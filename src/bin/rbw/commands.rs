@@ -1358,7 +1358,7 @@ pub fn sync() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn list(fields: &[String], raw: bool) -> anyhow::Result<()> {
+pub fn list(fields: &[String], raw: bool, full: bool) -> anyhow::Result<()> {
     let fields: Vec<ListField> = if raw {
         ListField::all()
     } else {
@@ -1369,6 +1369,20 @@ pub fn list(fields: &[String], raw: bool) -> anyhow::Result<()> {
     };
 
     unlock()?;
+    if full {
+        let db = load_db()?;
+        let mut entries: Vec<DecryptedCipher> = db
+            .entries
+            .iter()
+            .map(|entry| decrypt_cipher(entry))
+            .collect::<anyhow::Result<_>>()?;
+        entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        serde_json::to_writer_pretty(std::io::stdout(), &entries)
+            .context("failed to write entries to stdout".to_string())?;
+        println!();
+        return Ok(());
+    }
+
 
     let db = load_db()?;
     let mut entries: Vec<DecryptedListCipher> = db
@@ -1486,6 +1500,7 @@ pub fn search(
     fields: &[String],
     folder: Option<&str>,
     raw: bool,
+    full: bool,
 ) -> anyhow::Result<()> {
     let fields: Vec<ListField> = if raw {
         ListField::all()
@@ -1499,6 +1514,27 @@ pub fn search(
     unlock()?;
 
     let db = load_db()?;
+    if full {
+        let mut entries: Vec<DecryptedCipher> = db
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                match decrypt_search_cipher(entry) {
+                    Ok(searchable) if searchable.search_match(term, folder) => {
+                        decrypt_cipher(entry).ok()
+                    }
+                    Ok(_) => None,
+                    Err(_) => None,
+                }
+            })
+            .collect();
+        entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        serde_json::to_writer_pretty(std::io::stdout(), &entries)
+            .context("failed to write entries to stdout".to_string())?;
+        println!();
+        return Ok(());
+    }
+
 
     let mut entries: Vec<DecryptedListCipher> = db
         .entries
