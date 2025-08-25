@@ -67,6 +67,8 @@ enum Opt {
         fields: Vec<String>,
         #[structopt(long, help = "Display output as JSON")]
         raw: bool,
+        #[arg(long, help = "Dump full JSON for all items")]
+        full: bool,
     },
 
     #[command(about = "Display the password for a given entry")]
@@ -101,6 +103,8 @@ enum Opt {
         folder: Option<String>,
         #[structopt(long, help = "Display output as JSON")]
         raw: bool,
+        #[arg(long, help = "Dump full JSON for matching items")]
+        full: bool,
     },
 
     #[command(
@@ -335,7 +339,7 @@ fn main() {
         Opt::Unlock => commands::unlock(),
         Opt::Unlocked => commands::unlocked(),
         Opt::Sync => commands::sync(),
-        Opt::List { fields, raw } => commands::list(&fields, raw),
+        Opt::List { fields, raw, full } => commands::list(&fields, raw, full),
         Opt::Get {
             find_args,
             field,
@@ -361,7 +365,8 @@ fn main() {
             fields,
             folder,
             raw,
-        } => commands::search(&term, &fields, folder.as_deref(), raw),
+            full,
+        } => commands::search(&term, &fields, folder.as_deref(), raw, full),
         Opt::Code {
             find_args,
             #[cfg(feature = "clipboard")]
