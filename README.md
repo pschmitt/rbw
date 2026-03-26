@@ -134,9 +134,10 @@ URL to search for an entry with a matching website entry.
 
 `rbw inject` can render templates containing secret references. References use
 the format `bw://<uuid-or-name>?field=<field>`, where the item can be addressed
-by UUID or exact name. If `field` is omitted, the entry password is used.
-References can be written directly in the template or wrapped in
-`{{ bw://... }}`.
+by UUID or by an exact name consisting only of letters, digits, `-`, and `_`.
+For items whose names contain spaces or other punctuation, use the item UUID
+instead. If `field` is omitted, the entry password is used. References can be
+written directly in the template or wrapped in `{{ bw://... }}`.
 
 By default, `rbw inject` reads the template from stdin and writes the rendered
 output to stdout. Use `--in-file` and `--out-file` to work with files instead:
