@@ -11,7 +11,7 @@ pub fn login() -> anyhow::Result<()> {
 }
 
 pub fn unlock() -> anyhow::Result<()> {
-    simple_action(rbw::protocol::Action::Unlock)
+    simple_action(rbw::protocol::Action::Unlock { password: None })
 }
 
 pub fn unlocked() -> anyhow::Result<()> {
