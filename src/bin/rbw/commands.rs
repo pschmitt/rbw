@@ -1339,10 +1339,10 @@ pub fn login() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn unlock() -> anyhow::Result<()> {
+pub fn unlock(password: Option<String>) -> anyhow::Result<()> {
     ensure_agent()?;
     crate::actions::login()?;
-    crate::actions::unlock()?;
+    crate::actions::unlock(password)?;
 
     Ok(())
 }
@@ -1374,7 +1374,7 @@ pub fn list(fields: &[String], raw: bool) -> anyhow::Result<()> {
             .collect::<anyhow::Result<_>>()?
     };
 
-    unlock()?;
+    unlock(None)?;
 
     let db = load_db()?;
     let mut entries: Vec<DecryptedListCipher> = db
@@ -1401,7 +1401,7 @@ pub fn get(
     ignore_case: bool,
     list_fields: bool,
 ) -> anyhow::Result<()> {
-    unlock()?;
+    unlock(None)?;
 
     let db = load_db()?;
 
@@ -1506,7 +1506,7 @@ pub fn search(
             .collect::<anyhow::Result<_>>()?
     };
 
-    unlock()?;
+    unlock(None)?;
 
     let db = load_db()?;
 
@@ -1535,7 +1535,7 @@ pub fn code(
     clipboard: bool,
     ignore_case: bool,
 ) -> anyhow::Result<()> {
-    unlock()?;
+    unlock(None)?;
 
     let db = load_db()?;
 
@@ -1570,7 +1570,7 @@ pub fn add(
     uris: &[(String, Option<rbw::api::UriMatchType>)],
     folder: Option<&str>,
 ) -> anyhow::Result<()> {
-    unlock()?;
+    unlock(None)?;
 
     let mut db = load_db()?;
     // unwrap is safe here because the call to unlock above is guaranteed to
@@ -1675,7 +1675,7 @@ pub fn generate(
     println!("{password}");
 
     if let Some(name) = name {
-        unlock()?;
+        unlock(None)?;
 
         let mut db = load_db()?;
         // unwrap is safe here because the call to unlock above is guaranteed
@@ -1765,7 +1765,7 @@ pub fn edit(
     folder: Option<&str>,
     ignore_case: bool,
 ) -> anyhow::Result<()> {
-    unlock()?;
+    unlock(None)?;
 
     let mut db = load_db()?;
     let access_token = db.access_token.as_ref().unwrap();
@@ -1890,7 +1890,7 @@ pub fn remove(
     folder: Option<&str>,
     ignore_case: bool,
 ) -> anyhow::Result<()> {
-    unlock()?;
+    unlock(None)?;
 
     let mut db = load_db()?;
     let access_token = db.access_token.as_ref().unwrap();
@@ -2486,7 +2486,7 @@ pub fn history(
     folder: Option<&str>,
     ignore_case: bool,
 ) -> anyhow::Result<()> {
-    unlock()?;
+    unlock(None)?;
 
     let db = load_db()?;
 

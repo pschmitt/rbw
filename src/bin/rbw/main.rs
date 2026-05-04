@@ -43,7 +43,10 @@ enum Opt {
     Login,
 
     #[command(about = "Unlock the local Bitwarden database")]
-    Unlock,
+    Unlock {
+        #[arg(long, help = "Read the password from standard input")]
+        stdin: bool,
+    },
 
     #[command(about = "Check if the local Bitwarden database is unlocked")]
     Unlocked,
@@ -314,7 +317,7 @@ impl Opt {
             }
             Self::Register => "register".to_string(),
             Self::Login => "login".to_string(),
-            Self::Unlock => "unlock".to_string(),
+            Self::Unlock { .. } => "unlock".to_string(),
             Self::Unlocked => "unlocked".to_string(),
             Self::Sync => "sync".to_string(),
             Self::Export => "export".to_string(),
@@ -410,7 +413,19 @@ fn main() {
         },
         Opt::Register => commands::register(),
         Opt::Login => commands::login(),
-        Opt::Unlock => commands::unlock(),
+        Opt::Unlock { stdin } => {
+            let password = if stdin {
+                let mut buf = String::new();
+                let _ = std::io::stdin()
+                    .read_line(&mut buf)
+                    .context("failed to read password from stdin");
+                Some(buf.trim_end_matches('\n').to_string())
+            } else {
+                None
+            };
+
+            commands::unlock(password)
+        }
         Opt::Unlocked => commands::unlocked(),
         Opt::Sync => commands::sync(),
         Opt::Export => commands::export(),
