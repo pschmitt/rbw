@@ -432,6 +432,26 @@ async fn unlock_state(
 
         let email = config_email().await?;
 
+        if let Some(password) = password {
+            // Password was passed through stdin
+            match rbw::actions::unlock(
+                &email,
+                &password,
+                kdf,
+                iterations,
+                memory,
+                parallelism,
+                &protected_key,
+                &protected_private_key,
+                &db.protected_org_keys,
+            ) {
+                Ok((keys, org_keys)) => {
+                    return unlock_success(state, keys, org_keys).await
+                }
+                Err(e) => return Err(e).context("failed to unlock database"),
+            }
+        }
+
         let mut err_msg = None;
         let mut env_password_tried = false;
         for i in 1_u8..=3 {
