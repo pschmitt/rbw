@@ -2833,9 +2833,9 @@ impl ListCipherPlan {
             .transpose()?;
         // optional login fields are skipped (with a warning) on failure, to
         // match the previous best-effort behavior of `decrypt_field`
-        let user = self
-            .user
-            .and_then(|index| lenient_result(&results[index], Field::Username));
+        let user = self.user.and_then(|index| {
+            lenient_result(&results[index], Field::Username)
+        });
         let uris = self.uris.map(|indices| {
             indices
                 .iter()
