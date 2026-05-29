@@ -1392,7 +1392,7 @@ pub fn list(fields: &[String], raw: bool) -> anyhow::Result<()> {
     let results = if requests.is_empty() {
         Vec::new()
     } else {
-        crate::actions::decrypt_batch(&requests)?
+        crate::actions::decrypt_batch(requests)?
     };
 
     let mut entries: Vec<DecryptedListCipher> = plans

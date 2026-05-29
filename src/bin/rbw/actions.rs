@@ -106,14 +106,12 @@ pub fn decrypt(
 }
 
 pub fn decrypt_batch(
-    requests: &[rbw::protocol::DecryptRequest],
+    requests: Vec<rbw::protocol::DecryptRequest>,
 ) -> anyhow::Result<Vec<rbw::protocol::DecryptResult>> {
     let mut sock = connect()?;
     sock.send(&rbw::protocol::Request::new(
         get_environment(),
-        rbw::protocol::Action::DecryptBatch {
-            entries: requests.to_vec(),
-        },
+        rbw::protocol::Action::DecryptBatch { entries: requests },
     ))?;
 
     let res = sock.recv()?;
