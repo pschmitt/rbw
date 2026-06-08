@@ -1470,12 +1470,10 @@ fn print_entry_list(
                             std::string::ToString::to_string,
                         )
                     }
-                    ListField::Collections => {
-                        entry.collection_ids.as_ref().map_or_else(
-                            String::new,
-                            |ids| ids.join(","),
-                        )
-                    }
+                    ListField::Collections => entry
+                        .collection_ids
+                        .as_ref()
+                        .map_or_else(String::new, |ids| ids.join(",")),
                 })
                 .collect();
 
@@ -1972,11 +1970,8 @@ pub fn export() -> anyhow::Result<()> {
         .collections
         .iter()
         .map(|c| {
-            let name = crate::actions::decrypt(
-                &c.name,
-                None,
-                Some(&c.org_id),
-            )?;
+            let name =
+                crate::actions::decrypt(&c.name, None, Some(&c.org_id))?;
             Ok(ExportedCollection {
                 id: c.id.clone(),
                 org_id: c.org_id.clone(),
@@ -2014,11 +2009,8 @@ pub fn list_collections(raw: bool) -> anyhow::Result<()> {
         .collections
         .iter()
         .map(|c| {
-            let name = crate::actions::decrypt(
-                &c.name,
-                None,
-                Some(&c.org_id),
-            )?;
+            let name =
+                crate::actions::decrypt(&c.name, None, Some(&c.org_id))?;
             Ok(DecryptedCollection {
                 id: c.id.clone(),
                 org_id: c.org_id.clone(),
@@ -2073,18 +2065,14 @@ pub fn edit_collections(
     Ok(())
 }
 
-pub fn create_collection(
-    name: &str,
-    org_id: &str,
-) -> anyhow::Result<()> {
+pub fn create_collection(name: &str, org_id: &str) -> anyhow::Result<()> {
     unlock()?;
 
     let mut db = load_db()?;
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
 
-    let encrypted_name =
-        crate::actions::encrypt(name, Some(org_id))?;
+    let encrypted_name = crate::actions::encrypt(name, Some(org_id))?;
 
     let (new_access_token, id) = rbw::actions::create_collection(
         access_token,
@@ -2104,6 +2092,31 @@ pub fn create_collection(
     Ok(())
 }
 
+pub fn delete_collection(
+    collection_id: &str,
+    org_id: &str,
+) -> anyhow::Result<()> {
+    unlock()?;
+
+    let mut db = load_db()?;
+    let access_token = db.access_token.as_ref().unwrap();
+    let refresh_token = db.refresh_token.as_ref().unwrap();
+
+    if let (Some(access_token), ()) = rbw::actions::delete_collection(
+        access_token,
+        refresh_token,
+        org_id,
+        collection_id,
+    )? {
+        db.access_token = Some(access_token);
+        save_db(&db)?;
+    }
+
+    crate::actions::sync()?;
+
+    Ok(())
+}
+
 pub fn rename_collection(
     collection_id: &str,
     org_id: &str,
@@ -2115,8 +2128,7 @@ pub fn rename_collection(
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
 
-    let encrypted_name =
-        crate::actions::encrypt(name, Some(org_id))?;
+    let encrypted_name = crate::actions::encrypt(name, Some(org_id))?;
 
     if let (Some(access_token), ()) = rbw::actions::rename_collection(
         access_token,

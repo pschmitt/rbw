@@ -243,6 +243,14 @@ enum Opt {
         org_id: String,
     },
 
+    #[command(about = "Delete an organization collection")]
+    DeleteCollection {
+        #[arg(help = "ID of the collection")]
+        collection_id: String,
+        #[arg(long = "org-id", help = "Organization ID")]
+        org_id: String,
+    },
+
     #[command(about = "Edit collections for an entry")]
     EditCollections {
         #[arg(help = "ID of the entry")]
@@ -303,18 +311,11 @@ impl Opt {
             Self::Generate { .. } => "generate".to_string(),
             Self::Edit { .. } => "edit".to_string(),
             Self::Remove { .. } => "remove".to_string(),
-            Self::ListCollections { .. } => {
-                "list-collections".to_string()
-            }
-            Self::CreateCollection { .. } => {
-                "create-collection".to_string()
-            }
-            Self::EditCollections { .. } => {
-                "edit-collections".to_string()
-            }
-            Self::RenameCollection { .. } => {
-                "rename-collection".to_string()
-            }
+            Self::ListCollections { .. } => "list-collections".to_string(),
+            Self::CreateCollection { .. } => "create-collection".to_string(),
+            Self::DeleteCollection { .. } => "delete-collection".to_string(),
+            Self::EditCollections { .. } => "edit-collections".to_string(),
+            Self::RenameCollection { .. } => "rename-collection".to_string(),
             Self::History { .. } => "history".to_string(),
             Self::Lock => "lock".to_string(),
             Self::Purge => "purge".to_string(),
@@ -504,6 +505,10 @@ fn main() {
         Opt::CreateCollection { name, org_id } => {
             commands::create_collection(&name, &org_id)
         }
+        Opt::DeleteCollection {
+            collection_id,
+            org_id,
+        } => commands::delete_collection(&collection_id, &org_id),
         Opt::EditCollections { id, collections } => {
             commands::edit_collections(&id, &collections)
         }

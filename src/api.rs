@@ -1610,9 +1610,9 @@ impl Client {
         };
         let client = reqwest::blocking::Client::new();
         let res = client
-            .post(self.api_url(&format!(
-                "/organizations/{org_id}/collections"
-            )))
+            .post(
+                self.api_url(&format!("/organizations/{org_id}/collections")),
+            )
             .header("Authorization", format!("Bearer {access_token}"))
             .json(&req)
             .send()
@@ -1623,6 +1623,31 @@ impl Client {
                     res.json_with_path()?;
                 Ok(collection_res.id)
             }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    pub fn delete_collection(
+        &self,
+        access_token: &str,
+        org_id: &str,
+        collection_id: &str,
+    ) -> Result<()> {
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .delete(self.api_url(&format!(
+                "/organizations/{org_id}/collections/{collection_id}"
+            )))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
             reqwest::StatusCode::UNAUTHORIZED => {
                 Err(Error::RequestUnauthorized)
             }

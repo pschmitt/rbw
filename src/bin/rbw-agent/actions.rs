@@ -570,7 +570,13 @@ pub async fn sync(
     };
     let (
         access_token,
-        (protected_key, protected_private_key, protected_org_keys, entries, collections),
+        (
+            protected_key,
+            protected_private_key,
+            protected_org_keys,
+            entries,
+            collections,
+        ),
     ) = rbw::actions::sync(&access_token, &refresh_token)
         .await
         .context("failed to sync database from server")?;

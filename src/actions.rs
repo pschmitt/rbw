@@ -338,6 +338,26 @@ fn create_collection_once(
     client.create_collection(access_token, org_id, encrypted_name)
 }
 
+pub fn delete_collection(
+    access_token: &str,
+    refresh_token: &str,
+    org_id: &str,
+    collection_id: &str,
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        delete_collection_once(access_token, org_id, collection_id)
+    })
+}
+
+fn delete_collection_once(
+    access_token: &str,
+    org_id: &str,
+    collection_id: &str,
+) -> Result<()> {
+    let (client, _) = api_client()?;
+    client.delete_collection(access_token, org_id, collection_id)
+}
+
 pub fn list_folders(
     access_token: &str,
     refresh_token: &str,
