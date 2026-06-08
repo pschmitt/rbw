@@ -1919,10 +1919,6 @@ pub fn remove(
 }
 
 pub fn export() -> anyhow::Result<()> {
-    unlock()?;
-
-    let db = load_db()?;
-
     #[derive(serde::Serialize)]
     struct ExportedEntry {
         id: String,
@@ -1949,6 +1945,10 @@ pub fn export() -> anyhow::Result<()> {
         entries: Vec<ExportedEntry>,
         collections: Vec<ExportedCollection>,
     }
+
+    unlock()?;
+
+    let db = load_db()?;
 
     let mut entries: Vec<ExportedEntry> = Vec::new();
     for entry in &db.entries {
@@ -1994,16 +1994,16 @@ pub fn export() -> anyhow::Result<()> {
 }
 
 pub fn list_collections(raw: bool) -> anyhow::Result<()> {
-    unlock()?;
-
-    let db = load_db()?;
-
     #[derive(serde::Serialize)]
     struct DecryptedCollection {
         id: String,
         org_id: String,
         name: String,
     }
+
+    unlock()?;
+
+    let db = load_db()?;
 
     let mut collections: Vec<DecryptedCollection> = db
         .collections
@@ -2182,7 +2182,10 @@ fn perm_level_name(u: &rbw::api::CollectionUser) -> &'static str {
     }
 }
 
-fn same_flags(a: &rbw::api::CollectionUser, b: &rbw::api::CollectionUser) -> bool {
+fn same_flags(
+    a: &rbw::api::CollectionUser,
+    b: &rbw::api::CollectionUser,
+) -> bool {
     a.read_only == b.read_only
         && a.hide_passwords == b.hide_passwords
         && a.manage == b.manage
@@ -2281,8 +2284,10 @@ pub fn propagate_collection_permissions(
         .map(|m| (m.id.clone(), m.email.clone()))
         .collect();
 
-    let details_by_id: std::collections::HashMap<&str, &rbw::api::CollectionDetail> =
-        details.iter().map(|d| (d.id.as_str(), d)).collect();
+    let details_by_id: std::collections::HashMap<
+        &str,
+        &rbw::api::CollectionDetail,
+    > = details.iter().map(|d| (d.id.as_str(), d)).collect();
     for d in &details {
         if !id2name.contains_key(&d.id) {
             anyhow::bail!(
@@ -2321,26 +2326,20 @@ pub fn propagate_collection_permissions(
     > = std::collections::HashMap::new();
     for member_id in held.keys() {
         let held_ids = &held[member_id];
-        let held_names: Vec<&str> = held_ids
-            .keys()
-            .map(|id| id2name[id].as_str())
-            .collect();
+        let held_names: Vec<&str> =
+            held_ids.keys().map(|id| id2name[id].as_str()).collect();
         let topmost: Vec<&str> = held_names
             .iter()
             .copied()
             .filter(|n| {
-                !held_names.iter().any(|h| {
-                    *h != *n && n.starts_with(&format!("{h}/"))
-                })
+                !held_names
+                    .iter()
+                    .any(|h| *h != *n && n.starts_with(&format!("{h}/")))
             })
             .collect();
         for (id, name) in &id2name {
-            if topmost
-                .iter()
-                .any(|t| name.starts_with(&format!("{t}/")))
-            {
-                desired
-                    .insert((member_id.clone(), id.clone()), MANAGE);
+            if topmost.iter().any(|t| name.starts_with(&format!("{t}/"))) {
+                desired.insert((member_id.clone(), id.clone()), MANAGE);
             }
         }
         for (id, name) in &id2name {
@@ -2356,8 +2355,7 @@ pub fn propagate_collection_permissions(
     > = std::collections::BTreeMap::new();
     for ((member_id, coll_id), target) in &desired {
         let current = held.get(member_id).and_then(|h| h.get(coll_id));
-        let needs_change =
-            current.is_none_or(|c| !same_flags(c, target));
+        let needs_change = current.is_none_or(|c| !same_flags(c, target));
         if needs_change {
             changes
                 .entry(coll_id.clone())
@@ -2388,8 +2386,8 @@ pub fn propagate_collection_permissions(
             let email = &eligible[member_id];
             let level = if target.manage { "MANAGE" } else { "EDIT" };
             let current = held.get(member_id).and_then(|h| h.get(coll_id));
-            let downgrade = current
-                .is_some_and(|c| perm_rank(target) < perm_rank(c));
+            let downgrade =
+                current.is_some_and(|c| perm_rank(target) < perm_rank(c));
             let prefix = if apply { "" } else { "WOULD " };
             if downgrade {
                 let cur_level = perm_level_name(current.unwrap());
@@ -4739,6 +4737,7 @@ mod test {
                 history: vec![],
                 key: None,
                 master_password_reprompt: rbw::api::CipherRepromptType::None,
+                collection_ids: vec![],
             },
             DecryptedSearchCipher {
                 id: id.to_string(),

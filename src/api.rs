@@ -1783,7 +1783,8 @@ impl Client {
             .map_err(|source| Error::Reqwest { source })?;
         match res.status() {
             reqwest::StatusCode::OK => {
-                let details_res: CollectionDetailsRes = res.json_with_path()?;
+                let details_res: CollectionDetailsRes =
+                    res.json_with_path()?;
                 Ok(details_res
                     .data
                     .into_iter()
