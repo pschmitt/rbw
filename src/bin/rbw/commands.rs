@@ -187,6 +187,8 @@ struct DecryptedListCipher {
     uris: Option<Vec<String>>,
     #[serde(rename = "type")]
     entry_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    collection_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -331,6 +333,7 @@ impl From<DecryptedSearchCipher> for DecryptedListCipher {
             user: value.user,
             folder: value.folder,
             uris: Some(value.uris.into_iter().map(|(s, _)| s).collect()),
+            collection_ids: None,
         }
     }
 }
@@ -1186,6 +1189,7 @@ enum ListField {
     Folder,
     Uri,
     EntryType,
+    Collections,
 }
 
 impl ListField {
@@ -1197,6 +1201,7 @@ impl ListField {
             Self::Folder,
             Self::Uri,
             Self::EntryType,
+            Self::Collections,
         ]
     }
 }
@@ -1211,6 +1216,7 @@ impl std::convert::TryFrom<&String> for ListField {
             "user" => Self::User,
             "folder" => Self::Folder,
             "type" => Self::EntryType,
+            "collections" => Self::Collections,
             _ => return Err(anyhow::anyhow!("unknown field {s}")),
         })
     }
@@ -1462,6 +1468,12 @@ fn print_entry_list(
                         entry.entry_type.as_ref().map_or_else(
                             String::new,
                             std::string::ToString::to_string,
+                        )
+                    }
+                    ListField::Collections => {
+                        entry.collection_ids.as_ref().map_or_else(
+                            String::new,
+                            |ids| ids.join(","),
                         )
                     }
                 })
@@ -1908,6 +1920,220 @@ pub fn remove(
     Ok(())
 }
 
+pub fn export() -> anyhow::Result<()> {
+    unlock()?;
+
+    let db = load_db()?;
+
+    #[derive(serde::Serialize)]
+    struct ExportedEntry {
+        id: String,
+        org_id: Option<String>,
+        folder: Option<String>,
+        name: String,
+        #[serde(flatten)]
+        data: DecryptedData,
+        fields: Vec<DecryptedField>,
+        notes: Option<String>,
+        history: Vec<DecryptedHistoryEntry>,
+        collection_ids: Vec<String>,
+    }
+
+    #[derive(serde::Serialize)]
+    struct ExportedCollection {
+        id: String,
+        org_id: String,
+        name: String,
+    }
+
+    #[derive(serde::Serialize)]
+    struct ExportedVault {
+        entries: Vec<ExportedEntry>,
+        collections: Vec<ExportedCollection>,
+    }
+
+    let mut entries: Vec<ExportedEntry> = Vec::new();
+    for entry in &db.entries {
+        let decrypted = decrypt_cipher(entry)?;
+        entries.push(ExportedEntry {
+            id: decrypted.id,
+            org_id: entry.org_id.clone(),
+            folder: decrypted.folder,
+            name: decrypted.name,
+            data: decrypted.data,
+            fields: decrypted.fields,
+            notes: decrypted.notes,
+            history: decrypted.history,
+            collection_ids: entry.collection_ids.clone(),
+        });
+    }
+
+    let mut collections: Vec<ExportedCollection> = db
+        .collections
+        .iter()
+        .map(|c| {
+            let name = crate::actions::decrypt(
+                &c.name,
+                None,
+                Some(&c.org_id),
+            )?;
+            Ok(ExportedCollection {
+                id: c.id.clone(),
+                org_id: c.org_id.clone(),
+                name,
+            })
+        })
+        .collect::<anyhow::Result<_>>()?;
+    collections.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let vault = ExportedVault {
+        entries,
+        collections,
+    };
+
+    serde_json::to_writer_pretty(std::io::stdout(), &vault)
+        .context("failed to write export to stdout")?;
+    println!();
+
+    Ok(())
+}
+
+pub fn list_collections(raw: bool) -> anyhow::Result<()> {
+    unlock()?;
+
+    let db = load_db()?;
+
+    #[derive(serde::Serialize)]
+    struct DecryptedCollection {
+        id: String,
+        org_id: String,
+        name: String,
+    }
+
+    let mut collections: Vec<DecryptedCollection> = db
+        .collections
+        .iter()
+        .map(|c| {
+            let name = crate::actions::decrypt(
+                &c.name,
+                None,
+                Some(&c.org_id),
+            )?;
+            Ok(DecryptedCollection {
+                id: c.id.clone(),
+                org_id: c.org_id.clone(),
+                name,
+            })
+        })
+        .collect::<anyhow::Result<_>>()?;
+    collections.sort_by(|a, b| a.name.cmp(&b.name));
+
+    if raw {
+        serde_json::to_writer_pretty(std::io::stdout(), &collections)
+            .context("failed to write collections to stdout")?;
+        println!();
+    } else {
+        for c in &collections {
+            println!("{}\t{}", c.id, c.name);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn edit_collections(
+    id: &str,
+    collections_b64: &str,
+) -> anyhow::Result<()> {
+    unlock()?;
+
+    let mut db = load_db()?;
+    let access_token = db.access_token.as_ref().unwrap();
+    let refresh_token = db.refresh_token.as_ref().unwrap();
+
+    let json_bytes = rbw::base64::decode(collections_b64)
+        .context("failed to decode base64 collections")?;
+    let json_str = std::str::from_utf8(&json_bytes)
+        .context("collections is not valid UTF-8")?;
+    let collection_ids: Vec<String> = serde_json::from_str(json_str)
+        .context("failed to parse collection IDs JSON")?;
+
+    if let (Some(access_token), ()) = rbw::actions::edit_collections(
+        access_token,
+        refresh_token,
+        id,
+        &collection_ids,
+    )? {
+        db.access_token = Some(access_token);
+        save_db(&db)?;
+    }
+
+    crate::actions::sync()?;
+
+    Ok(())
+}
+
+pub fn create_collection(
+    name: &str,
+    org_id: &str,
+) -> anyhow::Result<()> {
+    unlock()?;
+
+    let mut db = load_db()?;
+    let access_token = db.access_token.as_ref().unwrap();
+    let refresh_token = db.refresh_token.as_ref().unwrap();
+
+    let encrypted_name =
+        crate::actions::encrypt(name, Some(org_id))?;
+
+    let (new_access_token, id) = rbw::actions::create_collection(
+        access_token,
+        refresh_token,
+        org_id,
+        &encrypted_name,
+    )?;
+    if let Some(new_access_token) = new_access_token {
+        db.access_token = Some(new_access_token);
+        save_db(&db)?;
+    }
+
+    crate::actions::sync()?;
+
+    println!("{id}");
+
+    Ok(())
+}
+
+pub fn rename_collection(
+    collection_id: &str,
+    org_id: &str,
+    name: &str,
+) -> anyhow::Result<()> {
+    unlock()?;
+
+    let mut db = load_db()?;
+    let access_token = db.access_token.as_ref().unwrap();
+    let refresh_token = db.refresh_token.as_ref().unwrap();
+
+    let encrypted_name =
+        crate::actions::encrypt(name, Some(org_id))?;
+
+    if let (Some(access_token), ()) = rbw::actions::rename_collection(
+        access_token,
+        refresh_token,
+        org_id,
+        collection_id,
+        &encrypted_name,
+    )? {
+        db.access_token = Some(access_token);
+        save_db(&db)?;
+    }
+
+    crate::actions::sync()?;
+
+    Ok(())
+}
+
 pub fn history(
     name: Needle,
     username: Option<&str>,
@@ -2190,6 +2416,12 @@ fn decrypt_list_cipher(
         })
         .map(str::to_string);
 
+    let collection_ids = if fields.contains(&ListField::Collections) {
+        Some(entry.collection_ids.clone())
+    } else {
+        None
+    };
+
     Ok(DecryptedListCipher {
         id,
         name,
@@ -2197,6 +2429,7 @@ fn decrypt_list_cipher(
         folder,
         uris,
         entry_type,
+        collection_ids,
     })
 }
 

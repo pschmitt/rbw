@@ -394,6 +394,18 @@ struct SyncRes {
     profile: SyncResProfile,
     #[serde(rename = "Folders", alias = "folders")]
     folders: Vec<SyncResFolder>,
+    #[serde(rename = "Collections", alias = "collections", default)]
+    collections: Vec<SyncResCollection>,
+}
+
+#[derive(serde::Deserialize, Debug, Clone)]
+struct SyncResCollection {
+    #[serde(rename = "Id", alias = "id")]
+    id: String,
+    #[serde(rename = "OrganizationId", alias = "organizationId")]
+    organization_id: String,
+    #[serde(rename = "Name", alias = "name")]
+    name: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -428,6 +440,8 @@ struct SyncResCipher {
     key: Option<String>,
     #[serde(rename = "Reprompt", alias = "reprompt")]
     reprompt: CipherRepromptType,
+    #[serde(rename = "CollectionIds", alias = "collectionIds", default)]
+    collection_ids: Vec<String>,
 }
 
 impl SyncResCipher {
@@ -551,6 +565,7 @@ impl SyncResCipher {
             history,
             key: self.key.clone(),
             master_password_reprompt: self.reprompt,
+            collection_ids: self.collection_ids.clone(),
         })
     }
 }
@@ -788,6 +803,29 @@ struct CiphersPutReqHistory {
     last_used_date: String,
     #[serde(rename = "Password")]
     password: String,
+}
+
+#[derive(serde::Serialize, Debug)]
+struct CiphersCollectionsPutReq {
+    #[serde(rename = "collectionIds")]
+    collection_ids: Vec<String>,
+}
+
+#[derive(serde::Serialize, Debug)]
+struct CollectionPutReq {
+    name: String,
+    #[serde(rename = "organizationId")]
+    organization_id: String,
+    #[serde(rename = "externalId")]
+    external_id: Option<String>,
+    groups: Vec<serde_json::Value>,
+    users: Vec<serde_json::Value>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct CollectionCreateRes {
+    #[serde(rename = "Id", alias = "id")]
+    id: String,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -1153,6 +1191,7 @@ impl Client {
         String,
         std::collections::HashMap<String, String>,
         Vec<crate::db::Entry>,
+        Vec<crate::db::Collection>,
     )> {
         let client = self.reqwest_client().await?;
         let res = client
@@ -1178,11 +1217,21 @@ impl Client {
                     .iter()
                     .map(|org| (org.id.clone(), org.key.clone()))
                     .collect();
+                let collections = sync_res
+                    .collections
+                    .iter()
+                    .map(|c| crate::db::Collection {
+                        id: c.id.clone(),
+                        org_id: c.organization_id.clone(),
+                        name: c.name.clone(),
+                    })
+                    .collect();
                 Ok((
                     sync_res.profile.key,
                     sync_res.profile.private_key,
                     org_keys,
                     ciphers,
+                    collections,
                 ))
             }
             reqwest::StatusCode::UNAUTHORIZED => {
@@ -1485,6 +1534,104 @@ impl Client {
         }
     }
 
+    pub fn edit_collections(
+        &self,
+        access_token: &str,
+        id: &str,
+        collection_ids: &[String],
+    ) -> Result<()> {
+        let req = CiphersCollectionsPutReq {
+            collection_ids: collection_ids.to_vec(),
+        };
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .put(self.api_url(&format!("/ciphers/{id}/collections")))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&req)
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    pub fn rename_collection(
+        &self,
+        access_token: &str,
+        org_id: &str,
+        collection_id: &str,
+        encrypted_name: &str,
+    ) -> Result<()> {
+        let req = CollectionPutReq {
+            name: encrypted_name.to_string(),
+            organization_id: org_id.to_string(),
+            external_id: None,
+            groups: vec![],
+            users: vec![],
+        };
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .put(self.api_url(&format!(
+                "/organizations/{org_id}/collections/{collection_id}"
+            )))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&req)
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    pub fn create_collection(
+        &self,
+        access_token: &str,
+        org_id: &str,
+        encrypted_name: &str,
+    ) -> Result<String> {
+        let req = CollectionPutReq {
+            name: encrypted_name.to_string(),
+            organization_id: org_id.to_string(),
+            external_id: None,
+            groups: vec![],
+            users: vec![],
+        };
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .post(self.api_url(&format!(
+                "/organizations/{org_id}/collections"
+            )))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&req)
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => {
+                let collection_res: CollectionCreateRes =
+                    res.json_with_path()?;
+                Ok(collection_res.id)
+            }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
     pub fn folders(
         &self,
         access_token: &str,
@@ -1557,8 +1704,22 @@ impl Client {
             .form(&connect_req)
             .send()
             .map_err(|source| Error::Reqwest { source })?;
-        let connect_res: ConnectRefreshTokenRes = res.json_with_path()?;
-        Ok(connect_res.access_token)
+        match res.status() {
+            reqwest::StatusCode::OK => {
+                let connect_res: ConnectRefreshTokenRes =
+                    res.json_with_path()?;
+                Ok(connect_res.access_token)
+            }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            s => {
+                let code = s.as_u16();
+                let body = res.text().unwrap_or_default();
+                log::warn!("refresh token exchange failed ({code}): {body}");
+                Err(Error::RequestFailed { status: code })
+            }
+        }
     }
 
     pub async fn exchange_refresh_token_async(
@@ -1577,9 +1738,22 @@ impl Client {
             .send()
             .await
             .map_err(|source| Error::Reqwest { source })?;
-        let connect_res: ConnectRefreshTokenRes =
-            res.json_with_path().await?;
-        Ok(connect_res.access_token)
+        match res.status() {
+            reqwest::StatusCode::OK => {
+                let connect_res: ConnectRefreshTokenRes =
+                    res.json_with_path().await?;
+                Ok(connect_res.access_token)
+            }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            s => {
+                let code = s.as_u16();
+                let body = res.text().await.unwrap_or_default();
+                log::warn!("refresh token exchange failed ({code}): {body}");
+                Err(Error::RequestFailed { status: code })
+            }
+        }
     }
 
     fn api_url(&self, path: &str) -> String {

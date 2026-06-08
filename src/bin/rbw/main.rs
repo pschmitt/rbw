@@ -52,6 +52,15 @@ enum Opt {
     Sync,
 
     #[command(
+        about = "Export the entire vault as decrypted JSON",
+        long_about = "Export the entire vault as decrypted JSON\n\n\
+            Outputs all entries (with full details) and collections \
+            to stdout. Suitable for piping to a file for backup or \
+            migration to another instance via `rbw import`."
+    )]
+    Export,
+
+    #[command(
         about = "List all entries in the local Bitwarden database",
         visible_alias = "ls"
     )]
@@ -59,7 +68,7 @@ enum Opt {
         #[arg(
             long,
             help = "Fields to display. \
-                Available options are id, name, user, folder, type. \
+                Available options are id, name, user, folder, type, collections. \
                 Multiple fields will be separated by tabs.",
             default_value = "name",
             use_value_delimiter = true
@@ -217,6 +226,41 @@ enum Opt {
         find_args: FindArgs,
     },
 
+    #[command(
+        about = "List all collections in the organization",
+        visible_alias = "lsc"
+    )]
+    ListCollections {
+        #[structopt(long, help = "Display output as JSON")]
+        raw: bool,
+    },
+
+    #[command(about = "Create a new collection in an organization")]
+    CreateCollection {
+        #[arg(help = "Name of the collection")]
+        name: String,
+        #[arg(long = "org-id", help = "Organization ID")]
+        org_id: String,
+    },
+
+    #[command(about = "Edit collections for an entry")]
+    EditCollections {
+        #[arg(help = "ID of the entry")]
+        id: String,
+        #[arg(help = "Base64-encoded JSON array of collection IDs")]
+        collections: String,
+    },
+
+    #[command(about = "Rename an organization collection")]
+    RenameCollection {
+        #[arg(help = "ID of the collection")]
+        id: String,
+        #[arg(long, help = "Organization ID")]
+        organizationid: String,
+        #[arg(help = "New name for the collection")]
+        name: String,
+    },
+
     #[command(about = "View the password history for a given entry")]
     History {
         #[command(flatten)]
@@ -250,6 +294,7 @@ impl Opt {
             Self::Unlock => "unlock".to_string(),
             Self::Unlocked => "unlocked".to_string(),
             Self::Sync => "sync".to_string(),
+            Self::Export => "export".to_string(),
             Self::List { .. } => "list".to_string(),
             Self::Get { .. } => "get".to_string(),
             Self::Search { .. } => "search".to_string(),
@@ -258,6 +303,18 @@ impl Opt {
             Self::Generate { .. } => "generate".to_string(),
             Self::Edit { .. } => "edit".to_string(),
             Self::Remove { .. } => "remove".to_string(),
+            Self::ListCollections { .. } => {
+                "list-collections".to_string()
+            }
+            Self::CreateCollection { .. } => {
+                "create-collection".to_string()
+            }
+            Self::EditCollections { .. } => {
+                "edit-collections".to_string()
+            }
+            Self::RenameCollection { .. } => {
+                "rename-collection".to_string()
+            }
             Self::History { .. } => "history".to_string(),
             Self::Lock => "lock".to_string(),
             Self::Purge => "purge".to_string(),
@@ -337,6 +394,7 @@ fn main() {
         Opt::Unlock => commands::unlock(),
         Opt::Unlocked => commands::unlocked(),
         Opt::Sync => commands::sync(),
+        Opt::Export => commands::export(),
         Opt::List { fields, raw } => commands::list(&fields, raw),
         Opt::Get {
             find_args,
@@ -442,6 +500,18 @@ fn main() {
             find_args.folder.as_deref(),
             find_args.ignorecase,
         ),
+        Opt::ListCollections { raw } => commands::list_collections(raw),
+        Opt::CreateCollection { name, org_id } => {
+            commands::create_collection(&name, &org_id)
+        }
+        Opt::EditCollections { id, collections } => {
+            commands::edit_collections(&id, &collections)
+        }
+        Opt::RenameCollection {
+            id,
+            organizationid,
+            name,
+        } => commands::rename_collection(&id, &organizationid, &name),
         Opt::History { find_args } => commands::history(
             find_args.needle,
             find_args.user.as_deref(),
