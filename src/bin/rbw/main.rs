@@ -259,6 +259,21 @@ enum Opt {
         collections: String,
     },
 
+    #[command(
+        about = "Grant members access to nested collections (topmost held -> edit, descendants -> manage)"
+    )]
+    PropagateCollectionPermissions {
+        #[arg(
+            long = "org-id",
+            help = "Organization ID (auto-detected if the vault has a single org)"
+        )]
+        org_id: Option<String>,
+        #[arg(long, help = "Execute the changes (default is a dry-run)")]
+        apply: bool,
+        #[arg(short, long, help = "Print per-run counts")]
+        verbose: bool,
+    },
+
     #[command(about = "Rename an organization collection")]
     RenameCollection {
         #[arg(help = "ID of the collection")]
@@ -315,6 +330,9 @@ impl Opt {
             Self::CreateCollection { .. } => "create-collection".to_string(),
             Self::DeleteCollection { .. } => "delete-collection".to_string(),
             Self::EditCollections { .. } => "edit-collections".to_string(),
+            Self::PropagateCollectionPermissions { .. } => {
+                "propagate-collection-permissions".to_string()
+            }
             Self::RenameCollection { .. } => "rename-collection".to_string(),
             Self::History { .. } => "history".to_string(),
             Self::Lock => "lock".to_string(),
@@ -512,6 +530,15 @@ fn main() {
         Opt::EditCollections { id, collections } => {
             commands::edit_collections(&id, &collections)
         }
+        Opt::PropagateCollectionPermissions {
+            org_id,
+            apply,
+            verbose,
+        } => commands::propagate_collection_permissions(
+            org_id.as_deref(),
+            apply,
+            verbose,
+        ),
         Opt::RenameCollection {
             id,
             organizationid,

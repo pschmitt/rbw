@@ -828,6 +828,82 @@ struct CollectionCreateRes {
     id: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct OrgUser {
+    pub id: String,
+    pub email: String,
+    pub status: i32,
+    // Organization role: 0=Owner, 1=Admin, 2=User, 3=Manager.
+    pub role: i32,
+    pub access_all: bool,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct OrgUsersRes {
+    #[serde(rename = "Data", alias = "data")]
+    data: Vec<OrgUsersResData>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct OrgUsersResData {
+    #[serde(rename = "Id", alias = "id")]
+    id: String,
+    #[serde(rename = "Email", alias = "email")]
+    email: String,
+    #[serde(rename = "Status", alias = "status")]
+    status: i32,
+    #[serde(rename = "Type", alias = "type")]
+    role: i32,
+    #[serde(rename = "AccessAll", alias = "accessAll", default)]
+    access_all: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CollectionUser {
+    pub id: String,
+    pub read_only: bool,
+    pub hide_passwords: bool,
+    pub manage: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CollectionDetail {
+    pub id: String,
+    pub external_id: Option<String>,
+    pub groups: Vec<serde_json::Value>,
+    pub users: Vec<CollectionUser>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct CollectionUserData {
+    #[serde(rename = "id", alias = "Id")]
+    id: String,
+    #[serde(rename = "readOnly", alias = "ReadOnly", default)]
+    read_only: bool,
+    #[serde(rename = "hidePasswords", alias = "HidePasswords", default)]
+    hide_passwords: bool,
+    #[serde(rename = "manage", alias = "Manage", default)]
+    manage: bool,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct CollectionDetailsRes {
+    #[serde(rename = "Data", alias = "data")]
+    data: Vec<CollectionDetailsResData>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct CollectionDetailsResData {
+    #[serde(rename = "Id", alias = "id")]
+    id: String,
+    #[serde(rename = "ExternalId", alias = "externalId", default)]
+    external_id: Option<String>,
+    #[serde(rename = "Groups", alias = "groups", default)]
+    groups: Vec<serde_json::Value>,
+    #[serde(rename = "Users", alias = "users", default)]
+    users: Vec<CollectionUserData>,
+}
+
 #[derive(serde::Deserialize, Debug)]
 struct FoldersRes {
     #[serde(rename = "Data", alias = "data")]
@@ -1644,6 +1720,134 @@ impl Client {
                 "/organizations/{org_id}/collections/{collection_id}"
             )))
             .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    pub fn org_users(
+        &self,
+        access_token: &str,
+        org_id: &str,
+    ) -> Result<Vec<OrgUser>> {
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .get(self.api_url(&format!("/organizations/{org_id}/users")))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => {
+                let users_res: OrgUsersRes = res.json_with_path()?;
+                Ok(users_res
+                    .data
+                    .into_iter()
+                    .map(|u| OrgUser {
+                        id: u.id,
+                        email: u.email,
+                        status: u.status,
+                        role: u.role,
+                        access_all: u.access_all,
+                    })
+                    .collect())
+            }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    pub fn collections_details(
+        &self,
+        access_token: &str,
+        org_id: &str,
+    ) -> Result<Vec<CollectionDetail>> {
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .get(self.api_url(&format!(
+                "/organizations/{org_id}/collections/details"
+            )))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => {
+                let details_res: CollectionDetailsRes = res.json_with_path()?;
+                Ok(details_res
+                    .data
+                    .into_iter()
+                    .map(|c| CollectionDetail {
+                        id: c.id,
+                        external_id: c.external_id,
+                        groups: c.groups,
+                        users: c
+                            .users
+                            .into_iter()
+                            .map(|u| CollectionUser {
+                                id: u.id,
+                                read_only: u.read_only,
+                                hide_passwords: u.hide_passwords,
+                                manage: u.manage,
+                            })
+                            .collect(),
+                    })
+                    .collect())
+            }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    pub fn set_collection_users(
+        &self,
+        access_token: &str,
+        org_id: &str,
+        collection_id: &str,
+        encrypted_name: &str,
+        external_id: Option<&str>,
+        groups: &[serde_json::Value],
+        users: &[CollectionUser],
+    ) -> Result<()> {
+        let users: Vec<serde_json::Value> = users
+            .iter()
+            .map(|u| {
+                serde_json::json!({
+                    "id": u.id,
+                    "readOnly": u.read_only,
+                    "hidePasswords": u.hide_passwords,
+                    "manage": u.manage,
+                })
+            })
+            .collect();
+        let req = CollectionPutReq {
+            name: encrypted_name.to_string(),
+            organization_id: org_id.to_string(),
+            external_id: external_id.map(std::string::ToString::to_string),
+            groups: groups.to_vec(),
+            users,
+        };
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .put(self.api_url(&format!(
+                "/organizations/{org_id}/collections/{collection_id}"
+            )))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&req)
             .send()
             .map_err(|source| Error::Reqwest { source })?;
         match res.status() {

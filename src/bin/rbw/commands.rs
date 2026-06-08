@@ -2146,6 +2146,343 @@ pub fn rename_collection(
     Ok(())
 }
 
+const EDIT: rbw::api::CollectionUser = rbw::api::CollectionUser {
+    id: String::new(),
+    read_only: false,
+    hide_passwords: false,
+    manage: false,
+};
+
+const MANAGE: rbw::api::CollectionUser = rbw::api::CollectionUser {
+    id: String::new(),
+    read_only: false,
+    hide_passwords: false,
+    manage: true,
+};
+
+fn perm_rank(u: &rbw::api::CollectionUser) -> u8 {
+    if u.manage {
+        return 4;
+    }
+    match (u.read_only, u.hide_passwords) {
+        (false, false) => 3,
+        (false, true) => 2,
+        (true, false) => 1,
+        (true, true) => 0,
+    }
+}
+
+fn perm_level_name(u: &rbw::api::CollectionUser) -> &'static str {
+    match perm_rank(u) {
+        4 => "manage",
+        3 => "edit",
+        2 => "edit-no-pw",
+        1 => "view",
+        _ => "view-no-pw",
+    }
+}
+
+fn same_flags(a: &rbw::api::CollectionUser, b: &rbw::api::CollectionUser) -> bool {
+    a.read_only == b.read_only
+        && a.hide_passwords == b.hide_passwords
+        && a.manage == b.manage
+}
+
+fn normalize_collection_name(name: &str) -> anyhow::Result<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with('/')
+        || trimmed.ends_with('/')
+    {
+        anyhow::bail!("collection name is empty or has a leading/trailing slash: {name:?}");
+    }
+    Ok(trimmed.to_string())
+}
+
+fn resolve_org(
+    db: &rbw::db::Db,
+    org_id: Option<&str>,
+) -> anyhow::Result<String> {
+    let org_ids: std::collections::BTreeSet<&str> =
+        db.collections.iter().map(|c| c.org_id.as_str()).collect();
+    org_id.map_or_else(
+        || match org_ids.len() {
+            0 => Err(anyhow::anyhow!("no organization found in vault")),
+            1 => Ok((*org_ids.iter().next().unwrap()).to_string()),
+            _ => Err(anyhow::anyhow!(
+                "multiple organizations found; pass --org-id"
+            )),
+        },
+        |o| {
+            if org_ids.contains(o) {
+                Ok(o.to_string())
+            } else {
+                Err(anyhow::anyhow!(
+                    "org {o} has no collections in this vault"
+                ))
+            }
+        },
+    )
+}
+
+pub fn propagate_collection_permissions(
+    org_id: Option<&str>,
+    apply: bool,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    unlock()?;
+    crate::actions::sync()?;
+
+    let mut db = load_db()?;
+    let org_id = resolve_org(&db, org_id)?;
+
+    let mut id2name: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for c in &db.collections {
+        if c.org_id != org_id {
+            continue;
+        }
+        let name = crate::actions::decrypt(&c.name, None, Some(&c.org_id))
+            .with_context(|| {
+                format!("failed to decrypt collection name for {}", c.id)
+            })?;
+        let name = normalize_collection_name(&name)?;
+        id2name.insert(c.id.clone(), name);
+    }
+
+    let mut access_token = db.access_token.as_ref().unwrap().clone();
+    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+
+    let (new_token, members) =
+        rbw::actions::org_users(&access_token, &refresh_token, &org_id)?;
+    if let Some(t) = new_token {
+        access_token.clone_from(&t);
+        db.access_token = Some(t);
+        save_db(&db)?;
+    }
+
+    let (new_token, details) = rbw::actions::collections_details(
+        &access_token,
+        &refresh_token,
+        &org_id,
+    )?;
+    if let Some(t) = new_token {
+        access_token.clone_from(&t);
+        db.access_token = Some(t);
+        save_db(&db)?;
+    }
+
+    // Exclude Owners (role 0) and Admins (role 1); only Users (2) and
+    // Managers (3) get permission propagation. confirmed (status==2) and
+    // non-access-all members only.
+    let eligible: std::collections::HashMap<String, String> = members
+        .iter()
+        .filter(|m| m.status == 2 && !m.access_all && m.role >= 2)
+        .map(|m| (m.id.clone(), m.email.clone()))
+        .collect();
+
+    let details_by_id: std::collections::HashMap<&str, &rbw::api::CollectionDetail> =
+        details.iter().map(|d| (d.id.as_str(), d)).collect();
+    for d in &details {
+        if !id2name.contains_key(&d.id) {
+            anyhow::bail!(
+                "collection {} returned by the API is missing or undecryptable in the local db; aborting",
+                d.id
+            );
+        }
+    }
+    for id in id2name.keys() {
+        if !details_by_id.contains_key(id.as_str()) {
+            anyhow::bail!(
+                "collection {} ({}) is in the local db but absent from the live API response; aborting",
+                id,
+                id2name[id]
+            );
+        }
+    }
+
+    let mut held: std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, rbw::api::CollectionUser>,
+    > = std::collections::HashMap::new();
+    for d in &details {
+        for u in &d.users {
+            if eligible.contains_key(&u.id) {
+                held.entry(u.id.clone())
+                    .or_default()
+                    .insert(d.id.clone(), u.clone());
+            }
+        }
+    }
+
+    let mut desired: std::collections::HashMap<
+        (String, String),
+        rbw::api::CollectionUser,
+    > = std::collections::HashMap::new();
+    for member_id in held.keys() {
+        let held_ids = &held[member_id];
+        let held_names: Vec<&str> = held_ids
+            .keys()
+            .map(|id| id2name[id].as_str())
+            .collect();
+        let topmost: Vec<&str> = held_names
+            .iter()
+            .copied()
+            .filter(|n| {
+                !held_names.iter().any(|h| {
+                    *h != *n && n.starts_with(&format!("{h}/"))
+                })
+            })
+            .collect();
+        for (id, name) in &id2name {
+            if topmost
+                .iter()
+                .any(|t| name.starts_with(&format!("{t}/")))
+            {
+                desired
+                    .insert((member_id.clone(), id.clone()), MANAGE);
+            }
+        }
+        for (id, name) in &id2name {
+            if topmost.contains(&name.as_str()) {
+                desired.insert((member_id.clone(), id.clone()), EDIT);
+            }
+        }
+    }
+
+    let mut changes: std::collections::BTreeMap<
+        String,
+        Vec<(String, rbw::api::CollectionUser)>,
+    > = std::collections::BTreeMap::new();
+    for ((member_id, coll_id), target) in &desired {
+        let current = held.get(member_id).and_then(|h| h.get(coll_id));
+        let needs_change =
+            current.is_none_or(|c| !same_flags(c, target));
+        if needs_change {
+            changes
+                .entry(coll_id.clone())
+                .or_default()
+                .push((member_id.clone(), target.clone()));
+        }
+    }
+    for member_targets in changes.values_mut() {
+        member_targets.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+
+    for coll_id in changes.keys() {
+        if !details_by_id[coll_id.as_str()].groups.is_empty() {
+            anyhow::bail!(
+                "collection {} ({}) has groups assigned; groups passthrough on PUT is unverified, aborting (see docs/collection-permissions-spec.md §4.3)",
+                coll_id,
+                id2name[coll_id]
+            );
+        }
+    }
+
+    let mut changed_members: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    let mut grants = 0usize;
+    for (coll_id, member_targets) in &changes {
+        let name = &id2name[coll_id];
+        for (member_id, target) in member_targets {
+            let email = &eligible[member_id];
+            let level = if target.manage { "MANAGE" } else { "EDIT" };
+            let current = held.get(member_id).and_then(|h| h.get(coll_id));
+            let downgrade = current
+                .is_some_and(|c| perm_rank(target) < perm_rank(c));
+            let prefix = if apply { "" } else { "WOULD " };
+            if downgrade {
+                let cur_level = perm_level_name(current.unwrap());
+                let tgt_level = perm_level_name(target);
+                println!(
+                    "{prefix}DOWNGRADE {email} {cur_level}->{tgt_level} on {name}"
+                );
+            } else {
+                println!("{prefix}SET {email} -> {level} on {name}");
+            }
+            changed_members.insert(member_id.clone());
+            grants += 1;
+        }
+    }
+
+    if verbose {
+        eprintln!(
+            "{} eligible members, {} collections in org, {} collections to change",
+            eligible.len(),
+            id2name.len(),
+            changes.len()
+        );
+    }
+
+    if apply {
+        let mut applied: Vec<String> = Vec::new();
+        for (coll_id, member_targets) in &changes {
+            let detail = details_by_id[coll_id.as_str()];
+            let mut new_users = detail.users.clone();
+            for (member_id, target) in member_targets {
+                let entry = new_users.iter_mut().find(|u| &u.id == member_id);
+                if let Some(u) = entry {
+                    u.read_only = target.read_only;
+                    u.hide_passwords = target.hide_passwords;
+                    u.manage = target.manage;
+                } else {
+                    new_users.push(rbw::api::CollectionUser {
+                        id: member_id.clone(),
+                        read_only: target.read_only,
+                        hide_passwords: target.hide_passwords,
+                        manage: target.manage,
+                    });
+                }
+            }
+            let enc_name = db
+                .collections
+                .iter()
+                .find(|c| &c.id == coll_id)
+                .map(|c| c.name.clone())
+                .unwrap();
+            let res = rbw::actions::set_collection_users(
+                &access_token,
+                &refresh_token,
+                &org_id,
+                coll_id,
+                &enc_name,
+                detail.external_id.as_deref(),
+                &detail.groups,
+                &new_users,
+            );
+            match res {
+                Ok((new_token, ())) => {
+                    if let Some(t) = new_token {
+                        access_token.clone_from(&t);
+                        db.access_token = Some(t);
+                        save_db(&db)?;
+                    }
+                    applied.push(coll_id.clone());
+                }
+                Err(e) => {
+                    eprintln!(
+                        "PUT failed on collection {} ({}); already applied to: {:?}",
+                        coll_id, id2name[coll_id], applied
+                    );
+                    return Err(e.into());
+                }
+            }
+        }
+        crate::actions::sync()?;
+    }
+
+    let mode = if apply { "applied" } else { "dry-run" };
+    println!(
+        "Done: {} members, {} collections changed, {} grants set ({})",
+        changed_members.len(),
+        changes.len(),
+        grants,
+        mode
+    );
+
+    Ok(())
+}
+
 pub fn history(
     name: Needle,
     username: Option<&str>,
