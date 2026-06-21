@@ -305,11 +305,20 @@ impl DecryptedSearchCipher {
         true
     }
 
-    fn search_match(&self, term: &str, folder: Option<&str>) -> bool {
+    fn search_match(
+        &self,
+        term: &str,
+        folder: Option<&str>,
+        with_attachments: bool,
+    ) -> bool {
         if let Some(folder) = folder {
             if self.folder.as_deref() != Some(folder) {
                 return false;
             }
+        }
+
+        if with_attachments && self.attachment_count == 0 {
+            return false;
         }
 
         let mut fields = vec![self.name.clone()];
@@ -363,17 +372,11 @@ struct DecryptedAttachment {
 struct AttachmentMetadata {
     #[serde(skip_serializing_if = "is_zero")]
     attachment_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attachment_hint: Option<String>,
 }
 
 impl AttachmentMetadata {
-    fn new(entry_id: &str, attachment_count: usize) -> Self {
-        Self {
-            attachment_count,
-            attachment_hint: (attachment_count > 0)
-                .then(|| attachment_command_hint(entry_id)),
-        }
+    fn new(_entry_id: &str, attachment_count: usize) -> Self {
+        Self { attachment_count }
     }
 
     fn has_attachments(&self) -> bool {
@@ -1046,18 +1049,16 @@ impl DecryptedCipher {
         }
     }
 
-    fn display_json(&self, desc: &str) -> anyhow::Result<()> {
-        serde_json::to_writer_pretty(std::io::stdout(), &self)
-            .context(format!("failed to write entry '{desc}' to stdout"))?;
-        println!();
-
-        Ok(())
-    }
-
-    fn maybe_print_attachment_hint(&self) {
-        maybe_print_attachment_hint(
-            self.attachment_metadata.attachment_count,
-        );
+    fn display_structured(
+        &self,
+        desc: &str,
+        output: OutputMode,
+    ) -> anyhow::Result<()> {
+        write_serialized_pretty(
+            &self,
+            output,
+            format!("failed to write entry '{desc}' to stdout"),
+        )
     }
 }
 
@@ -1073,10 +1074,6 @@ fn stdout_is_terminal() -> bool {
     std::io::stdout().is_terminal()
 }
 
-fn stderr_supports_color() -> bool {
-    std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none()
-}
-
 fn paint(text: &str, code: &str, enabled: bool) -> String {
     if enabled {
         format!("\x1b[{code}m{text}\x1b[0m")
@@ -1089,50 +1086,263 @@ fn paint_stdout(text: &str, code: &str) -> String {
     paint(text, code, stdout_supports_color())
 }
 
-fn paint_stderr(text: &str, code: &str) -> String {
-    paint(text, code, stderr_supports_color())
+fn write_yaml_pretty<T>(
+    value: &T,
+    context: impl Into<String>,
+) -> anyhow::Result<()>
+where
+    T: serde::Serialize,
+{
+    let context = context.into();
+    serde_yaml::to_writer(std::io::stdout(), value).context(context)?;
+    println!();
+
+    Ok(())
 }
 
 fn format_label(name: &str) -> String {
     paint_stdout(name, "1;36")
 }
 
-fn attachment_command_hint(entry_id: &str) -> String {
-    format!(
-        "Use `rbw attachment list {entry_id}` to inspect attachments and \
-         `rbw attachment get {entry_id} <attachment-id-or-filename>` to \
-         download one."
-    )
-}
-
-fn maybe_print_attachment_hint(attachment_count: usize) {
-    if attachment_count == 0 {
-        return;
-    }
-
-    let noun = if attachment_count == 1 {
-        "attachment is"
+fn write_json_pretty<T>(
+    value: &T,
+    context: impl Into<String>,
+) -> anyhow::Result<()>
+where
+    T: serde::Serialize,
+{
+    let context = context.into();
+    if stdout_supports_color() {
+        let value = serde_json::to_value(value).context(context.clone())?;
+        let rendered = colored_json::to_colored_json_auto(&value)
+            .map_err(|err| anyhow::anyhow!(err.to_string()))
+            .context(context)?;
+        println!("{rendered}");
     } else {
-        "attachments are"
-    };
-    let hint = format!(
-        "{attachment_count} {noun} available. Use `rbw attachment list <entry>` \
-         to inspect them and `rbw attachment get <entry> \
-         <attachment-id-or-filename>` to download one."
-    );
-    eprintln!("{}", paint_stderr(&hint, "1;33"));
-}
-
-fn maybe_print_attachment_command_hint(has_attachments: bool) {
-    if !has_attachments {
-        return;
+        serde_json::to_writer_pretty(std::io::stdout(), value)
+            .context(context)?;
+        println!();
     }
 
-    let hint =
-        "Some entries have attachments. Use `rbw attachment list <entry>` \
-                to inspect them and `rbw attachment get <entry> \
-                <attachment-id-or-filename>` to download one.";
-    eprintln!("{}", paint_stderr(hint, "1;33"));
+    Ok(())
+}
+
+fn attachment_rows(
+    attachments: &[DecryptedAttachment],
+    color: bool,
+) -> Vec<String> {
+    attachments
+        .iter()
+        .map(|attachment| {
+            format!(
+                "{}\t{}\t{}",
+                paint(&attachment.id, "1;36", color),
+                paint(
+                    &attachment.file_name.clone().unwrap_or_default(),
+                    "0;32",
+                    color,
+                ),
+                paint(
+                    &attachment
+                        .size_name
+                        .clone()
+                        .or_else(|| attachment.size.clone())
+                        .unwrap_or_default(),
+                    "2",
+                    color,
+                )
+            )
+        })
+        .collect()
+}
+
+fn attachments_cell(attachment_count: usize) -> String {
+    if attachment_count == 0 {
+        "none".to_string()
+    } else if attachment_count == 1 {
+        "📎".to_string()
+    } else {
+        format!("📎 x{attachment_count}")
+    }
+}
+
+fn output_is_structured(output: OutputMode) -> bool {
+    matches!(output, OutputMode::Json | OutputMode::Yaml)
+}
+
+fn write_serialized_pretty<T>(
+    value: &T,
+    output: OutputMode,
+    context: impl Into<String>,
+) -> anyhow::Result<()>
+where
+    T: serde::Serialize,
+{
+    match output {
+        OutputMode::Json => write_json_pretty(value, context),
+        OutputMode::Yaml => write_yaml_pretty(value, context),
+        OutputMode::Default | OutputMode::Name => {
+            Err(anyhow::anyhow!("unsupported serialized output mode"))
+        }
+    }
+}
+
+fn format_ambiguous_entry(entry: &DecryptedSearchCipher) -> String {
+    let mut details = vec![format!("uid: {}", entry.id)];
+    if let Some(user) = &entry.user {
+        details.push(format!("username: {user}"));
+    }
+    if let Some(folder) = &entry.folder {
+        details.push(format!("folder: {folder}"));
+    }
+    if entry.attachment_count > 0 {
+        details.push(format!("attachments: {}", entry.attachment_count));
+    }
+
+    format!("  - {} ({})", entry.name, details.join(" | "),)
+}
+
+fn colorize_table_cell(
+    text: &str,
+    style: TableColumnStyle,
+    color: bool,
+) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+
+    if (style == TableColumnStyle::User && text == "N/A")
+        || (style == TableColumnStyle::Attachments && text == "none")
+    {
+        return paint(text, "3;2;37", color);
+    }
+
+    match style {
+        TableColumnStyle::Id => paint(text, "0;36", color),
+        TableColumnStyle::Name => paint(text, "0;32", color),
+        TableColumnStyle::User => paint(text, "0;33", color),
+        TableColumnStyle::Folder => paint(text, "0;35", color),
+        TableColumnStyle::EntryType => paint(text, "0;34", color),
+        TableColumnStyle::Collections => paint(text, "2;37", color),
+        TableColumnStyle::Attachments => paint(text, "0;33", color),
+        TableColumnStyle::Size => paint(text, "2", color),
+        TableColumnStyle::Default => text.to_string(),
+    }
+}
+
+fn table_cell_width(text: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(text)
+}
+
+fn compute_table_widths(
+    columns: &[TableColumn<'_>],
+    rows: &[Vec<String>],
+) -> Vec<usize> {
+    columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| {
+            let header_width =
+                table_cell_width(&column.header.to_uppercase());
+            let row_width = rows
+                .iter()
+                .filter_map(|row| row.get(index))
+                .map(|cell| table_cell_width(cell))
+                .max()
+                .unwrap_or(0);
+            header_width.max(row_width)
+        })
+        .collect()
+}
+
+fn render_table_row<F>(
+    cells: &[String],
+    widths: &[usize],
+    mut render_cell: F,
+) -> String
+where
+    F: FnMut(usize, &str) -> String,
+{
+    let last_index = cells.len().saturating_sub(1);
+    let mut rendered = String::new();
+
+    for (index, cell) in cells.iter().enumerate() {
+        rendered.push_str(&render_cell(index, cell));
+
+        if index != last_index {
+            let padding =
+                widths[index].saturating_sub(table_cell_width(cell));
+            rendered.push_str(&" ".repeat(padding + 2));
+        }
+    }
+
+    rendered
+}
+
+fn print_table(
+    columns: &[TableColumn<'_>],
+    rows: &[Vec<String>],
+) -> anyhow::Result<()> {
+    if stdout_is_terminal() {
+        let widths = compute_table_widths(columns, rows);
+        let header_cells = columns
+            .iter()
+            .map(|column| column.header.to_uppercase())
+            .collect::<Vec<_>>();
+        let header = render_table_row(&header_cells, &widths, |_, cell| {
+            paint_stdout(cell, "1;37")
+        });
+        println!("{header}");
+        for row in rows {
+            let rendered = render_table_row(row, &widths, |index, cell| {
+                columns.get(index).map_or_else(String::new, |column| {
+                    colorize_table_cell(
+                        cell,
+                        column.style,
+                        stdout_supports_color(),
+                    )
+                })
+            });
+            println!("{rendered}");
+        }
+    } else {
+        for row in rows {
+            match writeln!(&mut std::io::stdout(), "{}", row.join("\t")) {
+                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                    return Ok(());
+                }
+                res => res?,
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn available_attachments_error(
+    entry_name: &str,
+    attachments: &[DecryptedAttachment],
+    reason: &str,
+) -> anyhow::Error {
+    if attachments.is_empty() {
+        return anyhow::anyhow!(
+            "{reason}\nNo attachments are available for '{}'.",
+            entry_name
+        );
+    }
+
+    let mut message = String::new();
+    let _ = writeln!(&mut message, "{reason}");
+    let _ =
+        writeln!(&mut message, "Available attachments for '{}':", entry_name);
+    for row in attachment_rows(attachments, false) {
+        let _ = writeln!(&mut message, "{row}");
+    }
+    let _ = write!(
+        &mut message,
+        "Use `rbw attachment get <entry> <attachment-id-or-filename>` to download one."
+    );
+    anyhow::anyhow!(message)
 }
 
 fn val_display_or_store(clipboard: bool, password: &str) -> bool {
@@ -1321,6 +1531,32 @@ enum ListField {
     Collections,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum TableColumnStyle {
+    Id,
+    Name,
+    User,
+    Folder,
+    EntryType,
+    Collections,
+    Attachments,
+    Size,
+    Default,
+}
+
+struct TableColumn<'a> {
+    header: &'a str,
+    style: TableColumnStyle,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutputMode {
+    Default,
+    Name,
+    Json,
+    Yaml,
+}
+
 impl ListField {
     fn all() -> Vec<Self> {
         vec![
@@ -1341,7 +1577,7 @@ impl std::convert::TryFrom<&String> for ListField {
     fn try_from(s: &String) -> anyhow::Result<Self> {
         Ok(match s.as_str() {
             "name" => Self::Name,
-            "id" => Self::Id,
+            "id" | "uid" => Self::Id,
             "user" => Self::User,
             "folder" => Self::Folder,
             "type" => Self::EntryType,
@@ -1364,11 +1600,7 @@ const HELP_NOTES: &str = r"
 
 pub fn config_show() -> anyhow::Result<()> {
     let config = rbw::config::Config::load()?;
-    serde_json::to_writer_pretty(std::io::stdout(), &config)
-        .context("failed to write config to stdout")?;
-    println!();
-
-    Ok(())
+    write_json_pretty(&config, "failed to write config to stdout")
 }
 
 pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
@@ -1493,8 +1725,19 @@ pub fn sync() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn list(fields: &[String], raw: bool, full: bool) -> anyhow::Result<()> {
-    let fields: Vec<ListField> = if raw {
+pub fn list(
+    fields: &[String],
+    with_attachments: bool,
+    output: OutputMode,
+    full: bool,
+) -> anyhow::Result<()> {
+    let structured_output = if full && output == OutputMode::Default {
+        OutputMode::Json
+    } else {
+        output
+    };
+
+    let fields: Vec<ListField> = if output_is_structured(structured_output) {
         ListField::all()
     } else {
         fields
@@ -1502,6 +1745,10 @@ pub fn list(fields: &[String], raw: bool, full: bool) -> anyhow::Result<()> {
             .map(std::convert::TryFrom::try_from)
             .collect::<anyhow::Result<_>>()?
     };
+
+    if full && output == OutputMode::Name {
+        anyhow::bail!("--full cannot be combined with --output name");
+    }
 
     unlock(None)?;
     if full {
@@ -1511,11 +1758,16 @@ pub fn list(fields: &[String], raw: bool, full: bool) -> anyhow::Result<()> {
             .iter()
             .map(decrypt_cipher)
             .collect::<anyhow::Result<_>>()?;
+        if with_attachments {
+            entries
+                .retain(|entry| entry.attachment_metadata.has_attachments());
+        }
         entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
-        serde_json::to_writer_pretty(std::io::stdout(), &entries)
-            .context("failed to write entries to stdout".to_string())?;
-        println!();
-        return Ok(());
+        return write_serialized_pretty(
+            &entries,
+            structured_output,
+            "failed to write entries to stdout",
+        );
     }
 
     let db = load_db()?;
@@ -1541,9 +1793,12 @@ pub fn list(fields: &[String], raw: bool, full: bool) -> anyhow::Result<()> {
         .into_iter()
         .map(|plan| plan.resolve(&results))
         .collect::<anyhow::Result<_>>()?;
+    if with_attachments {
+        entries.retain(|entry| entry.attachment_metadata.has_attachments());
+    }
     entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
-    print_entry_list(&entries, &fields, raw)?;
+    print_entry_list(&entries, &fields, output)?;
 
     Ok(())
 }
@@ -1555,7 +1810,7 @@ pub fn get(
     folder: Option<&str>,
     field: Option<&str>,
     full: bool,
-    raw: bool,
+    output: OutputMode,
     clipboard: bool,
     ignore_case: bool,
     list_fields: bool,
@@ -1575,18 +1830,16 @@ pub fn get(
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
     if list_fields {
         decrypted.display_fields_list();
-    } else if raw {
-        decrypted.display_json(&desc)?;
+    } else if output_is_structured(output) {
+        decrypted.display_structured(&desc, output)?;
+    } else if output == OutputMode::Name {
+        println!("{}", decrypted.name);
     } else if full {
         decrypted.display_long(&desc, clipboard);
     } else if let Some(field) = field {
         decrypted.display_field(&desc, field, clipboard);
     } else {
         decrypted.display_short(&desc, clipboard);
-    }
-
-    if !raw {
-        decrypted.maybe_print_attachment_hint();
     }
 
     Ok(())
@@ -1597,40 +1850,61 @@ pub fn attachment_list(
     user: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
-    raw: bool,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     unlock(None)?;
     let db = load_db()?;
     let (_, decrypted) = find_entry(&db, needle, user, folder, ignore_case)?;
 
-    if raw {
-        serde_json::to_writer_pretty(
-            std::io::stdout(),
+    if output_is_structured(output) {
+        write_serialized_pretty(
             &decrypted.attachments,
-        )
-        .context("failed to write attachments to stdout")?;
-        println!();
-    } else {
-        let color = stdout_supports_color();
-        for attachment in decrypted.attachments {
+            output,
+            "failed to write attachments to stdout",
+        )?;
+    } else if output == OutputMode::Name {
+        for attachment in &decrypted.attachments {
             println!(
-                "{}\t{}\t{}",
-                paint(&attachment.id, "1;36", color,),
-                paint(
-                    &attachment.file_name.unwrap_or_default(),
-                    "0;32",
-                    color,
-                ),
-                paint(
-                    &attachment
-                        .size_name
-                        .or(attachment.size)
-                        .unwrap_or_default(),
-                    "2",
-                    color,
-                )
+                "{}",
+                attachment
+                    .file_name
+                    .clone()
+                    .unwrap_or_else(|| attachment.id.clone())
             );
         }
+    } else {
+        let rows = decrypted
+            .attachments
+            .iter()
+            .map(|attachment| {
+                vec![
+                    attachment.id.clone(),
+                    attachment.file_name.clone().unwrap_or_default(),
+                    attachment
+                        .size_name
+                        .clone()
+                        .or_else(|| attachment.size.clone())
+                        .unwrap_or_default(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        print_table(
+            &[
+                TableColumn {
+                    header: "id",
+                    style: TableColumnStyle::Id,
+                },
+                TableColumn {
+                    header: "name",
+                    style: TableColumnStyle::Name,
+                },
+                TableColumn {
+                    header: "size",
+                    style: TableColumnStyle::Size,
+                },
+            ],
+            &rows,
+        )?;
     }
 
     Ok(())
@@ -1641,7 +1915,7 @@ pub fn attachment_get(
     user: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
-    attachment: &str,
+    attachment: Option<&str>,
     output: Option<&std::path::Path>,
     raw: bool,
 ) -> anyhow::Result<()> {
@@ -1649,8 +1923,21 @@ pub fn attachment_get(
     let mut db = load_db()?;
     let (entry, decrypted) =
         find_entry(&db, needle, user, folder, ignore_case)?;
+    let Some(attachment) = attachment else {
+        return Err(available_attachments_error(
+            &decrypted.name,
+            &decrypted.attachments,
+            "attachment id or filename is required",
+        ));
+    };
     let (attachment, decrypted_attachment) =
-        find_attachment(&entry, &decrypted, attachment)?;
+        find_attachment(&entry, &decrypted, attachment).map_err(|err| {
+            available_attachments_error(
+                &decrypted.name,
+                &decrypted.attachments,
+                &err.to_string(),
+            )
+        })?;
 
     let access_token = db
         .access_token
@@ -1686,7 +1973,10 @@ pub fn attachment_get(
         entry.org_id.as_deref(),
     )?;
 
-    if raw {
+    let output_to_stdout = raw
+        || output.is_some_and(|output| output == std::path::Path::new("-"));
+
+    if output_to_stdout {
         std::io::stdout()
             .write_all(&decrypted)
             .context("failed to write attachment to stdout")?;
@@ -1720,75 +2010,99 @@ pub fn attachment_get(
 fn print_entry_list(
     entries: &[DecryptedListCipher],
     fields: &[ListField],
-    raw: bool,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
-    if raw {
-        serde_json::to_writer_pretty(std::io::stdout(), &entries)
-            .context("failed to write entries to stdout".to_string())?;
-        println!();
-    } else {
-        let human_output = stdout_is_terminal();
-        let mut printed_attachment_hint = false;
+    if output_is_structured(output) {
+        write_serialized_pretty(
+            &entries,
+            output,
+            "failed to write entries to stdout",
+        )?;
+    } else if output == OutputMode::Name {
         for entry in entries {
-            let values: Vec<String> = fields
-                .iter()
-                .map(|field| match field {
-                    ListField::Id => entry.id.clone(),
-                    ListField::Name => entry.name.as_ref().map_or_else(
-                        String::new,
-                        std::string::ToString::to_string,
-                    ),
-                    ListField::User => entry.user.as_ref().map_or_else(
-                        String::new,
-                        std::string::ToString::to_string,
-                    ),
-                    ListField::Folder => entry.folder.as_ref().map_or_else(
-                        String::new,
-                        std::string::ToString::to_string,
-                    ),
-                    ListField::Uri => {
-                        // "uri" is not listed in the TryFrom
-                        // implementation, so there's no way to try to
-                        // print it (and it's not clear what that would
-                        // look like, since it's a list and not a single
-                        // string)
-                        unreachable!()
-                    }
-                    ListField::EntryType => {
-                        entry.entry_type.as_ref().map_or_else(
+            println!("{}", entry.name.clone().unwrap_or_default());
+        }
+    } else {
+        let mut columns = fields
+            .iter()
+            .map(|field| match field {
+                ListField::Id => TableColumn {
+                    header: "uid",
+                    style: TableColumnStyle::Id,
+                },
+                ListField::Name => TableColumn {
+                    header: "name",
+                    style: TableColumnStyle::Name,
+                },
+                ListField::User => TableColumn {
+                    header: "user",
+                    style: TableColumnStyle::User,
+                },
+                ListField::Folder => TableColumn {
+                    header: "folder",
+                    style: TableColumnStyle::Folder,
+                },
+                ListField::Uri => TableColumn {
+                    header: "uri",
+                    style: TableColumnStyle::Default,
+                },
+                ListField::EntryType => TableColumn {
+                    header: "type",
+                    style: TableColumnStyle::EntryType,
+                },
+                ListField::Collections => TableColumn {
+                    header: "collections",
+                    style: TableColumnStyle::Collections,
+                },
+            })
+            .collect::<Vec<_>>();
+        columns.push(TableColumn {
+            header: "attachments",
+            style: TableColumnStyle::Attachments,
+        });
+
+        let rows = entries
+            .iter()
+            .map(|entry| {
+                let mut values = fields
+                    .iter()
+                    .map(|field| match field {
+                        ListField::Id => entry.id.clone(),
+                        ListField::Name => entry.name.as_ref().map_or_else(
                             String::new,
                             std::string::ToString::to_string,
-                        )
-                    }
-                    ListField::Collections => entry
-                        .collection_ids
-                        .as_ref()
-                        .map_or_else(String::new, |ids| ids.join(",")),
-                })
-                .collect();
-            let mut values = values;
-            if human_output && entry.attachment_metadata.has_attachments() {
-                printed_attachment_hint = true;
-                let count = entry.attachment_metadata.attachment_count;
-                let noun = if count == 1 {
-                    "attachment"
-                } else {
-                    "attachments"
-                };
-                values.push(paint_stdout(&format!("{count} {noun}"), "1;33"));
-            }
+                        ),
+                        ListField::User => entry.user.as_ref().map_or_else(
+                            || "N/A".to_string(),
+                            std::string::ToString::to_string,
+                        ),
+                        ListField::Folder => {
+                            entry.folder.as_ref().map_or_else(
+                                String::new,
+                                std::string::ToString::to_string,
+                            )
+                        }
+                        ListField::Uri => unreachable!(),
+                        ListField::EntryType => {
+                            entry.entry_type.as_ref().map_or_else(
+                                String::new,
+                                std::string::ToString::to_string,
+                            )
+                        }
+                        ListField::Collections => entry
+                            .collection_ids
+                            .as_ref()
+                            .map_or_else(String::new, |ids| ids.join(",")),
+                    })
+                    .collect::<Vec<_>>();
+                values.push(attachments_cell(
+                    entry.attachment_metadata.attachment_count,
+                ));
+                values
+            })
+            .collect::<Vec<_>>();
 
-            // write to stdout but don't panic when pipe get's closed
-            // this happens when piping stdout in a shell
-            match writeln!(&mut std::io::stdout(), "{}", values.join("\t")) {
-                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
-                    Ok(())
-                }
-                res => res,
-            }?;
-        }
-
-        maybe_print_attachment_command_hint(printed_attachment_hint);
+        print_table(&columns, &rows)?;
     }
 
     Ok(())
@@ -1798,10 +2112,17 @@ pub fn search(
     term: &str,
     fields: &[String],
     folder: Option<&str>,
-    raw: bool,
+    with_attachments: bool,
+    output: OutputMode,
     full: bool,
 ) -> anyhow::Result<()> {
-    let fields: Vec<ListField> = if raw {
+    let structured_output = if full && output == OutputMode::Default {
+        OutputMode::Json
+    } else {
+        output
+    };
+
+    let fields: Vec<ListField> = if output_is_structured(structured_output) {
         ListField::all()
     } else {
         fields
@@ -1809,6 +2130,10 @@ pub fn search(
             .map(std::convert::TryFrom::try_from)
             .collect::<anyhow::Result<_>>()?
     };
+
+    if full && output == OutputMode::Name {
+        anyhow::bail!("--full cannot be combined with --output name");
+    }
 
     unlock(None)?;
 
@@ -1818,17 +2143,24 @@ pub fn search(
             .entries
             .iter()
             .filter_map(|entry| match decrypt_search_cipher(entry) {
-                Ok(searchable) if searchable.search_match(term, folder) => {
+                Ok(searchable)
+                    if searchable.search_match(
+                        term,
+                        folder,
+                        with_attachments,
+                    ) =>
+                {
                     decrypt_cipher(entry).ok()
                 }
                 Ok(_) | Err(_) => None,
             })
             .collect();
         entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
-        serde_json::to_writer_pretty(std::io::stdout(), &entries)
-            .context("failed to write entries to stdout".to_string())?;
-        println!();
-        return Ok(());
+        return write_serialized_pretty(
+            &entries,
+            structured_output,
+            "failed to write entries to stdout",
+        );
     }
 
     // As in `list`, decrypt every entry's searchable fields in a single batch
@@ -1850,15 +2182,15 @@ pub fn search(
         .into_iter()
         .map(|plan| plan.resolve(&results))
         .filter(|entry| {
-            entry
-                .as_ref()
-                .map_or(true, |entry| entry.search_match(term, folder))
+            entry.as_ref().map_or(true, |entry| {
+                entry.search_match(term, folder, with_attachments)
+            })
         })
         .map(|entry| entry.map(std::convert::Into::into))
         .collect::<Result<_, anyhow::Error>>()?;
     entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
-    print_entry_list(&entries, &fields, raw)?;
+    print_entry_list(&entries, &fields, output)?;
 
     Ok(())
 }
@@ -2320,14 +2652,10 @@ pub fn export() -> anyhow::Result<()> {
         collections,
     };
 
-    serde_json::to_writer_pretty(std::io::stdout(), &vault)
-        .context("failed to write export to stdout")?;
-    println!();
-
-    Ok(())
+    write_json_pretty(&vault, "failed to write export to stdout")
 }
 
-pub fn list_collections(raw: bool) -> anyhow::Result<()> {
+pub fn list_collections(output: OutputMode) -> anyhow::Result<()> {
     #[derive(serde::Serialize)]
     struct DecryptedCollection {
         id: String,
@@ -2354,14 +2682,34 @@ pub fn list_collections(raw: bool) -> anyhow::Result<()> {
         .collect::<anyhow::Result<_>>()?;
     collections.sort_by(|a, b| a.name.cmp(&b.name));
 
-    if raw {
-        serde_json::to_writer_pretty(std::io::stdout(), &collections)
-            .context("failed to write collections to stdout")?;
-        println!();
-    } else {
-        for c in &collections {
-            println!("{}\t{}", c.id, c.name);
+    if output_is_structured(output) {
+        write_serialized_pretty(
+            &collections,
+            output,
+            "failed to write collections to stdout",
+        )?;
+    } else if output == OutputMode::Name {
+        for collection in &collections {
+            println!("{}", collection.name);
         }
+    } else {
+        let rows = collections
+            .iter()
+            .map(|c| vec![c.id.clone(), c.name.clone()])
+            .collect::<Vec<_>>();
+        print_table(
+            &[
+                TableColumn {
+                    header: "id",
+                    style: TableColumnStyle::Id,
+                },
+                TableColumn {
+                    header: "name",
+                    style: TableColumnStyle::Name,
+                },
+            ],
+            &rows,
+        )?;
     }
 
     Ok(())
@@ -3095,10 +3443,12 @@ fn find_entry_raw(
     } else {
         let entries: Vec<String> = matches
             .iter()
-            .map(|(_, decrypted)| decrypted.display_name())
+            .map(|(_, decrypted)| format_ambiguous_entry(decrypted))
             .collect();
-        let entries = entries.join(", ");
-        Err(anyhow::anyhow!("multiple entries found: {entries}"))
+        Err(anyhow::anyhow!(
+            "multiple entries found:\n{}\n\nTry `rbw list {needle}` to inspect the matches, or add --user/--folder to disambiguate.",
+            entries.join("\n"),
+        ))
     }
 }
 
@@ -4932,14 +5282,13 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_attachment_metadata_serializes_json_hint() {
+    fn test_attachment_metadata_serializes_attachment_count() {
         let metadata = AttachmentMetadata::new("cipher-id", 2);
 
         assert_eq!(
             serde_json::to_value(&metadata).unwrap(),
             serde_json::json!({
-                "attachment_count": 2,
-                "attachment_hint": "Use `rbw attachment list cipher-id` to inspect attachments and `rbw attachment get cipher-id <attachment-id-or-filename>` to download one."
+                "attachment_count": 2
             })
         );
     }
@@ -4952,6 +5301,85 @@ mod test {
             serde_json::to_value(&metadata).unwrap(),
             serde_json::json!({})
         );
+    }
+
+    #[test]
+    fn test_list_field_accepts_uid_alias() {
+        let field = "uid".to_string();
+
+        assert!(matches!(
+            ListField::try_from(&field).unwrap(),
+            ListField::Id
+        ));
+    }
+
+    #[test]
+    fn test_format_ambiguous_entry_renders_multiline_details() {
+        let rendered = format_ambiguous_entry(&DecryptedSearchCipher {
+            id: "cipher-id".to_string(),
+            entry_type: "Login".to_string(),
+            folder: Some("mail".to_string()),
+            name: "google.com".to_string(),
+            user: Some("alice@example.com".to_string()),
+            uris: vec![],
+            fields: vec![],
+            notes: None,
+            attachment_count: 2,
+        });
+
+        assert_eq!(
+            rendered,
+            "  - google.com (uid: cipher-id | username: alice@example.com | folder: mail | attachments: 2)"
+        );
+    }
+
+    #[test]
+    fn test_search_match_respects_with_attachments_filter() {
+        let entry = DecryptedSearchCipher {
+            id: "cipher-id".to_string(),
+            entry_type: "Login".to_string(),
+            folder: None,
+            name: "example".to_string(),
+            user: None,
+            uris: vec![],
+            fields: vec![],
+            notes: None,
+            attachment_count: 0,
+        };
+
+        assert!(entry.search_match("exa", None, false));
+        assert!(!entry.search_match("exa", None, true));
+    }
+
+    #[test]
+    fn test_render_table_row_aligns_columns_with_padding() {
+        let row =
+            vec!["UID".to_string(), "NAME".to_string(), "USER".to_string()];
+        let widths = vec![5, 10, 4];
+
+        let rendered =
+            render_table_row(&row, &widths, |_, cell| cell.to_string());
+
+        assert_eq!(rendered, "UID    NAME        USER");
+    }
+
+    #[test]
+    fn test_available_attachments_error_lists_candidates() {
+        let error = available_attachments_error(
+            "example",
+            &[DecryptedAttachment {
+                id: "id-1".to_string(),
+                file_name: Some("invoice.pdf".to_string()),
+                size: None,
+                size_name: Some("1 KB".to_string()),
+            }],
+            "attachment 'foo' was not found",
+        );
+
+        let message = error.to_string();
+        assert!(message.contains("attachment 'foo' was not found"));
+        assert!(message.contains("Available attachments for 'example':"));
+        assert!(message.contains("id-1\tinvoice.pdf\t1 KB"));
     }
 
     #[test]
