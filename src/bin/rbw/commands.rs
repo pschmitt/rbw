@@ -1384,7 +1384,7 @@ pub fn list(fields: &[String], raw: bool, full: bool) -> anyhow::Result<()> {
         let mut entries: Vec<DecryptedCipher> = db
             .entries
             .iter()
-            .map(|entry| decrypt_cipher(entry))
+            .map(decrypt_cipher)
             .collect::<anyhow::Result<_>>()?;
         entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         serde_json::to_writer_pretty(std::io::stdout(), &entries)
@@ -1548,14 +1548,11 @@ pub fn search(
         let mut entries: Vec<DecryptedCipher> = db
             .entries
             .iter()
-            .filter_map(|entry| {
-                match decrypt_search_cipher(entry) {
-                    Ok(searchable) if searchable.search_match(term, folder) => {
-                        decrypt_cipher(entry).ok()
-                    }
-                    Ok(_) => None,
-                    Err(_) => None,
+            .filter_map(|entry| match decrypt_search_cipher(entry) {
+                Ok(searchable) if searchable.search_match(term, folder) => {
+                    decrypt_cipher(entry).ok()
                 }
+                Ok(_) | Err(_) => None,
             })
             .collect();
         entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
@@ -2014,7 +2011,7 @@ pub fn export() -> anyhow::Result<()> {
         collections: Vec<ExportedCollection>,
     }
 
-    unlock()?;
+    unlock(None)?;
 
     let db = load_db()?;
 
@@ -2069,7 +2066,7 @@ pub fn list_collections(raw: bool) -> anyhow::Result<()> {
         name: String,
     }
 
-    unlock()?;
+    unlock(None)?;
 
     let db = load_db()?;
 
@@ -2105,7 +2102,7 @@ pub fn edit_collections(
     id: &str,
     collections_b64: &str,
 ) -> anyhow::Result<()> {
-    unlock()?;
+    unlock(None)?;
 
     let mut db = load_db()?;
     let access_token = db.access_token.as_ref().unwrap();
@@ -2134,7 +2131,7 @@ pub fn edit_collections(
 }
 
 pub fn create_collection(name: &str, org_id: &str) -> anyhow::Result<()> {
-    unlock()?;
+    unlock(None)?;
 
     let mut db = load_db()?;
     let access_token = db.access_token.as_ref().unwrap();
@@ -2164,7 +2161,7 @@ pub fn delete_collection(
     collection_id: &str,
     org_id: &str,
 ) -> anyhow::Result<()> {
-    unlock()?;
+    unlock(None)?;
 
     let mut db = load_db()?;
     let access_token = db.access_token.as_ref().unwrap();
@@ -2190,7 +2187,7 @@ pub fn rename_collection(
     org_id: &str,
     name: &str,
 ) -> anyhow::Result<()> {
-    unlock()?;
+    unlock(None)?;
 
     let mut db = load_db()?;
     let access_token = db.access_token.as_ref().unwrap();
@@ -2301,7 +2298,7 @@ pub fn propagate_collection_permissions(
     apply: bool,
     verbose: bool,
 ) -> anyhow::Result<()> {
-    unlock()?;
+    unlock(None)?;
     crate::actions::sync()?;
 
     let mut db = load_db()?;
@@ -3152,6 +3149,93 @@ impl SearchCipherPlan {
     }
 }
 
+fn decrypt_search_cipher(
+    entry: &rbw::db::Entry,
+) -> anyhow::Result<DecryptedSearchCipher> {
+    let id = entry.id.clone();
+    let name = crate::actions::decrypt(
+        &entry.name,
+        entry.key.as_deref(),
+        entry.org_id.as_deref(),
+    )?;
+    let user = match &entry.data {
+        rbw::db::EntryData::Login { username, .. } => decrypt_field(
+            Field::Username,
+            username.as_deref(),
+            entry.key.as_deref(),
+            entry.org_id.as_deref(),
+        ),
+        _ => None,
+    };
+    let folder = entry
+        .folder
+        .as_ref()
+        .map(|folder| crate::actions::decrypt(folder, None, None))
+        .transpose()?;
+    let notes = entry
+        .notes
+        .as_ref()
+        .map(|notes| {
+            crate::actions::decrypt(
+                notes,
+                entry.key.as_deref(),
+                entry.org_id.as_deref(),
+            )
+        })
+        .transpose();
+    let uris = if let rbw::db::EntryData::Login { uris, .. } = &entry.data {
+        uris.iter()
+            .filter_map(|s| {
+                decrypt_field(
+                    Field::Uris,
+                    Some(&s.uri),
+                    entry.key.as_deref(),
+                    entry.org_id.as_deref(),
+                )
+                .map(|uri| (uri, s.match_type))
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+    let fields = entry
+        .fields
+        .iter()
+        .filter_map(|field| {
+            if field.ty == Some(rbw::api::FieldType::Hidden) {
+                None
+            } else {
+                field.value.as_ref()
+            }
+        })
+        .map(|value| {
+            crate::actions::decrypt(
+                value,
+                entry.key.as_deref(),
+                entry.org_id.as_deref(),
+            )
+        })
+        .collect::<anyhow::Result<_>>()?;
+    let notes = match notes {
+        Ok(notes) => notes,
+        Err(e) => {
+            log::warn!("failed to decrypt notes: {e}");
+            None
+        }
+    };
+
+    Ok(DecryptedSearchCipher {
+        id,
+        entry_type: entry_type_name(&entry.data).to_string(),
+        folder,
+        name,
+        user,
+        uris,
+        fields,
+        notes,
+    })
+}
+
 fn decrypt_cipher(entry: &rbw::db::Entry) -> anyhow::Result<DecryptedCipher> {
     // folder name should always be decrypted with the local key because
     // folders are local to a specific user's vault, not the organization
@@ -3630,7 +3714,7 @@ struct InjectContext {
 
 impl InjectContext {
     fn load() -> anyhow::Result<Self> {
-        unlock()?;
+        unlock(None)?;
 
         let db = load_db()?;
         Ok(Self {

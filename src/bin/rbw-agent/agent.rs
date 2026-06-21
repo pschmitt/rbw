@@ -181,7 +181,7 @@ async fn handle_request(
                 sock,
                 state.clone(),
                 &environment,
-                entries,
+                &entries,
             )
             .await?;
             true

@@ -436,7 +436,7 @@ async fn unlock_state(
             // Password was passed through stdin
             match rbw::actions::unlock(
                 &email,
-                &password,
+                password,
                 kdf,
                 iterations,
                 memory,
