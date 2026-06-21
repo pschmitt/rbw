@@ -125,6 +125,12 @@ enum Opt {
         full: bool,
     },
 
+    #[command(about = "List or download file attachments")]
+    Attachment {
+        #[command(subcommand)]
+        attachment: Attachment,
+    },
+
     #[command(
         about = "Display the authenticator code for a given entry",
         visible_alias = "totp"
@@ -360,6 +366,9 @@ impl Opt {
             Self::List { .. } => "list".to_string(),
             Self::Get { .. } => "get".to_string(),
             Self::Search { .. } => "search".to_string(),
+            Self::Attachment { attachment } => {
+                format!("attachment {}", attachment.subcommand_name())
+            }
             Self::Code { .. } => "code".to_string(),
             Self::Inject { .. } => "inject".to_string(),
             Self::Run { .. } => "run".to_string(),
@@ -411,6 +420,44 @@ enum Config {
         #[arg(help = "Configuration key to unset")]
         key: String,
     },
+}
+
+#[derive(Debug, clap::Parser)]
+enum Attachment {
+    #[command(about = "List attachments for an entry")]
+    List {
+        #[command(flatten)]
+        find_args: FindArgs,
+        #[structopt(long, help = "Display output as JSON")]
+        raw: bool,
+    },
+    #[command(about = "Download and decrypt an attachment")]
+    Get {
+        #[arg(help = "Name, URI or UUID of the entry", value_parser = commands::parse_needle)]
+        needle: commands::Needle,
+        #[arg(help = "Attachment ID or filename")]
+        attachment: String,
+        #[arg(help = "Username of the entry")]
+        user: Option<String>,
+        #[arg(long, help = "Folder name to search in")]
+        folder: Option<String>,
+        #[arg(short, long, help = "Ignore case")]
+        ignorecase: bool,
+        #[arg(short, long, help = "Output file or directory")]
+        output: Option<std::path::PathBuf>,
+        #[arg(long, help = "Write attachment content to stdout")]
+        raw: bool,
+    },
+}
+
+impl Attachment {
+    fn subcommand_name(&self) -> String {
+        match self {
+            Self::List { .. } => "list",
+            Self::Get { .. } => "get",
+        }
+        .to_string()
+    }
 }
 
 impl Config {
@@ -468,6 +515,32 @@ fn main() {
         Opt::Sync => commands::sync(),
         Opt::Export => commands::export(),
         Opt::List { fields, raw, full } => commands::list(&fields, raw, full),
+        Opt::Attachment { attachment } => match attachment {
+            Attachment::List { find_args, raw } => commands::attachment_list(
+                find_args.needle,
+                find_args.user.as_deref(),
+                find_args.folder.as_deref(),
+                find_args.ignorecase,
+                raw,
+            ),
+            Attachment::Get {
+                needle,
+                attachment,
+                user,
+                folder,
+                ignorecase,
+                output,
+                raw,
+            } => commands::attachment_get(
+                needle,
+                user.as_deref(),
+                folder.as_deref(),
+                ignorecase,
+                &attachment,
+                output.as_deref(),
+                raw,
+            ),
+        },
         Opt::Get {
             find_args,
             field,

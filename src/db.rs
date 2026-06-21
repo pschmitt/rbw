@@ -21,6 +21,8 @@ pub struct Entry {
     pub master_password_reprompt: crate::api::CipherRepromptType,
     #[serde(default)]
     pub collection_ids: Vec<String>,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
 }
 
 #[derive(
@@ -30,6 +32,18 @@ pub struct Collection {
     pub id: String,
     pub org_id: String,
     pub name: String,
+}
+
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Eq, PartialEq,
+)]
+pub struct Attachment {
+    pub id: String,
+    pub url: Option<String>,
+    pub file_name: Option<String>,
+    pub key: Option<String>,
+    pub size: Option<String>,
+    pub size_name: Option<String>,
 }
 
 impl Entry {

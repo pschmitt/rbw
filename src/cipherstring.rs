@@ -180,6 +180,16 @@ impl CipherString {
         }
     }
 
+    pub fn decrypt_attachment_key(
+        &self,
+        keys: &crate::locked::Keys,
+        entry_key: Option<&crate::locked::Keys>,
+    ) -> Result<crate::locked::Keys> {
+        let mut key = crate::locked::Vec::new();
+        key.extend(self.decrypt_symmetric(keys, entry_key)?.iter().copied());
+        Ok(crate::locked::Keys::new(key))
+    }
+
     pub fn decrypt_locked_asymmetric(
         &self,
         private_key: &crate::locked::PrivateKey,
@@ -208,6 +218,36 @@ impl CipherString {
                     "found a symmetric cipherstring, expecting asymmetric"
                         .to_string(),
             })
+        }
+    }
+}
+
+pub fn decrypt_file_data(
+    data: &[u8],
+    keys: &crate::locked::Keys,
+) -> Result<Vec<u8>> {
+    if data.len() < 50 {
+        return Err(Error::InvalidCipherString {
+            reason: "encrypted attachment is too short".to_string(),
+        });
+    }
+
+    match data[0] {
+        2 => {
+            let iv = &data[1..17];
+            let mac = &data[17..49];
+            let ciphertext = &data[49..];
+            let cipher =
+                decrypt_common_symmetric(keys, iv, ciphertext, Some(mac))?;
+            cipher
+                .decrypt_padded_vec_mut::<block_padding::Pkcs7>(ciphertext)
+                .map_err(|source| Error::Decrypt { source })
+        }
+        0 => Err(Error::UnimplementedCipherStringType {
+            ty: "0".to_string(),
+        }),
+        ty => {
+            Err(Error::UnimplementedCipherStringType { ty: ty.to_string() })
         }
     }
 }
@@ -312,4 +352,30 @@ fn test_pkcs7_unpad() {
         let got = pkcs7_unpad(input);
         assert_eq!(got, expected);
     }
+}
+
+#[test]
+fn test_decrypt_file_data() {
+    let mut key = crate::locked::Vec::new();
+    key.extend(0_u8..64);
+    let keys = crate::locked::Keys::new(key);
+    let plaintext = b"attachment content";
+
+    let encrypted =
+        CipherString::encrypt_symmetric(&keys, plaintext).unwrap();
+    let CipherString::Symmetric {
+        iv,
+        ciphertext,
+        mac: Some(mac),
+    } = encrypted
+    else {
+        panic!("expected symmetric cipherstring with mac");
+    };
+
+    let mut data = vec![2];
+    data.extend(iv);
+    data.extend(mac);
+    data.extend(ciphertext);
+
+    assert_eq!(decrypt_file_data(&data, &keys).unwrap(), plaintext);
 }

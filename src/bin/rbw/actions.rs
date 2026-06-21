@@ -124,6 +124,34 @@ pub fn decrypt_batch(
     }
 }
 
+pub fn decrypt_attachment(
+    data: Vec<u8>,
+    attachment_key: Option<&str>,
+    entry_key: Option<&str>,
+    org_id: Option<&str>,
+) -> anyhow::Result<Vec<u8>> {
+    let mut sock = connect()?;
+    sock.send(&rbw::protocol::Request::new(
+        get_environment(),
+        rbw::protocol::Action::DecryptAttachment {
+            data,
+            attachment_key: attachment_key
+                .map(std::string::ToString::to_string),
+            entry_key: entry_key.map(std::string::ToString::to_string),
+            org_id: org_id.map(std::string::ToString::to_string),
+        },
+    ))?;
+
+    let res = sock.recv()?;
+    match res {
+        rbw::protocol::Response::DecryptAttachment { data } => Ok(data),
+        rbw::protocol::Response::Error { error } => {
+            Err(anyhow::anyhow!("failed to decrypt attachment: {error}"))
+        }
+        _ => Err(anyhow::anyhow!("unexpected message: {res:?}")),
+    }
+}
+
 pub fn encrypt(
     plaintext: &str,
     org_id: Option<&str>,

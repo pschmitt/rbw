@@ -184,6 +184,12 @@ pub enum Action {
     DecryptBatch {
         entries: Vec<DecryptRequest>,
     },
+    DecryptAttachment {
+        data: Vec<u8>,
+        attachment_key: Option<String>,
+        entry_key: Option<String>,
+        org_id: Option<String>,
+    },
     Encrypt {
         plaintext: String,
         org_id: Option<String>,
@@ -202,6 +208,7 @@ pub enum Response {
     Error { error: String },
     Decrypt { plaintext: String },
     DecryptBatch { results: Vec<DecryptResult> },
+    DecryptAttachment { data: Vec<u8> },
     Encrypt { cipherstring: String },
     Version { version: u32 },
 }

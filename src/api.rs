@@ -442,6 +442,8 @@ struct SyncResCipher {
     reprompt: CipherRepromptType,
     #[serde(rename = "CollectionIds", alias = "collectionIds", default)]
     collection_ids: Vec<String>,
+    #[serde(rename = "Attachments", alias = "attachments", default)]
+    attachments: Vec<CipherAttachment>,
 }
 
 impl SyncResCipher {
@@ -566,8 +568,64 @@ impl SyncResCipher {
             key: self.key.clone(),
             master_password_reprompt: self.reprompt,
             collection_ids: self.collection_ids.clone(),
+            attachments: self
+                .attachments
+                .iter()
+                .map(|attachment| crate::db::Attachment {
+                    id: attachment.id.clone(),
+                    url: attachment.url.clone(),
+                    file_name: attachment.file_name.clone(),
+                    key: attachment.key.clone(),
+                    size: attachment.size.clone(),
+                    size_name: attachment.size_name.clone(),
+                })
+                .collect(),
         })
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+struct CipherAttachment {
+    #[serde(rename = "Id", alias = "id")]
+    id: String,
+    #[serde(rename = "Url", alias = "url")]
+    url: Option<String>,
+    #[serde(rename = "FileName", alias = "fileName")]
+    file_name: Option<String>,
+    #[serde(rename = "Key", alias = "key")]
+    key: Option<String>,
+    #[serde(
+        rename = "Size",
+        alias = "size",
+        default,
+        deserialize_with = "deserialize_optional_string"
+    )]
+    size: Option<String>,
+    #[serde(rename = "SizeName", alias = "sizeName")]
+    size_name: Option<String>,
+}
+
+fn deserialize_optional_string<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value =
+        <Option<serde_json::Value> as serde::Deserialize>::deserialize(
+            deserializer,
+        )?;
+    Ok(value.and_then(|value| match value {
+        serde_json::Value::String(value) => Some(value),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }))
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct AttachmentDataRes {
+    #[serde(rename = "Url", alias = "url")]
+    url: String,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -1631,6 +1689,52 @@ impl Client {
             reqwest::StatusCode::UNAUTHORIZED => {
                 Err(Error::RequestUnauthorized)
             }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    pub fn attachment_url(
+        &self,
+        access_token: &str,
+        cipher_id: &str,
+        attachment_id: &str,
+    ) -> Result<String> {
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .get(self.api_url(&format!(
+                "/ciphers/{cipher_id}/attachment/{attachment_id}"
+            )))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => {
+                let res: AttachmentDataRes = res.json_with_path()?;
+                Ok(res.url)
+            }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    pub fn download_attachment(&self, url: &str) -> Result<Vec<u8>> {
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .get(url)
+            .header("cache", "no-cache")
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => res
+                .bytes()
+                .map(|bytes| bytes.to_vec())
+                .map_err(|source| Error::Reqwest { source }),
             _ => Err(Error::RequestFailed {
                 status: res.status().as_u16(),
             }),

@@ -813,6 +813,60 @@ pub async fn decrypt_batch(
     Ok(())
 }
 
+pub async fn decrypt_attachment(
+    sock: &mut crate::sock::Sock,
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    data: &[u8],
+    attachment_key: Option<&str>,
+    entry_key: Option<&str>,
+    org_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let state = state.lock().await;
+    let Some(keys) = state.key(org_id) else {
+        return Err(anyhow::anyhow!(
+            "failed to find decryption keys in in-memory state"
+        ));
+    };
+    let entry_key = if let Some(entry_key) = entry_key {
+        let key_cipherstring =
+            rbw::cipherstring::CipherString::new(entry_key)
+                .context("failed to parse individual item encryption key")?;
+        Some(rbw::locked::Keys::new(
+            key_cipherstring.decrypt_locked_symmetric(keys).context(
+                "failed to decrypt individual item encryption key",
+            )?,
+        ))
+    } else {
+        None
+    };
+    let attachment_keys = if let Some(attachment_key) = attachment_key {
+        let key_cipherstring =
+            rbw::cipherstring::CipherString::new(attachment_key)
+                .context("failed to parse attachment encryption key")?;
+        Some(
+            key_cipherstring
+                .decrypt_attachment_key(keys, entry_key.as_ref())?,
+        )
+    } else {
+        None
+    };
+    let decrypted = rbw::cipherstring::decrypt_file_data(
+        data,
+        attachment_keys
+            .as_ref()
+            .or(entry_key.as_ref())
+            .unwrap_or(keys),
+    )
+    .context("failed to decrypt attachment data")?;
+
+    sock.send(&rbw::protocol::Response::DecryptAttachment {
+        data: decrypted,
+    })
+    .await?;
+
+    Ok(())
+}
+
 pub async fn encrypt(
     sock: &mut crate::sock::Sock,
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,

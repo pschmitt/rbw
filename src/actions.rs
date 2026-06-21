@@ -285,6 +285,31 @@ fn edit_collections_once(
     Ok(())
 }
 
+pub fn attachment_url(
+    access_token: &str,
+    refresh_token: &str,
+    cipher_id: &str,
+    attachment_id: &str,
+) -> Result<(Option<String>, String)> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        attachment_url_once(access_token, cipher_id, attachment_id)
+    })
+}
+
+fn attachment_url_once(
+    access_token: &str,
+    cipher_id: &str,
+    attachment_id: &str,
+) -> Result<String> {
+    let (client, _) = api_client()?;
+    client.attachment_url(access_token, cipher_id, attachment_id)
+}
+
+pub fn download_attachment(url: &str) -> Result<Vec<u8>> {
+    let (client, _) = api_client()?;
+    client.download_attachment(url)
+}
+
 pub fn rename_collection(
     access_token: &str,
     refresh_token: &str,
