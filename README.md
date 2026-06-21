@@ -126,15 +126,27 @@ functionality.
 Run `rbw get <name>` to get your passwords. If you also want to get the username
 or the note associated, you can use the flag `--full`. You can also use the flag
 `--field={field}` to get whatever default or custom field you want. The `--raw`
-flag will show the output as JSON. In addition to matching against the name,
-you can pass a UUID as the name to search for the entry with that id, or a
-URL to search for an entry with a matching website entry.
+flag (or `--json`) will show the output as JSON. On a terminal, JSON output is
+colorized automatically; when piped, plain JSON is emitted. In addition to
+matching against the name, you can pass a UUID as the name to search for the
+entry with that id, or a URL to search for an entry with a matching website
+entry.
 
-If an item has file attachments, `rbw get` and `rbw list` will point that out.
-To inspect them directly, run `rbw attachment list <entry>`. To download one,
-run `rbw attachment get <entry> <attachment-id-or-filename>`. Using the entry
-UUID is the most precise option and avoids shell quoting issues for names with
-spaces.
+`rbw list` also accepts an optional search term (`rbw list google`) to show only
+matching entries, and `rbw list --with-attachments` restricts the results to
+items that have attachments. Interactive table-style output uses uppercase
+headers, smart coloring, and default `UID`, `NAME`, `USER`, and
+`ATTACHMENTS` columns. To inspect attachments directly, run
+`rbw attachment list <entry>` (or `rbw attachment list <entry> --json`). To
+download one, run
+`rbw attachment get <entry> <attachment-id-or-filename>`. If you omit or mistype
+the attachment name, `rbw` will print the available attachments. Use
+`rbw attachment get <entry> <attachment-id-or-filename> --output -` to write the
+attachment to stdout instead of a file. Using the entry UUID is the most precise
+option and avoids shell quoting issues for names with spaces.
+
+For commands that support formatted output, use `-o name`, `-o json`, or
+`-o yaml`. `-o json` is equivalent to `--json`, and `-o yaml` emits YAML.
 
 ### Template and command injection
 

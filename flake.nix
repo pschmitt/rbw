@@ -31,14 +31,18 @@
             src = self;
             cargoLock.lockFile = ./Cargo.lock;
 
-            nativeBuildInputs = [ pkgs.installShellFiles ];
-
             postInstall = ''
               install -Dm755 bin/git-credential-rbw -t "$out/bin"
-              installShellCompletion --cmd rbw \
-                --bash <("$out/bin/rbw" gen-completions bash) \
-                --zsh <("$out/bin/rbw" gen-completions zsh) \
-                --fish <("$out/bin/rbw" gen-completions fish)
+              mkdir -p \
+                "$out/share/bash-completion/completions" \
+                "$out/share/fish/vendor_completions.d" \
+                "$out/share/zsh/site-functions"
+              "$out/bin/rbw" gen-completions bash \
+                > "$out/share/bash-completion/completions/rbw"
+              "$out/bin/rbw" gen-completions fish \
+                > "$out/share/fish/vendor_completions.d/rbw.fish"
+              "$out/bin/rbw" gen-completions zsh \
+                > "$out/share/zsh/site-functions/_rbw"
             '';
           };
 

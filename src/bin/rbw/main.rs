@@ -23,6 +23,56 @@ struct FindArgs {
     ignorecase: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+enum OutputArg {
+    Name,
+    Json,
+    Yaml,
+}
+
+fn resolve_output_mode(
+    output: Option<OutputArg>,
+    json: bool,
+    yaml: bool,
+) -> anyhow::Result<commands::OutputMode> {
+    if output == Some(OutputArg::Name) && (json || yaml) {
+        anyhow::bail!(
+            "--output name cannot be combined with --json or --yaml"
+        );
+    }
+
+    let mut structured = None;
+    if json {
+        structured = Some(commands::OutputMode::Json);
+    }
+    if yaml {
+        if structured.is_some() {
+            anyhow::bail!("conflicting output formats requested");
+        }
+        structured = Some(commands::OutputMode::Yaml);
+    }
+
+    if let Some(output) = output {
+        return match output {
+            OutputArg::Name => Ok(commands::OutputMode::Name),
+            OutputArg::Json => {
+                if structured == Some(commands::OutputMode::Yaml) {
+                    anyhow::bail!("conflicting output formats requested");
+                }
+                Ok(commands::OutputMode::Json)
+            }
+            OutputArg::Yaml => {
+                if structured == Some(commands::OutputMode::Json) {
+                    anyhow::bail!("conflicting output formats requested");
+                }
+                Ok(commands::OutputMode::Yaml)
+            }
+        };
+    }
+
+    Ok(structured.unwrap_or(commands::OutputMode::Default))
+}
+
 #[derive(Debug, clap::Parser)]
 #[command(version, about = "Unofficial Bitwarden CLI")]
 enum Opt {
@@ -77,13 +127,32 @@ enum Opt {
             help = "Fields to display. \
                 Available options are id, name, user, folder, type, collections. \
                 Multiple fields will be separated by tabs.",
-            default_value = "name",
+            default_value = "id,name,user",
             use_value_delimiter = true
         )]
         fields: Vec<String>,
+        #[arg(help = "Optional search term to filter the listed entries")]
+        term: Option<String>,
+        #[arg(
+            short = 'A',
+            long,
+            help = "Only show entries that have attachments"
+        )]
+        with_attachments: bool,
+        #[arg(
+            short,
+            long,
+            value_enum,
+            help = "Output mode: name, json, yaml"
+        )]
+        output: Option<OutputArg>,
         #[structopt(long, help = "Display output as JSON")]
         raw: bool,
-        #[arg(long, help = "Dump full JSON for all items")]
+        #[arg(long, help = "Display output as JSON")]
+        json: bool,
+        #[arg(long, help = "Display output as YAML")]
+        yaml: bool,
+        #[arg(long, help = "Dump full structured output for all items")]
         full: bool,
     },
 
@@ -95,8 +164,19 @@ enum Opt {
         field: Option<String>,
         #[arg(long, help = "Display the notes in addition to the password")]
         full: bool,
+        #[arg(
+            short,
+            long,
+            value_enum,
+            help = "Output mode: name, json, yaml"
+        )]
+        output: Option<OutputArg>,
         #[structopt(long, help = "Display output as JSON")]
         raw: bool,
+        #[arg(long, help = "Display output as JSON")]
+        json: bool,
+        #[arg(long, help = "Display output as YAML")]
+        yaml: bool,
         #[cfg(feature = "clipboard")]
         #[structopt(short, long, help = "Copy result to clipboard")]
         clipboard: bool,
@@ -111,17 +191,34 @@ enum Opt {
         #[arg(
             long,
             help = "Fields to display. \
-                Available options are id, name, user, folder. \
+                Available options are id, name, user, folder, type, collections. \
                 Multiple fields will be separated by tabs.",
-            default_value = "name",
+            default_value = "id,name,user",
             use_value_delimiter = true
         )]
         fields: Vec<String>,
         #[arg(long, help = "Folder name to search in")]
         folder: Option<String>,
+        #[arg(
+            short = 'A',
+            long,
+            help = "Only show entries that have attachments"
+        )]
+        with_attachments: bool,
+        #[arg(
+            short,
+            long,
+            value_enum,
+            help = "Output mode: name, json, yaml"
+        )]
+        output: Option<OutputArg>,
         #[structopt(long, help = "Display output as JSON")]
         raw: bool,
-        #[arg(long, help = "Dump full JSON for matching items")]
+        #[arg(long, help = "Display output as JSON")]
+        json: bool,
+        #[arg(long, help = "Display output as YAML")]
+        yaml: bool,
+        #[arg(long, help = "Dump full structured output for matching items")]
         full: bool,
     },
 
@@ -276,8 +373,19 @@ enum Opt {
         visible_alias = "lsc"
     )]
     ListCollections {
+        #[arg(
+            short,
+            long,
+            value_enum,
+            help = "Output mode: name, json, yaml"
+        )]
+        output: Option<OutputArg>,
         #[structopt(long, help = "Display output as JSON")]
         raw: bool,
+        #[arg(long, help = "Display output as JSON")]
+        json: bool,
+        #[arg(long, help = "Display output as YAML")]
+        yaml: bool,
     },
 
     #[command(about = "Create a new collection in an organization")]
@@ -428,8 +536,19 @@ enum Attachment {
     List {
         #[command(flatten)]
         find_args: FindArgs,
+        #[arg(
+            short,
+            long,
+            value_enum,
+            help = "Output mode: name, json, yaml"
+        )]
+        output: Option<OutputArg>,
         #[structopt(long, help = "Display output as JSON")]
         raw: bool,
+        #[arg(long, help = "Display output as JSON")]
+        json: bool,
+        #[arg(long, help = "Display output as YAML")]
+        yaml: bool,
     },
     #[command(
         about = "Download and decrypt an attachment by id or filename"
@@ -440,16 +559,24 @@ enum Attachment {
         #[arg(
             help = "Attachment ID or filename (see `rbw attachment list <entry>`)"
         )]
-        attachment: String,
+        attachment: Option<String>,
         #[arg(help = "Username of the entry")]
         user: Option<String>,
         #[arg(long, help = "Folder name to search in")]
         folder: Option<String>,
         #[arg(short, long, help = "Ignore case")]
         ignorecase: bool,
-        #[arg(short, long, help = "Output file or directory")]
+        #[arg(
+            short,
+            long,
+            help = "Output file or directory ('-' writes to stdout)"
+        )]
         output: Option<std::path::PathBuf>,
-        #[arg(long, help = "Write attachment content to stdout")]
+        #[arg(
+            long,
+            conflicts_with = "output",
+            help = "Write attachment content to stdout"
+        )]
         raw: bool,
     },
 }
@@ -518,15 +645,47 @@ fn main() {
         Opt::Unlocked => commands::unlocked(),
         Opt::Sync => commands::sync(),
         Opt::Export => commands::export(),
-        Opt::List { fields, raw, full } => commands::list(&fields, raw, full),
+        Opt::List {
+            fields,
+            term,
+            with_attachments,
+            output,
+            raw,
+            json,
+            yaml,
+            full,
+        } => (|| -> anyhow::Result<()> {
+            let output = resolve_output_mode(output, raw || json, yaml)?;
+            if let Some(term) = term {
+                commands::search(
+                    &term,
+                    &fields,
+                    None,
+                    with_attachments,
+                    output,
+                    full,
+                )
+            } else {
+                commands::list(&fields, with_attachments, output, full)
+            }
+        })(),
         Opt::Attachment { attachment } => match attachment {
-            Attachment::List { find_args, raw } => commands::attachment_list(
-                find_args.needle,
-                find_args.user.as_deref(),
-                find_args.folder.as_deref(),
-                find_args.ignorecase,
+            Attachment::List {
+                find_args,
+                output,
                 raw,
-            ),
+                json,
+                yaml,
+            } => (|| -> anyhow::Result<()> {
+                let output = resolve_output_mode(output, raw || json, yaml)?;
+                commands::attachment_list(
+                    find_args.needle,
+                    find_args.user.as_deref(),
+                    find_args.folder.as_deref(),
+                    find_args.ignorecase,
+                    output,
+                )
+            })(),
             Attachment::Get {
                 needle,
                 attachment,
@@ -540,7 +699,7 @@ fn main() {
                 user.as_deref(),
                 folder.as_deref(),
                 ignorecase,
-                &attachment,
+                attachment.as_deref(),
                 output.as_deref(),
                 raw,
             ),
@@ -549,31 +708,51 @@ fn main() {
             find_args,
             field,
             full,
+            output,
             raw,
+            json,
+            yaml,
             #[cfg(feature = "clipboard")]
             clipboard,
             list_fields,
-        } => commands::get(
-            find_args.needle.clone(),
-            find_args.user.as_deref(),
-            find_args.folder.as_deref(),
-            field.as_deref(),
-            full,
-            raw,
-            #[cfg(feature = "clipboard")]
-            clipboard,
-            #[cfg(not(feature = "clipboard"))]
-            false,
-            find_args.ignorecase,
-            list_fields,
-        ),
+        } => (|| -> anyhow::Result<()> {
+            let output = resolve_output_mode(output, raw || json, yaml)?;
+            commands::get(
+                find_args.needle.clone(),
+                find_args.user.as_deref(),
+                find_args.folder.as_deref(),
+                field.as_deref(),
+                full,
+                output,
+                #[cfg(feature = "clipboard")]
+                clipboard,
+                #[cfg(not(feature = "clipboard"))]
+                false,
+                find_args.ignorecase,
+                list_fields,
+            )
+        })(),
         Opt::Search {
             term,
             fields,
             folder,
+            with_attachments,
+            output,
             raw,
+            json,
+            yaml,
             full,
-        } => commands::search(&term, &fields, folder.as_deref(), raw, full),
+        } => (|| -> anyhow::Result<()> {
+            let output = resolve_output_mode(output, raw || json, yaml)?;
+            commands::search(
+                &term,
+                &fields,
+                folder.as_deref(),
+                with_attachments,
+                output,
+                full,
+            )
+        })(),
         Opt::Code {
             find_args,
             #[cfg(feature = "clipboard")]
@@ -663,7 +842,15 @@ fn main() {
             find_args.folder.as_deref(),
             find_args.ignorecase,
         ),
-        Opt::ListCollections { raw } => commands::list_collections(raw),
+        Opt::ListCollections {
+            output,
+            raw,
+            json,
+            yaml,
+        } => (|| -> anyhow::Result<()> {
+            let output = resolve_output_mode(output, raw || json, yaml)?;
+            commands::list_collections(output)
+        })(),
         Opt::CreateCollection { name, org_id } => {
             commands::create_collection(&name, &org_id)
         }
