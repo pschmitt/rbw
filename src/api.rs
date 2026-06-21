@@ -442,8 +442,24 @@ struct SyncResCipher {
     reprompt: CipherRepromptType,
     #[serde(rename = "CollectionIds", alias = "collectionIds", default)]
     collection_ids: Vec<String>,
-    #[serde(rename = "Attachments", alias = "attachments", default)]
+    #[serde(
+        rename = "Attachments",
+        alias = "attachments",
+        default,
+        deserialize_with = "deserialize_default_on_null"
+    )]
     attachments: Vec<CipherAttachment>,
+}
+
+fn deserialize_default_on_null<'de, D, T>(
+    deserializer: D,
+) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de> + Default,
+{
+    <Option<T> as serde::Deserialize>::deserialize(deserializer)
+        .map(Option::unwrap_or_default)
 }
 
 impl SyncResCipher {
@@ -603,6 +619,26 @@ struct CipherAttachment {
     size: Option<String>,
     #[serde(rename = "SizeName", alias = "sizeName")]
     size_name: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_cipher_treats_null_attachments_as_empty() {
+        let cipher: SyncResCipher =
+            serde_json::from_value(serde_json::json!({
+                "id": "cipher-id",
+                "name": "example",
+                "secureNote": {},
+                "reprompt": 0,
+                "attachments": null,
+            }))
+            .unwrap();
+
+        assert!(cipher.attachments.is_empty());
+    }
 }
 
 fn deserialize_optional_string<'de, D>(

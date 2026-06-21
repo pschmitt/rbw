@@ -5,6 +5,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::{fmt::Write as _, io::Write as _, os::unix::ffi::OsStrExt as _};
 
 use anyhow::Context as _;
+use is_terminal::IsTerminal as _;
 
 // The default number of seconds the generated TOTP
 // code lasts for before a new one must be generated
@@ -193,6 +194,8 @@ struct DecryptedListCipher {
     entry_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     collection_ids: Option<Vec<String>>,
+    #[serde(flatten)]
+    attachment_metadata: AttachmentMetadata,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -207,6 +210,7 @@ struct DecryptedSearchCipher {
     uris: Vec<(String, Option<rbw::api::UriMatchType>)>,
     fields: Vec<String>,
     notes: Option<String>,
+    attachment_count: usize,
 }
 
 impl DecryptedSearchCipher {
@@ -330,6 +334,8 @@ impl DecryptedSearchCipher {
 
 impl From<DecryptedSearchCipher> for DecryptedListCipher {
     fn from(value: DecryptedSearchCipher) -> Self {
+        let attachment_metadata =
+            AttachmentMetadata::new(&value.id, value.attachment_count);
         Self {
             id: value.id,
             entry_type: Some(value.entry_type),
@@ -338,6 +344,7 @@ impl From<DecryptedSearchCipher> for DecryptedListCipher {
             folder: value.folder,
             uris: Some(value.uris.into_iter().map(|(s, _)| s).collect()),
             collection_ids: None,
+            attachment_metadata,
         }
     }
 }
@@ -353,6 +360,29 @@ struct DecryptedAttachment {
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
+struct AttachmentMetadata {
+    #[serde(skip_serializing_if = "is_zero")]
+    attachment_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attachment_hint: Option<String>,
+}
+
+impl AttachmentMetadata {
+    fn new(entry_id: &str, attachment_count: usize) -> Self {
+        Self {
+            attachment_count,
+            attachment_hint: (attachment_count > 0)
+                .then(|| attachment_command_hint(entry_id)),
+        }
+    }
+
+    fn has_attachments(&self) -> bool {
+        self.attachment_count > 0
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(test, derive(Eq, PartialEq))]
 struct DecryptedCipher {
     id: String,
     folder: Option<String>,
@@ -362,6 +392,8 @@ struct DecryptedCipher {
     notes: Option<String>,
     history: Vec<DecryptedHistoryEntry>,
     attachments: Vec<DecryptedAttachment>,
+    #[serde(flatten)]
+    attachment_metadata: AttachmentMetadata,
 }
 
 impl DecryptedCipher {
@@ -762,7 +794,10 @@ impl DecryptedCipher {
                 if let (Some(exp_month), Some(exp_year)) =
                     (exp_month, exp_year)
                 {
-                    println!("Expiration: {exp_month}/{exp_year}");
+                    println!(
+                        "{}: {exp_month}/{exp_year}",
+                        format_label("Expiration")
+                    );
                     displayed = true;
                 }
                 displayed |= display_field("CVV", code.as_deref(), clipboard);
@@ -1018,6 +1053,86 @@ impl DecryptedCipher {
 
         Ok(())
     }
+
+    fn maybe_print_attachment_hint(&self) {
+        maybe_print_attachment_hint(
+            self.attachment_metadata.attachment_count,
+        );
+    }
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
+}
+
+fn stdout_supports_color() -> bool {
+    stdout_is_terminal() && std::env::var_os("NO_COLOR").is_none()
+}
+
+fn stdout_is_terminal() -> bool {
+    std::io::stdout().is_terminal()
+}
+
+fn stderr_supports_color() -> bool {
+    std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+}
+
+fn paint(text: &str, code: &str, enabled: bool) -> String {
+    if enabled {
+        format!("\x1b[{code}m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
+}
+
+fn paint_stdout(text: &str, code: &str) -> String {
+    paint(text, code, stdout_supports_color())
+}
+
+fn paint_stderr(text: &str, code: &str) -> String {
+    paint(text, code, stderr_supports_color())
+}
+
+fn format_label(name: &str) -> String {
+    paint_stdout(name, "1;36")
+}
+
+fn attachment_command_hint(entry_id: &str) -> String {
+    format!(
+        "Use `rbw attachment list {entry_id}` to inspect attachments and \
+         `rbw attachment get {entry_id} <attachment-id-or-filename>` to \
+         download one."
+    )
+}
+
+fn maybe_print_attachment_hint(attachment_count: usize) {
+    if attachment_count == 0 {
+        return;
+    }
+
+    let noun = if attachment_count == 1 {
+        "attachment is"
+    } else {
+        "attachments are"
+    };
+    let hint = format!(
+        "{attachment_count} {noun} available. Use `rbw attachment list <entry>` \
+         to inspect them and `rbw attachment get <entry> \
+         <attachment-id-or-filename>` to download one."
+    );
+    eprintln!("{}", paint_stderr(&hint, "1;33"));
+}
+
+fn maybe_print_attachment_command_hint(has_attachments: bool) {
+    if !has_attachments {
+        return;
+    }
+
+    let hint =
+        "Some entries have attachments. Use `rbw attachment list <entry>` \
+                to inspect them and `rbw attachment get <entry> \
+                <attachment-id-or-filename>` to download one.";
+    eprintln!("{}", paint_stderr(hint, "1;33"));
 }
 
 fn val_display_or_store(clipboard: bool, password: &str) -> bool {
@@ -1470,6 +1585,10 @@ pub fn get(
         decrypted.display_short(&desc, clipboard);
     }
 
+    if !raw {
+        decrypted.maybe_print_attachment_hint();
+    }
+
     Ok(())
 }
 
@@ -1492,12 +1611,24 @@ pub fn attachment_list(
         .context("failed to write attachments to stdout")?;
         println!();
     } else {
+        let color = stdout_supports_color();
         for attachment in decrypted.attachments {
             println!(
                 "{}\t{}\t{}",
-                attachment.id,
-                attachment.file_name.unwrap_or_default(),
-                attachment.size_name.or(attachment.size).unwrap_or_default()
+                paint(&attachment.id, "1;36", color,),
+                paint(
+                    &attachment.file_name.unwrap_or_default(),
+                    "0;32",
+                    color,
+                ),
+                paint(
+                    &attachment
+                        .size_name
+                        .or(attachment.size)
+                        .unwrap_or_default(),
+                    "2",
+                    color,
+                )
             );
         }
     }
@@ -1596,6 +1727,8 @@ fn print_entry_list(
             .context("failed to write entries to stdout".to_string())?;
         println!();
     } else {
+        let human_output = stdout_is_terminal();
+        let mut printed_attachment_hint = false;
         for entry in entries {
             let values: Vec<String> = fields
                 .iter()
@@ -1633,6 +1766,17 @@ fn print_entry_list(
                         .map_or_else(String::new, |ids| ids.join(",")),
                 })
                 .collect();
+            let mut values = values;
+            if human_output && entry.attachment_metadata.has_attachments() {
+                printed_attachment_hint = true;
+                let count = entry.attachment_metadata.attachment_count;
+                let noun = if count == 1 {
+                    "attachment"
+                } else {
+                    "attachments"
+                };
+                values.push(paint_stdout(&format!("{count} {noun}"), "1;33"));
+            }
 
             // write to stdout but don't panic when pipe get's closed
             // this happens when piping stdout in a shell
@@ -1643,6 +1787,8 @@ fn print_entry_list(
                 res => res,
             }?;
         }
+
+        maybe_print_attachment_command_hint(printed_attachment_hint);
     }
 
     Ok(())
@@ -3031,6 +3177,7 @@ struct ListCipherPlan {
     uris: Option<Vec<usize>>,
     entry_type: Option<String>,
     collection_ids: Option<Vec<String>>,
+    attachment_count: usize,
 }
 
 impl ListCipherPlan {
@@ -3111,6 +3258,7 @@ impl ListCipherPlan {
             uris,
             entry_type,
             collection_ids,
+            attachment_count: entry.attachments.len(),
         }
     }
 
@@ -3140,6 +3288,8 @@ impl ListCipherPlan {
                 })
                 .collect()
         });
+        let attachment_metadata =
+            AttachmentMetadata::new(&self.id, self.attachment_count);
 
         Ok(DecryptedListCipher {
             id: self.id,
@@ -3149,6 +3299,7 @@ impl ListCipherPlan {
             uris,
             entry_type: self.entry_type,
             collection_ids: self.collection_ids,
+            attachment_metadata,
         })
     }
 }
@@ -3194,6 +3345,7 @@ struct SearchCipherPlan {
     notes: Option<usize>,
     uris: Vec<(usize, Option<rbw::api::UriMatchType>)>,
     fields: Vec<usize>,
+    attachment_count: usize,
 }
 
 impl SearchCipherPlan {
@@ -3276,6 +3428,7 @@ impl SearchCipherPlan {
             notes,
             uris,
             fields,
+            attachment_count: entry.attachments.len(),
         }
     }
 
@@ -3320,6 +3473,7 @@ impl SearchCipherPlan {
             uris,
             fields,
             notes,
+            attachment_count: self.attachment_count,
         })
     }
 }
@@ -3408,6 +3562,7 @@ fn decrypt_search_cipher(
         uris,
         fields,
         notes,
+        attachment_count: entry.attachments.len(),
     })
 }
 
@@ -3489,7 +3644,7 @@ fn decrypt_cipher(entry: &rbw::db::Entry) -> anyhow::Result<DecryptedCipher> {
             })
         })
         .collect::<anyhow::Result<_>>()?;
-    let attachments = entry
+    let attachments: Vec<_> = entry
         .attachments
         .iter()
         .map(|attachment| DecryptedAttachment {
@@ -3504,6 +3659,7 @@ fn decrypt_cipher(entry: &rbw::db::Entry) -> anyhow::Result<DecryptedCipher> {
             size_name: attachment.size_name.clone(),
         })
         .collect();
+    let attachment_count = attachments.len();
 
     let data = match &entry.data {
         rbw::db::EntryData::Login {
@@ -3753,6 +3909,10 @@ fn decrypt_cipher(entry: &rbw::db::Entry) -> anyhow::Result<DecryptedCipher> {
         notes,
         history,
         attachments,
+        attachment_metadata: AttachmentMetadata::new(
+            &entry.id,
+            attachment_count,
+        ),
     })
 }
 
@@ -4758,13 +4918,41 @@ fn generate_totp(secret: &str) -> anyhow::Result<String> {
 fn display_field(name: &str, field: Option<&str>, clipboard: bool) -> bool {
     field.map_or_else(
         || false,
-        |field| val_display_or_store(clipboard, &format!("{name}: {field}")),
+        |field| {
+            val_display_or_store(
+                clipboard,
+                &format!("{}: {field}", format_label(name)),
+            )
+        },
     )
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_attachment_metadata_serializes_json_hint() {
+        let metadata = AttachmentMetadata::new("cipher-id", 2);
+
+        assert_eq!(
+            serde_json::to_value(&metadata).unwrap(),
+            serde_json::json!({
+                "attachment_count": 2,
+                "attachment_hint": "Use `rbw attachment list cipher-id` to inspect attachments and `rbw attachment get cipher-id <attachment-id-or-filename>` to download one."
+            })
+        );
+    }
+
+    #[test]
+    fn test_attachment_metadata_omits_empty_json_fields() {
+        let metadata = AttachmentMetadata::new("cipher-id", 0);
+
+        assert_eq!(
+            serde_json::to_value(&metadata).unwrap(),
+            serde_json::json!({})
+        );
+    }
 
     #[test]
     fn test_find_entry() {
@@ -6125,6 +6313,7 @@ mod test {
                     .collect(),
                 fields: vec![],
                 notes: None,
+                attachment_count: 0,
             },
         )
     }
@@ -6882,6 +7071,7 @@ mod test {
                 notes: None,
                 history: vec![],
                 attachments: vec![],
+                attachment_metadata: AttachmentMetadata::new("example-id", 0),
             };
 
             assert_eq!(

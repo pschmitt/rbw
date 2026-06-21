@@ -431,11 +431,15 @@ enum Attachment {
         #[structopt(long, help = "Display output as JSON")]
         raw: bool,
     },
-    #[command(about = "Download and decrypt an attachment")]
+    #[command(
+        about = "Download and decrypt an attachment by id or filename"
+    )]
     Get {
         #[arg(help = "Name, URI or UUID of the entry", value_parser = commands::parse_needle)]
         needle: commands::Needle,
-        #[arg(help = "Attachment ID or filename")]
+        #[arg(
+            help = "Attachment ID or filename (see `rbw attachment list <entry>`)"
+        )]
         attachment: String,
         #[arg(help = "Username of the entry")]
         user: Option<String>,

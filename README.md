@@ -130,6 +130,12 @@ flag will show the output as JSON. In addition to matching against the name,
 you can pass a UUID as the name to search for the entry with that id, or a
 URL to search for an entry with a matching website entry.
 
+If an item has file attachments, `rbw get` and `rbw list` will point that out.
+To inspect them directly, run `rbw attachment list <entry>`. To download one,
+run `rbw attachment get <entry> <attachment-id-or-filename>`. Using the entry
+UUID is the most precise option and avoids shell quoting issues for names with
+spaces.
+
 ### Template and command injection
 
 `rbw inject` can render templates containing secret references. References use
