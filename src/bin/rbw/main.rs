@@ -279,7 +279,7 @@ enum Opt {
     )]
     Add {
         #[arg(help = "Name of the password entry")]
-        name: String,
+        name: Option<String>,
         #[arg(help = "Username for the password entry")]
         user: Option<String>,
         #[arg(
@@ -290,6 +290,10 @@ enum Opt {
         uri: Vec<String>,
         #[arg(long, help = "Folder for the password entry")]
         folder: Option<String>,
+        #[arg(long, help = "Add via YAML editor (structured mode)")]
+        yaml: bool,
+        #[arg(long, help = "Add via JSON editor (structured mode)")]
+        json: bool,
     },
 
     #[command(
@@ -360,6 +364,32 @@ enum Opt {
     Edit {
         #[command(flatten)]
         find_args: FindArgs,
+        #[arg(long, help = "Edit as YAML (structured mode)")]
+        yaml: bool,
+        #[arg(long, help = "Edit as JSON (structured mode)")]
+        json: bool,
+    },
+
+    #[command(about = "Set specific fields of an existing entry")]
+    Set {
+        #[command(flatten)]
+        find_args: FindArgs,
+        #[arg(long, help = "New entry name")]
+        name: Option<String>,
+        #[arg(long, alias = "user", help = "New username (Login entries only)")]
+        username: Option<String>,
+        #[arg(long, help = "New password (Login entries only)")]
+        password: Option<String>,
+        #[arg(long, alias = "note", help = "New notes (empty string to clear)")]
+        notes: Option<String>,
+        #[arg(
+            long,
+            number_of_values = 1,
+            help = "Replace URIs (Login entries only; can be repeated)"
+        )]
+        uri: Vec<String>,
+        #[arg(long, help = "New TOTP secret (Login entries only)")]
+        totp: Option<String>,
     },
 
     #[command(about = "Remove a given entry", visible_alias = "rm")]
@@ -483,6 +513,7 @@ impl Opt {
             Self::Add { .. } => "add".to_string(),
             Self::Generate { .. } => "generate".to_string(),
             Self::Edit { .. } => "edit".to_string(),
+            Self::Set { .. } => "set".to_string(),
             Self::Remove { .. } => "remove".to_string(),
             Self::ListCollections { .. } => "list-collections".to_string(),
             Self::CreateCollection { .. } => "create-collection".to_string(),
@@ -785,8 +816,10 @@ fn main() {
             user,
             uri,
             folder,
+            json,
+            yaml,
         } => commands::add(
-            &name,
+            name.as_deref(),
             user.as_deref(),
             &uri.iter()
                 // XXX not sure what the ui for specifying the match type
@@ -794,6 +827,8 @@ fn main() {
                 .map(|uri| (uri.clone(), None))
                 .collect::<Vec<_>>(),
             folder.as_deref(),
+            json,
+            yaml,
         ),
         Opt::Generate {
             len,
@@ -830,11 +865,33 @@ fn main() {
                 ty,
             )
         }
-        Opt::Edit { find_args } => commands::edit(
+        Opt::Edit { find_args, json, yaml } => commands::edit(
             find_args.needle,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
             find_args.ignorecase,
+            json,
+            yaml,
+        ),
+        Opt::Set {
+            find_args,
+            name,
+            username,
+            password,
+            notes,
+            uri,
+            totp,
+        } => commands::set(
+            find_args.needle,
+            find_args.user.as_deref(),
+            find_args.folder.as_deref(),
+            find_args.ignorecase,
+            name.as_deref(),
+            username.as_deref(),
+            password.as_deref(),
+            notes.as_deref(),
+            &uri,
+            totp.as_deref(),
         ),
         Opt::Remove { find_args } => commands::remove(
             find_args.needle,

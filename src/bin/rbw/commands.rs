@@ -1450,6 +1450,109 @@ struct DecryptedUri {
     match_type: Option<rbw::api::UriMatchType>,
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct EditableCipher {
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notes: Option<String>,
+    data: EditableData,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    fields: Vec<EditableCustomField>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum EditableData {
+    Login {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        username: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        uris: Vec<EditableUri>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        totp: Option<String>,
+    },
+    Card {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cardholder_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        number: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        brand: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exp_month: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exp_year: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+    },
+    Identity {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        first_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        middle_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address1: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address2: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address3: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        city: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        postal_code: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        country: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phone: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        email: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssn: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        license_number: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        passport_number: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        username: Option<String>,
+    },
+    SecureNote,
+    SshKey {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        private_key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        public_key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fingerprint: Option<String>,
+    },
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct EditableUri {
+    uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    match_type: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct EditableCustomField {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    ty: Option<String>,
+}
+
 fn matches_url(
     url: &str,
     match_type: Option<rbw::api::UriMatchType>,
@@ -1586,17 +1689,6 @@ impl std::convert::TryFrom<&String> for ListField {
         })
     }
 }
-
-const HELP_PW: &str = r"
-# The first line of this file will be the password, and the remainder of the
-# file (after any blank lines after the password) will be stored as a note.
-# Lines with leading # will be ignored.
-";
-
-const HELP_NOTES: &str = r"
-# The content of this file will be stored as a note.
-# Lines with leading # will be ignored.
-";
 
 pub fn config_show() -> anyhow::Result<()> {
     let config = rbw::config::Config::load()?;
@@ -2232,103 +2324,16 @@ pub fn code(
 }
 
 pub fn add(
-    name: &str,
+    name: Option<&str>,
     username: Option<&str>,
     uris: &[(String, Option<rbw::api::UriMatchType>)],
     folder: Option<&str>,
+    json: bool,
+    _yaml: bool,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
-
-    let mut db = load_db()?;
-    // unwrap is safe here because the call to unlock above is guaranteed to
-    // populate these or error
-    let mut access_token = db.access_token.as_ref().unwrap().clone();
-    let refresh_token = db.refresh_token.as_ref().unwrap();
-
-    let name = crate::actions::encrypt(name, None)?;
-
-    let username = username
-        .map(|username| crate::actions::encrypt(username, None))
-        .transpose()?;
-
-    let contents = rbw::edit::edit("", HELP_PW)?;
-
-    let (password, notes) = parse_editor(&contents);
-    let password = password
-        .map(|password| crate::actions::encrypt(&password, None))
-        .transpose()?;
-    let notes = notes
-        .map(|notes| crate::actions::encrypt(&notes, None))
-        .transpose()?;
-    let uris: Vec<_> = uris
-        .iter()
-        .map(|uri| {
-            Ok(rbw::db::Uri {
-                uri: crate::actions::encrypt(&uri.0, None)?,
-                match_type: uri.1,
-            })
-        })
-        .collect::<anyhow::Result<_>>()?;
-
-    let mut folder_id = None;
-    if let Some(folder_name) = folder {
-        let (new_access_token, folders) =
-            rbw::actions::list_folders(&access_token, refresh_token)?;
-        if let Some(new_access_token) = new_access_token {
-            access_token.clone_from(&new_access_token);
-            db.access_token = Some(new_access_token);
-            save_db(&db)?;
-        }
-
-        let folders: Vec<(String, String)> = folders
-            .iter()
-            .cloned()
-            .map(|(id, name)| {
-                Ok((id, crate::actions::decrypt(&name, None, None)?))
-            })
-            .collect::<anyhow::Result<_>>()?;
-
-        for (id, name) in folders {
-            if name == folder_name {
-                folder_id = Some(id);
-            }
-        }
-        if folder_id.is_none() {
-            let (new_access_token, id) = rbw::actions::create_folder(
-                &access_token,
-                refresh_token,
-                &crate::actions::encrypt(folder_name, None)?,
-            )?;
-            if let Some(new_access_token) = new_access_token {
-                access_token.clone_from(&new_access_token);
-                db.access_token = Some(new_access_token);
-                save_db(&db)?;
-            }
-            folder_id = Some(id);
-        }
-    }
-
-    if let (Some(access_token), ()) = rbw::actions::add(
-        &access_token,
-        refresh_token,
-        &name,
-        &rbw::db::EntryData::Login {
-            username,
-            password,
-            uris,
-            totp: None,
-        },
-        notes.as_deref(),
-        folder_id.as_deref(),
-    )? {
-        db.access_token = Some(access_token);
-        save_db(&db)?;
-    }
-
-    crate::actions::sync()?;
-
-    Ok(())
+    add_structured(name, username, uris, folder, json)
 }
+
 
 pub fn generate(
     name: Option<&str>,
@@ -2431,124 +2436,10 @@ pub fn edit(
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
+    json: bool,
+    _yaml: bool,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
-
-    let mut db = load_db()?;
-    let access_token = db.access_token.as_ref().unwrap();
-    let refresh_token = db.refresh_token.as_ref().unwrap();
-
-    let desc = format!(
-        "{}{}",
-        username.map_or_else(String::new, |s| format!("{s}@")),
-        name
-    );
-
-    let (entry, decrypted) =
-        find_entry(&db, name, username, folder, ignore_case)
-            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
-
-    let (data, fields, notes, history) = match &decrypted.data {
-        DecryptedData::Login { password, .. } => {
-            let mut contents =
-                format!("{}\n", password.as_deref().unwrap_or(""));
-            if let Some(notes) = decrypted.notes {
-                write!(contents, "\n{notes}\n").unwrap();
-            }
-
-            let contents = rbw::edit::edit(&contents, HELP_PW)?;
-
-            let (password, notes) = parse_editor(&contents);
-            let password = password
-                .map(|password| {
-                    crate::actions::encrypt(
-                        &password,
-                        entry.org_id.as_deref(),
-                    )
-                })
-                .transpose()?;
-            let notes = notes
-                .map(|notes| {
-                    crate::actions::encrypt(&notes, entry.org_id.as_deref())
-                })
-                .transpose()?;
-            let mut history = entry.history.clone();
-            let rbw::db::EntryData::Login {
-                username: entry_username,
-                password: entry_password,
-                uris: entry_uris,
-                totp: entry_totp,
-            } = &entry.data
-            else {
-                unreachable!();
-            };
-
-            if let Some(prev_password) = entry_password.clone() {
-                let new_history_entry = rbw::db::HistoryEntry {
-                    last_used_date: format!(
-                        "{}",
-                        humantime::format_rfc3339(
-                            std::time::SystemTime::now()
-                        )
-                    ),
-                    password: prev_password,
-                };
-                history.insert(0, new_history_entry);
-            }
-
-            let data = rbw::db::EntryData::Login {
-                username: entry_username.clone(),
-                password,
-                uris: entry_uris.clone(),
-                totp: entry_totp.clone(),
-            };
-            (data, entry.fields, notes, history)
-        }
-        DecryptedData::SecureNote => {
-            let data = rbw::db::EntryData::SecureNote {};
-
-            let editor_content = decrypted.notes.map_or_else(
-                || "\n".to_string(),
-                |notes| format!("{notes}\n"),
-            );
-            let contents = rbw::edit::edit(&editor_content, HELP_NOTES)?;
-
-            // prepend blank line to be parsed as pw by `parse_editor`
-            let (_, notes) = parse_editor(&format!("\n{contents}\n"));
-
-            let notes = notes
-                .map(|notes| {
-                    crate::actions::encrypt(&notes, entry.org_id.as_deref())
-                })
-                .transpose()?;
-
-            (data, entry.fields, notes, entry.history)
-        }
-        _ => {
-            return Err(anyhow::anyhow!(
-                "modifications are only supported for login and note entries"
-            ));
-        }
-    };
-
-    if let (Some(access_token), ()) = rbw::actions::edit(
-        access_token,
-        refresh_token,
-        &entry.id,
-        entry.org_id.as_deref(),
-        &entry.name,
-        &data,
-        &fields,
-        notes.as_deref(),
-        entry.folder_id.as_deref(),
-        &history,
-    )? {
-        db.access_token = Some(access_token);
-        save_db(&db)?;
-    }
-
-    crate::actions::sync()?;
-    Ok(())
+    edit_structured(name, username, folder, ignore_case, json)
 }
 
 pub fn remove(
@@ -2582,6 +2473,429 @@ pub fn remove(
     crate::actions::sync()?;
 
     Ok(())
+}
+
+fn edit_structured(
+    name: Needle,
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    unlock(None)?;
+
+    let mut db = load_db()?;
+    let access_token = db.access_token.as_ref().unwrap().clone();
+    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        name
+    );
+
+    let (entry, decrypted) =
+        find_entry(&db, name, username, folder, ignore_case)
+            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    let editable = decrypted_to_editable(&decrypted);
+
+    let serialized = if json {
+        serde_json::to_string_pretty(&editable)?
+    } else {
+        serde_yaml::to_string(&editable)?
+    };
+
+    let help = if json {
+        "# Edit the JSON below. Lines starting with # are ignored."
+    } else {
+        "# Edit the YAML below. Lines starting with # are ignored."
+    };
+
+    let contents = rbw::edit::edit(&serialized, help)?;
+    let contents_trimmed = contents
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .fold(String::new(), |mut s, l| {
+            s.push_str(l);
+            s.push('\n');
+            s
+        });
+
+    let updated: EditableCipher = if json {
+        serde_json::from_str(&contents_trimmed)
+            .map_err(|e| anyhow::anyhow!("failed to parse JSON: {e}"))?
+    } else {
+        serde_yaml::from_str(&contents_trimmed)
+            .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?
+    };
+
+    let (data, fields, notes) =
+        editable_to_encrypted(&updated, entry.org_id.as_deref())?;
+
+    let encrypted_name =
+        crate::actions::encrypt(&updated.name, entry.org_id.as_deref())?;
+
+    let encrypted_notes = notes
+        .as_deref()
+        .map(|n| crate::actions::encrypt(n, entry.org_id.as_deref()))
+        .transpose()?;
+
+    let mut history = entry.history.clone();
+    if let (
+        rbw::db::EntryData::Login {
+            password: Some(old_pw),
+            ..
+        },
+        rbw::db::EntryData::Login {
+            password: new_pw, ..
+        },
+    ) = (&entry.data, &data)
+    {
+        if Some(old_pw) != new_pw.as_ref() {
+            history.insert(
+                0,
+                rbw::db::HistoryEntry {
+                    last_used_date: format!(
+                        "{}",
+                        humantime::format_rfc3339(
+                            std::time::SystemTime::now()
+                        )
+                    ),
+                    password: old_pw.clone(),
+                },
+            );
+        }
+    }
+
+    let folder_id = if let Some(folder_name) = updated.folder.as_deref() {
+        resolve_folder_id(
+            &mut db,
+            &access_token,
+            &refresh_token,
+            folder_name,
+        )?
+    } else {
+        entry.folder_id.clone()
+    };
+
+    if let (Some(new_token), ()) = rbw::actions::edit(
+        &access_token,
+        &refresh_token,
+        &entry.id,
+        entry.org_id.as_deref(),
+        &encrypted_name,
+        &data,
+        &fields,
+        encrypted_notes.as_deref(),
+        folder_id.as_deref(),
+        &history,
+    )? {
+        db.access_token = Some(new_token);
+        save_db(&db)?;
+    }
+
+    crate::actions::sync()?;
+    Ok(())
+}
+
+fn add_structured(
+    name: Option<&str>,
+    username: Option<&str>,
+    uris: &[(String, Option<rbw::api::UriMatchType>)],
+    folder: Option<&str>,
+    json: bool,
+) -> anyhow::Result<()> {
+    let editable_uris: Vec<EditableUri> = if uris.is_empty() {
+        vec![EditableUri {
+            uri: String::new(),
+            match_type: None,
+        }]
+    } else {
+        uris.iter()
+            .map(|(uri, mt)| EditableUri {
+                uri: uri.clone(),
+                match_type: mt.map(|m| uri_match_type_str(m).to_string()),
+            })
+            .collect()
+    };
+
+    let template = EditableCipher {
+        name: name.unwrap_or("").to_string(),
+        folder: folder.map(std::string::ToString::to_string),
+        notes: None,
+        data: EditableData::Login {
+            username: Some(username.unwrap_or("").to_string()),
+            password: Some(String::new()),
+            uris: editable_uris,
+            totp: None,
+        },
+        fields: Vec::new(),
+    };
+
+    let serialized = if json {
+        serde_json::to_string_pretty(&template)?
+    } else {
+        serde_yaml::to_string(&template)?
+    };
+
+    let help = if json {
+        "# Fill in the JSON below. Lines starting with # are ignored."
+    } else {
+        "# Fill in the YAML below. Lines starting with # are ignored."
+    };
+
+    let contents = rbw::edit::edit(&serialized, help)?;
+    let contents_trimmed = contents
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .fold(String::new(), |mut s, l| {
+            s.push_str(l);
+            s.push('\n');
+            s
+        });
+
+    let cipher: EditableCipher = if json {
+        serde_json::from_str(&contents_trimmed)
+            .map_err(|e| anyhow::anyhow!("failed to parse JSON: {e}"))?
+    } else {
+        serde_yaml::from_str(&contents_trimmed)
+            .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?
+    };
+
+    if cipher.name.is_empty() {
+        return Err(anyhow::anyhow!("name cannot be empty"));
+    }
+
+    unlock(None)?;
+
+    let mut db = load_db()?;
+    let access_token = db.access_token.as_ref().unwrap().clone();
+    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+
+    let (data, _fields, notes) = editable_to_encrypted(&cipher, None)?;
+
+    let encrypted_name = crate::actions::encrypt(&cipher.name, None)?;
+    let encrypted_notes = notes
+        .as_deref()
+        .map(|n| crate::actions::encrypt(n, None))
+        .transpose()?;
+
+    let folder_id = if let Some(folder_name) = cipher.folder.as_deref() {
+        resolve_folder_id(
+            &mut db,
+            &access_token,
+            &refresh_token,
+            folder_name,
+        )?
+    } else {
+        None
+    };
+
+    if let (Some(new_token), ()) = rbw::actions::add(
+        &access_token,
+        &refresh_token,
+        &encrypted_name,
+        &data,
+        encrypted_notes.as_deref(),
+        folder_id.as_deref(),
+    )? {
+        db.access_token = Some(new_token);
+        save_db(&db)?;
+    }
+
+    crate::actions::sync()?;
+    Ok(())
+}
+
+pub fn set(
+    needle: Needle,
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    new_name: Option<&str>,
+    new_username: Option<&str>,
+    new_password: Option<&str>,
+    new_notes: Option<&str>,
+    new_uris: &[String],
+    new_totp: Option<&str>,
+) -> anyhow::Result<()> {
+    unlock(None)?;
+
+    let mut db = load_db()?;
+    let access_token = db.access_token.as_ref().unwrap().clone();
+    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle
+    );
+
+    let (entry, _decrypted) =
+        find_entry(&db, needle, username, folder, ignore_case)
+            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    let org_id = entry.org_id.as_deref();
+
+    let encrypted_name = if let Some(n) = new_name {
+        crate::actions::encrypt(n, org_id)?
+    } else {
+        entry.name.clone()
+    };
+
+    let encrypted_notes = if let Some(n) = new_notes {
+        if n.is_empty() {
+            None
+        } else {
+            Some(crate::actions::encrypt(n, org_id)?)
+        }
+    } else {
+        entry.notes.clone()
+    };
+
+    let mut history = entry.history.clone();
+
+    let data = match &entry.data {
+        rbw::db::EntryData::Login {
+            username: entry_username,
+            password: entry_password,
+            uris: entry_uris,
+            totp: entry_totp,
+        } => {
+            let username = if new_username.is_some() {
+                new_username
+                    .map(|u| crate::actions::encrypt(u, org_id))
+                    .transpose()?
+            } else {
+                entry_username.clone()
+            };
+
+            let password = if let Some(pw) = new_password {
+                let encrypted = crate::actions::encrypt(pw, org_id)?;
+                if let Some(prev) = entry_password.clone() {
+                    history.insert(
+                        0,
+                        rbw::db::HistoryEntry {
+                            last_used_date: format!(
+                                "{}",
+                                humantime::format_rfc3339(
+                                    std::time::SystemTime::now()
+                                )
+                            ),
+                            password: prev,
+                        },
+                    );
+                }
+                Some(encrypted)
+            } else {
+                entry_password.clone()
+            };
+
+            let uris = if new_uris.is_empty() {
+                entry_uris.clone()
+            } else {
+                new_uris
+                    .iter()
+                    .map(|u| {
+                        Ok(rbw::db::Uri {
+                            uri: crate::actions::encrypt(u, org_id)?,
+                            match_type: None,
+                        })
+                    })
+                    .collect::<anyhow::Result<_>>()?
+            };
+
+            let totp = if new_totp.is_some() {
+                new_totp
+                    .map(|t| crate::actions::encrypt(t, org_id))
+                    .transpose()?
+            } else {
+                entry_totp.clone()
+            };
+
+            rbw::db::EntryData::Login {
+                username,
+                password,
+                uris,
+                totp,
+            }
+        }
+        other => {
+            if new_username.is_some()
+                || new_password.is_some()
+                || !new_uris.is_empty()
+                || new_totp.is_some()
+            {
+                return Err(anyhow::anyhow!(
+                    "username/password/uri/totp fields are only \
+                     supported for Login entries"
+                ));
+            }
+            other.clone()
+        }
+    };
+
+    if let (Some(new_token), ()) = rbw::actions::edit(
+        &access_token,
+        &refresh_token,
+        &entry.id,
+        org_id,
+        &encrypted_name,
+        &data,
+        &entry.fields,
+        encrypted_notes.as_deref(),
+        entry.folder_id.as_deref(),
+        &history,
+    )? {
+        db.access_token = Some(new_token);
+        save_db(&db)?;
+    }
+
+    crate::actions::sync()?;
+
+    Ok(())
+}
+
+fn resolve_folder_id(
+    db: &mut rbw::db::Db,
+    access_token: &str,
+    refresh_token: &str,
+    folder_name: &str,
+) -> anyhow::Result<Option<String>> {
+    let (new_access_token, folders) =
+        rbw::actions::list_folders(access_token, refresh_token)?;
+    if let Some(new_access_token) = new_access_token {
+        db.access_token = Some(new_access_token);
+        save_db(db)?;
+    }
+    let access_token = db.access_token.as_deref().unwrap();
+    let refresh_token_str = db.refresh_token.as_deref().unwrap();
+
+    let folders: Vec<(String, String)> = folders
+        .iter()
+        .cloned()
+        .map(|(id, name)| {
+            Ok((id, crate::actions::decrypt(&name, None, None)?))
+        })
+        .collect::<anyhow::Result<_>>()?;
+
+    for (id, name) in &folders {
+        if name == folder_name {
+            return Ok(Some(id.clone()));
+        }
+    }
+
+    let (new_access_token, id) = rbw::actions::create_folder(
+        access_token,
+        refresh_token_str,
+        &crate::actions::encrypt(folder_name, None)?,
+    )?;
+    if let Some(new_access_token) = new_access_token {
+        db.access_token = Some(new_access_token);
+        save_db(db)?;
+    }
+    Ok(Some(id))
 }
 
 pub fn export() -> anyhow::Result<()> {
@@ -4266,25 +4580,337 @@ fn decrypt_cipher(entry: &rbw::db::Entry) -> anyhow::Result<DecryptedCipher> {
     })
 }
 
-fn parse_editor(contents: &str) -> (Option<String>, Option<String>) {
-    let mut lines = contents.lines();
-
-    let password = lines.next().map(std::string::ToString::to_string);
-
-    let mut notes: String = lines
-        .skip_while(|line| line.is_empty())
-        .filter(|line| !line.starts_with('#'))
-        .fold(String::new(), |mut notes, line| {
-            notes.push_str(line);
-            notes.push('\n');
-            notes
-        });
-    while notes.ends_with('\n') {
-        notes.pop();
+fn uri_match_type_str(mt: rbw::api::UriMatchType) -> &'static str {
+    match mt {
+        rbw::api::UriMatchType::Domain => "domain",
+        rbw::api::UriMatchType::Host => "host",
+        rbw::api::UriMatchType::StartsWith => "starts_with",
+        rbw::api::UriMatchType::Exact => "exact",
+        rbw::api::UriMatchType::RegularExpression => "regular_expression",
+        rbw::api::UriMatchType::Never => "never",
     }
-    let notes = if notes.is_empty() { None } else { Some(notes) };
+}
 
-    (password, notes)
+fn parse_uri_match_type(
+    s: &str,
+) -> anyhow::Result<rbw::api::UriMatchType> {
+    match s {
+        "domain" => Ok(rbw::api::UriMatchType::Domain),
+        "host" => Ok(rbw::api::UriMatchType::Host),
+        "starts_with" => Ok(rbw::api::UriMatchType::StartsWith),
+        "exact" => Ok(rbw::api::UriMatchType::Exact),
+        "regular_expression" => {
+            Ok(rbw::api::UriMatchType::RegularExpression)
+        }
+        "never" => Ok(rbw::api::UriMatchType::Never),
+        other => Err(anyhow::anyhow!("unknown uri match type: '{other}'")),
+    }
+}
+
+fn field_type_str(ft: rbw::api::FieldType) -> &'static str {
+    match ft {
+        rbw::api::FieldType::Text => "text",
+        rbw::api::FieldType::Hidden => "hidden",
+        rbw::api::FieldType::Boolean => "boolean",
+        rbw::api::FieldType::Linked => "linked",
+    }
+}
+
+fn parse_field_type(s: &str) -> anyhow::Result<rbw::api::FieldType> {
+    match s {
+        "text" => Ok(rbw::api::FieldType::Text),
+        "hidden" => Ok(rbw::api::FieldType::Hidden),
+        "boolean" => Ok(rbw::api::FieldType::Boolean),
+        "linked" => Ok(rbw::api::FieldType::Linked),
+        other => Err(anyhow::anyhow!("unknown field type: '{other}'")),
+    }
+}
+
+fn decrypted_to_editable(decrypted: &DecryptedCipher) -> EditableCipher {
+    let data = match &decrypted.data {
+        DecryptedData::Login {
+            username,
+            password,
+            totp,
+            uris,
+        } => EditableData::Login {
+            username: username.clone(),
+            password: password.clone(),
+            uris: uris
+                .as_ref()
+                .map(|v| {
+                    v.iter()
+                        .map(|u| EditableUri {
+                            uri: u.uri.clone(),
+                            match_type: u
+                                .match_type
+                                .map(|mt| uri_match_type_str(mt).to_string()),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            totp: totp.clone(),
+        },
+        DecryptedData::Card {
+            cardholder_name,
+            number,
+            brand,
+            exp_month,
+            exp_year,
+            code,
+        } => EditableData::Card {
+            cardholder_name: cardholder_name.clone(),
+            number: number.clone(),
+            brand: brand.clone(),
+            exp_month: exp_month.clone(),
+            exp_year: exp_year.clone(),
+            code: code.clone(),
+        },
+        DecryptedData::Identity {
+            title,
+            first_name,
+            middle_name,
+            last_name,
+            address1,
+            address2,
+            address3,
+            city,
+            state,
+            postal_code,
+            country,
+            phone,
+            email,
+            ssn,
+            license_number,
+            passport_number,
+            username,
+        } => EditableData::Identity {
+            title: title.clone(),
+            first_name: first_name.clone(),
+            middle_name: middle_name.clone(),
+            last_name: last_name.clone(),
+            address1: address1.clone(),
+            address2: address2.clone(),
+            address3: address3.clone(),
+            city: city.clone(),
+            state: state.clone(),
+            postal_code: postal_code.clone(),
+            country: country.clone(),
+            phone: phone.clone(),
+            email: email.clone(),
+            ssn: ssn.clone(),
+            license_number: license_number.clone(),
+            passport_number: passport_number.clone(),
+            username: username.clone(),
+        },
+        DecryptedData::SecureNote => EditableData::SecureNote,
+        DecryptedData::SshKey {
+            public_key,
+            fingerprint,
+            private_key,
+        } => EditableData::SshKey {
+            private_key: private_key.clone(),
+            public_key: public_key.clone(),
+            fingerprint: fingerprint.clone(),
+        },
+    };
+
+    let fields = decrypted
+        .fields
+        .iter()
+        .map(|f| EditableCustomField {
+            name: f.name.clone(),
+            value: f.value.clone(),
+            ty: f.ty.map(|t| field_type_str(t).to_string()),
+        })
+        .collect();
+
+    EditableCipher {
+        name: decrypted.name.clone(),
+        folder: decrypted.folder.clone(),
+        notes: decrypted.notes.clone(),
+        data,
+        fields,
+    }
+}
+
+fn editable_to_encrypted(
+    editable: &EditableCipher,
+    org_id: Option<&str>,
+) -> anyhow::Result<(
+    rbw::db::EntryData,
+    Vec<rbw::db::Field>,
+    Option<String>,
+)> {
+    let data = match &editable.data {
+        EditableData::Login {
+            username,
+            password,
+            uris,
+            totp,
+        } => {
+            let username = username
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|u| crate::actions::encrypt(u, org_id))
+                .transpose()?;
+            let password = password
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|p| crate::actions::encrypt(p, org_id))
+                .transpose()?;
+            let uris = uris
+                .iter()
+                .filter(|u| !u.uri.is_empty())
+                .map(|u| {
+                    let match_type = u
+                        .match_type
+                        .as_deref()
+                        .map(parse_uri_match_type)
+                        .transpose()?;
+                    Ok(rbw::db::Uri {
+                        uri: crate::actions::encrypt(&u.uri, org_id)?,
+                        match_type,
+                    })
+                })
+                .collect::<anyhow::Result<_>>()?;
+            let totp = totp
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|t| crate::actions::encrypt(t, org_id))
+                .transpose()?;
+            rbw::db::EntryData::Login {
+                username,
+                password,
+                uris,
+                totp,
+            }
+        }
+        EditableData::Card {
+            cardholder_name,
+            number,
+            brand,
+            exp_month,
+            exp_year,
+            code,
+        } => {
+            let enc = |s: &Option<String>| {
+                s.as_deref()
+                    .filter(|v| !v.is_empty())
+                    .map(|v| crate::actions::encrypt(v, org_id))
+                    .transpose()
+            };
+            rbw::db::EntryData::Card {
+                cardholder_name: enc(cardholder_name)?,
+                number: enc(number)?,
+                brand: enc(brand)?,
+                exp_month: enc(exp_month)?,
+                exp_year: enc(exp_year)?,
+                code: enc(code)?,
+            }
+        }
+        EditableData::Identity {
+            title,
+            first_name,
+            middle_name,
+            last_name,
+            address1,
+            address2,
+            address3,
+            city,
+            state,
+            postal_code,
+            country,
+            phone,
+            email,
+            ssn,
+            license_number,
+            passport_number,
+            username,
+        } => {
+            let enc = |s: &Option<String>| {
+                s.as_deref()
+                    .filter(|v| !v.is_empty())
+                    .map(|v| crate::actions::encrypt(v, org_id))
+                    .transpose()
+            };
+            rbw::db::EntryData::Identity {
+                title: enc(title)?,
+                first_name: enc(first_name)?,
+                middle_name: enc(middle_name)?,
+                last_name: enc(last_name)?,
+                address1: enc(address1)?,
+                address2: enc(address2)?,
+                address3: enc(address3)?,
+                city: enc(city)?,
+                state: enc(state)?,
+                postal_code: enc(postal_code)?,
+                country: enc(country)?,
+                phone: enc(phone)?,
+                email: enc(email)?,
+                ssn: enc(ssn)?,
+                license_number: enc(license_number)?,
+                passport_number: enc(passport_number)?,
+                username: enc(username)?,
+            }
+        }
+        EditableData::SecureNote => rbw::db::EntryData::SecureNote,
+        EditableData::SshKey {
+            private_key,
+            public_key,
+            fingerprint,
+        } => {
+            let enc = |s: &Option<String>| {
+                s.as_deref()
+                    .filter(|v| !v.is_empty())
+                    .map(|v| crate::actions::encrypt(v, org_id))
+                    .transpose()
+            };
+            rbw::db::EntryData::SshKey {
+                private_key: enc(private_key)?,
+                public_key: enc(public_key)?,
+                fingerprint: enc(fingerprint)?,
+            }
+        }
+    };
+
+    let fields = editable
+        .fields
+        .iter()
+        .map(|f| {
+            let ty = f
+                .ty
+                .as_deref()
+                .map(parse_field_type)
+                .transpose()?;
+            let name = f
+                .name
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|n| crate::actions::encrypt(n, org_id))
+                .transpose()?;
+            let value = f
+                .value
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|v| crate::actions::encrypt(v, org_id))
+                .transpose()?;
+            Ok(rbw::db::Field {
+                ty,
+                name,
+                value,
+                linked_id: None,
+            })
+        })
+        .collect::<anyhow::Result<_>>()?;
+
+    let notes = editable
+        .notes
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(std::string::ToString::to_string);
+
+    Ok((data, fields, notes))
 }
 
 fn load_db() -> anyhow::Result<rbw::db::Db> {
@@ -7615,6 +8241,39 @@ mod test {
             let err =
                 write_rendered_template_file(&fifo, "hunter2").unwrap_err();
             assert!(format!("{err}").contains("regular file"));
+        }
+    }
+
+    #[test]
+    fn test_editable_cipher_yaml_roundtrip() {
+        let cipher = EditableCipher {
+            name: "test entry".to_string(),
+            folder: None,
+            notes: Some("some notes".to_string()),
+            data: EditableData::Login {
+                username: Some("user@example.com".to_string()),
+                password: Some("hunter2".to_string()),
+                uris: vec![EditableUri {
+                    uri: "https://example.com".to_string(),
+                    match_type: Some("domain".to_string()),
+                }],
+                totp: None,
+            },
+            fields: vec![],
+        };
+
+        let yaml = serde_yaml::to_string(&cipher).unwrap();
+        eprintln!("YAML output:\n{yaml}");
+        assert!(!yaml.is_empty(), "YAML output should not be empty");
+        assert!(yaml.contains("test entry"), "should contain name");
+        assert!(yaml.contains("login"), "should contain type tag");
+
+        let parsed: EditableCipher = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed.name, "test entry");
+        if let EditableData::Login { username, .. } = parsed.data {
+            assert_eq!(username.as_deref(), Some("user@example.com"));
+        } else {
+            panic!("expected Login variant");
         }
     }
 }
