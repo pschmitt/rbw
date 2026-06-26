@@ -2506,13 +2506,19 @@ fn edit_structured(
         serde_yaml::to_string(&editable)?
     };
 
-    let help = if json {
-        "# Edit the JSON below. Lines starting with # are ignored."
+    let (help, ext) = if json {
+        (
+            "# Edit the JSON below. Lines starting with # are ignored.",
+            "json",
+        )
     } else {
-        "# Edit the YAML below. Lines starting with # are ignored."
+        (
+            "# Edit the YAML below. Lines starting with # are ignored.",
+            "yaml",
+        )
     };
 
-    let contents = rbw::edit::edit(&serialized, help)?;
+    let contents = rbw::edit::edit(&serialized, help, ext)?;
     let contents_trimmed = contents
         .lines()
         .filter(|l| !l.starts_with('#'))
@@ -2521,6 +2527,11 @@ fn edit_structured(
             s.push('\n');
             s
         });
+
+    if contents_trimmed.trim() == serialized.trim() {
+        eprintln!("No changes made.");
+        return Ok(());
+    }
 
     let updated: EditableCipher = if json {
         serde_json::from_str(&contents_trimmed)
@@ -2639,13 +2650,19 @@ fn add_structured(
         serde_yaml::to_string(&template)?
     };
 
-    let help = if json {
-        "# Fill in the JSON below. Lines starting with # are ignored."
+    let (help, ext) = if json {
+        (
+            "# Fill in the JSON below. Lines starting with # are ignored.",
+            "json",
+        )
     } else {
-        "# Fill in the YAML below. Lines starting with # are ignored."
+        (
+            "# Fill in the YAML below. Lines starting with # are ignored.",
+            "yaml",
+        )
     };
 
-    let contents = rbw::edit::edit(&serialized, help)?;
+    let contents = rbw::edit::edit(&serialized, help, ext)?;
     let contents_trimmed = contents
         .lines()
         .filter(|l| !l.starts_with('#'))
@@ -2654,6 +2671,11 @@ fn add_structured(
             s.push('\n');
             s
         });
+
+    if contents_trimmed.trim() == serialized.trim() {
+        eprintln!("No changes made.");
+        return Ok(());
+    }
 
     let cipher: EditableCipher = if json {
         serde_json::from_str(&contents_trimmed)
@@ -2732,11 +2754,12 @@ pub fn set(
         needle
     );
 
-    let (entry, _decrypted) =
+    let (entry, decrypted) =
         find_entry(&db, needle, username, folder, ignore_case)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     let org_id = entry.org_id.as_deref();
+    let entry_name = &decrypted.name;
 
     let encrypted_name = if let Some(n) = new_name {
         crate::actions::encrypt(n, org_id)?
@@ -2852,6 +2875,41 @@ pub fn set(
         save_db(&db)?;
     }
 
+    let mut changes: Vec<String> = Vec::new();
+    if let Some(n) = new_name {
+        changes.push(format!(
+            "  name: {:?} → {:?}",
+            entry_name, n
+        ));
+    }
+    if let Some(u) = new_username {
+        changes.push(format!("  username: {:?}", u));
+    }
+    if let Some(p) = new_password {
+        changes.push(format!("  password: \"{}\"", censor(p)));
+    }
+    if let Some(n) = new_notes {
+        if n.is_empty() {
+            changes.push("  notes: cleared".to_string());
+        } else {
+            changes.push("  notes: updated".to_string());
+        }
+    }
+    if !new_uris.is_empty() {
+        for u in new_uris {
+            changes.push(format!("  uri: {:?}", u));
+        }
+    }
+    if let Some(t) = new_totp {
+        changes.push(format!("  totp: \"{}\"", censor(t)));
+    }
+    if !changes.is_empty() {
+        println!("Updated {:?}:", entry_name);
+        for line in &changes {
+            println!("{line}");
+        }
+    }
+
     crate::actions::sync()?;
 
     Ok(())
@@ -2896,6 +2954,24 @@ fn resolve_folder_id(
         save_db(db)?;
     }
     Ok(Some(id))
+}
+
+fn censor(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    if len <= 4 {
+        return "****".to_string();
+    }
+    let prefix = ((len + 2) / 3).min(8);
+    let suffix = ((len + 3) / 4).min(5);
+    if prefix + suffix >= len {
+        return "****".to_string();
+    }
+    format!(
+        "{}…{}",
+        chars[..prefix].iter().collect::<String>(),
+        chars[len - suffix..].iter().collect::<String>()
+    )
 }
 
 pub fn export() -> anyhow::Result<()> {

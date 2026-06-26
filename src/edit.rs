@@ -4,7 +4,7 @@ use std::io::{Read as _, Write as _};
 
 use is_terminal::IsTerminal as _;
 
-pub fn edit(contents: &str, help: &str) -> Result<String> {
+pub fn edit(contents: &str, help: &str, ext: &str) -> Result<String> {
     if !std::io::stdin().is_terminal() {
         // directly read from piped content
         return match std::io::read_to_string(std::io::stdin()) {
@@ -20,7 +20,12 @@ pub fn edit(contents: &str, help: &str) -> Result<String> {
     });
 
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("rbw");
+    let filename = if ext.is_empty() {
+        "rbw".to_string()
+    } else {
+        format!("rbw.{ext}")
+    };
+    let file = dir.path().join(filename);
     let mut fh = std::fs::File::create(&file).unwrap();
     fh.write_all(contents.as_bytes()).unwrap();
     fh.write_all(help.as_bytes()).unwrap();
