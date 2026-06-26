@@ -163,7 +163,7 @@ enum Opt {
         insecure: bool,
     },
 
-    #[command(about = "Display all fields of a given entry")]
+    #[command(about = "Get the primary value (password) of a given entry")]
     Get {
         #[command(flatten)]
         find_args: FindArgs,

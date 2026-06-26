@@ -2178,7 +2178,7 @@ pub fn get(
     } else if let Some(field) = field {
         decrypted.display_field(&desc, field, clipboard);
     } else {
-        decrypted.display_long(&desc, clipboard);
+        decrypted.display_short(&desc, clipboard);
     }
 
     Ok(())
