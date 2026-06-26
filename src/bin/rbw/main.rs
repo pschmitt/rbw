@@ -15,9 +15,13 @@ mod sock;
 
 #[derive(Debug, clap::Args)]
 struct FindArgs {
-    #[arg(help = "Name, URI or UUID of the entry to display", value_parser = commands::parse_needle)]
-    needle: commands::Needle,
-    #[arg(help = "Username of the entry to display")]
+    #[arg(
+        help = "Name, URI, UUID (or multiple terms, all required to match)",
+        value_parser = commands::parse_needle,
+        num_args = 1..,
+    )]
+    needles: Vec<commands::Needle>,
+    #[arg(long, help = "Username of the entry to display")]
     user: Option<String>,
     #[arg(long, help = "Folder name to search in")]
     folder: Option<String>,
@@ -589,13 +593,17 @@ enum Attachment {
         about = "Download and decrypt an attachment by id or filename"
     )]
     Get {
-        #[arg(help = "Name, URI or UUID of the entry", value_parser = commands::parse_needle)]
-        needle: commands::Needle,
+        #[arg(
+            help = "Name, URI, UUID (or multiple terms, all required to match)",
+            value_parser = commands::parse_needle,
+            num_args = 1..,
+        )]
+        needles: Vec<commands::Needle>,
         #[arg(
             help = "Attachment ID or filename (see `rbw attachment list <entry>`)"
         )]
         attachment: Option<String>,
-        #[arg(help = "Username of the entry")]
+        #[arg(long, help = "Username of the entry")]
         user: Option<String>,
         #[arg(long, help = "Folder name to search in")]
         folder: Option<String>,
@@ -616,8 +624,12 @@ enum Attachment {
     },
     #[command(about = "Upload a file as an attachment", visible_alias = "add")]
     Create {
-        #[arg(help = "Name, URI or UUID of the entry", value_parser = commands::parse_needle)]
-        needle: commands::Needle,
+        #[arg(
+            help = "Name, URI, UUID (or multiple terms, all required to match)",
+            value_parser = commands::parse_needle,
+            num_args = 1..,
+        )]
+        needles: Vec<commands::Needle>,
         #[arg(help = "File to attach")]
         file: std::path::PathBuf,
         #[arg(long, help = "Username of the entry")]
@@ -726,7 +738,7 @@ fn main() {
             } => (|| -> anyhow::Result<()> {
                 let output = resolve_output_mode(output, raw, yaml)?;
                 commands::attachment_list(
-                    find_args.needle,
+                    find_args.needles,
                     find_args.user.as_deref(),
                     find_args.folder.as_deref(),
                     find_args.ignorecase,
@@ -734,7 +746,7 @@ fn main() {
                 )
             })(),
             Attachment::Get {
-                needle,
+                needles,
                 attachment,
                 user,
                 folder,
@@ -742,7 +754,7 @@ fn main() {
                 output,
                 raw,
             } => commands::attachment_get(
-                needle,
+                needles,
                 user.as_deref(),
                 folder.as_deref(),
                 ignorecase,
@@ -751,13 +763,13 @@ fn main() {
                 raw,
             ),
             Attachment::Create {
-                needle,
+                needles,
                 file,
                 user,
                 folder,
                 ignorecase,
             } => commands::attachment_create(
-                needle,
+                needles,
                 user.as_deref(),
                 folder.as_deref(),
                 ignorecase,
@@ -777,7 +789,7 @@ fn main() {
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             commands::get(
-                find_args.needle.clone(),
+                find_args.needles.clone(),
                 find_args.user.as_deref(),
                 find_args.folder.as_deref(),
                 field.as_deref(),
@@ -792,7 +804,7 @@ fn main() {
             )
         })(),
         Opt::Show { find_args } => commands::show(
-            find_args.needle,
+            find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
             find_args.ignorecase,
@@ -822,7 +834,7 @@ fn main() {
             #[cfg(feature = "clipboard")]
             clipboard,
         } => commands::code(
-            find_args.needle,
+            find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
             #[cfg(feature = "clipboard")]
@@ -899,7 +911,7 @@ fn main() {
             )
         }
         Opt::Edit { find_args, json, yaml } => commands::edit(
-            find_args.needle,
+            find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
             find_args.ignorecase,
@@ -917,7 +929,7 @@ fn main() {
             diff,
             attachment,
         } => commands::set(
-            find_args.needle,
+            find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
             find_args.ignorecase,
@@ -931,7 +943,7 @@ fn main() {
             &attachment,
         ),
         Opt::Remove { find_args } => commands::remove(
-            find_args.needle,
+            find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
             find_args.ignorecase,
@@ -969,7 +981,7 @@ fn main() {
             name,
         } => commands::rename_collection(&id, &organizationid, &name),
         Opt::History { find_args } => commands::history(
-            find_args.needle,
+            find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
             find_args.ignorecase,

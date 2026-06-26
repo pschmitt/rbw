@@ -289,7 +289,12 @@ impl DecryptedSearchCipher {
                 }
             }
             Needle::Name(name) => {
-                if !match_str(&self.name, name) {
+                if !match_str(&self.name, name)
+                    && !self
+                        .id
+                        .to_lowercase()
+                        .contains(&name.to_lowercase())
+                {
                     return false;
                 }
             }
@@ -2120,7 +2125,7 @@ pub fn list(
 
 #[allow(clippy::fn_params_excessive_bools)]
 pub fn get(
-    needle: Needle,
+    needles: Vec<Needle>,
     user: Option<&str>,
     folder: Option<&str>,
     field: Option<&str>,
@@ -2134,14 +2139,19 @@ pub fn get(
 
     let db = load_db()?;
 
+    let needle_str = needles
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
     let desc = format!(
         "{}{}",
         user.map_or_else(String::new, |s| format!("{s}@")),
-        needle
+        needle_str
     );
 
     let (_, decrypted) =
-        find_entry(&db, needle, user, folder, ignore_case)
+        find_entry(&db, needles, user, folder, ignore_case)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
     if list_fields {
         decrypted.display_fields_list();
@@ -2161,27 +2171,32 @@ pub fn get(
 }
 
 pub fn show(
-    needle: Needle,
+    needles: Vec<Needle>,
     user: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
     let db = load_db()?;
+    let needle_str = needles
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
     let desc = format!(
         "{}{}",
         user.map_or_else(String::new, |s| format!("{s}@")),
-        needle
+        needle_str
     );
     let (_, decrypted) =
-        find_entry(&db, needle, user, folder, ignore_case)
+        find_entry(&db, needles, user, folder, ignore_case)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
     decrypted.display_show();
     Ok(())
 }
 
 pub fn attachment_list(
-    needle: Needle,
+    needles: Vec<Needle>,
     user: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
@@ -2189,7 +2204,7 @@ pub fn attachment_list(
 ) -> anyhow::Result<()> {
     unlock(None)?;
     let db = load_db()?;
-    let (_, decrypted) = find_entry(&db, needle, user, folder, ignore_case)?;
+    let (_, decrypted) = find_entry(&db, needles, user, folder, ignore_case)?;
 
     if output_is_structured(output) {
         write_serialized_pretty(
@@ -2246,7 +2261,7 @@ pub fn attachment_list(
 }
 
 pub fn attachment_get(
-    needle: Needle,
+    needles: Vec<Needle>,
     user: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
@@ -2257,7 +2272,7 @@ pub fn attachment_get(
     unlock(None)?;
     let mut db = load_db()?;
     let (entry, decrypted) =
-        find_entry(&db, needle, user, folder, ignore_case)?;
+        find_entry(&db, needles, user, folder, ignore_case)?;
     let Some(attachment) = attachment else {
         return Err(available_attachments_error(
             &decrypted.name,
@@ -2343,7 +2358,7 @@ pub fn attachment_get(
 }
 
 pub fn attachment_create(
-    needle: Needle,
+    needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
@@ -2355,7 +2370,7 @@ pub fn attachment_create(
     let refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
     let (entry, decrypted) =
-        find_entry(&db, needle, username, folder, ignore_case)?;
+        find_entry(&db, needles, username, folder, ignore_case)?;
 
     let filename = file
         .file_name()
@@ -2598,7 +2613,7 @@ pub fn search(
 }
 
 pub fn code(
-    needle: Needle,
+    needles: Vec<Needle>,
     user: Option<&str>,
     folder: Option<&str>,
     clipboard: bool,
@@ -2608,14 +2623,19 @@ pub fn code(
 
     let db = load_db()?;
 
+    let needle_str = needles
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
     let desc = format!(
         "{}{}",
         user.map_or_else(String::new, |s| format!("{s}@")),
-        needle
+        needle_str
     );
 
     let (_, decrypted) =
-        find_entry(&db, needle, user, folder, ignore_case)
+        find_entry(&db, needles, user, folder, ignore_case)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     if let DecryptedData::Login { totp, .. } = decrypted.data {
@@ -2742,18 +2762,18 @@ pub fn generate(
 }
 
 pub fn edit(
-    name: Needle,
+    needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
     json: bool,
     _yaml: bool,
 ) -> anyhow::Result<()> {
-    edit_structured(name, username, folder, ignore_case, json)
+    edit_structured(needles, username, folder, ignore_case, json)
 }
 
 pub fn remove(
-    name: Needle,
+    needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
@@ -2764,13 +2784,18 @@ pub fn remove(
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
 
+    let needle_str = needles
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
     let desc = format!(
         "{}{}",
         username.map_or_else(String::new, |s| format!("{s}@")),
-        name
+        needle_str
     );
 
-    let (entry, _) = find_entry(&db, name, username, folder, ignore_case)
+    let (entry, _) = find_entry(&db, needles, username, folder, ignore_case)
         .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     if let (Some(access_token), ()) =
@@ -2786,7 +2811,7 @@ pub fn remove(
 }
 
 fn edit_structured(
-    name: Needle,
+    needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
@@ -2798,14 +2823,19 @@ fn edit_structured(
     let access_token = db.access_token.as_ref().unwrap().clone();
     let refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
+    let needle_str = needles
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
     let desc = format!(
         "{}{}",
         username.map_or_else(String::new, |s| format!("{s}@")),
-        name
+        needle_str
     );
 
     let (entry, decrypted) =
-        find_entry(&db, name, username, folder, ignore_case)
+        find_entry(&db, needles, username, folder, ignore_case)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     let editable = decrypted_to_editable(&decrypted);
@@ -3042,7 +3072,7 @@ fn add_structured(
 }
 
 pub fn set(
-    needle: Needle,
+    needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
@@ -3061,14 +3091,19 @@ pub fn set(
     let access_token = db.access_token.as_ref().unwrap().clone();
     let refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
+    let needle_str = needles
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
     let desc = format!(
         "{}{}",
         username.map_or_else(String::new, |s| format!("{s}@")),
-        needle
+        needle_str
     );
 
     let (entry, decrypted) =
-        find_entry(&db, needle, username, folder, ignore_case)
+        find_entry(&db, needles, username, folder, ignore_case)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     let org_id = entry.org_id.as_deref();
@@ -4019,7 +4054,7 @@ pub fn propagate_collection_permissions(
 }
 
 pub fn history(
-    name: Needle,
+    needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
@@ -4028,14 +4063,20 @@ pub fn history(
 
     let db = load_db()?;
 
+    let needle_str = needles
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
     let desc = format!(
         "{}{}",
         username.map_or_else(String::new, |s| format!("{s}@")),
-        name
+        needle_str
     );
 
-    let (_, decrypted) = find_entry(&db, name, username, folder, ignore_case)
-        .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    let (_, decrypted) =
+        find_entry(&db, needles, username, folder, ignore_case)
+            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
     for history in decrypted.history {
         println!("{}: {}", history.last_used_date, history.password);
     }
@@ -4150,18 +4191,23 @@ fn version_or_quit() -> anyhow::Result<u32> {
 
 fn find_entry(
     db: &rbw::db::Db,
-    mut needle: Needle,
+    mut needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
 ) -> anyhow::Result<(rbw::db::Entry, DecryptedCipher)> {
-    if let Needle::Uuid(uuid, s) = needle {
-        for cipher in &db.entries {
-            if uuid::Uuid::parse_str(&cipher.id) == Ok(uuid) {
-                return Ok((cipher.clone(), decrypt_cipher(cipher)?));
+    // Fast-path: exactly one UUID needle — try exact match first
+    if needles.len() == 1 {
+        if let Needle::Uuid(uuid, s) = &needles[0] {
+            let uuid = *uuid;
+            for cipher in &db.entries {
+                if uuid::Uuid::parse_str(&cipher.id) == Ok(uuid) {
+                    return Ok((cipher.clone(), decrypt_cipher(cipher)?));
+                }
             }
+            // UUID not found by exact match; fall through to name search
+            needles = vec![Needle::Name(s.clone())];
         }
-        needle = Needle::Name(s);
     }
 
     let mut requests = BatchRequests::new();
@@ -4185,7 +4231,7 @@ fn find_entry(
         })
         .collect::<anyhow::Result<_>>()?;
     let (entry, _) =
-        find_entry_raw(&ciphers, &needle, username, folder, ignore_case)?;
+        find_entry_raw(&ciphers, &needles, username, folder, ignore_case)?;
     let decrypted_entry = decrypt_cipher(&entry)?;
     Ok((entry, decrypted_entry))
 }
@@ -4244,7 +4290,7 @@ fn find_attachment<'a>(
 
 fn find_entry_raw(
     entries: &[(rbw::db::Entry, DecryptedSearchCipher)],
-    needle: &Needle,
+    needles: &[Needle],
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
@@ -4255,15 +4301,34 @@ fn find_entry_raw(
         entries
             .iter()
             .filter(|&(_, decrypted_cipher)| {
-                decrypted_cipher.matches(
-                    needle,
+                let Some((first, rest)) = needles.split_first() else {
+                    return false;
+                };
+                // Apply full context (username, folder) to the first needle
+                if !decrypted_cipher.matches(
+                    first,
                     username,
                     folder,
                     ignore_case,
                     strict_username,
                     strict_folder,
                     exact,
-                )
+                ) {
+                    return false;
+                }
+                // Remaining needles must match name/id only (no user/folder
+                // filtering)
+                rest.iter().all(|n| {
+                    decrypted_cipher.matches(
+                        n,
+                        None,
+                        None,
+                        ignore_case,
+                        false,
+                        false,
+                        exact,
+                    )
+                })
             })
             .cloned()
             .collect()
@@ -4293,6 +4358,12 @@ fn find_entry_raw(
         }
     }
 
+    let needle_str = needles
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+
     if matches.is_empty() {
         Err(anyhow::anyhow!("no entry found"))
     } else {
@@ -4301,7 +4372,7 @@ fn find_entry_raw(
             .map(|(_, decrypted)| format_ambiguous_entry(decrypted))
             .collect();
         Err(anyhow::anyhow!(
-            "multiple entries found:\n{}\n\nTry `rbw list {needle}` to inspect the matches, or add --user/--folder to disambiguate.",
+            "multiple entries found:\n{}\n\nTry `rbw list {needle_str}` to inspect the matches, or add --user/--folder to disambiguate.",
             entries.join("\n"),
         ))
     }
@@ -7796,7 +7867,7 @@ mod test {
         entries_eq(
             &find_entry_raw(
                 entries,
-                &parse_needle(needle).unwrap(),
+                &[parse_needle(needle).unwrap()],
                 username,
                 folder,
                 ignore_case,
@@ -7816,7 +7887,7 @@ mod test {
     ) -> bool {
         let res = find_entry_raw(
             entries,
-            &parse_needle(needle).unwrap(),
+            &[parse_needle(needle).unwrap()],
             username,
             folder,
             ignore_case,
@@ -7838,7 +7909,7 @@ mod test {
     ) -> bool {
         let res = find_entry_raw(
             entries,
-            &parse_needle(needle).unwrap(),
+            &[parse_needle(needle).unwrap()],
             username,
             folder,
             ignore_case,
