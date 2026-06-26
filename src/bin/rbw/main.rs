@@ -152,22 +152,18 @@ enum Opt {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[arg(long, visible_alias = "json", help = "Display output as JSON")]
+        #[arg(short = 'j', long, visible_alias = "json", help = "Display output as JSON")]
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
-        #[arg(long, help = "Dump full structured output for all items")]
-        full: bool,
     },
 
-    #[command(about = "Display the password for a given entry")]
+    #[command(about = "Display all fields of a given entry")]
     Get {
         #[command(flatten)]
         find_args: FindArgs,
         #[arg(short, long, help = "Field to get")]
         field: Option<String>,
-        #[arg(long, help = "Display the notes in addition to the password")]
-        full: bool,
         #[arg(
             short,
             long,
@@ -175,7 +171,7 @@ enum Opt {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[arg(long, visible_alias = "json", help = "Display output as JSON")]
+        #[arg(short = 'j', long, visible_alias = "json", help = "Display output as JSON")]
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
@@ -220,12 +216,10 @@ enum Opt {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[arg(long, visible_alias = "json", help = "Display output as JSON")]
+        #[arg(short = 'j', long, visible_alias = "json", help = "Display output as JSON")]
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
-        #[arg(long, help = "Dump full structured output for matching items")]
-        full: bool,
     },
 
     #[command(about = "List or download file attachments")]
@@ -428,7 +422,7 @@ enum Opt {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[arg(long, visible_alias = "json", help = "Display output as JSON")]
+        #[arg(short = 'j', long, visible_alias = "json", help = "Display output as JSON")]
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
@@ -591,7 +585,7 @@ enum Attachment {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[arg(long, visible_alias = "json", help = "Display output as JSON")]
+        #[arg(short = 'j', long, visible_alias = "json", help = "Display output as JSON")]
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
@@ -720,20 +714,12 @@ fn main() {
             output,
             raw,
             yaml,
-            full,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             if let Some(term) = term {
-                commands::search(
-                    &term,
-                    &fields,
-                    None,
-                    with_attachments,
-                    output,
-                    full,
-                )
+                commands::search(&term, &fields, None, with_attachments, output)
             } else {
-                commands::list(&fields, with_attachments, output, full)
+                commands::list(&fields, with_attachments, output)
             }
         })(),
         Opt::Attachment { attachment } => match attachment {
@@ -786,7 +772,6 @@ fn main() {
         Opt::Get {
             find_args,
             field,
-            full,
             output,
             raw,
             yaml,
@@ -800,7 +785,6 @@ fn main() {
                 find_args.user.as_deref(),
                 find_args.folder.as_deref(),
                 field.as_deref(),
-                full,
                 output,
                 #[cfg(feature = "clipboard")]
                 clipboard,
@@ -824,7 +808,6 @@ fn main() {
             output,
             raw,
             yaml,
-            full,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             commands::search(
@@ -833,7 +816,6 @@ fn main() {
                 folder.as_deref(),
                 with_attachments,
                 output,
-                full,
             )
         })(),
         Opt::Code {

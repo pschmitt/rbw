@@ -1091,15 +1091,9 @@ impl DecryptedCipher {
             }
         };
 
-        // Header: entry name
-        let name = if c {
-            format!("\x1b[1;4m{}\x1b[0m", self.name)
-        } else {
-            self.name.clone()
-        };
-        println!("{name}");
-
-        // Type + folder
+        // Header fields: Name, UID, Type, Folder
+        println!("{} {}", label("Name"), self.name);
+        println!("{} {}", label("UID"), dim(&self.id));
         let type_name = match &self.data {
             DecryptedData::Login { .. } => "login",
             DecryptedData::Card { .. } => "card",
@@ -2054,15 +2048,8 @@ pub fn list(
     fields: &[String],
     with_attachments: bool,
     output: OutputMode,
-    full: bool,
 ) -> anyhow::Result<()> {
-    let structured_output = if full && output == OutputMode::Default {
-        OutputMode::Json
-    } else {
-        output
-    };
-
-    let fields: Vec<ListField> = if output_is_structured(structured_output) {
+    let fields: Vec<ListField> = if output_is_structured(output) {
         ListField::all()
     } else {
         fields
@@ -2071,29 +2058,7 @@ pub fn list(
             .collect::<anyhow::Result<_>>()?
     };
 
-    if full && output == OutputMode::Name {
-        anyhow::bail!("--full cannot be combined with --output name");
-    }
-
     unlock(None)?;
-    if full {
-        let db = load_db()?;
-        let mut entries: Vec<DecryptedCipher> = db
-            .entries
-            .iter()
-            .map(decrypt_cipher)
-            .collect::<anyhow::Result<_>>()?;
-        if with_attachments {
-            entries
-                .retain(|entry| entry.attachment_metadata.has_attachments());
-        }
-        entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
-        return write_serialized_pretty(
-            &entries,
-            structured_output,
-            "failed to write entries to stdout",
-        );
-    }
 
     let db = load_db()?;
 
@@ -2134,7 +2099,6 @@ pub fn get(
     user: Option<&str>,
     folder: Option<&str>,
     field: Option<&str>,
-    full: bool,
     output: OutputMode,
     clipboard: bool,
     ignore_case: bool,
@@ -2164,12 +2128,10 @@ pub fn get(
         decrypted.display_structured(&desc, output)?;
     } else if output == OutputMode::Name {
         println!("{}", decrypted.name);
-    } else if full {
-        decrypted.display_long(&desc, clipboard);
     } else if let Some(field) = field {
         decrypted.display_field(&desc, field, clipboard);
     } else {
-        decrypted.display_short(&desc, clipboard);
+        decrypted.display_long(&desc, clipboard);
     }
 
     Ok(())
@@ -2536,15 +2498,8 @@ pub fn search(
     folder: Option<&str>,
     with_attachments: bool,
     output: OutputMode,
-    full: bool,
 ) -> anyhow::Result<()> {
-    let structured_output = if full && output == OutputMode::Default {
-        OutputMode::Json
-    } else {
-        output
-    };
-
-    let fields: Vec<ListField> = if output_is_structured(structured_output) {
+    let fields: Vec<ListField> = if output_is_structured(output) {
         ListField::all()
     } else {
         fields
@@ -2553,47 +2508,9 @@ pub fn search(
             .collect::<anyhow::Result<_>>()?
     };
 
-    if full && output == OutputMode::Name {
-        anyhow::bail!("--full cannot be combined with --output name");
-    }
-
     unlock(None)?;
 
     let db = load_db()?;
-    if full {
-        let mut entries: Vec<DecryptedCipher> = db
-            .entries
-            .iter()
-            .filter_map(|entry| match decrypt_search_cipher(entry) {
-                Ok(searchable)
-                    if searchable.search_match(
-                        term,
-                        folder,
-                        with_attachments,
-                    ) =>
-                {
-                    decrypt_cipher(entry).ok()
-                }
-                Ok(_) | Err(_) => None,
-            })
-            .collect();
-        if entries.is_empty() {
-            use yansi::Paint as _;
-            let msg = format!("no entries found matching '{term}'");
-            if std::io::stderr().is_terminal() {
-                eprintln!("{}", msg.yellow().bold());
-            } else {
-                eprintln!("{msg}");
-            }
-            std::process::exit(1);
-        }
-        entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
-        return write_serialized_pretty(
-            &entries,
-            structured_output,
-            "failed to write entries to stdout",
-        );
-    }
 
     // As in `list`, decrypt every entry's searchable fields in a single batch
     // request rather than one socket round-trip per field per entry.
