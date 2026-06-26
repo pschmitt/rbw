@@ -191,6 +191,10 @@ enum Opt {
     Show {
         #[command(flatten)]
         find_args: FindArgs,
+        #[arg(short = 'j', long, visible_alias = "json", help = "Display output as JSON")]
+        raw: bool,
+        #[arg(long, help = "Display output as YAML")]
+        yaml: bool,
     },
 
     #[command(about = "Search for entries")]
@@ -800,12 +804,16 @@ fn main() {
                 list_fields,
             )
         })(),
-        Opt::Show { find_args } => commands::show(
-            find_args.needles,
-            find_args.user.as_deref(),
-            find_args.folder.as_deref(),
-            find_args.ignorecase,
-        ),
+        Opt::Show { find_args, raw, yaml } => (|| -> anyhow::Result<()> {
+            let output = resolve_output_mode(None, raw, yaml)?;
+            commands::show(
+                find_args.needles,
+                find_args.user.as_deref(),
+                find_args.folder.as_deref(),
+                find_args.ignorecase,
+                output,
+            )
+        })(),
         Opt::Search {
             term,
             fields,

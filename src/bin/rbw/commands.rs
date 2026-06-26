@@ -2189,6 +2189,7 @@ pub fn show(
     user: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     unlock(None)?;
     let db = load_db()?;
@@ -2205,7 +2206,11 @@ pub fn show(
     let (_, decrypted) =
         find_entry(&db, needles, user, folder, ignore_case)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
-    decrypted.display_show();
+    if output_is_structured(output) {
+        decrypted.display_structured(&desc, output)?;
+    } else {
+        decrypted.display_show();
+    }
     Ok(())
 }
 
