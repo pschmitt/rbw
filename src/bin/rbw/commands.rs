@@ -3261,13 +3261,22 @@ fn set_one(
         let bold = |s: &str| -> String {
             if c { format!("\x1b[1m{s}\x1b[0m") } else { s.to_string() }
         };
+        let label = |s: &str| -> String {
+            if c { format!("\x1b[1;36m{s:<12}\x1b[0m") } else { format!("{s:<12}") }
+        };
+        let dim = |s: &str| -> String {
+            if c { format!("\x1b[2m{s}\x1b[0m") } else { s.to_string() }
+        };
+        let new_val = |s: &str| -> String {
+            if c { format!("\x1b[33m{s}\x1b[0m") } else { s.to_string() }
+        };
         eprintln!("About to update {}:", bold(&entry_name));
         eprintln!();
         for (field, old, new) in &changes {
-            eprintln!("{}: {old} → {new}", bold(field));
+            eprintln!("{} {} {} {}", label(field), dim(old), dim("→"), new_val(new));
         }
         for file in new_attachments {
-            eprintln!("attach: {}", file.display());
+            eprintln!("{} {}", label("attach"), file.display());
         }
         eprintln!();
         eprint!("Apply? [y/N] ");
