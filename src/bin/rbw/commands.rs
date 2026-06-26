@@ -3262,12 +3262,14 @@ fn set_one(
             if c { format!("\x1b[1m{s}\x1b[0m") } else { s.to_string() }
         };
         eprintln!("About to update {}:", bold(&entry_name));
+        eprintln!();
         for (field, old, new) in &changes {
-            eprintln!("  {}: {old} → {new}", bold(field));
+            eprintln!("{}: {old} → {new}", bold(field));
         }
         for file in new_attachments {
-            eprintln!("  attach: {}", file.display());
+            eprintln!("attach: {}", file.display());
         }
+        eprintln!();
         eprint!("Apply? [y/N] ");
         use std::io::Write as _;
         let _ = std::io::stderr().flush();
