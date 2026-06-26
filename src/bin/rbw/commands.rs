@@ -1629,7 +1629,7 @@ fn val_display_or_store(clipboard: bool, password: &str) -> bool {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-#[serde(untagged)]
+#[serde(tag = "type")]
 #[cfg_attr(test, derive(Eq, PartialEq))]
 enum DecryptedData {
     Login {
@@ -2173,6 +2173,8 @@ pub fn get(
     clipboard: bool,
     ignore_case: bool,
     list_fields: bool,
+    verbose: bool,
+    force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
 
@@ -2190,8 +2192,18 @@ pub fn get(
     );
 
     let (_, decrypted) =
-        find_entry(&db, needles, user, folder, ignore_case)
+        find_entry(&db, needles, user, folder, ignore_case, force_exact)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    if verbose {
+        let c = std::io::stderr().is_terminal()
+            && std::env::var_os("NO_COLOR").is_none();
+        eprintln!(
+            "Matched item: {}",
+            style::name(&decrypted.name, c)
+        );
+    }
+
     if list_fields {
         decrypted.display_fields_list();
     } else if output_is_structured(output) {
@@ -2213,6 +2225,7 @@ pub fn show(
     folder: Option<&str>,
     ignore_case: bool,
     output: OutputMode,
+    force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
     let db = load_db()?;
@@ -2227,7 +2240,7 @@ pub fn show(
         needle_str
     );
     let (_, decrypted) =
-        find_entry(&db, needles, user, folder, ignore_case)
+        find_entry(&db, needles, user, folder, ignore_case, force_exact)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
     if output_is_structured(output) {
         decrypted.display_structured(&desc, output)?;
@@ -2243,10 +2256,11 @@ pub fn attachment_list(
     folder: Option<&str>,
     ignore_case: bool,
     output: OutputMode,
+    force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
     let db = load_db()?;
-    let (_, decrypted) = find_entry(&db, needles, user, folder, ignore_case)?;
+    let (_, decrypted) = find_entry(&db, needles, user, folder, ignore_case, force_exact)?;
 
     if output_is_structured(output) {
         write_serialized_pretty(
@@ -2314,7 +2328,7 @@ pub fn attachment_get(
     unlock(None)?;
     let mut db = load_db()?;
     let (entry, decrypted) =
-        find_entry(&db, needles, user, folder, ignore_case)?;
+        find_entry(&db, needles, user, folder, ignore_case, false)?;
     let Some(attachment) = attachment else {
         return Err(available_attachments_error(
             &decrypted.name,
@@ -2412,7 +2426,7 @@ pub fn attachment_create(
     let refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
     let (entry, decrypted) =
-        find_entry(&db, needles, username, folder, ignore_case)?;
+        find_entry(&db, needles, username, folder, ignore_case, false)?;
 
     let filename = file
         .file_name()
@@ -2648,6 +2662,7 @@ pub fn code(
     folder: Option<&str>,
     clipboard: bool,
     ignore_case: bool,
+    force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
 
@@ -2665,7 +2680,7 @@ pub fn code(
     );
 
     let (_, decrypted) =
-        find_entry(&db, needles, user, folder, ignore_case)
+        find_entry(&db, needles, user, folder, ignore_case, force_exact)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     if let DecryptedData::Login { totp, .. } = decrypted.data {
@@ -2798,8 +2813,9 @@ pub fn edit(
     ignore_case: bool,
     json: bool,
     _yaml: bool,
+    force_exact: bool,
 ) -> anyhow::Result<()> {
-    edit_structured(needles, username, folder, ignore_case, json)
+    edit_structured(needles, username, folder, ignore_case, json, force_exact)
 }
 
 pub fn remove(
@@ -2807,6 +2823,7 @@ pub fn remove(
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
+    force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
 
@@ -2825,7 +2842,7 @@ pub fn remove(
         needle_str
     );
 
-    let (entry, _) = find_entry(&db, needles, username, folder, ignore_case)
+    let (entry, _) = find_entry(&db, needles, username, folder, ignore_case, force_exact)
         .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     if let (Some(access_token), ()) =
@@ -2846,6 +2863,7 @@ fn edit_structured(
     folder: Option<&str>,
     ignore_case: bool,
     json: bool,
+    force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
 
@@ -2865,7 +2883,7 @@ fn edit_structured(
     );
 
     let (entry, decrypted) =
-        find_entry(&db, needles, username, folder, ignore_case)
+        find_entry(&db, needles, username, folder, ignore_case, force_exact)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     let editable = decrypted_to_editable(&decrypted);
@@ -3116,6 +3134,7 @@ pub fn set(
     new_attachments: &[std::path::PathBuf],
     bulk: bool,
     yes: bool,
+    force_exact: bool,
 ) -> anyhow::Result<()> {
     if bulk {
         unlock(None)?;
@@ -3271,6 +3290,7 @@ pub fn set(
         diff,
         new_attachments,
         yes,
+        force_exact,
     )
 }
 
@@ -3335,6 +3355,7 @@ fn set_one(
     diff: bool,
     new_attachments: &[std::path::PathBuf],
     yes: bool,
+    force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
 
@@ -3352,7 +3373,7 @@ fn set_one(
     );
 
     let (entry, decrypted) =
-        find_entry(&db, needles, username, folder, ignore_case)
+        find_entry(&db, needles, username, folder, ignore_case, force_exact)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     set_entry(
@@ -4375,6 +4396,7 @@ pub fn history(
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
+    force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
 
@@ -4392,7 +4414,7 @@ pub fn history(
     );
 
     let (_, decrypted) =
-        find_entry(&db, needles, username, folder, ignore_case)
+        find_entry(&db, needles, username, folder, ignore_case, force_exact)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
     for history in decrypted.history {
         println!("{}: {}", history.last_used_date, history.password);
@@ -4512,6 +4534,7 @@ fn find_entry(
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
+    force_exact: bool,
 ) -> anyhow::Result<(rbw::db::Entry, DecryptedCipher)> {
     // Fast-path: exactly one UUID needle — try exact match first
     if needles.len() == 1 {
@@ -4548,7 +4571,7 @@ fn find_entry(
         })
         .collect::<anyhow::Result<_>>()?;
     let (entry, _) =
-        find_entry_raw(&ciphers, &needles, username, folder, ignore_case)?;
+        find_entry_raw(&ciphers, &needles, username, folder, ignore_case, force_exact)?;
     let decrypted_entry = decrypt_cipher(&entry)?;
     Ok((entry, decrypted_entry))
 }
@@ -4611,6 +4634,7 @@ fn find_entry_raw(
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
+    force_exact: bool,
 ) -> anyhow::Result<(rbw::db::Entry, DecryptedSearchCipher)> {
     let mut matches: Vec<(rbw::db::Entry, DecryptedSearchCipher)> = vec![];
 
@@ -4651,7 +4675,9 @@ fn find_entry_raw(
             .collect()
     };
 
-    for exact in [true, false] {
+    let exact_range: &[bool] =
+        if force_exact { &[true] } else { &[true, false] };
+    for &exact in exact_range {
         let nonstrict: Vec<(rbw::db::Entry, DecryptedSearchCipher)> =
             find_matches(false, false, exact);
 
@@ -8338,6 +8364,7 @@ mod test {
                 username,
                 folder,
                 ignore_case,
+                false,
             )
             .unwrap(),
             &entries[idx],
@@ -8358,6 +8385,7 @@ mod test {
             username,
             folder,
             ignore_case,
+            false,
         );
         if let Err(e) = res {
             format!("{e}").contains("no entry found")
@@ -8380,6 +8408,7 @@ mod test {
             username,
             folder,
             ignore_case,
+            false,
         );
         if let Err(e) = res {
             format!("{e}").contains("multiple entries found")

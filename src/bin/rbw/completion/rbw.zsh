@@ -67,10 +67,14 @@ _rbw_wrapper() {
     fi
 
     opts=("${(@f)${res}}")
+    # Case-insensitive substring matching so e.g. `rbw get micro<TAB>`
+    # completes to `Microsoft (WIIT)` even though the entry name does not
+    # start with the typed text (and regardless of the user's matcher-list).
+    local -a matcher=(-M 'm:{[:lower:][:upper:]}={[:upper:][:lower:]} l:|=* r:|=*')
     if [[ "$cur" == "--folder="* ]]; then
-      compadd -P '--folder=' -- "${opts[@]}"
+      compadd "${matcher[@]}" -P '--folder=' -- "${opts[@]}"
     else
-      compadd -- "${opts[@]}"
+      compadd "${matcher[@]}" -- "${opts[@]}"
     fi
   else
     _rbw

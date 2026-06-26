@@ -27,6 +27,12 @@ struct FindArgs {
     folder: Option<String>,
     #[arg(short, long, help = "Ignore case")]
     ignorecase: bool,
+    #[arg(
+        short = 'e',
+        long,
+        help = "Only match if needle is an exact entry name (no substring fallback)"
+    )]
+    exact: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -185,6 +191,8 @@ enum Opt {
         clipboard: bool,
         #[structopt(short, long, help = "List fields in this entry")]
         list_fields: bool,
+        #[arg(short = 'v', long, help = "Print matched item name to stderr")]
+        verbose: bool,
     },
 
     #[command(about = "Show all details of a given entry")]
@@ -746,6 +754,7 @@ fn main() {
                     find_args.folder.as_deref(),
                     find_args.ignorecase,
                     output,
+                    find_args.exact,
                 )
             })(),
             Attachment::Get {
@@ -788,6 +797,7 @@ fn main() {
             #[cfg(feature = "clipboard")]
             clipboard,
             list_fields,
+            verbose,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             commands::get(
@@ -802,6 +812,8 @@ fn main() {
                 false,
                 find_args.ignorecase,
                 list_fields,
+                verbose,
+                find_args.exact,
             )
         })(),
         Opt::Show { find_args, raw, yaml } => (|| -> anyhow::Result<()> {
@@ -812,6 +824,7 @@ fn main() {
                 find_args.folder.as_deref(),
                 find_args.ignorecase,
                 output,
+                find_args.exact,
             )
         })(),
         Opt::Search {
@@ -846,6 +859,7 @@ fn main() {
             #[cfg(not(feature = "clipboard"))]
             false,
             find_args.ignorecase,
+            find_args.exact,
         ),
         Opt::Inject { input, output } => {
             commands::inject(input.as_deref(), output.as_deref())
@@ -921,6 +935,7 @@ fn main() {
             find_args.ignorecase,
             json,
             yaml,
+            find_args.exact,
         ),
         Opt::Set {
             find_args,
@@ -949,12 +964,14 @@ fn main() {
             &attachment,
             bulk,
             yes,
+            find_args.exact,
         ),
         Opt::Remove { find_args } => commands::remove(
             find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
             find_args.ignorecase,
+            find_args.exact,
         ),
         Opt::ListCollections {
             output,
@@ -993,6 +1010,7 @@ fn main() {
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
             find_args.ignorecase,
+            find_args.exact,
         ),
         Opt::Lock => commands::lock(),
         Opt::Purge => commands::purge(),
