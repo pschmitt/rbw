@@ -1085,34 +1085,14 @@ impl DecryptedCipher {
 
     fn display_show(&self) {
         let c = stdout_supports_color();
-        let label = |s: &str| -> String {
-            if c {
-                format!("\x1b[1;36m{s:<12}\x1b[0m")
-            } else {
-                format!("{s:<12}")
-            }
-        };
-        let dim = |s: &str| -> String {
-            if c { format!("\x1b[2m{s}\x1b[0m") } else { s.to_string() }
-        };
-        let secret = |s: &str| -> String {
-            if c {
-                format!("\x1b[33m{s}\x1b[0m")
-            } else {
-                s.to_string()
-            }
-        };
-        let section = |s: &str| -> String {
-            if c {
-                format!("\x1b[1m{s}\x1b[0m")
-            } else {
-                s.to_string()
-            }
-        };
+        let lbl = |s: &str| style::label(&format!("{s:<12}"), c);
+        let dim = |s: &str| style::dim(s, c);
+        let secret = |s: &str| style::secret(s, c);
+        let section = |s: &str| style::section(s, c);
 
         // Header fields: Name, UID, Type, Folder
-        println!("{} {}", label("Name"), self.name);
-        println!("{} {}", label("UID"), dim(&self.id));
+        println!("{} {}", lbl("Name"), style::name(&self.name, c));
+        println!("{} {}", lbl("UID"), style::uid(&self.id, c));
         let type_name = match &self.data {
             DecryptedData::Login { .. } => "login",
             DecryptedData::Card { .. } => "card",
@@ -1120,9 +1100,9 @@ impl DecryptedCipher {
             DecryptedData::SecureNote => "secure_note",
             DecryptedData::SshKey { .. } => "ssh_key",
         };
-        println!("{} {}", label("Type"), dim(type_name));
+        println!("{} {}", lbl("Type"), style::entry_type(type_name, c));
         if let Some(folder) = &self.folder {
-            println!("{} {}", label("Folder"), dim(folder));
+            println!("{} {}", lbl("Folder"), style::folder(folder, c));
         }
 
         // Type-specific fields
@@ -1134,17 +1114,17 @@ impl DecryptedCipher {
                 uris,
             } => {
                 if let Some(u) = username {
-                    println!("{} {u}", label("Username"));
+                    println!("{} {}", lbl("Username"), style::user(u, c));
                 }
                 if let Some(p) = password {
-                    println!("{} {}", label("Password"), secret(p));
+                    println!("{} {}", lbl("Password"), secret(p));
                 }
                 if let Some(t) = totp {
-                    println!("{} {}", label("TOTP"), dim(t));
+                    println!("{} {}", lbl("TOTP"), dim(t));
                 }
                 if let Some(uris) = uris {
                     for uri_entry in uris {
-                        print!("{} {}", label("URI"), uri_entry.uri);
+                        print!("{} {}", lbl("URI"), style::uri(&uri_entry.uri, c));
                         if let Some(mt) = uri_entry.match_type {
                             print!("  {}", dim(&format!("[{mt}]")));
                         }
@@ -1161,19 +1141,19 @@ impl DecryptedCipher {
                 code,
             } => {
                 if let Some(n) = number {
-                    println!("{} {}", label("Number"), secret(n));
+                    println!("{} {}", lbl("Number"), secret(n));
                 }
                 if let (Some(m), Some(y)) = (exp_month, exp_year) {
-                    println!("{} {m}/{y}", label("Expires"));
+                    println!("{} {m}/{y}", lbl("Expires"));
                 }
                 if let Some(cv) = code {
-                    println!("{} {}", label("CVV"), secret(cv));
+                    println!("{} {}", lbl("CVV"), secret(cv));
                 }
                 if let Some(n) = cardholder_name {
-                    println!("{} {n}", label("Name"));
+                    println!("{} {n}", lbl("Name"));
                 }
                 if let Some(b) = brand {
-                    println!("{} {b}", label("Brand"));
+                    println!("{} {b}", lbl("Brand"));
                 }
             }
             DecryptedData::Identity {
@@ -1206,43 +1186,43 @@ impl DecryptedCipher {
                 .collect::<Vec<_>>()
                 .join(" ");
                 if !full_name.is_empty() {
-                    println!("{} {full_name}", label("Name"));
+                    println!("{} {full_name}", lbl("Name"));
                 }
                 for addr in [address1, address2, address3]
                     .into_iter()
                     .flatten()
                 {
-                    println!("{} {addr}", label("Address"));
+                    println!("{} {addr}", lbl("Address"));
                 }
                 if let Some(v) = city {
-                    println!("{} {v}", label("City"));
+                    println!("{} {v}", lbl("City"));
                 }
                 if let Some(v) = state {
-                    println!("{} {v}", label("State"));
+                    println!("{} {v}", lbl("State"));
                 }
                 if let Some(v) = postal_code {
-                    println!("{} {v}", label("Postcode"));
+                    println!("{} {v}", lbl("Postcode"));
                 }
                 if let Some(v) = country {
-                    println!("{} {v}", label("Country"));
+                    println!("{} {v}", lbl("Country"));
                 }
                 if let Some(v) = phone {
-                    println!("{} {v}", label("Phone"));
+                    println!("{} {v}", lbl("Phone"));
                 }
                 if let Some(v) = email {
-                    println!("{} {v}", label("Email"));
+                    println!("{} {v}", lbl("Email"));
                 }
                 if let Some(v) = username {
-                    println!("{} {v}", label("Username"));
+                    println!("{} {}", lbl("Username"), style::user(v, c));
                 }
                 if let Some(v) = ssn {
-                    println!("{} {}", label("SSN"), secret(v));
+                    println!("{} {}", lbl("SSN"), secret(v));
                 }
                 if let Some(v) = license_number {
-                    println!("{} {v}", label("License"));
+                    println!("{} {v}", lbl("License"));
                 }
                 if let Some(v) = passport_number {
-                    println!("{} {v}", label("Passport"));
+                    println!("{} {v}", lbl("Passport"));
                 }
             }
             DecryptedData::SecureNote => {}
@@ -1252,13 +1232,13 @@ impl DecryptedCipher {
                 fingerprint,
             } => {
                 if let Some(fp) = fingerprint {
-                    println!("{} {}", label("Fingerprint"), dim(fp));
+                    println!("{} {}", lbl("Fingerprint"), dim(fp));
                 }
                 if let Some(pk) = public_key {
-                    println!("{} {pk}", label("Public key"));
+                    println!("{} {pk}", lbl("Public key"));
                 }
                 if let Some(pk) = private_key {
-                    println!("{} {}", label("Private key"), secret(pk));
+                    println!("{} {}", lbl("Private key"), secret(pk));
                 }
             }
         }
@@ -1274,9 +1254,9 @@ impl DecryptedCipher {
                     Some(rbw::api::FieldType::Hidden)
                 );
                 if is_hidden {
-                    println!("{} {}", label(name), secret(value));
+                    println!("{} {}", lbl(name), secret(value));
                 } else {
-                    println!("{} {value}", label(name));
+                    println!("{} {value}", lbl(name));
                 }
             }
         }
@@ -1302,7 +1282,7 @@ impl DecryptedCipher {
                     .as_deref()
                     .or(att.size.as_deref())
                     .unwrap_or("");
-                println!("\u{1f4ce} {fname:<30}  {}", dim(size));
+                println!("\u{1f4ce} {fname:<30}  {}", style::size(size, c));
             }
         }
     }
@@ -1320,16 +1300,57 @@ fn stdout_is_terminal() -> bool {
     std::io::stdout().is_terminal()
 }
 
-fn paint(text: &str, code: &str, enabled: bool) -> String {
-    if enabled {
-        format!("\x1b[{code}m{text}\x1b[0m")
-    } else {
-        text.to_string()
+// Central style palette.  Every coloured output in rbw goes through
+// these functions so that each semantic type always looks the same
+// regardless of which command produced it.
+mod style {
+    fn paint(text: &str, code: &str, color: bool) -> String {
+        if color {
+            format!("\x1b[{code}m{text}\x1b[0m")
+        } else {
+            text.to_string()
+        }
     }
-}
 
-fn paint_stdout(text: &str, code: &str) -> String {
-    paint(text, code, stdout_supports_color())
+    // Semantic roles → ANSI style
+    // uid     dim cyan       — long, secondary, but distinctive
+    pub fn uid(s: &str, c: bool) -> String { paint(s, "2;36", c) }
+    // name    bold           — most prominent field
+    pub fn name(s: &str, c: bool) -> String { paint(s, "1", c) }
+    // user    green          — "who" (accounts)
+    pub fn user(s: &str, c: bool) -> String { paint(s, "32", c) }
+    // secret  yellow         — sensitive / caution
+    pub fn secret(s: &str, c: bool) -> String { paint(s, "33", c) }
+    // folder  blue           — organisation / location
+    pub fn folder(s: &str, c: bool) -> String { paint(s, "34", c) }
+    // uri     cyan           — links / references
+    pub fn uri(s: &str, c: bool) -> String { paint(s, "36", c) }
+    // entry_type  magenta    — category label
+    pub fn entry_type(s: &str, c: bool) -> String { paint(s, "35", c) }
+    // label   bold cyan      — field-name label in aligned display
+    pub fn label(s: &str, c: bool) -> String { paint(s, "1;36", c) }
+    // section bold white     — section headers (FIELDS / NOTES / …)
+    pub fn section(s: &str, c: bool) -> String { paint(s, "1", c) }
+    // dim     dim            — secondary / decorative text
+    pub fn dim(s: &str, c: bool) -> String { paint(s, "2", c) }
+    // empty   dim italic     — "none" / "N/A" placeholder values
+    pub fn empty(s: &str, c: bool) -> String { paint(s, "2;3", c) }
+    // success bold green     — action verbs ("Created", "Attached", …)
+    pub fn success(s: &str, c: bool) -> String { paint(s, "1;32", c) }
+    // old_val dim red        — value about to be replaced
+    pub fn old_val(s: &str, c: bool) -> String { paint(s, "2;31", c) }
+    // new_val green          — replacement / updated value
+    pub fn new_val(s: &str, c: bool) -> String { paint(s, "32", c) }
+    // warning bold yellow    — warnings / notices
+    pub fn warning(s: &str, c: bool) -> String { paint(s, "1;33", c) }
+    // size    dim            — file sizes (same weight as dim)
+    pub fn size(s: &str, c: bool) -> String { paint(s, "2", c) }
+    // collections dim        — metadata that rarely matters
+    pub fn collections(s: &str, c: bool) -> String { paint(s, "2", c) }
+    // header  bold white     — table column headers
+    pub fn header(s: &str, c: bool) -> String { paint(s, "1;37", c) }
+    // raw escape for the rare case where a specific code is needed
+    pub fn paint_raw(s: &str, code: &str, c: bool) -> String { paint(s, code, c) }
 }
 
 fn write_yaml_pretty<T>(
@@ -1347,7 +1368,7 @@ where
 }
 
 fn format_label(name: &str) -> String {
-    paint_stdout(name, "1;36")
+    style::label(name, stdout_supports_color())
 }
 
 fn write_json_pretty<T>(
@@ -1382,19 +1403,17 @@ fn attachment_rows(
         .map(|attachment| {
             format!(
                 "{}\t{}\t{}",
-                paint(&attachment.id, "1;36", color),
-                paint(
+                style::uid(&attachment.id, color),
+                style::name(
                     &attachment.file_name.clone().unwrap_or_default(),
-                    "0;32",
                     color,
                 ),
-                paint(
+                style::size(
                     &attachment
                         .size_name
                         .clone()
                         .or_else(|| attachment.size.clone())
                         .unwrap_or_default(),
-                    "2",
                     color,
                 )
             )
@@ -1434,44 +1453,46 @@ where
 }
 
 fn format_ambiguous_entry(entry: &DecryptedSearchCipher) -> String {
-    let mut details = vec![format!("uid: {}", entry.id)];
+    let c = stdout_supports_color();
+    let mut details = vec![format!("uid: {}", style::uid(&entry.id, c))];
     if let Some(user) = &entry.user {
-        details.push(format!("username: {user}"));
+        details.push(format!("username: {}", style::user(user, c)));
     }
     if let Some(folder) = &entry.folder {
-        details.push(format!("folder: {folder}"));
+        details.push(format!("folder: {}", style::folder(folder, c)));
     }
     if entry.attachment_count > 0 {
         details.push(format!("attachments: {}", entry.attachment_count));
     }
 
-    format!("  - {} ({})", entry.name, details.join(" | "),)
+    format!("  - {} ({})", style::name(&entry.name, c), details.join(" | "))
 }
 
 fn colorize_table_cell(
     text: &str,
-    style: TableColumnStyle,
+    col_style: TableColumnStyle,
     color: bool,
 ) -> String {
     if text.is_empty() {
         return String::new();
     }
 
-    if (style == TableColumnStyle::User && text == "N/A")
-        || (style == TableColumnStyle::Attachments && text == "none")
+    if (col_style == TableColumnStyle::User && text == "N/A")
+        || (col_style == TableColumnStyle::Attachments && text == "none")
     {
-        return paint(text, "3;2;37", color);
+        return style::empty(text, color);
     }
 
-    match style {
-        TableColumnStyle::Id => paint(text, "0;36", color),
-        TableColumnStyle::Name => paint(text, "0;32", color),
-        TableColumnStyle::User => paint(text, "0;33", color),
-        TableColumnStyle::Folder => paint(text, "0;35", color),
-        TableColumnStyle::EntryType => paint(text, "0;34", color),
-        TableColumnStyle::Collections => paint(text, "2;37", color),
-        TableColumnStyle::Attachments => paint(text, "0;33", color),
-        TableColumnStyle::Size => paint(text, "2", color),
+    match col_style {
+        TableColumnStyle::Id => style::uid(text, color),
+        TableColumnStyle::Name => style::name(text, color),
+        TableColumnStyle::User => style::user(text, color),
+        TableColumnStyle::Password => style::secret(text, color),
+        TableColumnStyle::Folder => style::folder(text, color),
+        TableColumnStyle::EntryType => style::entry_type(text, color),
+        TableColumnStyle::Collections => style::collections(text, color),
+        TableColumnStyle::Attachments => style::uri(text, color),
+        TableColumnStyle::Size => style::size(text, color),
         TableColumnStyle::Default => text.to_string(),
     }
 }
@@ -1536,7 +1557,7 @@ fn print_table(
             .map(|column| column.header.to_uppercase())
             .collect::<Vec<_>>();
         let header = render_table_row(&header_cells, &widths, |_, cell| {
-            paint_stdout(cell, "1;37")
+            style::header(cell, stdout_supports_color())
         });
         println!("{header}");
         for row in rows {
@@ -1886,6 +1907,7 @@ enum TableColumnStyle {
     Id,
     Name,
     User,
+    Password,
     Folder,
     EntryType,
     Collections,
@@ -2421,24 +2443,13 @@ pub fn attachment_create(
 
     crate::actions::sync()?;
 
-    use yansi::Paint as _;
     let c = stdout_supports_color();
-    let name = if c {
-        decrypted.name.bold().to_string()
-    } else {
-        decrypted.name.clone()
-    };
-    let fname = if c {
-        filename.bold().to_string()
-    } else {
-        filename.to_string()
-    };
-    let verb = if c {
-        "Attached".green().bold().to_string()
-    } else {
-        "Attached".to_string()
-    };
-    eprintln!("{verb} {fname} \u{2192} {name}");
+    eprintln!(
+        "{} {} \u{2192} {}",
+        style::success("Attached", c),
+        style::name(filename, c),
+        style::name(&decrypted.name, c),
+    );
 
     Ok(())
 }
@@ -2492,7 +2503,7 @@ fn print_entry_list(
                 },
                 ListField::Password => TableColumn {
                     header: "password",
-                    style: TableColumnStyle::Default,
+                    style: TableColumnStyle::Password,
                 },
             })
             .collect::<Vec<_>>();
@@ -2618,13 +2629,10 @@ pub fn search(
     entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
     if entries.is_empty() {
-        use yansi::Paint as _;
+        let c = std::io::stderr().is_terminal()
+            && std::env::var_os("NO_COLOR").is_none();
         let msg = format!("no entries found matching '{term}'");
-        if std::io::stderr().is_terminal() {
-            eprintln!("{}", msg.yellow().bold());
-        } else {
-            eprintln!("{msg}");
-        }
+        eprintln!("{}", style::warning(&msg, c));
         std::process::exit(1);
     }
 
@@ -3372,25 +3380,20 @@ fn set_entry(
 
     if !yes {
         let c = stdout_supports_color();
-        let bold = |s: &str| -> String {
-            if c { format!("\x1b[1m{s}\x1b[0m") } else { s.to_string() }
-        };
-        let label = |s: &str| -> String {
-            if c { format!("\x1b[1;36m{s:<12}\x1b[0m") } else { format!("{s:<12}") }
-        };
-        let dim = |s: &str| -> String {
-            if c { format!("\x1b[2m{s}\x1b[0m") } else { s.to_string() }
-        };
-        let new_val = |s: &str| -> String {
-            if c { format!("\x1b[33m{s}\x1b[0m") } else { s.to_string() }
-        };
-        eprintln!("About to update {}:", bold(&entry_name));
+        let lbl = |s: &str| style::label(&format!("{s:<12}"), c);
+        eprintln!("About to update {}:", style::name(&entry_name, c));
         eprintln!();
         for (field, old, new) in &changes {
-            eprintln!("{} {} {} {}", label(field), dim(old), dim("→"), new_val(new));
+            eprintln!(
+                "{} {} {} {}",
+                lbl(field),
+                style::old_val(old, c),
+                style::dim("→", c),
+                style::new_val(new, c),
+            );
         }
         for file in new_attachments {
-            eprintln!("{} {}", label("attach"), file.display());
+            eprintln!("{} {}", lbl("attach"), file.display());
         }
         eprintln!();
         eprint!("Apply? [y/N] ");
@@ -3600,25 +3603,18 @@ fn censor(s: &str) -> String {
     )
 }
 
-fn color_enabled() -> bool {
-    stdout_supports_color()
+// Exposed for main.rs error rendering — keeps all ANSI codes in one place.
+pub fn style_error(msg: &str, color: bool) -> String {
+    style::paint_raw(msg, "1;31", color)
 }
 
 fn paint_no_changes() -> String {
-    use yansi::Paint as _;
-    if color_enabled() {
-        "No changes.".dim().italic().to_string()
-    } else {
-        "No changes.".to_string()
-    }
+    style::dim("No changes.", stdout_supports_color())
 }
 
 fn print_created(entry_name: &str) {
-    use yansi::Paint as _;
-    let c = color_enabled();
-    let name = if c { entry_name.bold().to_string() } else { entry_name.to_string() };
-    let verb = if c { "Created".green().bold().to_string() } else { "Created".to_string() };
-    eprintln!("{verb} {name}");
+    let c = stdout_supports_color();
+    eprintln!("{} {}", style::success("Created", c), style::name(entry_name, c));
 }
 
 fn print_set_changes(
@@ -3626,63 +3622,47 @@ fn print_set_changes(
     changes: &[(&str, String, String)],
     diff: bool,
 ) {
-    use yansi::Paint as _;
-
-    let c = color_enabled();
-
-    let name = entry_name.to_string();
-    let paint_name = |s: &str| -> String {
-        if c { s.bold().to_string() } else { s.to_string() }
-    };
-    let paint_field = |s: &str| -> String {
-        if c { s.yellow().bold().to_string() } else { s.to_string() }
-    };
-    let paint_new = |s: &str| -> String {
-        if c { s.green().to_string() } else { s.to_string() }
-    };
-    let paint_old = |s: &str| -> String {
-        if c { s.red().dim().to_string() } else { s.to_string() }
-    };
-    let arrow = if c { "→".dim().to_string() } else { "→".to_string() };
+    let c = stdout_supports_color();
+    let arrow = style::dim("→", c);
 
     if changes.len() == 1 {
         let (field, old, new) = &changes[0];
         let line = if diff {
             format!(
                 "{}: {} {} {} {}",
-                paint_name(&name),
-                paint_field(field),
-                paint_old(old),
+                style::name(entry_name, c),
+                style::label(field, c),
+                style::old_val(old, c),
                 arrow,
-                paint_new(new),
+                style::new_val(new, c),
             )
         } else {
             format!(
                 "{}: {} {} {}",
-                paint_name(&name),
-                paint_field(field),
+                style::name(entry_name, c),
+                style::label(field, c),
                 arrow,
-                paint_new(new),
+                style::new_val(new, c),
             )
         };
         println!("{line}");
     } else {
-        println!("{}:", paint_name(&name));
+        println!("{}:", style::name(entry_name, c));
         for (field, old, new) in changes {
             let line = if diff {
                 format!(
                     "  {} {} {} {}",
-                    paint_field(field),
-                    paint_old(old),
+                    style::label(field, c),
+                    style::old_val(old, c),
                     arrow,
-                    paint_new(new),
+                    style::new_val(new, c),
                 )
             } else {
                 format!(
                     "  {} {} {}",
-                    paint_field(field),
+                    style::label(field, c),
                     arrow,
-                    paint_new(new),
+                    style::new_val(new, c),
                 )
             };
             println!("{line}");

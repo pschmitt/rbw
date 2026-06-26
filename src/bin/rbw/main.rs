@@ -1065,13 +1065,10 @@ fn main() {
     .with_context(|| format!("rbw {subcommand_name}"));
 
     if let Err(e) = res {
-        use yansi::Paint as _;
+        let c = std::io::stderr().is_terminal()
+            && std::env::var_os("NO_COLOR").is_none();
         let msg = format!("{e:#}");
-        if std::io::stderr().is_terminal() {
-            eprintln!("{}", msg.red().bold());
-        } else {
-            eprintln!("{msg}");
-        }
+        eprintln!("{}", commands::style_error(&msg, c));
         std::process::exit(1);
     }
 }
