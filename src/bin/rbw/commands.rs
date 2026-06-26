@@ -7483,6 +7483,138 @@ mod test {
     }
 
     #[test]
+    fn test_find_entry_scoring() {
+        // An entry with the given name and an optional secret-field value.
+        let entry_with_secret = |name: &str, secret: Option<&str>| {
+            let mut e = make_entry(name, None, None, &[]);
+            if let Some(secret) = secret {
+                e.1.sensitive_fields = vec![secret.to_string()];
+            }
+            e
+        };
+
+        let gpg = entry_with_secret("Private GPG Key", Some("passphrase value"));
+        let github = entry_with_secret(
+            "GPG Key for github",
+            Some("-----BEGIN PGP PRIVATE KEY-----"),
+        );
+        let smappee = entry_with_secret("smappee.com", Some("note mentions gpg"));
+        let entries = &[gpg.clone(), github.clone(), smappee.clone()];
+
+        let find = |needles: &[&str]| {
+            let needles: Vec<_> =
+                needles.iter().map(|n| parse_needle(n).unwrap()).collect();
+            find_entry_raw(entries, &needles, None, None, false, false)
+        };
+
+        // "gpg" matches smappee only inside a secret field, but the GPG-named
+        // entries match it in the name and outrank it — smappee is never picked.
+        let (entry, _) = find(&["gpg"]).unwrap();
+        assert_ne!(entry.id, smappee.0.id);
+
+        // A multi-needle whose join equals a name wins decisively over an entry
+        // that merely contains the words across its name and a secret field.
+        let (entry, _) = find(&["private", "gpg", "key"]).unwrap();
+        assert_eq!(entry.id, gpg.0.id, "joined-name match should win");
+
+        // An exact (case-insensitive) name match resolves uniquely.
+        let (entry, _) = find(&["private gpg key"]).unwrap();
+        assert_eq!(entry.id, gpg.0.id, "ci-exact name match");
+
+        // A needle that only appears in a secret field still resolves when
+        // nothing matches by name (low-weight fallback still works).
+        let (entry, _) = find(&["mentions"]).unwrap();
+        assert_eq!(entry.id, smappee.0.id, "secret-field fallback");
+    }
+
+    #[test]
+    fn test_default_secret() {
+        let field = |name: &str, value: &str, hidden: bool| DecryptedField {
+            name: Some(name.to_string()),
+            value: Some(value.to_string()),
+            ty: Some(if hidden {
+                rbw::api::FieldType::Hidden
+            } else {
+                rbw::api::FieldType::Text
+            }),
+        };
+        let cipher = |data: DecryptedData,
+                      fields: Vec<DecryptedField>,
+                      notes: Option<&str>| DecryptedCipher {
+            id: "id".to_string(),
+            folder: None,
+            name: "name".to_string(),
+            data,
+            fields,
+            notes: notes.map(std::string::ToString::to_string),
+            history: vec![],
+            attachments: vec![],
+            attachment_metadata: AttachmentMetadata { attachment_count: 0 },
+        };
+        let login = |password: Option<&str>| DecryptedData::Login {
+            username: None,
+            password: password.map(std::string::ToString::to_string),
+            totp: None,
+            uris: None,
+        };
+        let resolved =
+            |c: &DecryptedCipher| c.default_secret().map(|(v, s)| (v, s.label()));
+
+        // login password wins, even over a password-named custom field
+        assert_eq!(
+            resolved(&cipher(login(Some("pw")), vec![], None)),
+            Some(("pw".to_string(), "password".to_string()))
+        );
+        assert_eq!(
+            resolved(&cipher(
+                login(Some("pw")),
+                vec![field("password", "other", true)],
+                None,
+            )),
+            Some(("pw".to_string(), "password".to_string()))
+        );
+        // no password -> custom passphrase field
+        assert_eq!(
+            resolved(&cipher(
+                DecryptedData::SecureNote,
+                vec![field("passphrase", "secret", true)],
+                None,
+            )),
+            Some(("secret".to_string(), "field 'passphrase'".to_string()))
+        );
+        // a password-named field beats notes
+        assert_eq!(
+            resolved(&cipher(
+                DecryptedData::SecureNote,
+                vec![field("password", "p", true)],
+                Some("the notes"),
+            )),
+            Some(("p".to_string(), "field 'password'".to_string()))
+        );
+        // notes fallback
+        assert_eq!(
+            resolved(&cipher(DecryptedData::SecureNote, vec![], Some("hi"))),
+            Some(("hi".to_string(), "notes".to_string()))
+        );
+        // a single non-standard field is used as a last resort
+        assert_eq!(
+            resolved(&cipher(
+                DecryptedData::SecureNote,
+                vec![field("api token", "tok", false)],
+                None,
+            )),
+            Some(("tok".to_string(), "field 'api token'".to_string()))
+        );
+        // nothing to resolve
+        assert_eq!(
+            cipher(DecryptedData::SecureNote, vec![], None)
+                .default_secret()
+                .map(|(v, _)| v),
+            None
+        );
+    }
+
+    #[test]
     fn test_find_by_uuid() {
         let entries = &[
             make_entry("github", Some("foo"), None, &[]),
