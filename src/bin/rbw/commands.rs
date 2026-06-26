@@ -3121,42 +3121,136 @@ pub fn set(
         unlock(None)?;
         let mut db = load_db()?;
         let mut any_err = false;
+
+        struct BulkPending {
+            entry: rbw::db::Entry,
+            entry_name: String,
+            changes: Vec<(&'static str, String, String)>,
+        }
+
+        let mut pending: Vec<BulkPending> = Vec::new();
+
         for needle in &needles {
-            let found = find_entries_all(
-                &db,
-                needle,
-                username,
-                folder,
-                ignore_case,
-            );
-            match found {
+            match find_entries_all(&db, needle, username, folder, ignore_case) {
                 Err(e) => {
-                    eprintln!("{}: {e:#}", needle);
+                    eprintln!("{needle}: {e:#}");
                     any_err = true;
                 }
                 Ok(entries) => {
                     for (entry, decrypted) in entries {
-                        if let Err(e) = set_entry(
-                            &mut db,
-                            entry,
-                            decrypted,
+                        let entry_name = decrypted.name.clone();
+                        match compute_entry_changes(
+                            &decrypted,
                             new_name,
                             new_username,
                             new_password,
                             new_notes,
                             new_uris,
                             new_totp,
-                            diff,
-                            new_attachments,
-                            yes,
                         ) {
-                            eprintln!("{e:#}");
-                            any_err = true;
+                            Err(e) => {
+                                eprintln!("{entry_name}: {e:#}");
+                                any_err = true;
+                            }
+                            Ok(changes)
+                                if changes.is_empty()
+                                    && new_attachments.is_empty() =>
+                            {
+                                let c = stdout_supports_color();
+                                eprintln!(
+                                    "{} {}",
+                                    style::name(&entry_name, c),
+                                    style::dim("(no changes)", c)
+                                );
+                            }
+                            Ok(changes) => {
+                                pending.push(BulkPending {
+                                    entry,
+                                    entry_name,
+                                    changes,
+                                });
+                            }
                         }
                     }
                 }
             }
         }
+
+        if !pending.is_empty() && !yes {
+            let c = stdout_supports_color();
+            let lbl =
+                |s: &str| style::label(&format!("{s:<12}"), c);
+            eprintln!(
+                "About to update {} {}:",
+                style::name(
+                    &format!("{}", pending.len()),
+                    c
+                ),
+                if pending.len() == 1 { "entry" } else { "entries" }
+            );
+            for pu in &pending {
+                eprintln!();
+                eprintln!("{}:", style::name(&pu.entry_name, c));
+                for (field, old, new) in &pu.changes {
+                    eprintln!(
+                        "  {} {} {} {}",
+                        lbl(field),
+                        style::old_val(old, c),
+                        style::dim("→", c),
+                        style::new_val(new, c),
+                    );
+                }
+                for file in new_attachments {
+                    eprintln!("  {} {}", lbl("attach"), file.display());
+                }
+            }
+            eprintln!();
+            eprint!(
+                "Apply all ({})? [y/N] ",
+                pending.len()
+            );
+            use std::io::Write as _;
+            let _ = std::io::stderr().flush();
+            let mut answer = String::new();
+            std::io::stdin()
+                .read_line(&mut answer)
+                .context("failed to read confirmation")?;
+            if !matches!(answer.trim(), "y" | "Y") {
+                eprintln!("Aborted.");
+                return Ok(());
+            }
+        }
+
+        let c = stdout_supports_color();
+        for pu in pending {
+            match apply_entry_update(
+                &mut db,
+                &pu.entry,
+                new_name,
+                new_username,
+                new_password,
+                new_notes,
+                new_uris,
+                new_totp,
+                !pu.changes.is_empty(),
+                new_attachments,
+            ) {
+                Err(e) => {
+                    eprintln!("{}: {e:#}", pu.entry_name);
+                    any_err = true;
+                }
+                Ok(()) => {
+                    println!(
+                        "Item {} was updated",
+                        style::name(&pu.entry_name, c)
+                    );
+                    if diff {
+                        print_entry_diff(&pu.changes);
+                    }
+                }
+            }
+        }
+
         return if any_err {
             Err(anyhow::anyhow!("one or more entries failed to update"))
         } else {
@@ -3278,27 +3372,15 @@ fn set_one(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn set_entry(
-    db: &mut rbw::db::Db,
-    entry: rbw::db::Entry,
-    decrypted: DecryptedCipher,
+fn compute_entry_changes(
+    decrypted: &DecryptedCipher,
     new_name: Option<&str>,
     new_username: Option<&str>,
     new_password: Option<&str>,
     new_notes: Option<&str>,
     new_uris: &[String],
     new_totp: Option<&str>,
-    diff: bool,
-    new_attachments: &[std::path::PathBuf],
-    yes: bool,
-) -> anyhow::Result<()> {
-    let access_token = db.access_token.as_ref().unwrap().clone();
-    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
-
-    let org_id = entry.org_id.as_deref();
-    let entry_name = decrypted.name.clone();
-
-    // Validate Login-only fields early before touching anything
+) -> anyhow::Result<Vec<(&'static str, String, String)>> {
     let login_fields_requested = new_username.is_some()
         || new_password.is_some()
         || !new_uris.is_empty()
@@ -3311,8 +3393,7 @@ fn set_entry(
         ));
     }
 
-    // Detect which fields actually changed; (field, old_display, new_display)
-    let mut changes: Vec<(&str, String, String)> = Vec::new();
+    let mut changes: Vec<(&'static str, String, String)> = Vec::new();
 
     if let Some(n) = new_name {
         if n != decrypted.name.as_str() {
@@ -3322,8 +3403,16 @@ fn set_entry(
     if let Some(n) = new_notes {
         let cur = decrypted.notes.as_deref().unwrap_or("");
         if n != cur {
-            let old_d = if cur.is_empty() { "(none)".to_string() } else { "(set)".to_string() };
-            let new_d = if n.is_empty() { "(cleared)".to_string() } else { "(set)".to_string() };
+            let old_d = if cur.is_empty() {
+                "(none)".to_string()
+            } else {
+                "(set)".to_string()
+            };
+            let new_d = if n.is_empty() {
+                "(cleared)".to_string()
+            } else {
+                "(set)".to_string()
+            };
             changes.push(("notes", old_d, new_d));
         }
     }
@@ -3336,7 +3425,8 @@ fn set_entry(
     {
         if let Some(u) = new_username {
             if Some(u) != cur_user.as_deref() {
-                let old = cur_user.as_deref()
+                let old = cur_user
+                    .as_deref()
                     .map(std::string::ToString::to_string)
                     .unwrap_or_else(|| "(none)".to_string());
                 changes.push(("username", old, u.to_string()));
@@ -3344,17 +3434,20 @@ fn set_entry(
         }
         if let Some(p) = new_password {
             if Some(p) != cur_pw.as_deref() {
-                let old = cur_pw.as_deref()
+                let old = cur_pw
+                    .as_deref()
                     .map(|s| format!("\"{}\"", censor(s)))
                     .unwrap_or_else(|| "(none)".to_string());
                 changes.push(("password", old, format!("\"{}\"", censor(p))));
             }
         }
         if !new_uris.is_empty() {
-            let cur_strs: Vec<&str> = cur_uris.as_ref()
+            let cur_strs: Vec<&str> = cur_uris
+                .as_ref()
                 .map(|v| v.iter().map(|u| u.uri.as_str()).collect())
                 .unwrap_or_default();
-            let new_strs: Vec<&str> = new_uris.iter().map(String::as_str).collect();
+            let new_strs: Vec<&str> =
+                new_uris.iter().map(String::as_str).collect();
             if new_strs != cur_strs {
                 let fmt_uris = |v: &[&str]| match v {
                     [] => "(none)".to_string(),
@@ -3366,51 +3459,34 @@ fn set_entry(
         }
         if let Some(t) = new_totp {
             if Some(t) != cur_totp.as_deref() {
-                let old = cur_totp.as_deref()
+                let old = cur_totp
+                    .as_deref()
                     .map(|s| format!("\"{}\"", censor(s)))
                     .unwrap_or_else(|| "(none)".to_string());
                 changes.push(("totp", old, format!("\"{}\"", censor(t))));
             }
         }
     }
+    Ok(changes)
+}
 
-    if changes.is_empty() && new_attachments.is_empty() {
-        eprintln!("{}", paint_no_changes());
-        return Ok(());
-    }
+#[allow(clippy::too_many_arguments)]
+fn apply_entry_update(
+    db: &mut rbw::db::Db,
+    entry: &rbw::db::Entry,
+    new_name: Option<&str>,
+    new_username: Option<&str>,
+    new_password: Option<&str>,
+    new_notes: Option<&str>,
+    new_uris: &[String],
+    new_totp: Option<&str>,
+    has_field_changes: bool,
+    new_attachments: &[std::path::PathBuf],
+) -> anyhow::Result<()> {
+    let access_token = db.access_token.as_ref().unwrap().clone();
+    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+    let org_id = entry.org_id.as_deref();
 
-    if !yes {
-        let c = stdout_supports_color();
-        let lbl = |s: &str| style::label(&format!("{s:<12}"), c);
-        eprintln!("About to update {}:", style::name(&entry_name, c));
-        eprintln!();
-        for (field, old, new) in &changes {
-            eprintln!(
-                "{} {} {} {}",
-                lbl(field),
-                style::old_val(old, c),
-                style::dim("→", c),
-                style::new_val(new, c),
-            );
-        }
-        for file in new_attachments {
-            eprintln!("{} {}", lbl("attach"), file.display());
-        }
-        eprintln!();
-        eprint!("Apply? [y/N] ");
-        use std::io::Write as _;
-        let _ = std::io::stderr().flush();
-        let mut answer = String::new();
-        std::io::stdin()
-            .read_line(&mut answer)
-            .context("failed to read confirmation")?;
-        if !matches!(answer.trim(), "y" | "Y") {
-            eprintln!("Aborted.");
-            return Ok(());
-        }
-    }
-
-    // Encrypt and save
     let encrypted_name = if let Some(n) = new_name {
         crate::actions::encrypt(n, org_id)?
     } else {
@@ -3492,7 +3568,7 @@ fn set_entry(
         other => other.clone(),
     };
 
-    if !changes.is_empty() {
+    if has_field_changes {
         if let (Some(new_token), ()) = rbw::actions::edit(
             &access_token,
             &refresh_token,
@@ -3506,17 +3582,17 @@ fn set_entry(
             &history,
         )? {
             db.access_token = Some(new_token);
-            save_db(&db)?;
+            save_db(db)?;
         }
-
-        print_set_changes(&entry_name, &changes, diff);
     }
 
     for file in new_attachments {
         let filename = file
             .file_name()
             .and_then(std::ffi::OsStr::to_str)
-            .ok_or_else(|| anyhow::anyhow!("invalid filename: {}", file.display()))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("invalid filename: {}", file.display())
+            })?;
         let file_data = std::fs::read(file)
             .with_context(|| format!("failed to read {}", file.display()))?;
         let access_token = db.access_token.as_ref().unwrap().clone();
@@ -3537,11 +3613,94 @@ fn set_entry(
             encrypted_data,
         )? {
             db.access_token = Some(new_token);
-            save_db(&db)?;
+            save_db(db)?;
         }
     }
 
     crate::actions::sync()?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set_entry(
+    db: &mut rbw::db::Db,
+    entry: rbw::db::Entry,
+    decrypted: DecryptedCipher,
+    new_name: Option<&str>,
+    new_username: Option<&str>,
+    new_password: Option<&str>,
+    new_notes: Option<&str>,
+    new_uris: &[String],
+    new_totp: Option<&str>,
+    diff: bool,
+    new_attachments: &[std::path::PathBuf],
+    yes: bool,
+) -> anyhow::Result<()> {
+    let entry_name = decrypted.name.clone();
+
+    let changes = compute_entry_changes(
+        &decrypted,
+        new_name,
+        new_username,
+        new_password,
+        new_notes,
+        new_uris,
+        new_totp,
+    )?;
+
+    if changes.is_empty() && new_attachments.is_empty() {
+        eprintln!("{}", paint_no_changes());
+        return Ok(());
+    }
+
+    if !yes {
+        let c = stdout_supports_color();
+        let lbl = |s: &str| style::label(&format!("{s:<12}"), c);
+        eprintln!("About to update {}:", style::name(&entry_name, c));
+        eprintln!();
+        for (field, old, new) in &changes {
+            eprintln!(
+                "{} {} {} {}",
+                lbl(field),
+                style::old_val(old, c),
+                style::dim("→", c),
+                style::new_val(new, c),
+            );
+        }
+        for file in new_attachments {
+            eprintln!("{} {}", lbl("attach"), file.display());
+        }
+        eprintln!();
+        eprint!("Apply? [y/N] ");
+        use std::io::Write as _;
+        let _ = std::io::stderr().flush();
+        let mut answer = String::new();
+        std::io::stdin()
+            .read_line(&mut answer)
+            .context("failed to read confirmation")?;
+        if !matches!(answer.trim(), "y" | "Y") {
+            eprintln!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    apply_entry_update(
+        db,
+        &entry,
+        new_name,
+        new_username,
+        new_password,
+        new_notes,
+        new_uris,
+        new_totp,
+        !changes.is_empty(),
+        new_attachments,
+    )?;
+    let c = stdout_supports_color();
+    println!("Item {} was updated", style::name(&entry_name, c));
+    if diff {
+        print_entry_diff(&changes);
+    }
     Ok(())
 }
 
@@ -3618,56 +3777,17 @@ fn print_created(entry_name: &str) {
     eprintln!("{} {}", style::success("Created", c), style::name(entry_name, c));
 }
 
-fn print_set_changes(
-    entry_name: &str,
-    changes: &[(&str, String, String)],
-    diff: bool,
-) {
+fn print_entry_diff(changes: &[(&str, String, String)]) {
     let c = stdout_supports_color();
-    let arrow = style::dim("→", c);
-
-    if changes.len() == 1 {
-        let (field, old, new) = &changes[0];
-        let line = if diff {
-            format!(
-                "{}: {} {} {} {}",
-                style::name(entry_name, c),
-                style::label(field, c),
-                style::old_val(old, c),
-                arrow,
-                style::new_val(new, c),
-            )
-        } else {
-            format!(
-                "{}: {} {} {}",
-                style::name(entry_name, c),
-                style::label(field, c),
-                arrow,
-                style::new_val(new, c),
-            )
-        };
-        println!("{line}");
-    } else {
-        println!("{}:", style::name(entry_name, c));
-        for (field, old, new) in changes {
-            let line = if diff {
-                format!(
-                    "  {} {} {} {}",
-                    style::label(field, c),
-                    style::old_val(old, c),
-                    arrow,
-                    style::new_val(new, c),
-                )
-            } else {
-                format!(
-                    "  {} {} {}",
-                    style::label(field, c),
-                    arrow,
-                    style::new_val(new, c),
-                )
-            };
-            println!("{line}");
-        }
+    let lbl = |s: &str| style::label(&format!("{s:<12}"), c);
+    for (field, old, new) in changes {
+        println!(
+            "  {} {} {} {}",
+            lbl(field),
+            style::old_val(old, c),
+            style::dim("→", c),
+            style::new_val(new, c),
+        );
     }
 }
 

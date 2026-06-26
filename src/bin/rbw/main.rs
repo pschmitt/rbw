@@ -400,7 +400,7 @@ enum Opt {
         uri: Vec<String>,
         #[arg(long, help = "New TOTP secret (Login entries only)")]
         totp: Option<String>,
-        #[arg(long, help = "Show old \u{2192} new for each changed field")]
+        #[arg(long, help = "Show old \u{2192} new diff after updating")]
         diff: bool,
         #[arg(long, number_of_values = 1, help = "File(s) to attach")]
         attachment: Vec<std::path::PathBuf>,
