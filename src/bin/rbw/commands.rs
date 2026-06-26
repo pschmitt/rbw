@@ -1125,8 +1125,12 @@ impl DecryptedCipher {
                     println!("{} {}", lbl("TOTP"), dim(t));
                 }
                 if let Some(uris) = uris {
-                    for uri_entry in uris {
-                        print!("{} {}", lbl("URI"), style::uri(&uri_entry.uri, c));
+                    for (i, uri_entry) in uris.iter().enumerate() {
+                        // Only label the first URI; align the rest under it
+                        // so the "URI" label isn't repeated for every value.
+                        let label =
+                            if i == 0 { lbl("URI") } else { " ".repeat(12) };
+                        print!("{} {}", label, style::uri(&uri_entry.uri, c));
                         if let Some(mt) = uri_entry.match_type {
                             print!("  {}", dim(&format!("[{mt}]")));
                         }
