@@ -4426,26 +4426,39 @@ fn find_entry_raw(
     };
 
     for exact in [true, false] {
-        matches = find_matches(true, true, exact);
-        if matches.len() == 1 {
-            return Ok(matches[0].clone());
+        let nonstrict: Vec<(rbw::db::Entry, DecryptedSearchCipher)> =
+            find_matches(false, false, exact);
+
+        if nonstrict.len() == 1 {
+            return Ok(nonstrict[0].clone());
         }
 
-        let strict_folder_matches = find_matches(false, true, exact);
-        let strict_username_matches = find_matches(true, false, exact);
-        if strict_folder_matches.len() == 1
-            && strict_username_matches.len() != 1
-        {
-            return Ok(strict_folder_matches[0].clone());
-        } else if strict_folder_matches.len() != 1
-            && strict_username_matches.len() == 1
-        {
-            return Ok(strict_username_matches[0].clone());
-        }
+        if nonstrict.len() > 1 {
+            // Only apply strict username/folder tiebreaking when every
+            // candidate has the same name.  If names differ these are
+            // genuinely distinct entries — silently picking one would be
+            // wrong; the caller should get an ambiguity error instead.
+            let first_name = nonstrict[0].1.name.as_str();
+            let all_same_name =
+                nonstrict.iter().all(|(_, d)| d.name == first_name);
 
-        matches = find_matches(false, false, exact);
-        if matches.len() == 1 {
-            return Ok(matches[0].clone());
+            if all_same_name {
+                let strict_both = find_matches(true, true, exact);
+                if strict_both.len() == 1 {
+                    return Ok(strict_both[0].clone());
+                }
+                let strict_folder = find_matches(false, true, exact);
+                let strict_username = find_matches(true, false, exact);
+                if strict_folder.len() == 1 && strict_username.len() != 1 {
+                    return Ok(strict_folder[0].clone());
+                } else if strict_folder.len() != 1
+                    && strict_username.len() == 1
+                {
+                    return Ok(strict_username[0].clone());
+                }
+            }
+
+            matches = nonstrict;
         }
     }
 
