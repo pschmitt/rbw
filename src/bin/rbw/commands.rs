@@ -2496,10 +2496,14 @@ fn print_entry_list(
                 },
             })
             .collect::<Vec<_>>();
-        columns.push(TableColumn {
-            header: "attachments",
-            style: TableColumnStyle::Attachments,
-        });
+        let show_attachments =
+            entries.iter().any(|e| e.attachment_metadata.has_attachments());
+        if show_attachments {
+            columns.push(TableColumn {
+                header: "attachments",
+                style: TableColumnStyle::Attachments,
+            });
+        }
 
         let rows = entries
             .iter()
@@ -2539,9 +2543,11 @@ fn print_entry_list(
                             .map_or_else(String::new, std::string::ToString::to_string),
                     })
                     .collect::<Vec<_>>();
-                values.push(attachments_cell(
-                    entry.attachment_metadata.attachment_count,
-                ));
+                if show_attachments {
+                    values.push(attachments_cell(
+                        entry.attachment_metadata.attachment_count,
+                    ));
+                }
                 values
             })
             .collect::<Vec<_>>();
@@ -2557,16 +2563,28 @@ pub fn search(
     fields: &[String],
     folder: Option<&str>,
     with_attachments: bool,
+    insecure: bool,
     output: OutputMode,
 ) -> anyhow::Result<()> {
-    let fields: Vec<ListField> = if output_is_structured(output) {
-        ListField::all()
+    let mut fields: Vec<ListField> = if output_is_structured(output) {
+        if insecure {
+            ListField::all_insecure()
+        } else {
+            ListField::all()
+        }
     } else {
         fields
             .iter()
             .map(std::convert::TryFrom::try_from)
             .collect::<anyhow::Result<_>>()?
     };
+    if insecure && !output_is_structured(output) && !fields.contains(&ListField::Password) {
+        let insert_pos = fields
+            .iter()
+            .position(|f| matches!(f, ListField::User))
+            .map_or(fields.len(), |i| i + 1);
+        fields.insert(insert_pos, ListField::Password);
+    }
 
     unlock(None)?;
 
@@ -3091,25 +3109,43 @@ pub fn set(
     yes: bool,
 ) -> anyhow::Result<()> {
     if bulk {
+        unlock(None)?;
+        let mut db = load_db()?;
         let mut any_err = false;
-        for needle in needles {
-            if let Err(e) = set_one(
-                vec![needle],
+        for needle in &needles {
+            let found = find_entries_all(
+                &db,
+                needle,
                 username,
                 folder,
                 ignore_case,
-                new_name,
-                new_username,
-                new_password,
-                new_notes,
-                new_uris,
-                new_totp,
-                diff,
-                new_attachments,
-                yes,
-            ) {
-                eprintln!("{e:#}");
-                any_err = true;
+            );
+            match found {
+                Err(e) => {
+                    eprintln!("{}: {e:#}", needle);
+                    any_err = true;
+                }
+                Ok(entries) => {
+                    for (entry, decrypted) in entries {
+                        if let Err(e) = set_entry(
+                            &mut db,
+                            entry,
+                            decrypted,
+                            new_name,
+                            new_username,
+                            new_password,
+                            new_notes,
+                            new_uris,
+                            new_totp,
+                            diff,
+                            new_attachments,
+                            yes,
+                        ) {
+                            eprintln!("{e:#}");
+                            any_err = true;
+                        }
+                    }
+                }
             }
         }
         return if any_err {
@@ -3135,6 +3171,52 @@ pub fn set(
     )
 }
 
+fn find_entries_all(
+    db: &rbw::db::Db,
+    needle: &Needle,
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+) -> anyhow::Result<Vec<(rbw::db::Entry, DecryptedCipher)>> {
+    let mut requests = BatchRequests::new();
+    let plans: Vec<SearchCipherPlan> = db
+        .entries
+        .iter()
+        .map(|entry| SearchCipherPlan::build(entry, &mut requests))
+        .collect();
+    let results = if requests.is_empty() {
+        Vec::new()
+    } else {
+        crate::actions::decrypt_batch(requests.into_vec())?
+    };
+    let ciphers: Vec<(rbw::db::Entry, DecryptedSearchCipher)> = db
+        .entries
+        .iter()
+        .zip(plans)
+        .map(|(entry, plan)| {
+            plan.resolve(&results).map(|d| (entry.clone(), d))
+        })
+        .collect::<anyhow::Result<_>>()?;
+
+    let matches: Vec<_> = ciphers
+        .iter()
+        .filter(|(_, d)| {
+            d.matches(needle, username, folder, ignore_case, false, false, false)
+        })
+        .collect();
+
+    if matches.is_empty() {
+        return Err(anyhow::anyhow!("no entry found for '{needle}'"));
+    }
+
+    matches
+        .iter()
+        .map(|(entry, _)| {
+            decrypt_cipher(entry).map(|d| ((*entry).clone(), d))
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn set_one(
     needles: Vec<Needle>,
@@ -3154,8 +3236,6 @@ fn set_one(
     unlock(None)?;
 
     let mut db = load_db()?;
-    let access_token = db.access_token.as_ref().unwrap().clone();
-    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
     let needle_str = needles
         .iter()
@@ -3171,6 +3251,40 @@ fn set_one(
     let (entry, decrypted) =
         find_entry(&db, needles, username, folder, ignore_case)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    set_entry(
+        &mut db,
+        entry,
+        decrypted,
+        new_name,
+        new_username,
+        new_password,
+        new_notes,
+        new_uris,
+        new_totp,
+        diff,
+        new_attachments,
+        yes,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set_entry(
+    db: &mut rbw::db::Db,
+    entry: rbw::db::Entry,
+    decrypted: DecryptedCipher,
+    new_name: Option<&str>,
+    new_username: Option<&str>,
+    new_password: Option<&str>,
+    new_notes: Option<&str>,
+    new_uris: &[String],
+    new_totp: Option<&str>,
+    diff: bool,
+    new_attachments: &[std::path::PathBuf],
+    yes: bool,
+) -> anyhow::Result<()> {
+    let access_token = db.access_token.as_ref().unwrap().clone();
+    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
     let org_id = entry.org_id.as_deref();
     let entry_name = decrypted.name.clone();

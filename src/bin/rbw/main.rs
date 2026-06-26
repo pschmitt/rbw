@@ -727,7 +727,7 @@ fn main() {
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             if let Some(term) = term {
-                commands::search(&term, &fields, None, with_attachments, output)
+                commands::search(&term, &fields, None, with_attachments, insecure, output)
             } else {
                 commands::list(&fields, with_attachments, insecure, output)
             }
@@ -829,6 +829,7 @@ fn main() {
                 &fields,
                 folder.as_deref(),
                 with_attachments,
+                false,
                 output,
             )
         })(),
