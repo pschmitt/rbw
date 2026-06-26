@@ -1525,14 +1525,21 @@ impl Client {
             .json(&req)
             .send()
             .map_err(|source| Error::Reqwest { source })?;
-        match res.status() {
+        let status = res.status();
+        match status {
             reqwest::StatusCode::OK => Ok(()),
             reqwest::StatusCode::UNAUTHORIZED => {
                 Err(Error::RequestUnauthorized)
             }
-            _ => Err(Error::RequestFailed {
-                status: res.status().as_u16(),
-            }),
+            _ => {
+                let code = status.as_u16();
+                let body = res.text().unwrap_or_default();
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
+            }
         }
     }
 
@@ -1675,14 +1682,21 @@ impl Client {
             .json(&req)
             .send()
             .map_err(|source| Error::Reqwest { source })?;
-        match res.status() {
+        let status = res.status();
+        match status {
             reqwest::StatusCode::OK => Ok(()),
             reqwest::StatusCode::UNAUTHORIZED => {
                 Err(Error::RequestUnauthorized)
             }
-            _ => Err(Error::RequestFailed {
-                status: res.status().as_u16(),
-            }),
+            _ => {
+                let code = status.as_u16();
+                let body = res.text().unwrap_or_default();
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
+            }
         }
     }
 
