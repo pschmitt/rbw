@@ -1060,6 +1060,229 @@ impl DecryptedCipher {
             format!("failed to write entry '{desc}' to stdout"),
         )
     }
+
+    fn display_show(&self) {
+        let c = stdout_supports_color();
+        let label = |s: &str| -> String {
+            if c {
+                format!("\x1b[1;36m{s:<12}\x1b[0m")
+            } else {
+                format!("{s:<12}")
+            }
+        };
+        let dim = |s: &str| -> String {
+            if c { format!("\x1b[2m{s}\x1b[0m") } else { s.to_string() }
+        };
+        let secret = |s: &str| -> String {
+            if c {
+                format!("\x1b[33m{s}\x1b[0m")
+            } else {
+                s.to_string()
+            }
+        };
+
+        // Header: entry name
+        let name = if c {
+            format!("\x1b[1;4m{}\x1b[0m", self.name)
+        } else {
+            self.name.clone()
+        };
+        println!("{name}");
+
+        // Type + folder
+        let type_name = match &self.data {
+            DecryptedData::Login { .. } => "login",
+            DecryptedData::Card { .. } => "card",
+            DecryptedData::Identity { .. } => "identity",
+            DecryptedData::SecureNote => "secure_note",
+            DecryptedData::SshKey { .. } => "ssh_key",
+        };
+        println!("{} {}", label("Type"), dim(type_name));
+        if let Some(folder) = &self.folder {
+            println!("{} {}", label("Folder"), dim(folder));
+        }
+
+        // Type-specific fields
+        match &self.data {
+            DecryptedData::Login {
+                username,
+                password,
+                totp,
+                uris,
+            } => {
+                if let Some(u) = username {
+                    println!("{} {u}", label("Username"));
+                }
+                if let Some(p) = password {
+                    println!("{} {}", label("Password"), secret(p));
+                }
+                if let Some(t) = totp {
+                    println!("{} {}", label("TOTP"), dim(t));
+                }
+                if let Some(uris) = uris {
+                    for uri_entry in uris {
+                        print!("{} {}", label("URI"), uri_entry.uri);
+                        if let Some(mt) = uri_entry.match_type {
+                            print!("  {}", dim(&format!("[{mt}]")));
+                        }
+                        println!();
+                    }
+                }
+            }
+            DecryptedData::Card {
+                cardholder_name,
+                number,
+                brand,
+                exp_month,
+                exp_year,
+                code,
+            } => {
+                if let Some(n) = number {
+                    println!("{} {}", label("Number"), secret(n));
+                }
+                if let (Some(m), Some(y)) = (exp_month, exp_year) {
+                    println!("{} {m}/{y}", label("Expires"));
+                }
+                if let Some(cv) = code {
+                    println!("{} {}", label("CVV"), secret(cv));
+                }
+                if let Some(n) = cardholder_name {
+                    println!("{} {n}", label("Name"));
+                }
+                if let Some(b) = brand {
+                    println!("{} {b}", label("Brand"));
+                }
+            }
+            DecryptedData::Identity {
+                title,
+                first_name,
+                middle_name,
+                last_name,
+                address1,
+                address2,
+                address3,
+                city,
+                state,
+                postal_code,
+                country,
+                phone,
+                email,
+                ssn,
+                license_number,
+                passport_number,
+                username,
+            } => {
+                let full_name = [
+                    title.as_deref(),
+                    first_name.as_deref(),
+                    middle_name.as_deref(),
+                    last_name.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" ");
+                if !full_name.is_empty() {
+                    println!("{} {full_name}", label("Name"));
+                }
+                for addr in [address1, address2, address3]
+                    .into_iter()
+                    .flatten()
+                {
+                    println!("{} {addr}", label("Address"));
+                }
+                if let Some(v) = city {
+                    println!("{} {v}", label("City"));
+                }
+                if let Some(v) = state {
+                    println!("{} {v}", label("State"));
+                }
+                if let Some(v) = postal_code {
+                    println!("{} {v}", label("Postcode"));
+                }
+                if let Some(v) = country {
+                    println!("{} {v}", label("Country"));
+                }
+                if let Some(v) = phone {
+                    println!("{} {v}", label("Phone"));
+                }
+                if let Some(v) = email {
+                    println!("{} {v}", label("Email"));
+                }
+                if let Some(v) = username {
+                    println!("{} {v}", label("Username"));
+                }
+                if let Some(v) = ssn {
+                    println!("{} {}", label("SSN"), secret(v));
+                }
+                if let Some(v) = license_number {
+                    println!("{} {v}", label("License"));
+                }
+                if let Some(v) = passport_number {
+                    println!("{} {v}", label("Passport"));
+                }
+            }
+            DecryptedData::SecureNote => {}
+            DecryptedData::SshKey {
+                public_key,
+                private_key,
+                fingerprint,
+            } => {
+                if let Some(fp) = fingerprint {
+                    println!("{} {}", label("Fingerprint"), dim(fp));
+                }
+                if let Some(pk) = public_key {
+                    println!("{} {pk}", label("Public key"));
+                }
+                if let Some(pk) = private_key {
+                    println!("{} {}", label("Private key"), secret(pk));
+                }
+            }
+        }
+
+        // Custom fields
+        if !self.fields.is_empty() {
+            println!("{}", dim("--- fields ---"));
+            for field in &self.fields {
+                let name = field.name.as_deref().unwrap_or("(unnamed)");
+                let value = field.value.as_deref().unwrap_or("");
+                let is_hidden = matches!(
+                    field.ty,
+                    Some(rbw::api::FieldType::Hidden)
+                );
+                if is_hidden {
+                    println!("{} {}", label(name), secret(value));
+                } else {
+                    println!("{} {value}", label(name));
+                }
+            }
+        }
+
+        // Notes
+        if let Some(notes) = &self.notes {
+            if !notes.is_empty() {
+                println!("{}", dim("--- notes ---"));
+                println!("{notes}");
+            }
+        }
+
+        // Attachments
+        if !self.attachments.is_empty() {
+            println!("{}", dim("--- attachments ---"));
+            for att in &self.attachments {
+                let fname = att
+                    .file_name
+                    .as_deref()
+                    .unwrap_or(&att.id);
+                let size = att
+                    .size_name
+                    .as_deref()
+                    .or(att.size.as_deref())
+                    .unwrap_or("");
+                println!("  {fname}  {}", dim(size));
+            }
+        }
+    }
 }
 
 fn is_zero(value: &usize) -> bool {
@@ -1934,6 +2157,26 @@ pub fn get(
         decrypted.display_short(&desc, clipboard);
     }
 
+    Ok(())
+}
+
+pub fn show(
+    needle: Needle,
+    user: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+) -> anyhow::Result<()> {
+    unlock(None)?;
+    let db = load_db()?;
+    let desc = format!(
+        "{}{}",
+        user.map_or_else(String::new, |s| format!("{s}@")),
+        needle
+    );
+    let (_, decrypted) =
+        find_entry(&db, needle, user, folder, ignore_case)
+            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    decrypted.display_show();
     Ok(())
 }
 

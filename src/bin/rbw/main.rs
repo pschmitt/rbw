@@ -182,6 +182,12 @@ enum Opt {
         list_fields: bool,
     },
 
+    #[command(about = "Show all details of a given entry")]
+    Show {
+        #[command(flatten)]
+        find_args: FindArgs,
+    },
+
     #[command(about = "Search for entries")]
     Search {
         #[arg(help = "Search term to locate entries")]
@@ -502,6 +508,7 @@ impl Opt {
             Self::Export => "export".to_string(),
             Self::List { .. } => "list".to_string(),
             Self::Get { .. } => "get".to_string(),
+            Self::Show { .. } => "show".to_string(),
             Self::Search { .. } => "search".to_string(),
             Self::Attachment { attachment } => {
                 format!("attachment {}", attachment.subcommand_name())
@@ -784,6 +791,12 @@ fn main() {
                 list_fields,
             )
         })(),
+        Opt::Show { find_args } => commands::show(
+            find_args.needle,
+            find_args.user.as_deref(),
+            find_args.folder.as_deref(),
+            find_args.ignorecase,
+        ),
         Opt::Search {
             term,
             fields,
