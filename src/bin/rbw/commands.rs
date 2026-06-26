@@ -1302,6 +1302,10 @@ fn stdout_is_terminal() -> bool {
     std::io::stdout().is_terminal()
 }
 
+fn stderr_supports_color() -> bool {
+    std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+}
+
 // Central style palette.  Every coloured output in rbw goes through
 // these functions so that each semantic type always looks the same
 // regardless of which command produced it.
@@ -4723,14 +4727,24 @@ fn find_entry_raw(
     if matches.is_empty() {
         Err(anyhow::anyhow!("no entry found"))
     } else {
-        let c = stdout_supports_color();
+        // This error is printed to stderr (wrapped in red by `style_error`),
+        // so colour the entry details based on stderr. The leading reset
+        // stops the outer red from bleeding into the per-field styling of the
+        // entry list; without it the headline's red leaks into the first
+        // entry (until its first inner reset) and looks inconsistent.
+        let c = stderr_supports_color();
+        let reset = if c { "\x1b[0m" } else { "" };
         let entries: Vec<String> = matches
             .iter()
             .map(|(_, decrypted)| format_ambiguous_entry(decrypted, c))
             .collect();
+        let hint = format!(
+            "Try `rbw list {needle_str}` to inspect the matches, or add --user/--folder to disambiguate."
+        );
         Err(anyhow::anyhow!(
-            "multiple entries found:\n{}\n\nTry `rbw list {needle_str}` to inspect the matches, or add --user/--folder to disambiguate.",
+            "multiple entries found:{reset}\n{}\n\n{}",
             entries.join("\n"),
+            style::dim(&hint, c),
         ))
     }
 }
