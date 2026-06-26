@@ -146,10 +146,8 @@ enum Opt {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[structopt(long, help = "Display output as JSON")]
+        #[arg(long, visible_alias = "json", help = "Display output as JSON")]
         raw: bool,
-        #[arg(long, help = "Display output as JSON")]
-        json: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
         #[arg(long, help = "Dump full structured output for all items")]
@@ -171,10 +169,8 @@ enum Opt {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[structopt(long, help = "Display output as JSON")]
+        #[arg(long, visible_alias = "json", help = "Display output as JSON")]
         raw: bool,
-        #[arg(long, help = "Display output as JSON")]
-        json: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
         #[cfg(feature = "clipboard")]
@@ -212,10 +208,8 @@ enum Opt {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[structopt(long, help = "Display output as JSON")]
+        #[arg(long, visible_alias = "json", help = "Display output as JSON")]
         raw: bool,
-        #[arg(long, help = "Display output as JSON")]
-        json: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
         #[arg(long, help = "Dump full structured output for matching items")]
@@ -412,10 +406,8 @@ enum Opt {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[structopt(long, help = "Display output as JSON")]
+        #[arg(long, visible_alias = "json", help = "Display output as JSON")]
         raw: bool,
-        #[arg(long, help = "Display output as JSON")]
-        json: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
     },
@@ -576,10 +568,8 @@ enum Attachment {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[structopt(long, help = "Display output as JSON")]
+        #[arg(long, visible_alias = "json", help = "Display output as JSON")]
         raw: bool,
-        #[arg(long, help = "Display output as JSON")]
-        json: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
     },
@@ -684,11 +674,10 @@ fn main() {
             with_attachments,
             output,
             raw,
-            json,
             yaml,
             full,
         } => (|| -> anyhow::Result<()> {
-            let output = resolve_output_mode(output, raw || json, yaml)?;
+            let output = resolve_output_mode(output, raw, yaml)?;
             if let Some(term) = term {
                 commands::search(
                     &term,
@@ -707,10 +696,9 @@ fn main() {
                 find_args,
                 output,
                 raw,
-                json,
                 yaml,
             } => (|| -> anyhow::Result<()> {
-                let output = resolve_output_mode(output, raw || json, yaml)?;
+                let output = resolve_output_mode(output, raw, yaml)?;
                 commands::attachment_list(
                     find_args.needle,
                     find_args.user.as_deref(),
@@ -743,13 +731,12 @@ fn main() {
             full,
             output,
             raw,
-            json,
             yaml,
             #[cfg(feature = "clipboard")]
             clipboard,
             list_fields,
         } => (|| -> anyhow::Result<()> {
-            let output = resolve_output_mode(output, raw || json, yaml)?;
+            let output = resolve_output_mode(output, raw, yaml)?;
             commands::get(
                 find_args.needle.clone(),
                 find_args.user.as_deref(),
@@ -772,11 +759,10 @@ fn main() {
             with_attachments,
             output,
             raw,
-            json,
             yaml,
             full,
         } => (|| -> anyhow::Result<()> {
-            let output = resolve_output_mode(output, raw || json, yaml)?;
+            let output = resolve_output_mode(output, raw, yaml)?;
             commands::search(
                 &term,
                 &fields,
@@ -906,10 +892,9 @@ fn main() {
         Opt::ListCollections {
             output,
             raw,
-            json,
             yaml,
         } => (|| -> anyhow::Result<()> {
-            let output = resolve_output_mode(output, raw || json, yaml)?;
+            let output = resolve_output_mode(output, raw, yaml)?;
             commands::list_collections(output)
         })(),
         Opt::CreateCollection { name, org_id } => {
