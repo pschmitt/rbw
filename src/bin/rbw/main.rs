@@ -156,6 +156,11 @@ enum Opt {
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
+        #[arg(
+            long,
+            help = "Include password column (shows sensitive data in plain text)"
+        )]
+        insecure: bool,
     },
 
     #[command(about = "Display all fields of a given entry")]
@@ -714,12 +719,13 @@ fn main() {
             output,
             raw,
             yaml,
+            insecure,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             if let Some(term) = term {
                 commands::search(&term, &fields, None, with_attachments, output)
             } else {
-                commands::list(&fields, with_attachments, output)
+                commands::list(&fields, with_attachments, insecure, output)
             }
         })(),
         Opt::Attachment { attachment } => match attachment {

@@ -188,6 +188,8 @@ struct DecryptedListCipher {
     id: String,
     name: Option<String>,
     user: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    password: Option<String>,
     folder: Option<String>,
     uris: Option<Vec<String>>,
     #[serde(rename = "type")]
@@ -291,13 +293,22 @@ impl DecryptedSearchCipher {
                 }
             }
             Needle::Name(name) => {
-                let matches_name = match_str(&self.name, name);
+                let name_lower = name.to_lowercase();
+                // For partial (non-exact) matching, always use
+                // case-insensitive contains so "micro" finds "Microsoft".
+                // For exact matching, honour the ignore_case flag via
+                // match_str.
+                let matches_name = if exact {
+                    match_str(&self.name, name)
+                } else {
+                    self.name.to_lowercase().contains(&name_lower)
+                };
                 let matches_id =
-                    self.id.to_lowercase().contains(&name.to_lowercase());
+                    self.id.to_lowercase().contains(&name_lower);
                 let matches_sensitive = self
                     .sensitive_fields
                     .iter()
-                    .any(|f| f.to_lowercase().contains(&name.to_lowercase()));
+                    .any(|f| f.to_lowercase().contains(&name_lower));
                 if !matches_name && !matches_id && !matches_sensitive {
                     return false;
                 }
@@ -360,6 +371,7 @@ impl From<DecryptedSearchCipher> for DecryptedListCipher {
             entry_type: Some(value.entry_type),
             name: Some(value.name),
             user: value.user,
+            password: None,
             folder: value.folder,
             uris: Some(value.uris.into_iter().map(|(s, _)| s).collect()),
             collection_ids: None,
@@ -1090,6 +1102,13 @@ impl DecryptedCipher {
                 s.to_string()
             }
         };
+        let section = |s: &str| -> String {
+            if c {
+                format!("\x1b[1m{s}\x1b[0m")
+            } else {
+                s.to_string()
+            }
+        };
 
         // Header fields: Name, UID, Type, Folder
         println!("{} {}", label("Name"), self.name);
@@ -1246,7 +1265,7 @@ impl DecryptedCipher {
 
         // Custom fields
         if !self.fields.is_empty() {
-            println!("{}", dim("--- fields ---"));
+            println!("\n{}", section("FIELDS"));
             for field in &self.fields {
                 let name = field.name.as_deref().unwrap_or("(unnamed)");
                 let value = field.value.as_deref().unwrap_or("");
@@ -1265,14 +1284,14 @@ impl DecryptedCipher {
         // Notes
         if let Some(notes) = &self.notes {
             if !notes.is_empty() {
-                println!("{}", dim("--- notes ---"));
+                println!("\n{}", section("NOTES"));
                 println!("{notes}");
             }
         }
 
         // Attachments
         if !self.attachments.is_empty() {
-            println!("{}", dim("--- attachments ---"));
+            println!("\n{}", section("ATTACHMENTS"));
             for att in &self.attachments {
                 let fname = att
                     .file_name
@@ -1283,7 +1302,7 @@ impl DecryptedCipher {
                     .as_deref()
                     .or(att.size.as_deref())
                     .unwrap_or("");
-                println!("  {fname}  {}", dim(size));
+                println!("\u{1f4ce} {fname:<30}  {}", dim(size));
             }
         }
     }
@@ -1855,6 +1874,7 @@ enum ListField {
     Id,
     Name,
     User,
+    Password,
     Folder,
     Uri,
     EntryType,
@@ -1899,6 +1919,19 @@ impl ListField {
             Self::Collections,
         ]
     }
+
+    fn all_insecure() -> Vec<Self> {
+        vec![
+            Self::Id,
+            Self::Name,
+            Self::User,
+            Self::Password,
+            Self::Folder,
+            Self::Uri,
+            Self::EntryType,
+            Self::Collections,
+        ]
+    }
 }
 
 impl std::convert::TryFrom<&String> for ListField {
@@ -1909,6 +1942,7 @@ impl std::convert::TryFrom<&String> for ListField {
             "name" => Self::Name,
             "id" | "uid" => Self::Id,
             "user" => Self::User,
+            "password" => Self::Password,
             "folder" => Self::Folder,
             "type" => Self::EntryType,
             "collections" => Self::Collections,
@@ -2047,16 +2081,29 @@ pub fn sync() -> anyhow::Result<()> {
 pub fn list(
     fields: &[String],
     with_attachments: bool,
+    insecure: bool,
     output: OutputMode,
 ) -> anyhow::Result<()> {
-    let fields: Vec<ListField> = if output_is_structured(output) {
-        ListField::all()
+    let mut fields: Vec<ListField> = if output_is_structured(output) {
+        if insecure {
+            ListField::all_insecure()
+        } else {
+            ListField::all()
+        }
     } else {
         fields
             .iter()
             .map(std::convert::TryFrom::try_from)
             .collect::<anyhow::Result<_>>()?
     };
+    if insecure && !output_is_structured(output) && !fields.contains(&ListField::Password) {
+        // Insert password after user (or at position 2 if user column present)
+        let insert_pos = fields
+            .iter()
+            .position(|f| matches!(f, ListField::User))
+            .map_or(fields.len(), |i| i + 1);
+        fields.insert(insert_pos, ListField::Password);
+    }
 
     unlock(None)?;
 
@@ -2438,6 +2485,10 @@ fn print_entry_list(
                     header: "collections",
                     style: TableColumnStyle::Collections,
                 },
+                ListField::Password => TableColumn {
+                    header: "password",
+                    style: TableColumnStyle::Default,
+                },
             })
             .collect::<Vec<_>>();
         columns.push(TableColumn {
@@ -2477,6 +2528,10 @@ fn print_entry_list(
                             .collection_ids
                             .as_ref()
                             .map_or_else(String::new, |ids| ids.join(",")),
+                        ListField::Password => entry
+                            .password
+                            .as_ref()
+                            .map_or_else(String::new, std::string::ToString::to_string),
                     })
                     .collect::<Vec<_>>();
                 values.push(attachments_cell(
@@ -4480,6 +4535,7 @@ struct ListCipherPlan {
     id: String,
     name: Option<usize>,
     user: Option<usize>,
+    password: Option<usize>,
     folder: Option<usize>,
     uris: Option<Vec<usize>>,
     entry_type: Option<String>,
@@ -4508,6 +4564,22 @@ impl ListCipherPlan {
                     ..
                 } => Some(requests.push(
                     username,
+                    entry.key.as_deref(),
+                    entry.org_id.as_deref(),
+                )),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        let password = if fields.contains(&ListField::Password) {
+            match &entry.data {
+                rbw::db::EntryData::Login {
+                    password: Some(password),
+                    ..
+                } => Some(requests.push(
+                    password,
                     entry.key.as_deref(),
                     entry.org_id.as_deref(),
                 )),
@@ -4561,6 +4633,7 @@ impl ListCipherPlan {
             id: entry.id.clone(),
             name,
             user,
+            password,
             folder,
             uris,
             entry_type,
@@ -4587,6 +4660,9 @@ impl ListCipherPlan {
         let user = self.user.and_then(|index| {
             lenient_result(&results[index], Field::Username)
         });
+        let password = self.password.and_then(|index| {
+            lenient_result(&results[index], Field::Password)
+        });
         let uris = self.uris.map(|indices| {
             indices
                 .iter()
@@ -4602,6 +4678,7 @@ impl ListCipherPlan {
             id: self.id,
             name,
             user,
+            password,
             folder,
             uris,
             entry_type: self.entry_type,
