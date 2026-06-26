@@ -1,6 +1,8 @@
 use std::ffi::OsString;
 use std::io::Write as _;
 
+use is_terminal::IsTerminal as _;
+
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt as _;
 
@@ -998,7 +1000,13 @@ fn main() {
     .with_context(|| format!("rbw {subcommand_name}"));
 
     if let Err(e) = res {
-        eprintln!("{e:#}");
+        use yansi::Paint as _;
+        let msg = format!("{e:#}");
+        if std::io::stderr().is_terminal() {
+            eprintln!("{}", msg.red().bold());
+        } else {
+            eprintln!("{msg}");
+        }
         std::process::exit(1);
     }
 }
