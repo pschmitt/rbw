@@ -2727,6 +2727,7 @@ fn add_structured(
     }
 
     crate::actions::sync()?;
+    print_created(&cipher.name);
     Ok(())
 }
 
@@ -3017,6 +3018,14 @@ fn paint_no_changes() -> String {
     } else {
         "No changes.".to_string()
     }
+}
+
+fn print_created(entry_name: &str) {
+    use yansi::Paint as _;
+    let c = color_enabled();
+    let name = if c { entry_name.bold().to_string() } else { entry_name.to_string() };
+    let verb = if c { "Created".green().bold().to_string() } else { "Created".to_string() };
+    eprintln!("{verb} {name}");
 }
 
 fn print_set_changes(
