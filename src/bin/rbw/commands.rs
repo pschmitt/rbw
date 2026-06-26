@@ -211,6 +211,8 @@ struct DecryptedSearchCipher {
     fields: Vec<String>,
     notes: Option<String>,
     attachment_count: usize,
+    #[serde(skip)]
+    sensitive_fields: Vec<String>,
 }
 
 impl DecryptedSearchCipher {
@@ -289,12 +291,14 @@ impl DecryptedSearchCipher {
                 }
             }
             Needle::Name(name) => {
-                if !match_str(&self.name, name)
-                    && !self
-                        .id
-                        .to_lowercase()
-                        .contains(&name.to_lowercase())
-                {
+                let matches_name = match_str(&self.name, name);
+                let matches_id =
+                    self.id.to_lowercase().contains(&name.to_lowercase());
+                let matches_sensitive = self
+                    .sensitive_fields
+                    .iter()
+                    .any(|f| f.to_lowercase().contains(&name.to_lowercase()));
+                if !matches_name && !matches_id && !matches_sensitive {
                     return false;
                 }
             }
@@ -335,6 +339,7 @@ impl DecryptedSearchCipher {
         }
         fields.extend(self.uris.iter().map(|(uri, _)| uri).cloned());
         fields.extend(self.fields.iter().cloned());
+        fields.extend(self.sensitive_fields.iter().cloned());
 
         for field in fields {
             if field.to_lowercase().contains(&term.to_lowercase()) {
@@ -2572,6 +2577,16 @@ pub fn search(
                 Ok(_) | Err(_) => None,
             })
             .collect();
+        if entries.is_empty() {
+            use yansi::Paint as _;
+            let msg = format!("no entries found matching '{term}'");
+            if std::io::stderr().is_terminal() {
+                eprintln!("{}", msg.yellow().bold());
+            } else {
+                eprintln!("{msg}");
+            }
+            std::process::exit(1);
+        }
         entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         return write_serialized_pretty(
             &entries,
@@ -2606,6 +2621,17 @@ pub fn search(
         .map(|entry| entry.map(std::convert::Into::into))
         .collect::<Result<_, anyhow::Error>>()?;
     entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+
+    if entries.is_empty() {
+        use yansi::Paint as _;
+        let msg = format!("no entries found matching '{term}'");
+        if std::io::stderr().is_terminal() {
+            eprintln!("{}", msg.yellow().bold());
+        } else {
+            eprintln!("{msg}");
+        }
+        std::process::exit(1);
+    }
 
     print_entry_list(&entries, &fields, output)?;
 
@@ -3084,6 +3110,69 @@ pub fn set(
     new_totp: Option<&str>,
     diff: bool,
     new_attachments: &[std::path::PathBuf],
+    bulk: bool,
+    yes: bool,
+) -> anyhow::Result<()> {
+    if bulk {
+        let mut any_err = false;
+        for needle in needles {
+            if let Err(e) = set_one(
+                vec![needle],
+                username,
+                folder,
+                ignore_case,
+                new_name,
+                new_username,
+                new_password,
+                new_notes,
+                new_uris,
+                new_totp,
+                diff,
+                new_attachments,
+                yes,
+            ) {
+                eprintln!("{e:#}");
+                any_err = true;
+            }
+        }
+        return if any_err {
+            Err(anyhow::anyhow!("one or more entries failed to update"))
+        } else {
+            Ok(())
+        };
+    }
+    set_one(
+        needles,
+        username,
+        folder,
+        ignore_case,
+        new_name,
+        new_username,
+        new_password,
+        new_notes,
+        new_uris,
+        new_totp,
+        diff,
+        new_attachments,
+        yes,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set_one(
+    needles: Vec<Needle>,
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    new_name: Option<&str>,
+    new_username: Option<&str>,
+    new_password: Option<&str>,
+    new_notes: Option<&str>,
+    new_uris: &[String],
+    new_totp: Option<&str>,
+    diff: bool,
+    new_attachments: &[std::path::PathBuf],
+    yes: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
 
@@ -3188,6 +3277,31 @@ pub fn set(
     if changes.is_empty() && new_attachments.is_empty() {
         eprintln!("{}", paint_no_changes());
         return Ok(());
+    }
+
+    if !yes {
+        let c = stdout_supports_color();
+        let bold = |s: &str| -> String {
+            if c { format!("\x1b[1m{s}\x1b[0m") } else { s.to_string() }
+        };
+        eprintln!("About to update {}:", bold(&entry_name));
+        for (field, old, new) in &changes {
+            eprintln!("  {}: {old} → {new}", bold(field));
+        }
+        for file in new_attachments {
+            eprintln!("  attach: {}", file.display());
+        }
+        eprint!("Apply? [y/N] ");
+        use std::io::Write as _;
+        let _ = std::io::stderr().flush();
+        let mut answer = String::new();
+        std::io::stdin()
+            .read_line(&mut answer)
+            .context("failed to read confirmation")?;
+        if !matches!(answer.trim(), "y" | "Y") {
+            eprintln!("Aborted.");
+            return Ok(());
+        }
     }
 
     // Encrypt and save
@@ -4621,6 +4735,7 @@ struct SearchCipherPlan {
     notes: Option<usize>,
     uris: Vec<(usize, Option<rbw::api::UriMatchType>)>,
     fields: Vec<usize>,
+    sensitive_fields: Vec<usize>,
     attachment_count: usize,
 }
 
@@ -4695,6 +4810,43 @@ impl SearchCipherPlan {
             })
             .collect();
 
+        let push_opt = |v: Option<&String>, requests: &mut BatchRequests| {
+            v.map(|s| requests.push(s, entry.key.as_deref(), entry.org_id.as_deref()))
+        };
+        let mut sensitive_fields: Vec<usize> = Vec::new();
+        match &entry.data {
+            rbw::db::EntryData::Login { password, .. } => {
+                sensitive_fields.extend(push_opt(password.as_ref(), requests));
+            }
+            rbw::db::EntryData::Card { number, code, .. } => {
+                sensitive_fields.extend(push_opt(number.as_ref(), requests));
+                sensitive_fields.extend(push_opt(code.as_ref(), requests));
+            }
+            rbw::db::EntryData::Identity {
+                ssn,
+                license_number,
+                passport_number,
+                ..
+            } => {
+                sensitive_fields.extend(push_opt(ssn.as_ref(), requests));
+                sensitive_fields
+                    .extend(push_opt(license_number.as_ref(), requests));
+                sensitive_fields
+                    .extend(push_opt(passport_number.as_ref(), requests));
+            }
+            rbw::db::EntryData::SshKey { private_key, .. } => {
+                sensitive_fields
+                    .extend(push_opt(private_key.as_ref(), requests));
+            }
+            rbw::db::EntryData::SecureNote => {}
+        }
+        for field in &entry.fields {
+            if field.ty == Some(rbw::api::FieldType::Hidden) {
+                sensitive_fields
+                    .extend(push_opt(field.value.as_ref(), requests));
+            }
+        }
+
         Self {
             id: entry.id.clone(),
             entry_type: entry_type_name(&entry.data).to_string(),
@@ -4704,6 +4856,7 @@ impl SearchCipherPlan {
             notes,
             uris,
             fields,
+            sensitive_fields,
             attachment_count: entry.attachments.len(),
         }
     }
@@ -4740,6 +4893,12 @@ impl SearchCipherPlan {
             })
             .collect();
 
+        let sensitive_fields = self
+            .sensitive_fields
+            .iter()
+            .filter_map(|&index| lenient_result(&results[index], Field::Password))
+            .collect();
+
         Ok(DecryptedSearchCipher {
             id: self.id,
             entry_type: self.entry_type,
@@ -4749,6 +4908,7 @@ impl SearchCipherPlan {
             uris,
             fields,
             notes,
+            sensitive_fields,
             attachment_count: self.attachment_count,
         })
     }
@@ -4829,6 +4989,49 @@ fn decrypt_search_cipher(
         }
     };
 
+    let sensitive_fields: Vec<String> = {
+        let decrypt_opt = |v: Option<&String>| -> Option<String> {
+            v.and_then(|s| {
+                decrypt_field(
+                    Field::Password,
+                    Some(s),
+                    entry.key.as_deref(),
+                    entry.org_id.as_deref(),
+                )
+            })
+        };
+        let mut sf: Vec<String> = Vec::new();
+        match &entry.data {
+            rbw::db::EntryData::Login { password, .. } => {
+                sf.extend(decrypt_opt(password.as_ref()));
+            }
+            rbw::db::EntryData::Card { number, code, .. } => {
+                sf.extend(decrypt_opt(number.as_ref()));
+                sf.extend(decrypt_opt(code.as_ref()));
+            }
+            rbw::db::EntryData::Identity {
+                ssn,
+                license_number,
+                passport_number,
+                ..
+            } => {
+                sf.extend(decrypt_opt(ssn.as_ref()));
+                sf.extend(decrypt_opt(license_number.as_ref()));
+                sf.extend(decrypt_opt(passport_number.as_ref()));
+            }
+            rbw::db::EntryData::SshKey { private_key, .. } => {
+                sf.extend(decrypt_opt(private_key.as_ref()));
+            }
+            rbw::db::EntryData::SecureNote => {}
+        }
+        for field in &entry.fields {
+            if field.ty == Some(rbw::api::FieldType::Hidden) {
+                sf.extend(decrypt_opt(field.value.as_ref()));
+            }
+        }
+        sf
+    };
+
     Ok(DecryptedSearchCipher {
         id,
         entry_type: entry_type_name(&entry.data).to_string(),
@@ -4838,6 +5041,7 @@ fn decrypt_search_cipher(
         uris,
         fields,
         notes,
+        sensitive_fields,
         attachment_count: entry.attachments.len(),
     })
 }
@@ -6563,6 +6767,7 @@ mod test {
             fields: vec![],
             notes: None,
             attachment_count: 2,
+            sensitive_fields: vec![],
         });
 
         assert_eq!(
@@ -6583,6 +6788,7 @@ mod test {
             fields: vec![],
             notes: None,
             attachment_count: 0,
+            sensitive_fields: vec![],
         };
 
         assert!(entry.search_match("exa", None, false));
@@ -7980,6 +8186,7 @@ mod test {
                 fields: vec![],
                 notes: None,
                 attachment_count: 0,
+                sensitive_fields: vec![],
             },
         )
     }

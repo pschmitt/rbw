@@ -383,7 +383,7 @@ enum Opt {
         find_args: FindArgs,
         #[arg(long, help = "New entry name")]
         name: Option<String>,
-        #[arg(long, alias = "user", help = "New username (Login entries only)")]
+        #[arg(long, help = "New username (Login entries only)")]
         username: Option<String>,
         #[arg(long, help = "New password (Login entries only)")]
         password: Option<String>,
@@ -401,6 +401,13 @@ enum Opt {
         diff: bool,
         #[arg(long, number_of_values = 1, help = "File(s) to attach")]
         attachment: Vec<std::path::PathBuf>,
+        #[arg(
+            long,
+            help = "Treat each needle as an independent entry to update"
+        )]
+        bulk: bool,
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
     },
 
     #[command(about = "Remove a given entry", visible_alias = "rm")]
@@ -928,6 +935,8 @@ fn main() {
             totp,
             diff,
             attachment,
+            bulk,
+            yes,
         } => commands::set(
             find_args.needles,
             find_args.user.as_deref(),
@@ -941,6 +950,8 @@ fn main() {
             totp.as_deref(),
             diff,
             &attachment,
+            bulk,
+            yes,
         ),
         Opt::Remove { find_args } => commands::remove(
             find_args.needles,
