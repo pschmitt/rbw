@@ -390,6 +390,8 @@ enum Opt {
         uri: Vec<String>,
         #[arg(long, help = "New TOTP secret (Login entries only)")]
         totp: Option<String>,
+        #[arg(long, help = "Show old → new for each changed field")]
+        diff: bool,
     },
 
     #[command(about = "Remove a given entry", visible_alias = "rm")]
@@ -881,6 +883,7 @@ fn main() {
             notes,
             uri,
             totp,
+            diff,
         } => commands::set(
             find_args.needle,
             find_args.user.as_deref(),
@@ -892,6 +895,7 @@ fn main() {
             notes.as_deref(),
             &uri,
             totp.as_deref(),
+            diff,
         ),
         Opt::Remove { find_args } => commands::remove(
             find_args.needle,

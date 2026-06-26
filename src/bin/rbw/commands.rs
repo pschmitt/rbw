@@ -2529,7 +2529,7 @@ fn edit_structured(
         });
 
     if contents_trimmed.trim() == serialized.trim() {
-        eprintln!("No changes made.");
+        eprintln!("{}", paint_no_changes());
         return Ok(());
     }
 
@@ -2673,7 +2673,7 @@ fn add_structured(
         });
 
     if contents_trimmed.trim() == serialized.trim() {
-        eprintln!("No changes made.");
+        eprintln!("{}", paint_no_changes());
         return Ok(());
     }
 
@@ -2741,6 +2741,7 @@ pub fn set(
     new_notes: Option<&str>,
     new_uris: &[String],
     new_totp: Option<&str>,
+    diff: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
 
@@ -2759,8 +2760,90 @@ pub fn set(
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     let org_id = entry.org_id.as_deref();
-    let entry_name = &decrypted.name;
+    let entry_name = decrypted.name.clone();
 
+    // Validate Login-only fields early before touching anything
+    let login_fields_requested = new_username.is_some()
+        || new_password.is_some()
+        || !new_uris.is_empty()
+        || new_totp.is_some();
+    if login_fields_requested
+        && !matches!(decrypted.data, DecryptedData::Login { .. })
+    {
+        return Err(anyhow::anyhow!(
+            "username/password/uri/totp are only supported for Login entries"
+        ));
+    }
+
+    // Detect which fields actually changed; (field, old_display, new_display)
+    let mut changes: Vec<(&str, String, String)> = Vec::new();
+
+    if let Some(n) = new_name {
+        if n != decrypted.name.as_str() {
+            changes.push(("name", format!("{:?}", decrypted.name), format!("{n:?}")));
+        }
+    }
+    if let Some(n) = new_notes {
+        let cur = decrypted.notes.as_deref().unwrap_or("");
+        if n != cur {
+            let old_d = if cur.is_empty() { "(none)".to_string() } else { "(set)".to_string() };
+            let new_d = if n.is_empty() { "(cleared)".to_string() } else { "(set)".to_string() };
+            changes.push(("notes", old_d, new_d));
+        }
+    }
+    if let DecryptedData::Login {
+        username: cur_user,
+        password: cur_pw,
+        uris: cur_uris,
+        totp: cur_totp,
+    } = &decrypted.data
+    {
+        if let Some(u) = new_username {
+            if Some(u) != cur_user.as_deref() {
+                let old = cur_user.as_deref()
+                    .map(|s| format!("{s:?}"))
+                    .unwrap_or_else(|| "(none)".to_string());
+                changes.push(("username", old, format!("{u:?}")));
+            }
+        }
+        if let Some(p) = new_password {
+            if Some(p) != cur_pw.as_deref() {
+                let old = cur_pw.as_deref()
+                    .map(|s| format!("\"{}\"", censor(s)))
+                    .unwrap_or_else(|| "(none)".to_string());
+                changes.push(("password", old, format!("\"{}\"", censor(p))));
+            }
+        }
+        if !new_uris.is_empty() {
+            let cur_strs: Vec<&str> = cur_uris.as_ref()
+                .map(|v| v.iter().map(|u| u.uri.as_str()).collect())
+                .unwrap_or_default();
+            let new_strs: Vec<&str> = new_uris.iter().map(String::as_str).collect();
+            if new_strs != cur_strs {
+                let fmt_uris = |v: &[&str]| match v {
+                    [] => "(none)".to_string(),
+                    [u] => format!("{u:?}"),
+                    _ => format!("[{} uris]", v.len()),
+                };
+                changes.push(("uri", fmt_uris(&cur_strs), fmt_uris(&new_strs)));
+            }
+        }
+        if let Some(t) = new_totp {
+            if Some(t) != cur_totp.as_deref() {
+                let old = cur_totp.as_deref()
+                    .map(|s| format!("\"{}\"", censor(s)))
+                    .unwrap_or_else(|| "(none)".to_string());
+                changes.push(("totp", old, format!("\"{}\"", censor(t))));
+            }
+        }
+    }
+
+    if changes.is_empty() {
+        eprintln!("{}", paint_no_changes());
+        return Ok(());
+    }
+
+    // Encrypt and save
     let encrypted_name = if let Some(n) = new_name {
         crate::actions::encrypt(n, org_id)?
     } else {
@@ -2786,16 +2869,14 @@ pub fn set(
             uris: entry_uris,
             totp: entry_totp,
         } => {
-            let username = if new_username.is_some() {
+            let enc_user = if new_username.is_some() {
                 new_username
                     .map(|u| crate::actions::encrypt(u, org_id))
                     .transpose()?
             } else {
                 entry_username.clone()
             };
-
-            let password = if let Some(pw) = new_password {
-                let encrypted = crate::actions::encrypt(pw, org_id)?;
+            let enc_pw = if let Some(pw) = new_password {
                 if let Some(prev) = entry_password.clone() {
                     history.insert(
                         0,
@@ -2810,12 +2891,11 @@ pub fn set(
                         },
                     );
                 }
-                Some(encrypted)
+                Some(crate::actions::encrypt(pw, org_id)?)
             } else {
                 entry_password.clone()
             };
-
-            let uris = if new_uris.is_empty() {
+            let enc_uris = if new_uris.is_empty() {
                 entry_uris.clone()
             } else {
                 new_uris
@@ -2828,35 +2908,21 @@ pub fn set(
                     })
                     .collect::<anyhow::Result<_>>()?
             };
-
-            let totp = if new_totp.is_some() {
+            let enc_totp = if new_totp.is_some() {
                 new_totp
                     .map(|t| crate::actions::encrypt(t, org_id))
                     .transpose()?
             } else {
                 entry_totp.clone()
             };
-
             rbw::db::EntryData::Login {
-                username,
-                password,
-                uris,
-                totp,
+                username: enc_user,
+                password: enc_pw,
+                uris: enc_uris,
+                totp: enc_totp,
             }
         }
-        other => {
-            if new_username.is_some()
-                || new_password.is_some()
-                || !new_uris.is_empty()
-                || new_totp.is_some()
-            {
-                return Err(anyhow::anyhow!(
-                    "username/password/uri/totp fields are only \
-                     supported for Login entries"
-                ));
-            }
-            other.clone()
-        }
+        other => other.clone(),
     };
 
     if let (Some(new_token), ()) = rbw::actions::edit(
@@ -2875,43 +2941,9 @@ pub fn set(
         save_db(&db)?;
     }
 
-    let mut changes: Vec<String> = Vec::new();
-    if let Some(n) = new_name {
-        changes.push(format!(
-            "  name: {:?} → {:?}",
-            entry_name, n
-        ));
-    }
-    if let Some(u) = new_username {
-        changes.push(format!("  username: {:?}", u));
-    }
-    if let Some(p) = new_password {
-        changes.push(format!("  password: \"{}\"", censor(p)));
-    }
-    if let Some(n) = new_notes {
-        if n.is_empty() {
-            changes.push("  notes: cleared".to_string());
-        } else {
-            changes.push("  notes: updated".to_string());
-        }
-    }
-    if !new_uris.is_empty() {
-        for u in new_uris {
-            changes.push(format!("  uri: {:?}", u));
-        }
-    }
-    if let Some(t) = new_totp {
-        changes.push(format!("  totp: \"{}\"", censor(t)));
-    }
-    if !changes.is_empty() {
-        println!("Updated {:?}:", entry_name);
-        for line in &changes {
-            println!("{line}");
-        }
-    }
+    print_set_changes(&entry_name, &changes, diff);
 
     crate::actions::sync()?;
-
     Ok(())
 }
 
@@ -2972,6 +3004,88 @@ fn censor(s: &str) -> String {
         chars[..prefix].iter().collect::<String>(),
         chars[len - suffix..].iter().collect::<String>()
     )
+}
+
+fn color_enabled() -> bool {
+    stdout_supports_color()
+}
+
+fn paint_no_changes() -> String {
+    use yansi::Paint as _;
+    if color_enabled() {
+        "No changes.".dim().italic().to_string()
+    } else {
+        "No changes.".to_string()
+    }
+}
+
+fn print_set_changes(
+    entry_name: &str,
+    changes: &[(&str, String, String)],
+    diff: bool,
+) {
+    use yansi::Paint as _;
+
+    let c = color_enabled();
+
+    let name = format!("{entry_name:?}");
+    let paint_name = |s: &str| -> String {
+        if c { s.bold().to_string() } else { s.to_string() }
+    };
+    let paint_field = |s: &str| -> String {
+        if c { s.yellow().bold().to_string() } else { s.to_string() }
+    };
+    let paint_new = |s: &str| -> String {
+        if c { s.green().to_string() } else { s.to_string() }
+    };
+    let paint_old = |s: &str| -> String {
+        if c { s.red().dim().to_string() } else { s.to_string() }
+    };
+    let arrow = if c { "→".dim().to_string() } else { "→".to_string() };
+
+    if changes.len() == 1 {
+        let (field, old, new) = &changes[0];
+        let line = if diff {
+            format!(
+                "{}: {} {} {} {}",
+                paint_name(&name),
+                paint_field(field),
+                paint_old(old),
+                arrow,
+                paint_new(new),
+            )
+        } else {
+            format!(
+                "{}: {} {} {}",
+                paint_name(&name),
+                paint_field(field),
+                arrow,
+                paint_new(new),
+            )
+        };
+        println!("{line}");
+    } else {
+        println!("{}:", paint_name(&name));
+        for (field, old, new) in changes {
+            let line = if diff {
+                format!(
+                    "  {} {} {} {}",
+                    paint_field(field),
+                    paint_old(old),
+                    arrow,
+                    paint_new(new),
+                )
+            } else {
+                format!(
+                    "  {} {} {}",
+                    paint_field(field),
+                    arrow,
+                    paint_new(new),
+                )
+            };
+            println!("{line}");
+        }
+    }
 }
 
 pub fn export() -> anyhow::Result<()> {

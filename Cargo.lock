@@ -1935,6 +1935,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "yansi",
  "zeroize",
 ]
 

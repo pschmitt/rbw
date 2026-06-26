@@ -27,8 +27,11 @@ pub fn edit(contents: &str, help: &str, ext: &str) -> Result<String> {
     };
     let file = dir.path().join(filename);
     let mut fh = std::fs::File::create(&file).unwrap();
+    if !help.is_empty() {
+        fh.write_all(help.as_bytes()).unwrap();
+        fh.write_all(b"\n").unwrap();
+    }
     fh.write_all(contents.as_bytes()).unwrap();
-    fh.write_all(help.as_bytes()).unwrap();
     drop(fh);
 
     let (cmd, args) = if contains_shell_metacharacters(&editor) {
