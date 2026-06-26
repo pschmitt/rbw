@@ -219,6 +219,20 @@ struct DecryptedSearchCipher {
     password: Option<String>,
 }
 
+// Relevance weights for entry lookup. A match's location decides how strongly
+// it counts, so a name hit always outranks a hit inside a hidden field, and an
+// exact (case-insensitive) name match wins decisively. Per-needle scores are
+// summed; `SCORE_FULL_NAME_BONUS` is added when the whole needle string equals
+// the entry name.
+const SCORE_UID_EXACT: u32 = 10_000;
+const SCORE_NAME_EXACT: u32 = 1_000;
+const SCORE_NAME_PREFIX: u32 = 200;
+const SCORE_NAME_SUBSTR: u32 = 100;
+const SCORE_URI: u32 = 80;
+const SCORE_ID_SUBSTR: u32 = 20;
+const SCORE_SENSITIVE: u32 = 10;
+const SCORE_FULL_NAME_BONUS: u32 = 5_000;
+
 impl DecryptedSearchCipher {
     fn display_name(&self) -> String {
         self.user.as_ref().map_or_else(
@@ -227,29 +241,25 @@ impl DecryptedSearchCipher {
         )
     }
 
-    fn matches(
+    // Folder/username pre-filter, independent of the needle. `strict_*`
+    // rejects an entry that *has* a folder/username when the caller gave none
+    // (used only for tie-breaking between otherwise-equal candidates).
+    fn passes_user_folder(
         &self,
-        needle: &Needle,
         username: Option<&str>,
         folder: Option<&str>,
         ignore_case: bool,
+        exact: bool,
         strict_username: bool,
         strict_folder: bool,
-        exact: bool,
     ) -> bool {
-        let match_str = match (ignore_case, exact) {
-            (true, true) => |field: &str, search_term: &str| {
-                field.to_lowercase() == search_term.to_lowercase()
-            },
-            (true, false) => |field: &str, search_term: &str| {
-                field.to_lowercase().contains(&search_term.to_lowercase())
-            },
-            (false, true) => {
-                |field: &str, search_term: &str| field == search_term
+        let match_str = |field: &str, term: &str| match (ignore_case, exact) {
+            (true, true) => field.to_lowercase() == term.to_lowercase(),
+            (true, false) => {
+                field.to_lowercase().contains(&term.to_lowercase())
             }
-            (false, false) => {
-                |field: &str, search_term: &str| field.contains(search_term)
-            }
+            (false, true) => field == term,
+            (false, false) => field.contains(term),
         };
 
         match (self.folder.as_deref(), folder) {
@@ -263,9 +273,7 @@ impl DecryptedSearchCipher {
                     return false;
                 }
             }
-            (None, Some(_)) => {
-                return false;
-            }
+            (None, Some(_)) => return false,
             (None, None) => {}
         }
 
@@ -280,51 +288,105 @@ impl DecryptedSearchCipher {
                     return false;
                 }
             }
-            (None, Some(_)) => {
-                return false;
-            }
+            (None, Some(_)) => return false,
             (None, None) => {}
         }
 
+        true
+    }
+
+    // Score how strongly `needle` matches this entry by *where* it matches, so
+    // candidates can be ranked: an exact name beats a name substring beats a
+    // hit buried in a hidden field. `None` means no match. With `exact`
+    // (--exact) only an exact name match counts. Substring/prefix matching is
+    // always case-insensitive (so `micro` finds `Microsoft`); the `ignore_case`
+    // flag only affects exact matching.
+    fn match_score(
+        &self,
+        needle: &Needle,
+        ignore_case: bool,
+        exact: bool,
+    ) -> Option<u32> {
+        // Tiered score against the entry name only. `ci` chooses case
+        // sensitivity. In --exact mode only an exact match counts.
+        let name_score = |term: &str, ci: bool| -> Option<u32> {
+            let (name, term) = if ci {
+                (self.name.to_lowercase(), term.to_lowercase())
+            } else {
+                (self.name.clone(), term.to_string())
+            };
+            if exact {
+                return (name == term).then_some(SCORE_NAME_EXACT);
+            }
+            if name == term {
+                Some(SCORE_NAME_EXACT)
+            } else if name.starts_with(&term) {
+                Some(SCORE_NAME_PREFIX)
+            } else if name.contains(&term) {
+                Some(SCORE_NAME_SUBSTR)
+            } else {
+                None
+            }
+        };
+
         match needle {
+            // A uuid needle matches the id exactly (case-insensitive), else
+            // falls back to a name match honouring `ignore_case`.
             Needle::Uuid(uuid, s) => {
-                if uuid::Uuid::parse_str(&self.id) != Ok(*uuid)
-                    && !match_str(&self.name, s)
-                {
-                    return false;
+                if uuid::Uuid::parse_str(&self.id) == Ok(*uuid) {
+                    Some(SCORE_UID_EXACT)
+                } else {
+                    name_score(s, ignore_case)
                 }
             }
-            Needle::Name(name) => {
-                let name_lower = name.to_lowercase();
-                // For partial (non-exact) matching, always use
-                // case-insensitive contains so "micro" finds "Microsoft".
-                // For exact matching, honour the ignore_case flag via
-                // match_str.
-                let matches_name = if exact {
-                    match_str(&self.name, name)
-                } else {
-                    self.name.to_lowercase().contains(&name_lower)
-                };
-                let matches_id =
-                    self.id.to_lowercase().contains(&name_lower);
-                let matches_sensitive = self
+            // A name needle matches the name case-insensitively; only if the
+            // name doesn't match at all do we fall back to the id or a hidden
+            // field (never under --exact).
+            Needle::Name(name) => name_score(name, true).or_else(|| {
+                if exact {
+                    return None;
+                }
+                let term = name.to_lowercase();
+                if self.id.to_lowercase().contains(&term) {
+                    Some(SCORE_ID_SUBSTR)
+                } else if self
                     .sensitive_fields
                     .iter()
-                    .any(|f| f.to_lowercase().contains(&name_lower));
-                if !matches_name && !matches_id && !matches_sensitive {
-                    return false;
+                    .any(|f| f.to_lowercase().contains(&term))
+                {
+                    Some(SCORE_SENSITIVE)
+                } else {
+                    None
                 }
-            }
-            Needle::Uri(given_uri) => {
-                if self.uris.iter().all(|(uri, match_type)| {
-                    !matches_url(uri, *match_type, given_uri)
-                }) {
-                    return false;
-                }
-            }
+            }),
+            Needle::Uri(given_uri) => self
+                .uris
+                .iter()
+                .any(|(uri, match_type)| {
+                    matches_url(uri, *match_type, given_uri)
+                })
+                .then_some(SCORE_URI),
         }
+    }
 
-        true
+    fn matches(
+        &self,
+        needle: &Needle,
+        username: Option<&str>,
+        folder: Option<&str>,
+        ignore_case: bool,
+        strict_username: bool,
+        strict_folder: bool,
+        exact: bool,
+    ) -> bool {
+        self.passes_user_folder(
+            username,
+            folder,
+            ignore_case,
+            exact,
+            strict_username,
+            strict_folder,
+        ) && self.match_score(needle, ignore_case, exact).is_some()
     }
 
     fn search_match(
@@ -423,18 +485,40 @@ struct DecryptedCipher {
     attachment_metadata: AttachmentMetadata,
 }
 
+// Where a plain `rbw get` value was resolved from — surfaced by --verbose.
+enum SecretSource {
+    Password,
+    Field(String),
+    Notes,
+}
+
+impl SecretSource {
+    fn field(field: &DecryptedField) -> Self {
+        Self::Field(field.name.clone().unwrap_or_else(|| "(unnamed)".into()))
+    }
+
+    fn label(&self) -> String {
+        match self {
+            Self::Password => "password".to_string(),
+            Self::Field(name) => format!("field '{name}'"),
+            Self::Notes => "notes".to_string(),
+        }
+    }
+}
+
 impl DecryptedCipher {
     // The item's "default" secret for a plain `rbw get NAME`: the login
     // password, else a custom password/passphrase/pass/passwd field, else the
     // notes, else a lone custom field. This keeps the resolution logic in one
-    // place (here) instead of every consumer reimplementing it.
-    fn default_secret(&self) -> Option<String> {
+    // place (here) instead of every consumer reimplementing it. The second
+    // tuple element records *where* the value came from (for --verbose).
+    fn default_secret(&self) -> Option<(String, SecretSource)> {
         if let DecryptedData::Login {
             password: Some(password),
             ..
         } = &self.data
         {
-            return Some(password.clone());
+            return Some((password.clone(), SecretSource::Password));
         }
 
         const FIELD_NAMES: [&str; 4] =
@@ -445,17 +529,17 @@ impl DecryptedCipher {
             })
         }) {
             if let Some(value) = &field.value {
-                return Some(value.clone());
+                return Some((value.clone(), SecretSource::field(field)));
             }
         }
 
         if let Some(notes) = &self.notes {
-            return Some(notes.clone());
+            return Some((notes.clone(), SecretSource::Notes));
         }
 
         if let [field] = self.fields.as_slice() {
             if let Some(value) = &field.value {
-                return Some(value.clone());
+                return Some((value.clone(), SecretSource::field(field)));
             }
         }
 
@@ -470,7 +554,7 @@ impl DecryptedCipher {
                         eprintln!("entry for '{desc}' had no password");
                         false
                     },
-                    |password| val_display_or_store(clipboard, &password),
+                    |(password, _)| val_display_or_store(clipboard, &password),
                 )
             }
             DecryptedData::Card { number, .. } => {
@@ -508,7 +592,7 @@ impl DecryptedCipher {
                     eprintln!("entry for '{desc}' had no notes");
                     false
                 },
-                |value| val_display_or_store(clipboard, &value),
+                |(value, _)| val_display_or_store(clipboard, &value),
             ),
             DecryptedData::SshKey { public_key, .. } => {
                 public_key.as_ref().map_or_else(
@@ -2233,9 +2317,22 @@ pub fn get(
     if verbose {
         let c = std::io::stderr().is_terminal()
             && std::env::var_os("NO_COLOR").is_none();
+        // Note which field the value is coming from — useful now that a plain
+        // `get` may fall back to a passphrase field, notes, etc.
+        let source = if list_fields || output_is_structured(output) {
+            None
+        } else if let Some(field) = field {
+            Some(format!("field '{field}'"))
+        } else {
+            decrypted.default_secret().map(|(_, src)| src.label())
+        };
+        let suffix = source
+            .map(|s| format!(" {}", style::dim(&format!("({s})"), c)))
+            .unwrap_or_default();
         eprintln!(
-            "Matched item: {}",
-            style::name(&decrypted.name, c)
+            "Matched item: {}{}",
+            style::name(&decrypted.name, c),
+            suffix
         );
     }
 
@@ -4701,113 +4798,122 @@ fn find_entry_raw(
     ignore_case: bool,
     force_exact: bool,
 ) -> anyhow::Result<(rbw::db::Entry, DecryptedSearchCipher)> {
-    let mut matches: Vec<(rbw::db::Entry, DecryptedSearchCipher)> = vec![];
-
-    let find_matches = |strict_username, strict_folder, exact| {
-        entries
-            .iter()
-            .filter(|&(_, decrypted_cipher)| {
-                let Some((first, rest)) = needles.split_first() else {
-                    return false;
-                };
-                // Apply full context (username, folder) to the first needle
-                if !decrypted_cipher.matches(
-                    first,
-                    username,
-                    folder,
-                    ignore_case,
-                    strict_username,
-                    strict_folder,
-                    exact,
-                ) {
-                    return false;
-                }
-                // Remaining needles must match name/id only (no user/folder
-                // filtering)
-                rest.iter().all(|n| {
-                    decrypted_cipher.matches(
-                        n,
-                        None,
-                        None,
-                        ignore_case,
-                        false,
-                        false,
-                        exact,
-                    )
-                })
-            })
-            .cloned()
-            .collect()
-    };
-
-    let exact_range: &[bool] =
-        if force_exact { &[true] } else { &[true, false] };
-    for &exact in exact_range {
-        let nonstrict: Vec<(rbw::db::Entry, DecryptedSearchCipher)> =
-            find_matches(false, false, exact);
-
-        if nonstrict.len() == 1 {
-            return Ok(nonstrict[0].clone());
-        }
-
-        if nonstrict.len() > 1 {
-            // Only apply strict username/folder tiebreaking when every
-            // candidate has the same name.  If names differ these are
-            // genuinely distinct entries — silently picking one would be
-            // wrong; the caller should get an ambiguity error instead.
-            let first_name = nonstrict[0].1.name.as_str();
-            let all_same_name =
-                nonstrict.iter().all(|(_, d)| d.name == first_name);
-
-            if all_same_name {
-                let strict_both = find_matches(true, true, exact);
-                if strict_both.len() == 1 {
-                    return Ok(strict_both[0].clone());
-                }
-                let strict_folder = find_matches(false, true, exact);
-                let strict_username = find_matches(true, false, exact);
-                if strict_folder.len() == 1 && strict_username.len() != 1 {
-                    return Ok(strict_folder[0].clone());
-                } else if strict_folder.len() != 1
-                    && strict_username.len() == 1
-                {
-                    return Ok(strict_username[0].clone());
-                }
-            }
-
-            matches = nonstrict;
-        }
+    if needles.is_empty() {
+        return Err(anyhow::anyhow!("no entry found"));
     }
 
-    let needle_str = needles
+    let joined = needles
         .iter()
-        .map(|n| n.to_string())
+        .map(std::string::ToString::to_string)
         .collect::<Vec<_>>()
         .join(" ");
 
-    if matches.is_empty() {
-        Err(anyhow::anyhow!("no entry found"))
-    } else {
-        // This error is printed to stderr (wrapped in red by `style_error`),
-        // so colour the entry details based on stderr. The leading reset
-        // stops the outer red from bleeding into the per-field styling of the
-        // entry list; without it the headline's red leaks into the first
-        // entry (until its first inner reset) and looks inconsistent.
-        let c = stderr_supports_color();
-        let reset = if c { "\x1b[0m" } else { "" };
-        let entries: Vec<String> = matches
+    // Total relevance score for an entry, or None if it isn't a candidate
+    // (fails the user/folder filter, or some needle matches nowhere). Every
+    // needle must match somewhere; the score reflects the best location each
+    // matched, so name hits dominate hits in hidden fields.
+    let score = |d: &DecryptedSearchCipher,
+                 strict_username: bool,
+                 strict_folder: bool|
+     -> Option<u32> {
+        if !d.passes_user_folder(
+            username,
+            folder,
+            ignore_case,
+            force_exact,
+            strict_username,
+            strict_folder,
+        ) {
+            return None;
+        }
+        let mut total: u32 = 0;
+        for needle in needles {
+            total = total.saturating_add(d.match_score(
+                needle,
+                ignore_case,
+                force_exact,
+            )?);
+        }
+        // The whole needle string equalling the name (e.g.
+        // `get private gpg key` -> "Private GPG Key") is the strongest signal.
+        let name_eq_joined = if ignore_case {
+            d.name.to_lowercase() == joined.to_lowercase()
+        } else {
+            d.name == joined
+        };
+        if name_eq_joined {
+            total = total.saturating_add(SCORE_FULL_NAME_BONUS);
+        }
+        Some(total)
+    };
+
+    let mut scored: Vec<(&(rbw::db::Entry, DecryptedSearchCipher), u32)> =
+        entries
             .iter()
-            .map(|(_, decrypted)| format_ambiguous_entry(decrypted, c))
+            .filter_map(|entry| {
+                score(&entry.1, false, false).map(|s| (entry, s))
+            })
             .collect();
-        let hint = format!(
-            "Try `rbw list {needle_str}` to inspect the matches, or add --user/--folder to disambiguate."
-        );
-        Err(anyhow::anyhow!(
-            "multiple entries found:{reset}\n{}\n\n{}",
-            entries.join("\n"),
-            style::dim(&hint, c),
-        ))
+
+    if scored.is_empty() {
+        return Err(anyhow::anyhow!("no entry found"));
     }
+
+    let max_score = scored.iter().map(|(_, s)| *s).max().unwrap_or(0);
+    scored.retain(|(_, s)| *s == max_score);
+
+    if scored.len() == 1 {
+        return Ok(scored[0].0.clone());
+    }
+
+    // Several candidates tied at the top score. If they share a name they're
+    // the "same" entry across folders/users, so try to disambiguate with the
+    // strict user/folder filter; differently-named ties are a real ambiguity.
+    let first_name = scored[0].0 .1.name.as_str();
+    if scored.iter().all(|(entry, _)| entry.1.name == first_name) {
+        let narrow = |strict_username: bool, strict_folder: bool| {
+            scored
+                .iter()
+                .filter(|(entry, _)| {
+                    score(&entry.1, strict_username, strict_folder).is_some()
+                })
+                .map(|(entry, _)| *entry)
+                .collect::<Vec<_>>()
+        };
+
+        let strict_both = narrow(true, true);
+        if strict_both.len() == 1 {
+            return Ok(strict_both[0].clone());
+        }
+        // Pick a winner only when exactly one of the stricter filters
+        // resolves to a single candidate; if both do (a folder match *and* a
+        // user match), it's genuinely ambiguous.
+        let strict_folder = narrow(false, true);
+        let strict_username = narrow(true, false);
+        if strict_folder.len() == 1 && strict_username.len() != 1 {
+            return Ok(strict_folder[0].clone());
+        } else if strict_folder.len() != 1 && strict_username.len() == 1 {
+            return Ok(strict_username[0].clone());
+        }
+    }
+
+    // This error is printed to stderr (wrapped in red by `style_error`), so
+    // colour based on stderr. The leading reset stops the outer red from
+    // bleeding into the per-field styling of the entry list.
+    let c = stderr_supports_color();
+    let reset = if c { "\x1b[0m" } else { "" };
+    let entries_str: Vec<String> = scored
+        .iter()
+        .map(|(entry, _)| format_ambiguous_entry(&entry.1, c))
+        .collect();
+    let hint = format!(
+        "Try `rbw list {joined}` to inspect the matches, or add --user/--folder to disambiguate."
+    );
+    Err(anyhow::anyhow!(
+        "multiple entries found:{reset}\n{}\n\n{}",
+        entries_str.join("\n"),
+        style::dim(&hint, c),
+    ))
 }
 
 fn decrypt_field(
