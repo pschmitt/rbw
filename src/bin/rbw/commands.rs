@@ -2780,7 +2780,7 @@ pub fn set(
 
     if let Some(n) = new_name {
         if n != decrypted.name.as_str() {
-            changes.push(("name", format!("{:?}", decrypted.name), format!("{n:?}")));
+            changes.push(("name", decrypted.name.clone(), n.to_string()));
         }
     }
     if let Some(n) = new_notes {
@@ -2801,9 +2801,9 @@ pub fn set(
         if let Some(u) = new_username {
             if Some(u) != cur_user.as_deref() {
                 let old = cur_user.as_deref()
-                    .map(|s| format!("{s:?}"))
+                    .map(std::string::ToString::to_string)
                     .unwrap_or_else(|| "(none)".to_string());
-                changes.push(("username", old, format!("{u:?}")));
+                changes.push(("username", old, u.to_string()));
             }
         }
         if let Some(p) = new_password {
@@ -2822,7 +2822,7 @@ pub fn set(
             if new_strs != cur_strs {
                 let fmt_uris = |v: &[&str]| match v {
                     [] => "(none)".to_string(),
-                    [u] => format!("{u:?}"),
+                    [u] => (*u).to_string(),
                     _ => format!("[{} uris]", v.len()),
                 };
                 changes.push(("uri", fmt_uris(&cur_strs), fmt_uris(&new_strs)));
@@ -3028,7 +3028,7 @@ fn print_set_changes(
 
     let c = color_enabled();
 
-    let name = format!("{entry_name:?}");
+    let name = entry_name.to_string();
     let paint_name = |s: &str| -> String {
         if c { s.bold().to_string() } else { s.to_string() }
     };
