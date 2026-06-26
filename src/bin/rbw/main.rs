@@ -271,7 +271,8 @@ enum Opt {
             the password and notes. The editor to use is determined \
             by the value of the $VISUAL or $EDITOR environment variables.
             The first line will be saved as the password and the \
-            remainder will be saved as a note."
+            remainder will be saved as a note.",
+        visible_alias = "create"
     )]
     Add {
         #[arg(help = "Name of the password entry")]
