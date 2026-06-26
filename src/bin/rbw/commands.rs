@@ -1454,8 +1454,7 @@ where
     }
 }
 
-fn format_ambiguous_entry(entry: &DecryptedSearchCipher) -> String {
-    let c = stdout_supports_color();
+fn format_ambiguous_entry(entry: &DecryptedSearchCipher, c: bool) -> String {
     let mut details = vec![format!("uid: {}", style::uid(&entry.id, c))];
     if let Some(user) = &entry.user {
         details.push(format!("username: {}", style::user(user, c)));
@@ -4578,9 +4577,10 @@ fn find_entry_raw(
     if matches.is_empty() {
         Err(anyhow::anyhow!("no entry found"))
     } else {
+        let c = stdout_supports_color();
         let entries: Vec<String> = matches
             .iter()
-            .map(|(_, decrypted)| format_ambiguous_entry(decrypted))
+            .map(|(_, decrypted)| format_ambiguous_entry(decrypted, c))
             .collect();
         Err(anyhow::anyhow!(
             "multiple entries found:\n{}\n\nTry `rbw list {needle_str}` to inspect the matches, or add --user/--folder to disambiguate.",
@@ -6893,19 +6893,22 @@ mod test {
 
     #[test]
     fn test_format_ambiguous_entry_renders_multiline_details() {
-        let rendered = format_ambiguous_entry(&DecryptedSearchCipher {
-            id: "cipher-id".to_string(),
-            entry_type: "Login".to_string(),
-            folder: Some("mail".to_string()),
-            name: "google.com".to_string(),
-            user: Some("alice@example.com".to_string()),
-            uris: vec![],
-            fields: vec![],
-            notes: None,
-            attachment_count: 2,
-            sensitive_fields: vec![],
-            password: None,
-        });
+        let rendered = format_ambiguous_entry(
+            &DecryptedSearchCipher {
+                id: "cipher-id".to_string(),
+                entry_type: "Login".to_string(),
+                folder: Some("mail".to_string()),
+                name: "google.com".to_string(),
+                user: Some("alice@example.com".to_string()),
+                uris: vec![],
+                fields: vec![],
+                notes: None,
+                attachment_count: 2,
+                sensitive_fields: vec![],
+                password: None,
+            },
+            false,
+        );
 
         assert_eq!(
             rendered,
