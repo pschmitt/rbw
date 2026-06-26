@@ -386,8 +386,10 @@ enum Opt {
         uri: Vec<String>,
         #[arg(long, help = "New TOTP secret (Login entries only)")]
         totp: Option<String>,
-        #[arg(long, help = "Show old → new for each changed field")]
+        #[arg(long, help = "Show old \u{2192} new for each changed field")]
         diff: bool,
+        #[arg(long, number_of_values = 1, help = "File(s) to attach")]
+        attachment: Vec<std::path::PathBuf>,
     },
 
     #[command(about = "Remove a given entry", visible_alias = "rm")]
@@ -604,6 +606,19 @@ enum Attachment {
         )]
         raw: bool,
     },
+    #[command(about = "Upload a file as an attachment", visible_alias = "add")]
+    Create {
+        #[arg(help = "Name, URI or UUID of the entry", value_parser = commands::parse_needle)]
+        needle: commands::Needle,
+        #[arg(help = "File to attach")]
+        file: std::path::PathBuf,
+        #[arg(long, help = "Username of the entry")]
+        user: Option<String>,
+        #[arg(long, help = "Folder name to search in")]
+        folder: Option<String>,
+        #[arg(short, long, help = "Ignore case")]
+        ignorecase: bool,
+    },
 }
 
 impl Attachment {
@@ -611,6 +626,7 @@ impl Attachment {
         match self {
             Self::List { .. } => "list",
             Self::Get { .. } => "get",
+            Self::Create { .. } => "create",
         }
         .to_string()
     }
@@ -725,6 +741,19 @@ fn main() {
                 attachment.as_deref(),
                 output.as_deref(),
                 raw,
+            ),
+            Attachment::Create {
+                needle,
+                file,
+                user,
+                folder,
+                ignorecase,
+            } => commands::attachment_create(
+                needle,
+                user.as_deref(),
+                folder.as_deref(),
+                ignorecase,
+                &file,
             ),
         },
         Opt::Get {
@@ -872,6 +901,7 @@ fn main() {
             uri,
             totp,
             diff,
+            attachment,
         } => commands::set(
             find_args.needle,
             find_args.user.as_deref(),
@@ -884,6 +914,7 @@ fn main() {
             &uri,
             totp.as_deref(),
             diff,
+            &attachment,
         ),
         Opt::Remove { find_args } => commands::remove(
             find_args.needle,

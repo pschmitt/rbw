@@ -2099,6 +2099,73 @@ pub fn attachment_get(
     Ok(())
 }
 
+pub fn attachment_create(
+    needle: Needle,
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    file: &std::path::Path,
+) -> anyhow::Result<()> {
+    unlock(None)?;
+    let mut db = load_db()?;
+    let access_token = db.access_token.as_ref().unwrap().clone();
+    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+
+    let (entry, decrypted) =
+        find_entry(&db, needle, username, folder, ignore_case)?;
+
+    let filename = file
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or_else(|| anyhow::anyhow!("invalid filename"))?;
+
+    let data = std::fs::read(file)
+        .with_context(|| format!("failed to read {}", file.display()))?;
+
+    let (encrypted_data, encrypted_key, encrypted_filename) =
+        crate::actions::encrypt_attachment(
+            data,
+            filename,
+            entry.key.as_deref(),
+            entry.org_id.as_deref(),
+        )?;
+
+    if let (Some(new_token), ()) = rbw::actions::create_attachment(
+        &access_token,
+        &refresh_token,
+        &entry.id,
+        &encrypted_filename,
+        &encrypted_key,
+        encrypted_data,
+    )? {
+        db.access_token = Some(new_token);
+        save_db(&db)?;
+    }
+
+    crate::actions::sync()?;
+
+    use yansi::Paint as _;
+    let c = stdout_supports_color();
+    let name = if c {
+        decrypted.name.bold().to_string()
+    } else {
+        decrypted.name.clone()
+    };
+    let fname = if c {
+        filename.bold().to_string()
+    } else {
+        filename.to_string()
+    };
+    let verb = if c {
+        "Attached".green().bold().to_string()
+    } else {
+        "Attached".to_string()
+    };
+    eprintln!("{verb} {fname} \u{2192} {name}");
+
+    Ok(())
+}
+
 fn print_entry_list(
     entries: &[DecryptedListCipher],
     fields: &[ListField],
@@ -2743,6 +2810,7 @@ pub fn set(
     new_uris: &[String],
     new_totp: Option<&str>,
     diff: bool,
+    new_attachments: &[std::path::PathBuf],
 ) -> anyhow::Result<()> {
     unlock(None)?;
 
@@ -2839,7 +2907,7 @@ pub fn set(
         }
     }
 
-    if changes.is_empty() {
+    if changes.is_empty() && new_attachments.is_empty() {
         eprintln!("{}", paint_no_changes());
         return Ok(());
     }
@@ -2926,23 +2994,54 @@ pub fn set(
         other => other.clone(),
     };
 
-    if let (Some(new_token), ()) = rbw::actions::edit(
-        &access_token,
-        &refresh_token,
-        &entry.id,
-        org_id,
-        &encrypted_name,
-        &data,
-        &entry.fields,
-        encrypted_notes.as_deref(),
-        entry.folder_id.as_deref(),
-        &history,
-    )? {
-        db.access_token = Some(new_token);
-        save_db(&db)?;
+    if !changes.is_empty() {
+        if let (Some(new_token), ()) = rbw::actions::edit(
+            &access_token,
+            &refresh_token,
+            &entry.id,
+            org_id,
+            &encrypted_name,
+            &data,
+            &entry.fields,
+            encrypted_notes.as_deref(),
+            entry.folder_id.as_deref(),
+            &history,
+        )? {
+            db.access_token = Some(new_token);
+            save_db(&db)?;
+        }
+
+        print_set_changes(&entry_name, &changes, diff);
     }
 
-    print_set_changes(&entry_name, &changes, diff);
+    for file in new_attachments {
+        let filename = file
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .ok_or_else(|| anyhow::anyhow!("invalid filename: {}", file.display()))?;
+        let file_data = std::fs::read(file)
+            .with_context(|| format!("failed to read {}", file.display()))?;
+        let access_token = db.access_token.as_ref().unwrap().clone();
+        let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+        let (encrypted_data, encrypted_key, encrypted_filename) =
+            crate::actions::encrypt_attachment(
+                file_data,
+                filename,
+                entry.key.as_deref(),
+                entry.org_id.as_deref(),
+            )?;
+        if let (Some(new_token), ()) = rbw::actions::create_attachment(
+            &access_token,
+            &refresh_token,
+            &entry.id,
+            &encrypted_filename,
+            &encrypted_key,
+            encrypted_data,
+        )? {
+            db.access_token = Some(new_token);
+            save_db(&db)?;
+        }
+    }
 
     crate::actions::sync()?;
     Ok(())

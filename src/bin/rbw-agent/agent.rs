@@ -203,6 +203,23 @@ async fn handle_request(
             .await?;
             true
         }
+        rbw::protocol::Action::EncryptAttachment {
+            data,
+            filename,
+            entry_key,
+            org_id,
+        } => {
+            crate::actions::encrypt_attachment(
+                sock,
+                state.clone(),
+                &data,
+                &filename,
+                entry_key.as_deref(),
+                org_id.as_deref(),
+            )
+            .await?;
+            true
+        }
         rbw::protocol::Action::Encrypt { plaintext, org_id } => {
             crate::actions::encrypt(
                 sock,

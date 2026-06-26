@@ -310,6 +310,43 @@ pub fn download_attachment(url: &str) -> Result<Vec<u8>> {
     client.download_attachment(url)
 }
 
+pub fn create_attachment(
+    access_token: &str,
+    refresh_token: &str,
+    cipher_id: &str,
+    encrypted_filename: &str,
+    encrypted_key: &str,
+    encrypted_data: Vec<u8>,
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        create_attachment_once(
+            access_token,
+            cipher_id,
+            encrypted_filename,
+            encrypted_key,
+            encrypted_data.clone(),
+        )
+    })
+}
+
+fn create_attachment_once(
+    access_token: &str,
+    cipher_id: &str,
+    encrypted_filename: &str,
+    encrypted_key: &str,
+    encrypted_data: Vec<u8>,
+) -> Result<()> {
+    let (client, _) = api_client()?;
+    client.create_attachment(
+        access_token,
+        cipher_id,
+        encrypted_filename,
+        encrypted_key,
+        encrypted_data,
+    )?;
+    Ok(())
+}
+
 pub fn rename_collection(
     access_token: &str,
     refresh_token: &str,

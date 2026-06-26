@@ -222,6 +222,40 @@ impl CipherString {
     }
 }
 
+pub fn encrypt_file_data(
+    data: &[u8],
+    keys: &crate::locked::Keys,
+) -> Result<Vec<u8>> {
+    let iv = random_iv();
+    let cipher = cbc::Encryptor::<aes::Aes256>::new(
+        keys.enc_key().into(),
+        iv.as_slice().into(),
+    );
+    let ciphertext =
+        cipher.encrypt_padded_vec_mut::<block_padding::Pkcs7>(data);
+    let mut digest =
+        hmac::Hmac::<sha2::Sha256>::new_from_slice(keys.mac_key())
+            .map_err(|source| Error::CreateHmac { source })?;
+    digest.update(&iv);
+    digest.update(&ciphertext);
+    let mac = digest.finalize().into_bytes().as_slice().to_vec();
+    // Format: [0x02][iv:16][mac:32][ciphertext:*]
+    let mut result = Vec::with_capacity(1 + 16 + 32 + ciphertext.len());
+    result.push(2u8);
+    result.extend_from_slice(&iv);
+    result.extend_from_slice(&mac);
+    result.extend_from_slice(&ciphertext);
+    Ok(result)
+}
+
+pub fn generate_attachment_keys() -> crate::locked::Keys {
+    use rand::RngCore as _;
+    let mut key = crate::locked::Vec::new();
+    key.extend(std::iter::repeat_n(0u8, 64));
+    rand::rng().fill_bytes(key.data_mut());
+    crate::locked::Keys::new(key)
+}
+
 pub fn decrypt_file_data(
     data: &[u8],
     keys: &crate::locked::Keys,

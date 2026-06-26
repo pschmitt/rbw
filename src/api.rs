@@ -1773,6 +1773,49 @@ impl Client {
         }
     }
 
+    pub fn create_attachment(
+        &self,
+        access_token: &str,
+        cipher_id: &str,
+        encrypted_filename: &str,
+        encrypted_key: &str,
+        encrypted_data: Vec<u8>,
+    ) -> Result<()> {
+        let form = reqwest::blocking::multipart::Form::new()
+            .text("Key", encrypted_key.to_string())
+            .text("FileName", encrypted_filename.to_string())
+            .part(
+                "Data",
+                reqwest::blocking::multipart::Part::bytes(encrypted_data)
+                    .file_name("blob")
+                    .mime_str("application/octet-stream")
+                    .map_err(|source| Error::Reqwest { source })?,
+            );
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .post(self.api_url(&format!("/ciphers/{cipher_id}/attachment")))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .multipart(form)
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        let status = res.status();
+        match status {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => {
+                let code = status.as_u16();
+                let body = res.text().unwrap_or_default();
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
+            }
+        }
+    }
+
     pub fn download_attachment(&self, url: &str) -> Result<Vec<u8>> {
         let client = reqwest::blocking::Client::new();
         let res = client

@@ -152,6 +152,36 @@ pub fn decrypt_attachment(
     }
 }
 
+pub fn encrypt_attachment(
+    data: Vec<u8>,
+    filename: &str,
+    entry_key: Option<&str>,
+    org_id: Option<&str>,
+) -> anyhow::Result<(Vec<u8>, String, String)> {
+    let mut sock = connect()?;
+    sock.send(&rbw::protocol::Request::new(
+        get_environment(),
+        rbw::protocol::Action::EncryptAttachment {
+            data,
+            filename: filename.to_string(),
+            entry_key: entry_key.map(std::string::ToString::to_string),
+            org_id: org_id.map(std::string::ToString::to_string),
+        },
+    ))?;
+    let res = sock.recv()?;
+    match res {
+        rbw::protocol::Response::EncryptAttachment {
+            encrypted_data,
+            encrypted_key,
+            encrypted_filename,
+        } => Ok((encrypted_data, encrypted_key, encrypted_filename)),
+        rbw::protocol::Response::Error { error } => {
+            Err(anyhow::anyhow!("failed to encrypt attachment: {error}"))
+        }
+        _ => Err(anyhow::anyhow!("unexpected message: {res:?}")),
+    }
+}
+
 pub fn encrypt(
     plaintext: &str,
     org_id: Option<&str>,

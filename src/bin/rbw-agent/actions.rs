@@ -867,6 +867,73 @@ pub async fn decrypt_attachment(
     Ok(())
 }
 
+pub async fn encrypt_attachment(
+    sock: &mut crate::sock::Sock,
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    data: &[u8],
+    filename: &str,
+    entry_key: Option<&str>,
+    org_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let state = state.lock().await;
+    let Some(keys) = state.key(org_id) else {
+        return Err(anyhow::anyhow!(
+            "failed to find encryption keys in in-memory state"
+        ));
+    };
+    // Resolve the cipher's own key if it has one
+    let entry_keys = if let Some(entry_key) = entry_key {
+        let key_cs = rbw::cipherstring::CipherString::new(entry_key)
+            .context("failed to parse individual item encryption key")?;
+        Some(rbw::locked::Keys::new(
+            key_cs.decrypt_locked_symmetric(keys).context(
+                "failed to decrypt individual item encryption key",
+            )?,
+        ))
+    } else {
+        None
+    };
+    let effective_keys = entry_keys.as_ref().unwrap_or(keys);
+
+    // Generate a fresh random attachment key
+    let attachment_keys = rbw::cipherstring::generate_attachment_keys();
+
+    // Encrypt file data with attachment key
+    let encrypted_data =
+        rbw::cipherstring::encrypt_file_data(data, &attachment_keys)
+            .context("failed to encrypt attachment data")?;
+
+    // Encrypt the 64-byte attachment key with the cipher's effective keys
+    let raw_attachment_key: Vec<u8> = attachment_keys
+        .enc_key()
+        .iter()
+        .chain(attachment_keys.mac_key().iter())
+        .copied()
+        .collect();
+    let encrypted_key =
+        rbw::cipherstring::CipherString::encrypt_symmetric(
+            effective_keys,
+            &raw_attachment_key,
+        )
+        .context("failed to encrypt attachment key")?;
+
+    // Encrypt filename with the attachment key
+    let encrypted_filename =
+        rbw::cipherstring::CipherString::encrypt_symmetric(
+            &attachment_keys,
+            filename.as_bytes(),
+        )
+        .context("failed to encrypt attachment filename")?;
+
+    sock.send(&rbw::protocol::Response::EncryptAttachment {
+        encrypted_data,
+        encrypted_key: encrypted_key.to_string(),
+        encrypted_filename: encrypted_filename.to_string(),
+    })
+    .await?;
+    Ok(())
+}
+
 pub async fn encrypt(
     sock: &mut crate::sock::Sock,
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,

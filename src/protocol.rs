@@ -190,6 +190,12 @@ pub enum Action {
         entry_key: Option<String>,
         org_id: Option<String>,
     },
+    EncryptAttachment {
+        data: Vec<u8>,
+        filename: String,
+        entry_key: Option<String>,
+        org_id: Option<String>,
+    },
     Encrypt {
         plaintext: String,
         org_id: Option<String>,
@@ -209,6 +215,11 @@ pub enum Response {
     Decrypt { plaintext: String },
     DecryptBatch { results: Vec<DecryptResult> },
     DecryptAttachment { data: Vec<u8> },
+    EncryptAttachment {
+        encrypted_data: Vec<u8>,
+        encrypted_key: String,
+        encrypted_filename: String,
+    },
     Encrypt { cipherstring: String },
     Version { version: u32 },
 }
