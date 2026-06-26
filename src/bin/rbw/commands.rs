@@ -215,6 +215,8 @@ struct DecryptedSearchCipher {
     attachment_count: usize,
     #[serde(skip)]
     sensitive_fields: Vec<String>,
+    #[serde(skip)]
+    password: Option<String>,
 }
 
 impl DecryptedSearchCipher {
@@ -371,7 +373,7 @@ impl From<DecryptedSearchCipher> for DecryptedListCipher {
             entry_type: Some(value.entry_type),
             name: Some(value.name),
             user: value.user,
-            password: None,
+            password: value.password,
             folder: value.folder,
             uris: Some(value.uris.into_iter().map(|(s, _)| s).collect()),
             collection_ids: None,
@@ -4854,6 +4856,7 @@ struct SearchCipherPlan {
     fields: Vec<usize>,
     sensitive_fields: Vec<usize>,
     attachment_count: usize,
+    password: Option<usize>,
 }
 
 impl SearchCipherPlan {
@@ -4931,9 +4934,12 @@ impl SearchCipherPlan {
             v.map(|s| requests.push(s, entry.key.as_deref(), entry.org_id.as_deref()))
         };
         let mut sensitive_fields: Vec<usize> = Vec::new();
+        let mut password_idx: Option<usize> = None;
         match &entry.data {
             rbw::db::EntryData::Login { password, .. } => {
-                sensitive_fields.extend(push_opt(password.as_ref(), requests));
+                let idx = push_opt(password.as_ref(), requests);
+                sensitive_fields.extend(idx);
+                password_idx = idx;
             }
             rbw::db::EntryData::Card { number, code, .. } => {
                 sensitive_fields.extend(push_opt(number.as_ref(), requests));
@@ -4975,6 +4981,7 @@ impl SearchCipherPlan {
             fields,
             sensitive_fields,
             attachment_count: entry.attachments.len(),
+            password: password_idx,
         }
     }
 
@@ -5016,6 +5023,10 @@ impl SearchCipherPlan {
             .filter_map(|&index| lenient_result(&results[index], Field::Password))
             .collect();
 
+        let password = self
+            .password
+            .and_then(|index| lenient_result(&results[index], Field::Password));
+
         Ok(DecryptedSearchCipher {
             id: self.id,
             entry_type: self.entry_type,
@@ -5027,6 +5038,7 @@ impl SearchCipherPlan {
             notes,
             sensitive_fields,
             attachment_count: self.attachment_count,
+            password,
         })
     }
 }
@@ -5106,17 +5118,23 @@ fn decrypt_search_cipher(
         }
     };
 
+    let decrypt_opt = |v: Option<&String>| -> Option<String> {
+        v.and_then(|s| {
+            decrypt_field(
+                Field::Password,
+                Some(s),
+                entry.key.as_deref(),
+                entry.org_id.as_deref(),
+            )
+        })
+    };
+    let login_password = match &entry.data {
+        rbw::db::EntryData::Login { password, .. } => {
+            decrypt_opt(password.as_ref())
+        }
+        _ => None,
+    };
     let sensitive_fields: Vec<String> = {
-        let decrypt_opt = |v: Option<&String>| -> Option<String> {
-            v.and_then(|s| {
-                decrypt_field(
-                    Field::Password,
-                    Some(s),
-                    entry.key.as_deref(),
-                    entry.org_id.as_deref(),
-                )
-            })
-        };
         let mut sf: Vec<String> = Vec::new();
         match &entry.data {
             rbw::db::EntryData::Login { password, .. } => {
@@ -5160,6 +5178,7 @@ fn decrypt_search_cipher(
         notes,
         sensitive_fields,
         attachment_count: entry.attachments.len(),
+        password: login_password,
     })
 }
 
@@ -6885,6 +6904,7 @@ mod test {
             notes: None,
             attachment_count: 2,
             sensitive_fields: vec![],
+            password: None,
         });
 
         assert_eq!(
@@ -6906,6 +6926,7 @@ mod test {
             notes: None,
             attachment_count: 0,
             sensitive_fields: vec![],
+            password: None,
         };
 
         assert!(entry.search_match("exa", None, false));
@@ -8304,6 +8325,7 @@ mod test {
                 notes: None,
                 attachment_count: 0,
                 sensitive_fields: vec![],
+                password: None,
             },
         )
     }
