@@ -424,15 +424,53 @@ struct DecryptedCipher {
 }
 
 impl DecryptedCipher {
+    // The item's "default" secret for a plain `rbw get NAME`: the login
+    // password, else a custom password/passphrase/pass/passwd field, else the
+    // notes, else a lone custom field. This keeps the resolution logic in one
+    // place (here) instead of every consumer reimplementing it.
+    fn default_secret(&self) -> Option<String> {
+        if let DecryptedData::Login {
+            password: Some(password),
+            ..
+        } = &self.data
+        {
+            return Some(password.clone());
+        }
+
+        const FIELD_NAMES: [&str; 4] =
+            ["password", "passphrase", "pass", "passwd"];
+        if let Some(field) = self.fields.iter().find(|field| {
+            field.name.as_deref().is_some_and(|name| {
+                FIELD_NAMES.contains(&name.to_lowercase().as_str())
+            })
+        }) {
+            if let Some(value) = &field.value {
+                return Some(value.clone());
+            }
+        }
+
+        if let Some(notes) = &self.notes {
+            return Some(notes.clone());
+        }
+
+        if let [field] = self.fields.as_slice() {
+            if let Some(value) = &field.value {
+                return Some(value.clone());
+            }
+        }
+
+        None
+    }
+
     fn display_short(&self, desc: &str, clipboard: bool) -> bool {
         match &self.data {
-            DecryptedData::Login { password, .. } => {
-                password.as_ref().map_or_else(
+            DecryptedData::Login { .. } => {
+                self.default_secret().map_or_else(
                     || {
                         eprintln!("entry for '{desc}' had no password");
                         false
                     },
-                    |password| val_display_or_store(clipboard, password),
+                    |password| val_display_or_store(clipboard, &password),
                 )
             }
             DecryptedData::Card { number, .. } => {
@@ -465,12 +503,12 @@ impl DecryptedCipher {
                     val_display_or_store(clipboard, &names.join(" "))
                 }
             }
-            DecryptedData::SecureNote => self.notes.as_ref().map_or_else(
+            DecryptedData::SecureNote => self.default_secret().map_or_else(
                 || {
                     eprintln!("entry for '{desc}' had no notes");
                     false
                 },
-                |notes| val_display_or_store(clipboard, notes),
+                |value| val_display_or_store(clipboard, &value),
             ),
             DecryptedData::SshKey { public_key, .. } => {
                 public_key.as_ref().map_or_else(
@@ -1938,33 +1976,6 @@ pub enum OutputMode {
     Yaml,
 }
 
-impl ListField {
-    fn all() -> Vec<Self> {
-        vec![
-            Self::Id,
-            Self::Name,
-            Self::User,
-            Self::Folder,
-            Self::Uri,
-            Self::EntryType,
-            Self::Collections,
-        ]
-    }
-
-    fn all_insecure() -> Vec<Self> {
-        vec![
-            Self::Id,
-            Self::Name,
-            Self::User,
-            Self::Password,
-            Self::Folder,
-            Self::Uri,
-            Self::EntryType,
-            Self::Collections,
-        ]
-    }
-}
-
 impl std::convert::TryFrom<&String> for ListField {
     type Error = anyhow::Error;
 
@@ -2115,19 +2126,35 @@ pub fn list(
     insecure: bool,
     output: OutputMode,
 ) -> anyhow::Result<()> {
-    let mut fields: Vec<ListField> = if output_is_structured(output) {
-        if insecure {
-            ListField::all_insecure()
-        } else {
-            ListField::all()
-        }
-    } else {
-        fields
+    // Structured output (`--json`/`--yaml`) always emits the *full* decrypted
+    // entry — same shape as `rbw get --json`: password, custom fields with
+    // values, notes, totp, uris, etc. This lets consumers retrieve everything
+    // in a single call instead of following up with `rbw get`.
+    if output_is_structured(output) {
+        unlock(None)?;
+        let db = load_db()?;
+        let mut entries: Vec<DecryptedCipher> = db
+            .entries
             .iter()
-            .map(std::convert::TryFrom::try_from)
-            .collect::<anyhow::Result<_>>()?
-    };
-    if insecure && !output_is_structured(output) && !fields.contains(&ListField::Password) {
+            .map(decrypt_cipher)
+            .collect::<anyhow::Result<_>>()?;
+        if with_attachments {
+            entries
+                .retain(|entry| entry.attachment_metadata.has_attachments());
+        }
+        entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        return write_serialized_pretty(
+            &entries,
+            output,
+            "failed to write entries to stdout",
+        );
+    }
+
+    let mut fields: Vec<ListField> = fields
+        .iter()
+        .map(std::convert::TryFrom::try_from)
+        .collect::<anyhow::Result<_>>()?;
+    if insecure && !fields.contains(&ListField::Password) {
         // Insert password after user (or at position 2 if user column present)
         let insert_pos = fields
             .iter()
@@ -2600,19 +2627,49 @@ pub fn search(
     insecure: bool,
     output: OutputMode,
 ) -> anyhow::Result<()> {
-    let mut fields: Vec<ListField> = if output_is_structured(output) {
-        if insecure {
-            ListField::all_insecure()
-        } else {
-            ListField::all()
-        }
-    } else {
-        fields
+    // Structured output (`--json`/`--yaml`) emits the *full* decrypted entry
+    // (same shape as `rbw get --json`) for every match, so consumers get
+    // everything in one call. Matching still uses the lightweight searchable
+    // view; only the matching entries are fully decrypted.
+    if output_is_structured(output) {
+        unlock(None)?;
+        let db = load_db()?;
+        let mut entries: Vec<DecryptedCipher> = db
+            .entries
             .iter()
-            .map(std::convert::TryFrom::try_from)
-            .collect::<anyhow::Result<_>>()?
-    };
-    if insecure && !output_is_structured(output) && !fields.contains(&ListField::Password) {
+            .filter_map(|entry| match decrypt_search_cipher(entry) {
+                Ok(searchable)
+                    if searchable.search_match(
+                        term,
+                        folder,
+                        with_attachments,
+                    ) =>
+                {
+                    decrypt_cipher(entry).ok()
+                }
+                Ok(_) | Err(_) => None,
+            })
+            .collect();
+        entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        if entries.is_empty() {
+            let c = std::io::stderr().is_terminal()
+                && std::env::var_os("NO_COLOR").is_none();
+            let msg = format!("no entries found matching '{term}'");
+            eprintln!("{}", style::warning(&msg, c));
+            std::process::exit(1);
+        }
+        return write_serialized_pretty(
+            &entries,
+            output,
+            "failed to write entries to stdout",
+        );
+    }
+
+    let mut fields: Vec<ListField> = fields
+        .iter()
+        .map(std::convert::TryFrom::try_from)
+        .collect::<anyhow::Result<_>>()?;
+    if insecure && !fields.contains(&ListField::Password) {
         let insert_pos = fields
             .iter()
             .position(|f| matches!(f, ListField::User))
