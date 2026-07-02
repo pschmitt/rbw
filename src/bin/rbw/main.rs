@@ -216,6 +216,9 @@ enum Opt {
     #[command(about = "Log in to the Bitwarden server")]
     Login,
 
+    #[command(about = "Print version information")]
+    Version,
+
     #[command(about = "Unlock the local Bitwarden database")]
     Unlock {
         #[arg(
@@ -753,6 +756,7 @@ impl Opt {
             Self::Account { .. } => "account".to_string(),
             Self::Register => "register".to_string(),
             Self::Login => "login".to_string(),
+            Self::Version => "version".to_string(),
             Self::Unlock { .. } => "unlock".to_string(),
             Self::Unlocked => "unlocked".to_string(),
             Self::Sync { .. } => "sync".to_string(),
@@ -1102,6 +1106,10 @@ fn main() {
         },
         Opt::Register => commands::register(),
         Opt::Login => commands::login(),
+        Opt::Version => {
+            println!("rbw {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         Opt::Unlock { stdin, all } => {
             if all {
                 commands::unlock_all()
