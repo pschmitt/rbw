@@ -67,6 +67,14 @@ let
       inherit description;
     };
 
+  mkNullOrInt =
+    description:
+    mkOption {
+      type = types.nullOr types.ints.unsigned;
+      default = null;
+      inherit description;
+    };
+
   # A single Bitwarden/Vaultwarden account. Mirrors `Account` in
   # `src/config.rs`. Keyed by attribute name in `settings.accounts`, which
   # doubles as the account's `name` field unless overridden.
@@ -117,6 +125,44 @@ let
             `list`/`search`/`get` merge across accounts (even if unlocked,
             even with `--all`). Still reachable via `--account <name>`
             directly.
+          '';
+        };
+        # See `CredentialSource`.
+        credential_source = mkOption {
+          type = types.nullOr (
+            types.submodule {
+              options = {
+                account = mkOption {
+                  type = types.str;
+                  description = ''
+                    Name of the *other* configured account whose vault holds
+                    this account's credentials. Must not be this account's
+                    own name, and must not form a cycle with other
+                    accounts' `credential_source`s.
+                  '';
+                };
+                entry = mkOption {
+                  type = types.str;
+                  description = ''
+                    Which entry in that account's vault holds the
+                    credentials, matched the same way as an `rbw get NAME`
+                    name lookup.
+                  '';
+                };
+              };
+            }
+          );
+          default = null;
+          description = ''
+            Points at a Login entry, in another configured account's vault,
+            that holds this account's master password. Used by the agent's
+            unlock flow to skip the pinentry prompt: the source account is
+            unlocked (recursively, if it itself has a `credential_source`),
+            the named entry is looked up in its vault, and the entry's
+            `password` field is used as this account's master password.
+            Mirrors `Option<CredentialSource>` in `src/config.rs`. Unset
+            (`null`, the default) means this account is unlocked normally
+            via pinentry.
           '';
         };
       };
@@ -192,6 +238,57 @@ let
           built-in default chords. Actions not listed here keep their
           defaults. See `src/bin/rbw/tui/keymap.rs` in the rbw source for
           the full action list and defaults.
+        '';
+      };
+      # Mirrors `PasswordGenPolicy` in `src/config.rs`.
+      password_gen = mkOption {
+        type = types.submodule {
+          options = {
+            length = mkNullOrInt ''
+              Default password length for `rbw gen`/`rbw create --generate`
+              when not overridden on the command line. Unset (`null`)
+              leaves the built-in default length in place.
+            '';
+            no_symbols = mkOption {
+              type = types.bool;
+              default = false;
+              description = ''
+                Default `--no-symbols` behavior for `rbw gen`/`rbw create
+                --generate` when not overridden on the command line.
+              '';
+            };
+            only_numbers = mkOption {
+              type = types.bool;
+              default = false;
+              description = ''
+                Default `--only-numbers` behavior for `rbw gen`/`rbw create
+                --generate` when not overridden on the command line.
+              '';
+            };
+            nonconfusables = mkOption {
+              type = types.bool;
+              default = false;
+              description = ''
+                Default `--nonconfusables` behavior for `rbw gen`/`rbw
+                create --generate` when not overridden on the command line.
+              '';
+            };
+            diceware = mkOption {
+              type = types.bool;
+              default = false;
+              description = ''
+                Default `--diceware` behavior for `rbw gen`/`rbw create
+                --generate` when not overridden on the command line.
+              '';
+            };
+          };
+        };
+        default = { };
+        description = ''
+          Default password-generation policy for `rbw gen` and `rbw create
+          --generate`, used whenever a given flag isn't passed explicitly
+          on the command line. Mirrors `PasswordGenPolicy` in
+          `src/config.rs`. Also editable from the TUI's settings view.
         '';
       };
     };
