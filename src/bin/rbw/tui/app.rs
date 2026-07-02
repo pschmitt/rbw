@@ -1181,7 +1181,7 @@ impl App {
     }
 
     fn handle_accounts(&mut self, key: KeyEvent) -> Action {
-        match self.keymap.action_for(key, true) {
+        match self.keymap.action_in(key, true, TuiAction::ACCOUNT) {
             Some(TuiAction::AccountClose) => self.mode = Mode::Normal,
             Some(TuiAction::AccountMoveDown) => self.accounts_move(1),
             Some(TuiAction::AccountMoveUp) => self.accounts_move(-1),
@@ -1614,7 +1614,7 @@ impl App {
     }
 
     fn handle_attachments(&mut self, key: KeyEvent) {
-        let action = self.keymap.action_for(key, true);
+        let action = self.keymap.action_in(key, true, TuiAction::ATTACHMENT);
         // Any key other than a repeated delete cancels a pending confirm.
         if action != Some(TuiAction::AttachmentDelete) {
             if let Mode::Attachments(v) = &mut self.mode {
@@ -2275,7 +2275,8 @@ fn detail_first_uri(detail: &DecryptedCipher) -> Option<String> {
 #[cfg(test)]
 mod test {
     use super::{
-        AccountsView, Action, App, Keymap, Mode, PromptKind, SettingValue,
+        AccountsView, Action, App, AttachmentItem, AttachmentView, Keymap,
+        Mode, PromptKind, SettingValue,
     };
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -2713,6 +2714,79 @@ mod test {
             selected: 0,
         });
         a
+    }
+
+    // Regression test: `q`/arrow-down must resolve to `AccountClose`/
+    // `AccountMoveDown`, not silently no-op by resolving to the global
+    // `Quit`/`MoveDown` (which `handle_accounts` has no arm for) -- see
+    // `action_in_scopes_to_the_given_actions_not_the_global_default` in
+    // `keymap.rs` for the underlying bug this exercises end to end.
+    #[test]
+    fn accounts_q_and_down_arrow_are_not_swallowed_by_global_defaults() {
+        let mut a = app();
+        a.mode = Mode::Accounts(AccountsView {
+            accounts: vec![
+                crate::commands::TuiAccount {
+                    name: "first".to_string(),
+                    email: None,
+                    server: "bitwarden.com".to_string(),
+                    unlocked: false,
+                    primary: true,
+                    credential_source: None,
+                },
+                crate::commands::TuiAccount {
+                    name: "second".to_string(),
+                    email: None,
+                    server: "bitwarden.com".to_string(),
+                    unlocked: false,
+                    primary: false,
+                    credential_source: None,
+                },
+            ],
+            selected: 0,
+        });
+
+        a.handle_key(key(KeyCode::Down));
+        let Mode::Accounts(view) = &a.mode else {
+            panic!("expected still Mode::Accounts after moving down");
+        };
+        assert_eq!(view.selected, 1);
+
+        a.handle_key(key(KeyCode::Char('q')));
+        assert!(matches!(a.mode, Mode::Normal));
+    }
+
+    // Same regression as `accounts_q_and_down_arrow_are_not_swallowed_by_global_defaults`,
+    // for the attachments panel: `AttachmentClose`/`AttachmentMoveDown`
+    // share default chords with `Quit`/`MoveDown` too.
+    #[test]
+    fn attachments_q_and_down_arrow_are_not_swallowed_by_global_defaults() {
+        let mut a = app();
+        a.mode = Mode::Attachments(AttachmentView {
+            items: vec![
+                AttachmentItem {
+                    id: "1".to_string(),
+                    name: "first".to_string(),
+                    size: None,
+                },
+                AttachmentItem {
+                    id: "2".to_string(),
+                    name: "second".to_string(),
+                    size: None,
+                },
+            ],
+            selected: 0,
+            pending_delete: false,
+        });
+
+        a.handle_key(key(KeyCode::Down));
+        let Mode::Attachments(view) = &a.mode else {
+            panic!("expected still Mode::Attachments after moving down");
+        };
+        assert_eq!(view.selected, 1);
+
+        a.handle_key(key(KeyCode::Char('q')));
+        assert!(matches!(a.mode, Mode::Normal));
     }
 
     // `l` on a highlighted account opens the link/edit prompt, prefilled

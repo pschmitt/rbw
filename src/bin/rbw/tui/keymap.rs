@@ -285,6 +285,34 @@ impl TuiAction {
         Self::AccountClearCredentialSource,
     ];
 
+    // The actions `App::handle_accounts` understands -- pass to
+    // `Keymap::action_in` rather than the unscoped `action_for`, since
+    // `AccountClose`/`AccountMoveDown`/`AccountMoveUp` share default chords
+    // with the earlier-in-`ALL` `Quit`/`MoveDown`/`MoveUp`.
+    pub const ACCOUNT: &'static [Self] = &[
+        Self::AccountClose,
+        Self::AccountMoveDown,
+        Self::AccountMoveUp,
+        Self::AccountUnlock,
+        Self::AccountSync,
+        Self::AccountSetPrimary,
+        Self::AccountAdd,
+        Self::AccountSetCredentialSource,
+        Self::AccountClearCredentialSource,
+    ];
+
+    // The actions `App::handle_attachments` understands -- see `ACCOUNT`'s
+    // doc comment for why this needs to be scoped rather than going through
+    // the unscoped `action_for`.
+    pub const ATTACHMENT: &'static [Self] = &[
+        Self::AttachmentClose,
+        Self::AttachmentMoveDown,
+        Self::AttachmentMoveUp,
+        Self::AttachmentDownload,
+        Self::AttachmentUpload,
+        Self::AttachmentDelete,
+    ];
+
     // The config.json key used to override this action's chords.
     fn config_key(self) -> &'static str {
         match self {
@@ -434,10 +462,36 @@ impl Keymap {
     // Pass `allow_plain = false` from a text-input context (the search
     // filter) so a plain, unmodified letter/digit is never swallowed by an
     // action lookup and reaches the input widget instead.
+    //
+    // Global in scope: considers every action, not just ones relevant to the
+    // caller's current mode. Fine for `handle_normal`/`handle_shared`, which
+    // want exactly that (they're the "everything" handlers) -- but never use
+    // this from a mode-specific handler (`handle_accounts`,
+    // `handle_attachments`, ...) that only understands a subset of actions.
+    // Several unrelated actions intentionally reuse the same default chords
+    // across modes (every panel's own "close" defaults to "esc"/"q", every
+    // panel's own "move down" to "down"/"j"/"ctrl-n"), and since `Quit`/
+    // `MoveDown` sort earlier in `TuiAction::ALL` than `AccountClose`/
+    // `AccountMoveDown`, this would resolve to the wrong (global) action --
+    // which such a handler has no arm for, so it'd silently no-op every key
+    // that collides with an earlier global default. Use `action_in` with an
+    // explicit scope instead.
     pub fn action_for(
         &self,
         key: KeyEvent,
         allow_plain: bool,
+    ) -> Option<TuiAction> {
+        self.action_in(key, allow_plain, TuiAction::ALL)
+    }
+
+    // Like `action_for`, but only resolves to an action listed in `scope` --
+    // see `action_for`'s doc comment for why mode-specific handlers need
+    // this instead of the unscoped global lookup.
+    pub fn action_in(
+        &self,
+        key: KeyEvent,
+        allow_plain: bool,
+        scope: &[TuiAction],
     ) -> Option<TuiAction> {
         if !allow_plain
             && matches!(key.code, KeyCode::Char(_))
@@ -449,6 +503,7 @@ impl Keymap {
         }
         self.bindings
             .iter()
+            .filter(|(action, _)| scope.contains(action))
             .find(|(_, chords)| chords.iter().any(|c| c.matches(key)))
             .map(|(action, _)| *action)
     }
@@ -605,6 +660,48 @@ mod test {
         assert_eq!(
             keymap.action_for(pagedown, false),
             Some(TuiAction::PageDown)
+        );
+    }
+
+    // Regression test: `AccountClose`/`AccountMoveDown` share their default
+    // chords ("q"/"esc", "down"/"j") with the earlier-in-`TuiAction::ALL`
+    // `Quit`/`MoveDown`. The unscoped `action_for` always resolves to the
+    // global action first, which `App::handle_accounts` has no arm for --
+    // silently swallowing every keypress in the accounts panel that
+    // collides with a global default (this is exactly what happened live:
+    // "q", the arrow keys, and "ctrl-c" all appeared to do nothing once the
+    // accounts panel was reachable at all -- see
+    // `uppercase_letter_defaults_match_a_real_shift_reported_keypress` for
+    // the bug that made the accounts panel reachable in the first place).
+    // `action_in`, scoped to
+    // `TuiAction::ACCOUNT`, must resolve to the mode-appropriate action
+    // instead.
+    #[test]
+    fn action_in_scopes_to_the_given_actions_not_the_global_default() {
+        let keymap = Keymap::resolve(&std::collections::HashMap::new());
+
+        let q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        assert_eq!(keymap.action_for(q, true), Some(TuiAction::Quit));
+        assert_eq!(
+            keymap.action_in(q, true, TuiAction::ACCOUNT),
+            Some(TuiAction::AccountClose)
+        );
+
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(keymap.action_for(down, true), Some(TuiAction::MoveDown));
+        assert_eq!(
+            keymap.action_in(down, true, TuiAction::ACCOUNT),
+            Some(TuiAction::AccountMoveDown)
+        );
+
+        // A key with no `ACCOUNT`-scoped binding at all (e.g. the global
+        // "sync" chord doesn't collide with anything account-scoped here)
+        // still correctly resolves to nothing rather than falling back to
+        // the global action.
+        let s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE);
+        assert_eq!(
+            keymap.action_in(s, true, TuiAction::ACCOUNT),
+            Some(TuiAction::AccountSync)
         );
     }
 
