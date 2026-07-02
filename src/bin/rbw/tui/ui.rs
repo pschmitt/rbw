@@ -4,7 +4,8 @@
 #![allow(
     clippy::as_conversions,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::tuple_array_conversions
 )]
 
 use ratatui::{
@@ -41,15 +42,10 @@ const LABEL_W: usize = 12;
 // so we stack them vertically instead.
 const NARROW_WIDTH: u16 = 80;
 
-pub fn render(f: &mut Frame, app: &App) {
-    // Search bar sits at the bottom (fzf-style), just above the status line.
-    let [main, search, status] = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .areas(f.area());
-
+// The list/detail split for the main area, shared by `render` and mouse
+// hit-testing (`pane_at`) so a click is judged against exactly the geometry
+// that was last drawn.
+pub fn pane_layout(main: Rect) -> (Rect, Rect) {
     // On a wide terminal, put the list and details side by side. When there
     // isn't room for a readable details column, stack them instead — details
     // on top, list below (so the selection and its details stay together).
@@ -59,17 +55,62 @@ pub fn render(f: &mut Frame, app: &App) {
             Constraint::Min(0),
         ])
         .areas(main);
-        render_list(f, app, list_area);
-        render_detail(f, app, detail_area);
+        (list_area, detail_area)
     } else {
         let [detail_area, list_area] = Layout::vertical([
             Constraint::Percentage(50),
             Constraint::Min(0),
         ])
         .areas(main);
-        render_detail(f, app, detail_area);
-        render_list(f, app, list_area);
+        (list_area, detail_area)
     }
+}
+
+// Splits the full terminal area the same way `render` does, returning the
+// main (list+detail) area used for hit-testing mouse clicks.
+pub fn main_area(full: Rect) -> Rect {
+    let [main, _search, _status] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(full);
+    main
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pane {
+    List,
+    Detail,
+}
+
+// Which pane (if either) a mouse event at `(x, y)` in the full terminal area
+// landed in.
+pub fn pane_at(full: Rect, x: u16, y: u16) -> Option<Pane> {
+    let (list_area, detail_area) = pane_layout(main_area(full));
+    let hit =
+        |r: Rect| x >= r.x && x < r.right() && y >= r.y && y < r.bottom();
+    if hit(detail_area) {
+        Some(Pane::Detail)
+    } else if hit(list_area) {
+        Some(Pane::List)
+    } else {
+        None
+    }
+}
+
+pub fn render(f: &mut Frame, app: &App) {
+    // Search bar sits at the bottom (fzf-style), just above the status line.
+    let [main, search, status] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(f.area());
+
+    let (list_area, detail_area) = pane_layout(main);
+    render_list(f, app, list_area);
+    render_detail(f, app, detail_area);
     render_search(f, app, search);
     render_status(f, app, status);
 
@@ -149,7 +190,8 @@ fn type_marker(kind: &str) -> Span<'static> {
 }
 
 fn render_list(f: &mut Frame, app: &App, area: Rect) {
-    let focused = matches!(app.mode, Mode::Normal | Mode::Search);
+    let focused = matches!(app.mode, Mode::Search)
+        || (matches!(app.mode, Mode::Normal) && !app.detail_focused);
     let total = app.search.len();
     let count = app.filtered.len();
     let title = if count == total {
@@ -304,11 +346,13 @@ fn list_item(
 }
 
 fn render_detail(f: &mut Frame, app: &App, area: Rect) {
-    let b = block("details", false);
+    let focused = matches!(app.mode, Mode::Normal) && app.detail_focused;
+    let b = block("details", focused);
     let inner = b.inner(area);
     f.render_widget(b, area);
 
     let Some(detail) = app.current_detail() else {
+        app.detail_max_scroll.set(0);
         let msg = if app.current_search().is_some() {
             "  decrypting…"
         } else {
@@ -325,10 +369,52 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let lines = detail_lines(detail, app.reveal, app.filter.value());
+    // Clamp to content that actually overflows the pane, so scrolling a
+    // preview that already fits is a visible no-op instead of pushing
+    // content off the top. Cached back onto `app` so the next keypress
+    // (handled before the next render) can clamp itself the same way.
+    // `Paragraph::line_count` would give this exactly, but it's behind an
+    // unstable ratatui feature; word-wrapped row estimate is close enough
+    // for a soft scroll clamp.
+    let max_scroll = wrapped_row_count(&lines, inner.width)
+        .saturating_sub(inner.height as usize);
+    app.detail_max_scroll
+        .set(u16::try_from(max_scroll).unwrap_or(u16::MAX));
+    let scroll = (app.detail_scroll as usize).min(max_scroll) as u16;
     let para = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .scroll((app.detail_scroll, 0));
+        .scroll((scroll, 0));
     f.render_widget(para, inner);
+}
+
+// Greedy word-wrap row estimate for a block of lines at `width` columns,
+// mirroring `Wrap { trim: false }` closely enough to size a scroll clamp.
+fn wrapped_row_count(lines: &[Line<'_>], width: u16) -> usize {
+    if width == 0 {
+        return lines.len();
+    }
+    let width = width as usize;
+    lines
+        .iter()
+        .map(|line| {
+            let text: String =
+                line.spans.iter().map(|s| s.content.as_ref()).collect();
+            if text.is_empty() {
+                return 1;
+            }
+            let mut rows = 1usize;
+            let mut col = 0usize;
+            for word in text.split_inclusive(' ') {
+                let w = word.width();
+                if col > 0 && col + w > width {
+                    rows += 1;
+                    col = 0;
+                }
+                col += w;
+            }
+            rows
+        })
+        .sum()
 }
 
 fn row(label: &str, value: impl Into<String>) -> Line<'static> {
@@ -1115,7 +1201,7 @@ fn render_help(f: &mut Frame, area: Rect) {
 
 #[cfg(test)]
 mod test {
-    use super::{detail_lines, render, totp_line, MATCH};
+    use super::{detail_lines, pane_at, render, totp_line, Pane, MATCH};
     use crate::commands::{
         AttachmentMetadata, DecryptedCipher, DecryptedData, DecryptedField,
         DecryptedUri,
@@ -1123,6 +1209,7 @@ mod test {
     use crate::tui::app::App;
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::layout::Rect;
     use ratatui::Terminal;
 
     fn press(app: &mut App, code: KeyCode) {
@@ -1403,5 +1490,30 @@ mod test {
         let revealed_text: String =
             revealed.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(!revealed_text.contains("copy"));
+    }
+
+    // Wide terminal: list/detail sit side by side (list on the left), so a
+    // click's pane is decided by which half of the width it falls in.
+    #[test]
+    fn pane_at_splits_left_right_on_a_wide_terminal() {
+        let full = Rect::new(0, 0, 100, 30);
+        assert_eq!(pane_at(full, 5, 5), Some(Pane::List));
+        assert_eq!(pane_at(full, 99, 5), Some(Pane::Detail));
+    }
+
+    // Narrow terminal: layout stacks vertically with details on top, list
+    // below, so the same x column can land in either pane depending on y.
+    #[test]
+    fn pane_at_splits_top_bottom_on_a_narrow_terminal() {
+        let full = Rect::new(0, 0, 40, 30);
+        assert_eq!(pane_at(full, 5, 2), Some(Pane::Detail));
+        assert_eq!(pane_at(full, 5, 27), Some(Pane::List));
+    }
+
+    // The bottom two rows (search bar, status line) belong to neither pane.
+    #[test]
+    fn pane_at_is_none_below_the_main_area() {
+        let full = Rect::new(0, 0, 100, 30);
+        assert_eq!(pane_at(full, 5, 29), None);
     }
 }

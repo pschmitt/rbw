@@ -393,6 +393,25 @@ const SCORE_SENSITIVE: u32 = 10;
 const SCORE_FULL_NAME_BONUS: u32 = 5_000;
 
 impl DecryptedSearchCipher {
+    // Minimal entry for tests outside this module (e.g. the TUI's) that just
+    // need *an* entry to select, not specific field content.
+    #[cfg(test)]
+    pub(crate) fn test_entry(name: &str) -> Self {
+        Self {
+            id: name.to_string(),
+            entry_type: "Login".to_string(),
+            folder: None,
+            name: name.to_string(),
+            user: None,
+            uris: vec![],
+            fields: vec![],
+            notes: None,
+            attachment_count: 0,
+            sensitive_fields: vec![],
+            password: None,
+        }
+    }
+
     pub fn display_name(&self) -> String {
         self.user.as_ref().map_or_else(
             || self.name.clone(),
@@ -6935,9 +6954,12 @@ fn list_target_accounts(all: bool) -> anyhow::Result<Vec<String>> {
 
 // Open the multi-account TUI. Unlocks the target account (--account /
 // RBW_ACCOUNT, else primary) up front — pinentry runs here, on the real
-// terminal, before the UI takes over the screen — then loads every account
-// that is currently unlocked and reports the rest as locked.
-pub fn tui_open() -> anyhow::Result<TuiOpen> {
+// terminal, before the UI takes over the screen. With `all`, every
+// configured account whose `unlock` policy isn't `never` is unlocked here
+// too (pinentry runs once per locked account, same as `rbw sync --all`);
+// otherwise only accounts that are already unlocked are loaded, and the
+// rest are reported as locked for lazy unlock from the accounts panel.
+pub fn tui_open(all: bool) -> anyhow::Result<TuiOpen> {
     let config = rbw::config::Config::load()?;
     let accounts = config.accounts();
 
@@ -6950,6 +6972,11 @@ pub fn tui_open() -> anyhow::Result<TuiOpen> {
     let mut locked = Vec::new();
     for account in &accounts {
         crate::actions::set_active_account(Some(account.name.clone()))?;
+        let should_unlock = all
+            && !matches!(account.unlock, rbw::config::UnlockPolicy::Never);
+        if should_unlock && !active_account_unlocked() {
+            unlock(None)?;
+        }
         if active_account_unlocked() {
             let (db, search) = tui_reload()?;
             vaults.push(TuiVault {
@@ -8633,10 +8660,7 @@ mod test {
     #[test]
     fn test_scope_prefix_ranges_marks_only_recognized_prefixes() {
         // "u:" is recognized; the value after it is not part of the range.
-        assert_eq!(
-            scope_prefix_ranges("u:alice"),
-            vec![(0, 2)]
-        );
+        assert_eq!(scope_prefix_ranges("u:alice"), vec![(0, 2)]);
 
         // Multiple scoped words, each found at its own position, plus a
         // bare word (no range) in between.

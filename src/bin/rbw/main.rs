@@ -180,6 +180,12 @@ enum Opt {
     Tui {
         #[arg(help = "Optional initial search term")]
         term: Option<String>,
+        #[arg(
+            long,
+            help = "Unlock and load every configured account up front, \
+                not just the ones already unlocked"
+        )]
+        all: bool,
     },
 
     #[command(
@@ -528,7 +534,10 @@ enum Opt {
         yes: bool,
     },
 
-    #[command(about = "Remove a given entry", visible_alias = "rm")]
+    #[command(
+        about = "Remove a given entry",
+        visible_aliases = ["rm", "delete", "del"]
+    )]
     Remove {
         #[command(flatten)]
         find_args: FindArgs,
@@ -954,7 +963,7 @@ fn main() {
         }
         Opt::Unlocked => commands::unlocked(),
         Opt::Sync { all } => commands::sync(all),
-        Opt::Tui { term } => tui::run(term.as_deref()),
+        Opt::Tui { term, all } => tui::run(term.as_deref(), all),
         Opt::Export => commands::export(),
         Opt::List {
             fields,

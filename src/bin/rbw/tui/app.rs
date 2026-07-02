@@ -218,6 +218,16 @@ pub struct App {
     pub reveal: bool,
     pub status: Option<Status>,
     pub detail_scroll: u16,
+    // How far `detail_scroll` can go before the preview stops growing (set
+    // by the renderer each frame, from the actual wrapped line count vs. the
+    // pane's height). Lets scroll input clamp itself so that scrolling a
+    // preview that already fits the pane is a no-op in both directions,
+    // rather than accepting keypresses a visible scroll never catches up to.
+    pub detail_max_scroll: std::cell::Cell<u16>,
+    // Right arrow (or a detail-pane click) moves focus here so Up/Down
+    // scroll the preview instead of moving the list selection; Left/Esc (or
+    // a list-pane click) moves it back. Only meaningful in `Mode::Normal`.
+    pub detail_focused: bool,
     keymap: Keymap,
 }
 
@@ -264,6 +274,8 @@ impl App {
             reveal: false,
             status: None,
             detail_scroll: 0,
+            detail_max_scroll: std::cell::Cell::new(0),
+            detail_focused: false,
             keymap,
         };
         app.rebuild_flat();
@@ -394,6 +406,27 @@ impl App {
             next = last;
         }
         self.select(usize::try_from(next).unwrap_or(0));
+    }
+
+    // Up/Down: scroll the detail preview while it's focused, otherwise move
+    // the list selection as usual.
+    fn move_or_scroll(&mut self, delta: isize) {
+        if self.detail_focused && matches!(self.mode, Mode::Normal) {
+            self.scroll_detail(delta);
+        } else {
+            self.move_by(delta);
+        }
+    }
+
+    // Adjusts `detail_scroll`, clamped to what the last-rendered pane could
+    // actually show, so scrolling past the end of a short preview doesn't
+    // silently rack up keypresses a visible scroll never catches up to.
+    fn scroll_detail(&mut self, delta: isize) {
+        let max = isize::try_from(self.detail_max_scroll.get())
+            .unwrap_or(isize::MAX);
+        let cur = isize::try_from(self.detail_scroll).unwrap_or(0);
+        let next = (cur + delta).clamp(0, max);
+        self.detail_scroll = u16::try_from(next).unwrap_or(0);
     }
 
     // Decrypt full detail for the current selection if not already cached.
@@ -1110,6 +1143,38 @@ impl App {
         }
     }
 
+    // ---- mouse handling ---------------------------------------------------
+
+    // Right-arrow equivalent (also used for a detail-pane click): focus the
+    // detail pane so Up/Down scroll it instead of moving the list selection.
+    pub fn focus_detail(&mut self) {
+        if matches!(self.mode, Mode::Normal) && !self.filtered.is_empty() {
+            self.detail_focused = true;
+        }
+    }
+
+    // Left-arrow/Esc equivalent (also used for a list-pane click): focus
+    // back on the list.
+    pub fn focus_list(&mut self) {
+        if matches!(self.mode, Mode::Normal) {
+            self.detail_focused = false;
+        }
+    }
+
+    // Mouse wheel over the detail pane.
+    pub fn mouse_scroll_detail(&mut self, delta: isize) {
+        if matches!(self.mode, Mode::Normal) {
+            self.scroll_detail(delta);
+        }
+    }
+
+    // Mouse wheel over the list pane.
+    pub fn mouse_scroll_list(&mut self, delta: isize) {
+        if matches!(self.mode, Mode::Normal | Mode::Search) {
+            self.move_by(delta);
+        }
+    }
+
     // ---- key handling ---------------------------------------------------
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
@@ -1145,8 +1210,8 @@ impl App {
     // widget (the search filter) never has typing swallowed by an action.
     fn handle_shared(&mut self, key: KeyEvent) -> Option<Action> {
         match self.keymap.action_for(key, false)? {
-            TuiAction::MoveUp => self.move_by(-1),
-            TuiAction::MoveDown => self.move_by(1),
+            TuiAction::MoveUp => self.move_or_scroll(-1),
+            TuiAction::MoveDown => self.move_or_scroll(1),
             TuiAction::PageUp => self.move_by(-10),
             TuiAction::PageDown => self.move_by(10),
             TuiAction::Quit => return Some(Action::Quit),
@@ -1158,12 +1223,8 @@ impl App {
             TuiAction::CopyTotp => self.copy_totp(),
             TuiAction::OpenUri => self.open_uri(),
             TuiAction::OpenAttachments => self.open_attachments(),
-            TuiAction::ScrollDetailDown => {
-                self.detail_scroll = self.detail_scroll.saturating_add(1);
-            }
-            TuiAction::ScrollDetailUp => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(1);
-            }
+            TuiAction::ScrollDetailDown => self.scroll_detail(1),
+            TuiAction::ScrollDetailUp => self.scroll_detail(-1),
             _ => return None,
         }
         Some(Action::None)
@@ -1173,24 +1234,26 @@ impl App {
         if let Some(action) = self.handle_shared(key) {
             return action;
         }
-        // Esc always quits Normal mode, regardless of keybinding config —
-        // it's a near-universal "back out" convention worth keeping as a
-        // fallback even if `quit` is rebound away from it.
+        // Esc backs out one level: first out of a focused detail pane, then
+        // (a near-universal convention worth keeping even if `quit` is
+        // rebound away from it) out of Normal mode entirely.
         if key.code == KeyCode::Esc {
+            if self.detail_focused {
+                self.detail_focused = false;
+                return Action::None;
+            }
             return Action::Quit;
         }
         match self.keymap.action_for(key, true) {
             Some(TuiAction::Quit) => return Action::Quit,
-            Some(TuiAction::MoveDown) => self.move_by(1),
-            Some(TuiAction::MoveUp) => self.move_by(-1),
+            Some(TuiAction::MoveDown) => self.move_or_scroll(1),
+            Some(TuiAction::MoveUp) => self.move_or_scroll(-1),
             Some(TuiAction::JumpFirst) => self.select(0),
             Some(TuiAction::JumpLast) => self.select(self.filtered.len()),
-            Some(TuiAction::ScrollDetailDown) => {
-                self.detail_scroll = self.detail_scroll.saturating_add(1);
-            }
-            Some(TuiAction::ScrollDetailUp) => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(1);
-            }
+            Some(TuiAction::ScrollDetailDown) => self.scroll_detail(1),
+            Some(TuiAction::ScrollDetailUp) => self.scroll_detail(-1),
+            Some(TuiAction::FocusDetail) => self.focus_detail(),
+            Some(TuiAction::FocusList) => self.focus_list(),
             Some(TuiAction::ToggleSearch) => self.mode = Mode::Search,
             Some(TuiAction::ToggleReveal) => self.reveal = !self.reveal,
             Some(TuiAction::CopyPassword) => self.copy_password(),
@@ -1745,6 +1808,60 @@ mod test {
         )
     }
 
+    // Like `app()`, but with `n` selectable entries and focus already handed
+    // to the list, for tests that need something to focus/scroll onto. The
+    // entries never actually decrypt (no agent in a unit test), but
+    // `ensure_detail` still indexes into `db.entries` before finding that
+    // out, so a same-length placeholder `Entry` per search result is needed
+    // to avoid an out-of-bounds panic.
+    fn app_with_entries(n: usize) -> App {
+        let mut search = Vec::new();
+        let mut entries = Vec::new();
+        for i in 0..n {
+            let id = format!("entry-{i}");
+            search.push(crate::commands::DecryptedSearchCipher::test_entry(
+                &id,
+            ));
+            entries.push(rbw::db::Entry {
+                id: id.clone(),
+                org_id: None,
+                folder: None,
+                folder_id: None,
+                name: id,
+                data: rbw::db::EntryData::Login {
+                    username: None,
+                    password: None,
+                    totp: None,
+                    uris: vec![],
+                },
+                fields: vec![],
+                notes: None,
+                history: vec![],
+                key: None,
+                master_password_reprompt: rbw::api::CipherRepromptType::None,
+                collection_ids: vec![],
+                attachments: vec![],
+            });
+        }
+        let mut db = rbw::db::Db::new();
+        db.entries = entries;
+        let mut a = App::with_keymap(
+            crate::commands::TuiOpen {
+                vaults: vec![crate::commands::TuiVault {
+                    account: "default".to_string(),
+                    db,
+                    search,
+                }],
+                locked: Vec::new(),
+                multi: false,
+            },
+            None,
+            Keymap::resolve(&std::collections::HashMap::new()),
+        );
+        a.mode = Mode::Normal;
+        a
+    }
+
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
@@ -1794,5 +1911,98 @@ mod test {
         assert!(matches!(a.handle_key(key(KeyCode::Esc)), Action::None));
         assert_eq!(a.filter.value(), "");
         assert!(matches!(a.handle_key(key(KeyCode::Esc)), Action::Quit));
+    }
+
+    // Right arrow focuses the detail pane; Left returns focus to the list.
+    #[test]
+    fn right_and_left_arrows_toggle_detail_focus() {
+        let mut a = app_with_entries(2);
+        assert!(!a.detail_focused);
+        a.handle_key(key(KeyCode::Right));
+        assert!(a.detail_focused);
+        a.handle_key(key(KeyCode::Left));
+        assert!(!a.detail_focused);
+    }
+
+    // Right arrow is a no-op with nothing in the list to show.
+    #[test]
+    fn right_arrow_is_a_noop_on_an_empty_list() {
+        let mut a = app_with_entries(0);
+        a.handle_key(key(KeyCode::Right));
+        assert!(!a.detail_focused);
+    }
+
+    // Esc on a focused detail pane backs out to the list instead of quitting;
+    // a second Esc then quits as usual.
+    #[test]
+    fn esc_backs_out_of_detail_focus_before_quitting() {
+        let mut a = app_with_entries(2);
+        a.handle_key(key(KeyCode::Right));
+        assert!(a.detail_focused);
+        assert!(matches!(a.handle_key(key(KeyCode::Esc)), Action::None));
+        assert!(!a.detail_focused);
+        assert!(matches!(a.handle_key(key(KeyCode::Esc)), Action::Quit));
+    }
+
+    // Up/Down move the list selection normally, but scroll the detail pane
+    // instead once it's focused.
+    #[test]
+    fn up_down_scroll_detail_instead_of_moving_selection_when_focused() {
+        let mut a = app_with_entries(3);
+        a.detail_max_scroll.set(5);
+        a.handle_key(key(KeyCode::Down));
+        assert_eq!(a.selected, 1);
+        assert_eq!(a.detail_scroll, 0);
+
+        a.handle_key(key(KeyCode::Right));
+        a.handle_key(key(KeyCode::Down));
+        assert_eq!(a.selected, 1, "selection shouldn't move while focused");
+        assert_eq!(a.detail_scroll, 1);
+
+        a.handle_key(key(KeyCode::Up));
+        assert_eq!(a.detail_scroll, 0);
+    }
+
+    // A preview that already fits the pane (`detail_max_scroll` still at its
+    // default 0) doesn't accumulate scroll either direction.
+    #[test]
+    fn detail_scroll_is_a_noop_when_nothing_overflows_the_pane() {
+        let mut a = app_with_entries(1);
+        a.handle_key(key(KeyCode::Right));
+        a.handle_key(key(KeyCode::Down));
+        assert_eq!(a.detail_scroll, 0);
+    }
+
+    // Detail scroll never exceeds what the renderer last reported as
+    // scrollable, so repeated Down presses can't rack up a backlog that
+    // later Up presses have to silently eat through.
+    #[test]
+    fn detail_scroll_is_clamped_to_the_rendered_max() {
+        let mut a = app_with_entries(1);
+        a.detail_max_scroll.set(2);
+        a.handle_key(key(KeyCode::Right));
+        for _ in 0..10 {
+            a.handle_key(key(KeyCode::Down));
+        }
+        assert_eq!(a.detail_scroll, 2);
+    }
+
+    // Mouse: clicking into a pane focuses it, same as the arrow keys.
+    #[test]
+    fn mouse_focus_matches_arrow_key_focus() {
+        let mut a = app_with_entries(2);
+        a.focus_detail();
+        assert!(a.detail_focused);
+        a.focus_list();
+        assert!(!a.detail_focused);
+    }
+
+    #[test]
+    fn mouse_scroll_over_detail_only_affects_detail_scroll() {
+        let mut a = app_with_entries(2);
+        a.detail_max_scroll.set(5);
+        a.mouse_scroll_detail(1);
+        assert_eq!(a.detail_scroll, 1);
+        assert_eq!(a.selected, 0);
     }
 }
