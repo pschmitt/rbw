@@ -753,6 +753,7 @@ enum Attachment {
             help = "Name, URI, UUID (or multiple terms, all required to match)",
             value_parser = commands::parse_needle,
             num_args = 1..,
+            required = true,
         )]
         needles: Vec<commands::Needle>,
         #[arg(help = "File to attach")]
@@ -801,8 +802,7 @@ fn main() {
     actions::set_account(account.clone());
     // If the config can't be loaded here, downstream commands surface a clearer
     // error; there is nothing to point the api client at in that case.
-    if let (Some(name), Ok(config)) =
-        (&account, rbw::config::Config::load())
+    if let (Some(name), Ok(config)) = (&account, rbw::config::Config::load())
     {
         match config.account(Some(name)) {
             Ok(account) => rbw::actions::set_client_account(account),

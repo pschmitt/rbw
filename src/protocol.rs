@@ -199,6 +199,9 @@ pub enum Action {
         cipherstring: String,
         entry_key: Option<String>,
         org_id: Option<String>,
+        // Set when `cipherstring` is wrapped in an attachment's own key (e.g.
+        // an attachment file name) rather than directly in the entry's key.
+        attachment_key: Option<String>,
     },
     DecryptBatch {
         entries: Vec<DecryptRequest>,

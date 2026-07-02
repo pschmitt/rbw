@@ -116,6 +116,17 @@ pub fn decrypt(
     entry_key: Option<&str>,
     org_id: Option<&str>,
 ) -> anyhow::Result<String> {
+    decrypt_with_attachment_key(cipherstring, entry_key, org_id, None)
+}
+
+// Like `decrypt`, but for a cipherstring wrapped in an attachment's own key
+// (e.g. an attachment file name) rather than directly in the entry's key.
+pub fn decrypt_with_attachment_key(
+    cipherstring: &str,
+    entry_key: Option<&str>,
+    org_id: Option<&str>,
+    attachment_key: Option<&str>,
+) -> anyhow::Result<String> {
     let mut sock = connect()?;
     sock.send(&rbw::protocol::Request::with_account(
         get_environment(),
@@ -124,6 +135,8 @@ pub fn decrypt(
             cipherstring: cipherstring.to_string(),
             entry_key: entry_key.map(std::string::ToString::to_string),
             org_id: org_id.map(std::string::ToString::to_string),
+            attachment_key: attachment_key
+                .map(std::string::ToString::to_string),
         },
     ))?;
 

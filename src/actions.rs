@@ -313,6 +313,26 @@ pub fn download_attachment(url: &str) -> Result<Vec<u8>> {
     client.download_attachment(url)
 }
 
+pub fn delete_attachment(
+    access_token: &str,
+    refresh_token: &str,
+    cipher_id: &str,
+    attachment_id: &str,
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        delete_attachment_once(access_token, cipher_id, attachment_id)
+    })
+}
+
+fn delete_attachment_once(
+    access_token: &str,
+    cipher_id: &str,
+    attachment_id: &str,
+) -> Result<()> {
+    let (client, _) = api_client()?;
+    client.delete_attachment(access_token, cipher_id, attachment_id)
+}
+
 pub fn create_attachment(
     access_token: &str,
     refresh_token: &str,

@@ -23,7 +23,9 @@ use crate::commands::{
     DecryptedCipher, DecryptedData, DecryptedSearchCipher,
 };
 
-use super::app::{AccountsView, App, AttachmentView, EditForm, Level, Mode};
+use super::app::{
+    AccountsView, App, AttachmentView, EditForm, Level, Mode, Prompt,
+};
 
 const ACCENT: Color = Color::Cyan;
 const SELECT_BG: Color = Color::Rgb(38, 44, 66);
@@ -72,6 +74,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::ConfirmDelete => render_confirm(f, app, main),
         Mode::Attachments(view) => render_attachments(f, view, main),
         Mode::Accounts(view) => render_accounts(f, view, main),
+        Mode::Prompt(prompt) => render_prompt(f, prompt, main),
         Mode::Help => render_help(f, main),
         Mode::Normal | Mode::Search => {}
     }
@@ -501,16 +504,19 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let hint = match app.mode {
+    let hint = match &app.mode {
         Mode::Search => {
             "type to filter · ↑/↓ select · ⇥ actions · ⌥p/u/t/o copy · ^E editor · esc clear"
         }
         Mode::Edit(_) => "⏎ save · esc cancel · ⇥ next field · ^R reveal · ^E editor",
         Mode::ConfirmDelete => "y confirm · n/esc cancel",
-        Mode::Attachments(_) => "⏎ download · ↑/↓ select · esc cancel",
-        Mode::Accounts(_) => {
-            "⏎/u unlock · s sync · p set primary · ↑/↓ select · esc close"
+        Mode::Attachments(_) => {
+            "⏎ download · a upload · d delete · ↑/↓ select · esc cancel"
         }
+        Mode::Accounts(_) => {
+            "⏎/u unlock · s sync · p primary · a add · ↑/↓ select · esc close"
+        }
+        Mode::Prompt(prompt) => prompt.hint,
         Mode::Help => "any key to close",
         Mode::Normal => {
             "/ search · e edit · a add · d delete · p/u/t copy · o open · s attach · A accounts · ^S sync · r reveal · ? help · q quit"
@@ -612,6 +618,71 @@ fn render_form(f: &mut Frame, form: &EditForm, area: Rect) {
     }
 }
 
+fn render_prompt(f: &mut Frame, prompt: &Prompt, area: Rect) {
+    // Widest label, so values line up in a column.
+    let label_w = prompt
+        .fields
+        .iter()
+        .map(|field| field.label.width())
+        .max()
+        .unwrap_or(0);
+    let width = 72u16.min(area.width.saturating_sub(4));
+    let height =
+        (prompt.fields.len() as u16 + 4).min(area.height.saturating_sub(2));
+    let rect = centered(width, height, area);
+
+    f.render_widget(Clear, rect);
+    let b = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(
+            format!(" {} ", prompt.title),
+            Style::default().fg(ACCENT).bold(),
+        ));
+    let inner = b.inner(rect);
+    f.render_widget(b, rect);
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, field) in prompt.fields.iter().enumerate() {
+        let focused = i == prompt.focus;
+        let prefix = if focused { "❯ " } else { "  " };
+        lines.push(Line::from(vec![
+            Span::styled(
+                prefix,
+                Style::default().fg(if focused { ACCENT } else { DIM }),
+            ),
+            Span::styled(
+                format!("{:<label_w$}", field.label),
+                Style::default().fg(if focused { Color::White } else { DIM }),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                field.input.value().to_string(),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        prompt.hint,
+        Style::default().fg(DIM),
+    )));
+
+    f.render_widget(Paragraph::new(lines), inner);
+
+    // Cursor in the focused field.
+    if let Some(field) = prompt.fields.get(prompt.focus) {
+        let x = inner.x
+            + 2
+            + label_w as u16
+            + 2
+            + field.input.cursor_display_col() as u16;
+        let y = inner.y + prompt.focus as u16;
+        f.set_cursor_position((x.min(inner.right().saturating_sub(1)), y));
+    }
+}
+
 fn render_confirm(f: &mut Frame, app: &App, area: Rect) {
     let name = app
         .current_search()
@@ -689,10 +760,18 @@ fn render_attachments(f: &mut Frame, view: &AttachmentView, area: Rect) {
         lines.push(Line::from(spans));
     }
     lines.push(Line::raw(""));
-    lines.push(Line::from(Span::styled(
-        "⏎ download   ↑/↓ select   esc cancel",
-        Style::default().fg(DIM),
-    )));
+    let hint = if view.pending_delete {
+        Line::from(Span::styled(
+            "press d again to confirm delete · any other key cancels",
+            Style::default().fg(Color::Red).bold(),
+        ))
+    } else {
+        Line::from(Span::styled(
+            "⏎ download · a upload · d delete · esc cancel",
+            Style::default().fg(DIM),
+        ))
+    };
+    lines.push(hint);
 
     f.render_widget(Paragraph::new(lines), inner);
 }
@@ -747,7 +826,7 @@ fn render_accounts(f: &mut Frame, view: &AccountsView, area: Rect) {
     }
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
-        "⏎/u unlock · s sync · p set primary · esc close",
+        "⏎/u unlock · s sync · p set primary · a add · esc close",
         Style::default().fg(DIM),
     )));
 
@@ -878,7 +957,12 @@ mod test {
                 size: Some("12.3 KB".to_string()),
             }],
             selected: 0,
+            pending_delete: false,
         });
+        draw(&app);
+
+        // Text prompt overlay (add-account fields).
+        app.mode = Mode::Prompt(crate::tui::app::Prompt::add_account());
         draw(&app);
 
         // Accounts / settings panel overlay.

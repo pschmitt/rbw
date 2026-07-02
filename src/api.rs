@@ -922,6 +922,31 @@ struct CollectionCreateRes {
     id: String,
 }
 
+// The body of the first step of the v2 attachment upload (POST
+// /ciphers/{id}/attachment/v2): reserve an upload slot for a file of the given
+// (encrypted) size.
+#[derive(serde::Serialize, Debug)]
+struct AttachmentUploadDataReq {
+    #[serde(rename = "fileName")]
+    file_name: String,
+    key: String,
+    #[serde(rename = "fileSize")]
+    file_size: i64,
+}
+
+// The response to the v2 request: where and how to upload the file data.
+#[derive(serde::Deserialize, Debug)]
+struct AttachmentUploadDataRes {
+    #[serde(rename = "attachmentId", alias = "AttachmentId")]
+    attachment_id: String,
+    #[serde(rename = "url", alias = "Url")]
+    url: String,
+    // 0 = Direct (POST multipart back to the Bitwarden API), 1 = Azure (PUT the
+    // bytes to the returned blob URL).
+    #[serde(rename = "fileUploadType", alias = "FileUploadType")]
+    file_upload_type: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct OrgUser {
     pub id: String,
@@ -1023,6 +1048,21 @@ const BITWARDEN_CLIENT: &str = "cli";
 
 // DeviceType.LinuxDesktop, as per Bitwarden API device types.
 const DEVICE_TYPE: u8 = 8;
+
+// Build an Error from a non-OK, non-401 blocking response, including the body
+// when the server sent one.
+fn request_failed(
+    res: reqwest::blocking::Response,
+    status: reqwest::StatusCode,
+) -> Error {
+    let code = status.as_u16();
+    let body = res.text().unwrap_or_default();
+    if body.is_empty() {
+        Error::RequestFailed { status: code }
+    } else {
+        Error::RequestFailedWithBody { status: code, body }
+    }
+}
 
 #[derive(Debug)]
 pub struct Client {
@@ -1718,6 +1758,31 @@ impl Client {
         }
     }
 
+    pub fn delete_attachment(
+        &self,
+        access_token: &str,
+        cipher_id: &str,
+        attachment_id: &str,
+    ) -> Result<()> {
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .delete(self.api_url(&format!(
+                "/ciphers/{cipher_id}/attachment/{attachment_id}"
+            )))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
     pub fn edit_collections(
         &self,
         access_token: &str,
@@ -1773,6 +1838,11 @@ impl Client {
         }
     }
 
+    // Upload a file as an attachment using the two-step v2 flow: first reserve
+    // an upload slot (which returns where/how to upload), then send the bytes
+    // either to Azure blob storage (bitwarden.com) or back to the API as a
+    // multipart POST (self-hosted "direct" uploads). The old single-step
+    // /attachment endpoint has been removed from bitwarden.com.
     pub fn create_attachment(
         &self,
         access_token: &str,
@@ -1781,38 +1851,71 @@ impl Client {
         encrypted_key: &str,
         encrypted_data: Vec<u8>,
     ) -> Result<()> {
-        let form = reqwest::blocking::multipart::Form::new()
-            .text("Key", encrypted_key.to_string())
-            .text("FileName", encrypted_filename.to_string())
-            .part(
-                "Data",
+        let client = reqwest::blocking::Client::new();
+
+        // Step 1: reserve an upload slot.
+        let req = AttachmentUploadDataReq {
+            file_name: encrypted_filename.to_string(),
+            key: encrypted_key.to_string(),
+            file_size: i64::try_from(encrypted_data.len())
+                .unwrap_or(i64::MAX),
+        };
+        let res = client
+            .post(
+                self.api_url(&format!("/ciphers/{cipher_id}/attachment/v2")),
+            )
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&req)
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        let upload: AttachmentUploadDataRes = match res.status() {
+            reqwest::StatusCode::OK => res.json_with_path()?,
+            reqwest::StatusCode::UNAUTHORIZED => {
+                return Err(Error::RequestUnauthorized)
+            }
+            status => return Err(request_failed(res, status)),
+        };
+
+        // Step 2: upload the encrypted bytes where step 1 told us to.
+        let res = if upload.file_upload_type == 1 {
+            // Azure blob: PUT the bytes to the returned SAS URL.
+            client
+                .put(&upload.url)
+                .header("x-ms-blob-type", "BlockBlob")
+                .body(encrypted_data)
+                .send()
+                .map_err(|source| Error::Reqwest { source })?
+        } else {
+            // Direct: POST the bytes as multipart back to the API.
+            let url = if upload.url.starts_with("http") {
+                upload.url
+            } else {
+                self.api_url(&format!(
+                    "/ciphers/{cipher_id}/attachment/{}",
+                    upload.attachment_id
+                ))
+            };
+            let form = reqwest::blocking::multipart::Form::new().part(
+                "data",
                 reqwest::blocking::multipart::Part::bytes(encrypted_data)
                     .file_name("blob")
                     .mime_str("application/octet-stream")
                     .map_err(|source| Error::Reqwest { source })?,
             );
-        let client = reqwest::blocking::Client::new();
-        let res = client
-            .post(self.api_url(&format!("/ciphers/{cipher_id}/attachment")))
-            .header("Authorization", format!("Bearer {access_token}"))
-            .multipart(form)
-            .send()
-            .map_err(|source| Error::Reqwest { source })?;
-        let status = res.status();
-        match status {
-            reqwest::StatusCode::OK => Ok(()),
+            client
+                .post(url)
+                .header("Authorization", format!("Bearer {access_token}"))
+                .multipart(form)
+                .send()
+                .map_err(|source| Error::Reqwest { source })?
+        };
+
+        match res.status() {
+            reqwest::StatusCode::OK | reqwest::StatusCode::CREATED => Ok(()),
             reqwest::StatusCode::UNAUTHORIZED => {
                 Err(Error::RequestUnauthorized)
             }
-            _ => {
-                let code = status.as_u16();
-                let body = res.text().unwrap_or_default();
-                if body.is_empty() {
-                    Err(Error::RequestFailed { status: code })
-                } else {
-                    Err(Error::RequestFailedWithBody { status: code, body })
-                }
-            }
+            status => Err(request_failed(res, status)),
         }
     }
 

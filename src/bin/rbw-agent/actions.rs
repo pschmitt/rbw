@@ -657,6 +657,9 @@ async fn decrypt_cipher(
     cipherstring: &str,
     entry_key: Option<&str>,
     org_id: Option<&str>,
+    // Set when `cipherstring` is wrapped in an attachment's own key (e.g. an
+    // attachment file name) rather than directly in the entry's key.
+    attachment_key: Option<&str>,
     mut client: Option<&mut tokio::net::UnixStream>,
     account: &rbw::config::Account,
 ) -> anyhow::Result<String> {
@@ -681,6 +684,20 @@ async fn decrypt_cipher(
         ))
     } else {
         None
+    };
+    // An attachment key is itself wrapped in the entry's effective key, same
+    // as the entry key is wrapped in the account keys.
+    let entry_key = if let Some(attachment_key) = attachment_key {
+        let key_cipherstring =
+            rbw::cipherstring::CipherString::new(attachment_key)
+                .context("failed to parse attachment encryption key")?;
+        Some(
+            key_cipherstring
+                .decrypt_attachment_key(keys, entry_key.as_ref())
+                .context("failed to decrypt attachment encryption key")?,
+        )
+    } else {
+        entry_key
     };
 
     let mut sha256 = sha2::Sha256::new();
@@ -803,6 +820,7 @@ pub async fn decrypt(
     cipherstring: &str,
     entry_key: Option<&str>,
     org_id: Option<&str>,
+    attachment_key: Option<&str>,
     account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
     let plaintext = decrypt_cipher(
@@ -811,6 +829,7 @@ pub async fn decrypt(
         cipherstring,
         entry_key,
         org_id,
+        attachment_key,
         Some(sock.inner()),
         account,
     )
@@ -835,6 +854,7 @@ pub async fn decrypt_batch(
             &entry.cipherstring,
             entry.entry_key.as_deref(),
             entry.org_id.as_deref(),
+            None,
             Some(sock.inner()),
             account,
         )
@@ -1191,6 +1211,7 @@ pub async fn get_ssh_public_keys(
                 entry.key.as_deref(),
                 entry.org_id.as_deref(),
                 None,
+                None,
                 &account,
             )
             .await?;
@@ -1237,6 +1258,7 @@ pub async fn find_ssh_private_key(
                 entry.key.as_deref(),
                 entry.org_id.as_deref(),
                 None,
+                None,
                 &account,
             )
             .await?;
@@ -1259,6 +1281,7 @@ pub async fn find_ssh_private_key(
                     private_key_enc,
                     entry.key.as_deref(),
                     entry.org_id.as_deref(),
+                    None,
                     None,
                     &account,
                 )

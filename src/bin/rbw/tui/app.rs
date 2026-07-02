@@ -48,6 +48,7 @@ pub enum Mode {
     ConfirmDelete,
     Attachments(AttachmentView),
     Accounts(AccountsView),
+    Prompt(Prompt),
     Help,
 }
 
@@ -58,6 +59,112 @@ pub struct AccountsView {
     pub selected: usize,
 }
 
+// What a filled-in `Prompt` should do on submit.
+pub enum PromptKind {
+    // Upload the entered file path as an attachment on the entry with `id` in
+    // the vault `owner`.
+    AttachmentUpload { owner: usize, id: String },
+    // Add a new account from the entered name / email / server-url fields.
+    AddAccount,
+}
+
+pub struct PromptField {
+    pub label: &'static str,
+    pub input: Input,
+}
+
+// A small labelled multi-field text prompt shown as an overlay (file path for
+// attachment upload, or the fields for a new account).
+pub struct Prompt {
+    pub title: String,
+    pub hint: &'static str,
+    pub fields: Vec<PromptField>,
+    pub focus: usize,
+    kind: PromptKind,
+}
+
+impl Prompt {
+    fn attachment_upload(owner: usize, id: String, entry_name: &str) -> Self {
+        Self {
+            title: format!("Upload attachment → {entry_name}"),
+            hint: "⏎ upload · esc cancel",
+            fields: vec![PromptField {
+                label: "File path",
+                input: Input::default(),
+            }],
+            focus: 0,
+            kind: PromptKind::AttachmentUpload { owner, id },
+        }
+    }
+
+    pub fn add_account() -> Self {
+        Self {
+            title: "Add account".to_string(),
+            hint:
+                "⏎ save · ⇥ next · esc cancel · Server blank = bitwarden.com",
+            fields: vec![
+                PromptField {
+                    label: "Name",
+                    input: Input::default(),
+                },
+                PromptField {
+                    label: "Email",
+                    input: Input::default(),
+                },
+                PromptField {
+                    label: "Server",
+                    input: Input::default(),
+                },
+            ],
+            focus: 0,
+            kind: PromptKind::AddAccount,
+        }
+    }
+
+    fn focus_next(&mut self) {
+        if !self.fields.is_empty() {
+            self.focus = (self.focus + 1) % self.fields.len();
+        }
+    }
+
+    fn focus_prev(&mut self) {
+        if !self.fields.is_empty() {
+            self.focus =
+                (self.focus + self.fields.len() - 1) % self.fields.len();
+        }
+    }
+
+    fn value(&self, i: usize) -> String {
+        self.fields
+            .get(i)
+            .map_or_else(String::new, |f| f.input.value().to_string())
+    }
+}
+
+// What `submit_prompt` should carry out, extracted from the prompt's fields so
+// the (immutable) prompt borrow is released before the app mutates itself.
+enum PromptSubmit {
+    Upload {
+        owner: usize,
+        id: String,
+        path: String,
+    },
+    AddAccount {
+        name: String,
+        email: Option<String>,
+        base_url: Option<String>,
+    },
+}
+
+fn expand_tilde(p: &str) -> std::path::PathBuf {
+    if let Some(rest) = p.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return std::path::Path::new(&home).join(rest);
+        }
+    }
+    std::path::PathBuf::from(p)
+}
+
 // A single row in the attachment picker.
 pub struct AttachmentItem {
     pub id: String,
@@ -66,9 +173,12 @@ pub struct AttachmentItem {
 }
 
 // The attachment picker overlay: the current entry's attachments plus a cursor.
+// `pending_delete` arms a two-press confirm for `d` (so an accidental keypress
+// doesn't drop an attachment).
 pub struct AttachmentView {
     pub items: Vec<AttachmentItem>,
     pub selected: usize,
+    pub pending_delete: bool,
 }
 
 // One unlocked account and its local db plus decrypted search index. The
@@ -375,10 +485,7 @@ impl App {
             self.set_status(Level::Warn, "nothing selected");
             return;
         };
-        if detail.attachments.is_empty() {
-            self.set_status(Level::Warn, "no attachments");
-            return;
-        }
+        let empty = detail.attachments.is_empty();
         let items = detail
             .attachments
             .iter()
@@ -388,7 +495,17 @@ impl App {
                 size: a.size_name.clone().or_else(|| a.size.clone()),
             })
             .collect();
-        self.mode = Mode::Attachments(AttachmentView { items, selected: 0 });
+        if empty {
+            self.set_status(
+                Level::Info,
+                "no attachments · press a to upload one",
+            );
+        }
+        self.mode = Mode::Attachments(AttachmentView {
+            items,
+            selected: 0,
+            pending_delete: false,
+        });
     }
 
     fn attachment_move(&mut self, delta: isize) {
@@ -839,9 +956,127 @@ impl App {
             }
             KeyCode::Char('s') => self.sync_selected_account(),
             KeyCode::Char('p') => self.set_primary_selected_account(),
+            KeyCode::Char('a') => self.start_add_account(),
             _ => {}
         }
         Action::None
+    }
+
+    // ---- prompts (attachment upload / add account) ----------------------
+
+    fn start_attachment_upload(&mut self) {
+        let Some(owner) = self.current_owner() else {
+            return;
+        };
+        let Some(entry) = self.current_entry() else {
+            return;
+        };
+        let name = self
+            .current_search()
+            .map_or_else(String::new, |s| s.name.clone());
+        self.mode =
+            Mode::Prompt(Prompt::attachment_upload(owner, entry.id, &name));
+    }
+
+    fn start_add_account(&mut self) {
+        self.mode = Mode::Prompt(Prompt::add_account());
+    }
+
+    fn handle_prompt(&mut self, key: KeyEvent) -> Action {
+        let Mode::Prompt(prompt) = &mut self.mode else {
+            return Action::None;
+        };
+        match key.code {
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => self.submit_prompt(),
+            KeyCode::Tab | KeyCode::Down => prompt.focus_next(),
+            KeyCode::BackTab | KeyCode::Up => prompt.focus_prev(),
+            _ => {
+                if let Some(field) = prompt.fields.get_mut(prompt.focus) {
+                    let _ = field.input.handle_key(key);
+                }
+            }
+        }
+        Action::None
+    }
+
+    fn submit_prompt(&mut self) {
+        // Pull the field values out first so the prompt borrow is released
+        // before we mutate the app / vaults below.
+        let submit = {
+            let Mode::Prompt(p) = &self.mode else {
+                return;
+            };
+            match &p.kind {
+                PromptKind::AttachmentUpload { owner, id } => {
+                    PromptSubmit::Upload {
+                        owner: *owner,
+                        id: id.clone(),
+                        path: p.value(0),
+                    }
+                }
+                PromptKind::AddAccount => PromptSubmit::AddAccount {
+                    name: p.value(0).trim().to_string(),
+                    email: non_empty(p.value(1).trim().to_string()),
+                    base_url: non_empty(p.value(2).trim().to_string()),
+                },
+            }
+        };
+        match submit {
+            PromptSubmit::Upload { owner, id, path } => {
+                if path.trim().is_empty() {
+                    self.set_status(Level::Warn, "no file path given");
+                    return;
+                }
+                let Some(entry) = self.vaults[owner]
+                    .db
+                    .entries
+                    .iter()
+                    .find(|e| e.id == id)
+                    .cloned()
+                else {
+                    self.mode = Mode::Normal;
+                    self.set_status(Level::Error, "entry no longer exists");
+                    return;
+                };
+                if let Err(e) = crate::actions::set_active_account(Some(
+                    self.vaults[owner].name.clone(),
+                )) {
+                    self.set_status(Level::Error, format!("{e:#}"));
+                    return;
+                }
+                match commands::tui_attachment_create(
+                    &mut self.vaults[owner].db,
+                    &entry,
+                    &expand_tilde(path.trim()),
+                ) {
+                    Ok(()) => {
+                        self.mode = Mode::Normal;
+                        self.reload_vault(owner);
+                        self.set_status(
+                            Level::Success,
+                            "attachment uploaded",
+                        );
+                    }
+                    Err(e) => self.set_status(Level::Error, format!("{e:#}")),
+                }
+            }
+            PromptSubmit::AddAccount {
+                name,
+                email,
+                base_url,
+            } => match commands::tui_account_add(&name, email, base_url) {
+                Ok(()) => {
+                    self.set_status(
+                        Level::Success,
+                        format!("added account '{name}'"),
+                    );
+                    // Back to the (refreshed) accounts panel.
+                    self.open_accounts();
+                }
+                Err(e) => self.set_status(Level::Error, format!("{e:#}")),
+            },
+        }
     }
 
     // ---- key handling ---------------------------------------------------
@@ -862,6 +1097,7 @@ impl App {
                 Action::None
             }
             Mode::Accounts(_) => self.handle_accounts(key),
+            Mode::Prompt(_) => self.handle_prompt(key),
             Mode::Help => {
                 self.mode = Mode::Normal;
                 Action::None
@@ -973,6 +1209,12 @@ impl App {
 
     fn handle_attachments(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Any key other than a repeated `d` cancels a pending delete confirm.
+        if !matches!(key.code, KeyCode::Char('d')) {
+            if let Mode::Attachments(v) = &mut self.mode {
+                v.pending_delete = false;
+            }
+        }
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
             KeyCode::Down | KeyCode::Char('j') => self.attachment_move(1),
@@ -980,7 +1222,54 @@ impl App {
             KeyCode::Char('n') if ctrl => self.attachment_move(1),
             KeyCode::Char('p') if ctrl => self.attachment_move(-1),
             KeyCode::Enter => self.download_attachment(),
+            KeyCode::Char('a' | 'u') => self.start_attachment_upload(),
+            KeyCode::Char('d') => self.attachment_delete_pressed(),
             _ => {}
+        }
+    }
+
+    // `d` in the picker: first press arms the confirm, second deletes.
+    fn attachment_delete_pressed(&mut self) {
+        let (armed, att_id) = if let Mode::Attachments(v) = &self.mode {
+            (
+                v.pending_delete,
+                v.items.get(v.selected).map(|i| i.id.clone()),
+            )
+        } else {
+            (false, None)
+        };
+        let Some(att_id) = att_id else {
+            return;
+        };
+        if !armed {
+            if let Mode::Attachments(v) = &mut self.mode {
+                v.pending_delete = true;
+            }
+            self.set_status(Level::Warn, "press d again to confirm delete");
+            return;
+        }
+        let Some(owner) = self.current_owner() else {
+            return;
+        };
+        let Some(entry) = self.current_entry() else {
+            return;
+        };
+        if let Err(e) = self.activate_current() {
+            self.set_status(Level::Error, format!("{e:#}"));
+            return;
+        }
+        match commands::tui_attachment_delete(
+            &mut self.vaults[owner].db,
+            &entry,
+            &att_id,
+        ) {
+            Ok(()) => {
+                self.reload_vault(owner);
+                self.set_status(Level::Success, "attachment deleted");
+                // Reopen the picker so the remaining attachments refresh.
+                self.open_attachments();
+            }
+            Err(e) => self.set_status(Level::Error, format!("{e:#}")),
         }
     }
 

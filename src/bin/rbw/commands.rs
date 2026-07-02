@@ -5092,9 +5092,28 @@ fn decrypt_field(
     entry_key: Option<&str>,
     org_id: Option<&str>,
 ) -> Option<String> {
+    decrypt_field_with_attachment_key(name, field, entry_key, org_id, None)
+}
+
+// Like `decrypt_field`, but for a field wrapped in an attachment's own key
+// (e.g. an attachment file name) rather than directly in the entry's key.
+fn decrypt_field_with_attachment_key(
+    name: Field,
+    field: Option<&str>,
+    entry_key: Option<&str>,
+    org_id: Option<&str>,
+    attachment_key: Option<&str>,
+) -> Option<String> {
     let field = field
         .as_ref()
-        .map(|field| crate::actions::decrypt(field, entry_key, org_id))
+        .map(|field| {
+            crate::actions::decrypt_with_attachment_key(
+                field,
+                entry_key,
+                org_id,
+                attachment_key,
+            )
+        })
         .transpose();
     match field {
         Ok(field) => field,
@@ -5772,11 +5791,12 @@ pub fn decrypt_cipher(
         .iter()
         .map(|attachment| DecryptedAttachment {
             id: attachment.id.clone(),
-            file_name: decrypt_field(
+            file_name: decrypt_field_with_attachment_key(
                 Field::Name,
                 attachment.file_name.as_deref(),
                 entry.key.as_deref(),
                 entry.org_id.as_deref(),
+                attachment.key.as_deref(),
             ),
             size: attachment.size.clone(),
             size_name: attachment.size_name.clone(),
@@ -6485,6 +6505,118 @@ pub fn tui_accounts() -> anyhow::Result<Vec<TuiAccount>> {
         });
     }
     Ok(out)
+}
+
+// Upload a file as an attachment on an already-loaded, already-unlocked entry
+// (the TUI equivalent of `attachment_create`, which finds+unlocks itself).
+pub fn tui_attachment_create(
+    db: &mut rbw::db::Db,
+    entry: &rbw::db::Entry,
+    file: &std::path::Path,
+) -> anyhow::Result<()> {
+    let access_token = db
+        .access_token
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
+    let refresh_token = db
+        .refresh_token
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
+
+    let filename = file
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or_else(|| anyhow::anyhow!("invalid filename"))?;
+    let data = std::fs::read(file)
+        .with_context(|| format!("failed to read {}", file.display()))?;
+
+    let (encrypted_data, encrypted_key, encrypted_filename) =
+        crate::actions::encrypt_attachment(
+            data,
+            filename,
+            entry.key.as_deref(),
+            entry.org_id.as_deref(),
+        )?;
+
+    if let (Some(new_token), ()) = rbw::actions::create_attachment(
+        &access_token,
+        &refresh_token,
+        &entry.id,
+        &encrypted_filename,
+        &encrypted_key,
+        encrypted_data,
+    )? {
+        db.access_token = Some(new_token);
+        save_db(db)?;
+    }
+
+    crate::actions::sync()?;
+    Ok(())
+}
+
+// Delete an attachment from an entry and sync.
+pub fn tui_attachment_delete(
+    db: &mut rbw::db::Db,
+    entry: &rbw::db::Entry,
+    attachment_id: &str,
+) -> anyhow::Result<()> {
+    let access_token = db
+        .access_token
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
+    let refresh_token = db
+        .refresh_token
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
+
+    if let (Some(new_token), ()) = rbw::actions::delete_attachment(
+        &access_token,
+        &refresh_token,
+        &entry.id,
+        attachment_id,
+    )? {
+        db.access_token = Some(new_token);
+        save_db(db)?;
+    }
+
+    crate::actions::sync()?;
+    Ok(())
+}
+
+// Add a new account to the config from the TUI accounts panel. Mirrors
+// `account_add` but without printing or tearing down the agent (per-account
+// keysets make that unnecessary). The account starts locked; unlocking it from
+// the panel runs the login/unlock flow.
+pub fn tui_account_add(
+    name: &str,
+    email: Option<String>,
+    base_url: Option<String>,
+) -> anyhow::Result<()> {
+    if name.trim().is_empty() {
+        anyhow::bail!("account name cannot be empty");
+    }
+    let mut config = rbw::config::Config::load()
+        .unwrap_or_else(|_| rbw::config::Config::new());
+    config.migrate_legacy();
+    if config.accounts.iter().any(|a| a.name == name) {
+        anyhow::bail!("account '{name}' already exists");
+    }
+    let first = config.accounts.is_empty();
+    config.accounts.push(rbw::config::Account {
+        name: name.to_string(),
+        email,
+        sso_id: None,
+        base_url,
+        identity_url: None,
+        ui_url: None,
+        notifications_url: None,
+        client_cert_path: None,
+    });
+    if first {
+        config.primary_account = Some(name.to_string());
+    }
+    config.save()?;
+    Ok(())
 }
 
 // Set the primary account without tearing down the agent: under per-account

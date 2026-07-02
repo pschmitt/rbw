@@ -200,6 +200,7 @@ async fn dispatch(
             cipherstring,
             entry_key,
             org_id,
+            attachment_key,
         } => {
             crate::actions::decrypt(
                 sock,
@@ -208,6 +209,7 @@ async fn dispatch(
                 &cipherstring,
                 entry_key.as_deref(),
                 org_id.as_deref(),
+                attachment_key.as_deref(),
                 account,
             )
             .await?;
