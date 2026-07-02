@@ -158,7 +158,15 @@ enum Opt {
     Unlocked,
 
     #[command(about = "Update the local copy of the Bitwarden database")]
-    Sync,
+    Sync {
+        #[arg(
+            long,
+            help = "With multiple accounts configured, unlock (prompting as \
+                needed) and sync every account instead of just the \
+                already-unlocked ones"
+        )]
+        all: bool,
+    },
 
     #[command(
         about = "Browse, search, and edit entries in an interactive terminal UI",
@@ -631,7 +639,7 @@ impl Opt {
             Self::Login => "login".to_string(),
             Self::Unlock { .. } => "unlock".to_string(),
             Self::Unlocked => "unlocked".to_string(),
-            Self::Sync => "sync".to_string(),
+            Self::Sync { .. } => "sync".to_string(),
             Self::Tui { .. } => "tui".to_string(),
             Self::Export => "export".to_string(),
             Self::List { .. } => "list".to_string(),
@@ -945,7 +953,7 @@ fn main() {
             commands::unlock(password)
         }
         Opt::Unlocked => commands::unlocked(),
-        Opt::Sync => commands::sync(),
+        Opt::Sync { all } => commands::sync(all),
         Opt::Tui { term } => tui::run(term.as_deref()),
         Opt::Export => commands::export(),
         Opt::List {

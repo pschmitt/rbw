@@ -2387,11 +2387,35 @@ pub fn unlocked() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn sync() -> anyhow::Result<()> {
-    ensure_agent()?;
-    crate::actions::login()?;
-    crate::actions::sync()?;
+pub fn sync(all: bool) -> anyhow::Result<()> {
+    let target_accounts = list_target_accounts(all)?;
+    let c = stdout_supports_color();
 
+    let mut failed = Vec::new();
+    for account in &target_accounts {
+        crate::actions::set_active_account(Some(account.clone()))?;
+        match crate::actions::login().and_then(|()| crate::actions::sync()) {
+            Ok(()) => {
+                eprintln!(
+                    "{} '{}'",
+                    style::success("synced", c),
+                    style::name(account, c),
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "{} '{}': {e:#}",
+                    style::warning("failed to sync", c),
+                    style::name(account, c),
+                );
+                failed.push(account.clone());
+            }
+        }
+    }
+
+    if !failed.is_empty() {
+        anyhow::bail!("failed to sync: {}", failed.join(", "));
+    }
     Ok(())
 }
 
