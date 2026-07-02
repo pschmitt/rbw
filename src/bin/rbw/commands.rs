@@ -2643,6 +2643,23 @@ pub fn unlock(password: Option<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
+// Unlocks every configured account per its `unlock` policy, same target
+// selection as `list --all`/`sync --all`. `list_target_accounts` does the
+// actual unlocking as a side effect of building its target list; this just
+// reports what ended up unlocked.
+pub fn unlock_all() -> anyhow::Result<()> {
+    let target_accounts = list_target_accounts(true)?;
+    let c = stdout_supports_color();
+    for account in &target_accounts {
+        eprintln!(
+            "{} '{}'",
+            style::success("unlocked", c),
+            style::name(account, c),
+        );
+    }
+    Ok(())
+}
+
 pub fn unlocked() -> anyhow::Result<()> {
     // not ensure_agent, because we don't want `rbw unlocked` to start the
     // agent if it's not running

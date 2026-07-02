@@ -150,8 +150,18 @@ enum Opt {
 
     #[command(about = "Unlock the local Bitwarden database")]
     Unlock {
-        #[arg(long, help = "Read the password from standard input")]
+        #[arg(
+            long,
+            help = "Read the password from standard input",
+            conflicts_with = "all"
+        )]
         stdin: bool,
+        #[arg(
+            long,
+            help = "With multiple accounts configured, unlock (prompting \
+                as needed) every account instead of just the active one"
+        )]
+        all: bool,
     },
 
     #[command(about = "Check if the local Bitwarden database is unlocked")]
@@ -631,10 +641,10 @@ enum Opt {
     StopAgent,
 
     #[command(
-        name = "gen-completions",
+        name = "completions",
         about = "Generate completion script for the given shell"
     )]
-    GenCompletions { shell: CompletionShell },
+    Completions { shell: CompletionShell },
 }
 
 impl Opt {
@@ -678,7 +688,7 @@ impl Opt {
             Self::Lock => "lock".to_string(),
             Self::Purge => "purge".to_string(),
             Self::StopAgent => "stop-agent".to_string(),
-            Self::GenCompletions { .. } => "gen-completions".to_string(),
+            Self::Completions { .. } => "completions".to_string(),
         }
     }
 }
@@ -948,18 +958,22 @@ fn main() {
         },
         Opt::Register => commands::register(),
         Opt::Login => commands::login(),
-        Opt::Unlock { stdin } => {
-            let password = if stdin {
-                let mut buf = String::new();
-                let _ = std::io::stdin()
-                    .read_line(&mut buf)
-                    .context("failed to read password from stdin");
-                Some(buf.trim_end_matches('\n').to_string())
+        Opt::Unlock { stdin, all } => {
+            if all {
+                commands::unlock_all()
             } else {
-                None
-            };
+                let password = if stdin {
+                    let mut buf = String::new();
+                    let _ = std::io::stdin()
+                        .read_line(&mut buf)
+                        .context("failed to read password from stdin");
+                    Some(buf.trim_end_matches('\n').to_string())
+                } else {
+                    None
+                };
 
-            commands::unlock(password)
+                commands::unlock(password)
+            }
         }
         Opt::Unlocked => commands::unlocked(),
         Opt::Sync { all } => commands::sync(all),
@@ -1281,7 +1295,7 @@ fn main() {
         Opt::Lock => commands::lock(),
         Opt::Purge => commands::purge(),
         Opt::StopAgent => commands::stop_agent(),
-        Opt::GenCompletions { shell } => {
+        Opt::Completions { shell } => {
             match shell {
                 CompletionShell::Bash => {
                     clap_complete::generate(

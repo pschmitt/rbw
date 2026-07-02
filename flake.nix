@@ -37,11 +37,11 @@
                 "$out/share/bash-completion/completions" \
                 "$out/share/fish/vendor_completions.d" \
                 "$out/share/zsh/site-functions"
-              "$out/bin/rbw" gen-completions bash \
+              "$out/bin/rbw" completions bash \
                 > "$out/share/bash-completion/completions/rbw"
-              "$out/bin/rbw" gen-completions fish \
+              "$out/bin/rbw" completions fish \
                 > "$out/share/fish/vendor_completions.d/rbw.fish"
-              "$out/bin/rbw" gen-completions zsh \
+              "$out/bin/rbw" completions zsh \
                 > "$out/share/zsh/site-functions/_rbw"
             '';
           };

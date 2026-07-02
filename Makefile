@@ -37,9 +37,9 @@ cleanall: clean
 
 completion: release
 	@mkdir -p target/x86_64-unknown-linux-musl/release/completion
-	@./target/x86_64-unknown-linux-musl/release/rbw gen-completions bash > target/x86_64-unknown-linux-musl/release/completion/bash
-	@./target/x86_64-unknown-linux-musl/release/rbw gen-completions zsh > target/x86_64-unknown-linux-musl/release/completion/zsh
-	@./target/x86_64-unknown-linux-musl/release/rbw gen-completions fish > target/x86_64-unknown-linux-musl/release/completion/fish
+	@./target/x86_64-unknown-linux-musl/release/rbw completions bash > target/x86_64-unknown-linux-musl/release/completion/bash
+	@./target/x86_64-unknown-linux-musl/release/rbw completions zsh > target/x86_64-unknown-linux-musl/release/completion/zsh
+	@./target/x86_64-unknown-linux-musl/release/rbw completions fish > target/x86_64-unknown-linux-musl/release/completion/fish
 .PHONY: completion
 
 package: pkg/$(DEB_PACKAGE) pkg/$(TGZ_PACKAGE)
