@@ -8,6 +8,7 @@
 
 mod app;
 mod input;
+mod keymap;
 mod ui;
 
 use std::time::Duration;

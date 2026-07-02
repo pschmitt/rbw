@@ -95,6 +95,13 @@ pub struct Config {
     pub sync_interval: u64,
     #[serde(default = "default_pinentry")]
     pub pinentry: String,
+    // TUI keybinding overrides: action name (e.g. "copy_password",
+    // "move_down") to a list of key chord strings (e.g. "ctrl-y", "alt-p",
+    // "g", "pagedown") that fully replace that action's built-in default
+    // chords. Actions not listed here keep their defaults. See
+    // `src/bin/rbw/tui/keymap.rs` for the full action list and defaults.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub tui_keybindings: std::collections::HashMap<String, Vec<String>>,
     // backcompat, no longer generated in new configs
     #[serde(skip_serializing)]
     pub device_id: Option<String>,
@@ -115,6 +122,7 @@ impl Default for Config {
             lock_timeout: default_lock_timeout(),
             sync_interval: default_sync_interval(),
             pinentry: default_pinentry(),
+            tui_keybindings: std::collections::HashMap::new(),
             device_id: None,
         }
     }

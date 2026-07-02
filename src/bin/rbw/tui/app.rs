@@ -14,6 +14,7 @@ use crate::commands::{
 };
 
 use super::input::Input;
+use super::keymap::{Keymap, TuiAction};
 
 // What the event loop should do after a keypress. Everything except spawning
 // an external editor is handled inline (agent round-trips are synchronous and
@@ -217,10 +218,26 @@ pub struct App {
     pub reveal: bool,
     pub status: Option<Status>,
     pub detail_scroll: u16,
+    keymap: Keymap,
 }
 
 impl App {
     pub fn new(open: commands::TuiOpen, initial_term: Option<&str>) -> Self {
+        let keymap = rbw::config::Config::load().map_or_else(
+            |_| Keymap::resolve(&std::collections::HashMap::new()),
+            |config| Keymap::resolve(&config.tui_keybindings),
+        );
+        Self::with_keymap(open, initial_term, keymap)
+    }
+
+    // Split out from `new` so tests can supply a deterministic keymap
+    // instead of picking up whatever the machine running them happens to
+    // have in `~/.config/rbw/config.json`.
+    fn with_keymap(
+        open: commands::TuiOpen,
+        initial_term: Option<&str>,
+        keymap: Keymap,
+    ) -> Self {
         let vaults = open
             .vaults
             .into_iter()
@@ -247,6 +264,7 @@ impl App {
             reveal: false,
             status: None,
             detail_scroll: 0,
+            keymap,
         };
         app.rebuild_flat();
         app.recompute_filter();
@@ -947,14 +965,11 @@ impl App {
     }
 
     fn handle_accounts(&mut self, key: KeyEvent) -> Action {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
-            KeyCode::Char('n') if ctrl => self.accounts_move(1),
-            KeyCode::Char('p') if ctrl => self.accounts_move(-1),
-            KeyCode::Down | KeyCode::Char('j') => self.accounts_move(1),
-            KeyCode::Up | KeyCode::Char('k') => self.accounts_move(-1),
-            KeyCode::Enter | KeyCode::Char('u') => {
+        match self.keymap.action_for(key, true) {
+            Some(TuiAction::AccountClose) => self.mode = Mode::Normal,
+            Some(TuiAction::AccountMoveDown) => self.accounts_move(1),
+            Some(TuiAction::AccountMoveUp) => self.accounts_move(-1),
+            Some(TuiAction::AccountUnlock) => {
                 // Unlock the highlighted account if it is locked; the loop
                 // handles it (pinentry needs the terminal).
                 if let Some((name, unlocked)) = self.selected_account() {
@@ -968,9 +983,11 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('s') => self.sync_selected_account(),
-            KeyCode::Char('p') => self.set_primary_selected_account(),
-            KeyCode::Char('a') => self.start_add_account(),
+            Some(TuiAction::AccountSync) => self.sync_selected_account(),
+            Some(TuiAction::AccountSetPrimary) => {
+                self.set_primary_selected_account();
+            }
+            Some(TuiAction::AccountAdd) => self.start_add_account(),
             _ => {}
         }
         Action::None
@@ -1123,30 +1140,28 @@ impl App {
     // focused: list navigation, secret reveal, the external editor, and the
     // Alt-modified quick actions (so a power user never has to leave the
     // filter). Returns `Some` when the key was consumed here.
+    // Only resolves actions whose chord isn't a plain, unmodified character
+    // (`Keymap::action_for(key, false)`), so a caller with a text-input
+    // widget (the search filter) never has typing swallowed by an action.
     fn handle_shared(&mut self, key: KeyEvent) -> Option<Action> {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let alt = key.modifiers.contains(KeyModifiers::ALT);
-        match key.code {
-            KeyCode::Up => self.move_by(-1),
-            KeyCode::Down => self.move_by(1),
-            KeyCode::PageUp => self.move_by(-10),
-            KeyCode::PageDown => self.move_by(10),
-            KeyCode::Char('p') if ctrl => self.move_by(-1),
-            KeyCode::Char('n') if ctrl => self.move_by(1),
-            KeyCode::Char('c') if ctrl => return Some(Action::Quit),
-            KeyCode::Char('e') if ctrl => return Some(Action::OpenEditor),
-            KeyCode::Char('s') if ctrl => self.sync(),
-            KeyCode::Char('r') if ctrl => self.reveal = !self.reveal,
-            KeyCode::Char('y') if ctrl => self.copy_password(),
-            KeyCode::Char('p') if alt => self.copy_password(),
-            KeyCode::Char('u') if alt => self.copy_username(),
-            KeyCode::Char('t') if alt => self.copy_totp(),
-            KeyCode::Char('o') if alt => self.open_uri(),
-            KeyCode::Char('s') if alt => self.open_attachments(),
-            KeyCode::Char('j') if alt => {
+        match self.keymap.action_for(key, false)? {
+            TuiAction::MoveUp => self.move_by(-1),
+            TuiAction::MoveDown => self.move_by(1),
+            TuiAction::PageUp => self.move_by(-10),
+            TuiAction::PageDown => self.move_by(10),
+            TuiAction::Quit => return Some(Action::Quit),
+            TuiAction::OpenEditor => return Some(Action::OpenEditor),
+            TuiAction::Sync => self.sync(),
+            TuiAction::ToggleReveal => self.reveal = !self.reveal,
+            TuiAction::CopyPassword => self.copy_password(),
+            TuiAction::CopyUsername => self.copy_username(),
+            TuiAction::CopyTotp => self.copy_totp(),
+            TuiAction::OpenUri => self.open_uri(),
+            TuiAction::OpenAttachments => self.open_attachments(),
+            TuiAction::ScrollDetailDown => {
                 self.detail_scroll = self.detail_scroll.saturating_add(1);
             }
-            KeyCode::Char('k') if alt => {
+            TuiAction::ScrollDetailUp => {
                 self.detail_scroll = self.detail_scroll.saturating_sub(1);
             }
             _ => return None,
@@ -1158,39 +1173,42 @@ impl App {
         if let Some(action) = self.handle_shared(key) {
             return action;
         }
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => return Action::Quit,
-            KeyCode::Char('j') => self.move_by(1),
-            KeyCode::Char('k') => self.move_by(-1),
-            KeyCode::Char('g') | KeyCode::Home => self.select(0),
-            KeyCode::Char('G') | KeyCode::End => {
-                self.select(self.filtered.len());
-            }
-            KeyCode::Char('J') => {
+        // Esc always quits Normal mode, regardless of keybinding config —
+        // it's a near-universal "back out" convention worth keeping as a
+        // fallback even if `quit` is rebound away from it.
+        if key.code == KeyCode::Esc {
+            return Action::Quit;
+        }
+        match self.keymap.action_for(key, true) {
+            Some(TuiAction::Quit) => return Action::Quit,
+            Some(TuiAction::MoveDown) => self.move_by(1),
+            Some(TuiAction::MoveUp) => self.move_by(-1),
+            Some(TuiAction::JumpFirst) => self.select(0),
+            Some(TuiAction::JumpLast) => self.select(self.filtered.len()),
+            Some(TuiAction::ScrollDetailDown) => {
                 self.detail_scroll = self.detail_scroll.saturating_add(1);
             }
-            KeyCode::Char('K') => {
+            Some(TuiAction::ScrollDetailUp) => {
                 self.detail_scroll = self.detail_scroll.saturating_sub(1);
             }
-            KeyCode::Char('/' | 'i') | KeyCode::Tab => {
-                self.mode = Mode::Search;
-            }
-            KeyCode::Char('r') => self.reveal = !self.reveal,
-            KeyCode::Char('p' | 'y') => self.copy_password(),
-            KeyCode::Char('u') => self.copy_username(),
-            KeyCode::Char('t') => self.copy_totp(),
-            KeyCode::Char('o') => self.open_uri(),
-            KeyCode::Char('s') => self.open_attachments(),
-            KeyCode::Char('e') | KeyCode::Enter => self.start_edit(),
-            KeyCode::Char('E') => return Action::OpenEditor,
-            KeyCode::Char('a') => self.start_add(),
-            KeyCode::Char('A') => self.open_accounts(),
-            KeyCode::Char('d') => {
+            Some(TuiAction::ToggleSearch) => self.mode = Mode::Search,
+            Some(TuiAction::ToggleReveal) => self.reveal = !self.reveal,
+            Some(TuiAction::CopyPassword) => self.copy_password(),
+            Some(TuiAction::CopyUsername) => self.copy_username(),
+            Some(TuiAction::CopyTotp) => self.copy_totp(),
+            Some(TuiAction::OpenUri) => self.open_uri(),
+            Some(TuiAction::OpenAttachments) => self.open_attachments(),
+            Some(TuiAction::StartEdit) => self.start_edit(),
+            Some(TuiAction::OpenEditor) => return Action::OpenEditor,
+            Some(TuiAction::StartAdd) => self.start_add(),
+            Some(TuiAction::OpenAccounts) => self.open_accounts(),
+            Some(TuiAction::DeleteEntry) => {
                 if self.current_search().is_some() {
                     self.mode = Mode::ConfirmDelete;
                 }
             }
-            KeyCode::Char('?') => self.mode = Mode::Help,
+            Some(TuiAction::Sync) => self.sync(),
+            Some(TuiAction::Help) => self.mode = Mode::Help,
             _ => {}
         }
         Action::None
@@ -1223,22 +1241,24 @@ impl App {
     }
 
     fn handle_attachments(&mut self, key: KeyEvent) {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        // Any key other than a repeated `d` cancels a pending delete confirm.
-        if !matches!(key.code, KeyCode::Char('d')) {
+        let action = self.keymap.action_for(key, true);
+        // Any key other than a repeated delete cancels a pending confirm.
+        if action != Some(TuiAction::AttachmentDelete) {
             if let Mode::Attachments(v) = &mut self.mode {
                 v.pending_delete = false;
             }
         }
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
-            KeyCode::Down | KeyCode::Char('j') => self.attachment_move(1),
-            KeyCode::Up | KeyCode::Char('k') => self.attachment_move(-1),
-            KeyCode::Char('n') if ctrl => self.attachment_move(1),
-            KeyCode::Char('p') if ctrl => self.attachment_move(-1),
-            KeyCode::Enter => self.download_attachment(),
-            KeyCode::Char('a' | 'u') => self.start_attachment_upload(),
-            KeyCode::Char('d') => self.attachment_delete_pressed(),
+        match action {
+            Some(TuiAction::AttachmentClose) => self.mode = Mode::Normal,
+            Some(TuiAction::AttachmentMoveDown) => self.attachment_move(1),
+            Some(TuiAction::AttachmentMoveUp) => self.attachment_move(-1),
+            Some(TuiAction::AttachmentDownload) => self.download_attachment(),
+            Some(TuiAction::AttachmentUpload) => {
+                self.start_attachment_upload();
+            }
+            Some(TuiAction::AttachmentDelete) => {
+                self.attachment_delete_pressed();
+            }
             _ => {}
         }
     }
@@ -1706,11 +1726,11 @@ fn detail_first_uri(detail: &DecryptedCipher) -> Option<String> {
 
 #[cfg(test)]
 mod test {
-    use super::{Action, App, Mode};
+    use super::{Action, App, Keymap, Mode};
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn app() -> App {
-        App::new(
+        App::with_keymap(
             crate::commands::TuiOpen {
                 vaults: vec![crate::commands::TuiVault {
                     account: "default".to_string(),
@@ -1721,6 +1741,7 @@ mod test {
                 multi: false,
             },
             None,
+            Keymap::resolve(&std::collections::HashMap::new()),
         )
     }
 
