@@ -266,19 +266,24 @@ fn parse_query(input: &str) -> Vec<QueryToken> {
     input.split_whitespace().map(QueryToken::parse).collect()
 }
 
-// Which displayed field a piece of text in the TUI's list row is showing —
-// used to decide which query words apply to it for `highlight_ranges`.
+// Which displayed field a piece of text (a TUI list row, a TUI detail-pane
+// row, or a CLI table cell) is showing — used to decide which query words
+// apply to it for `highlight_ranges`.
 #[derive(Clone, Copy)]
 pub enum SearchField {
     Name,
     User,
     Folder,
+    Uri,
+    Notes,
+    Field,
 }
 
 // Byte ranges within `text` (a `field`-typed piece of an entry, e.g. its
 // name) that any word of `query` matches — a bare word always applies to
 // every field, a scoped word like "u:alice" only applies to its own field.
-// Used by the TUI to highlight *why* a row matched the current filter.
+// Used to highlight *why* a row matched the current filter/search term, in
+// both the TUI and the CLI's `list`/`search`.
 pub fn highlight_ranges(
     query: &str,
     field: SearchField,
@@ -293,7 +298,10 @@ pub fn highlight_ranges(
         let ((QueryToken::Any(term), _)
         | (QueryToken::Name(term), SearchField::Name)
         | (QueryToken::User(term), SearchField::User)
-        | (QueryToken::Folder(term), SearchField::Folder)) =
+        | (QueryToken::Folder(term), SearchField::Folder)
+        | (QueryToken::Uri(term), SearchField::Uri)
+        | (QueryToken::Notes(term), SearchField::Notes)
+        | (QueryToken::Field(term), SearchField::Field)) =
             (token, field)
         else {
             continue;
@@ -1628,10 +1636,6 @@ mod style {
     pub fn size(s: &str, c: bool) -> String {
         paint(s, "2", c)
     }
-    // collections dim        — metadata that rarely matters
-    pub fn collections(s: &str, c: bool) -> String {
-        paint(s, "2", c)
-    }
     // header  bold white     — table column headers
     pub fn header(s: &str, c: bool) -> String {
         paint(s, "1;37", c)
@@ -1639,6 +1643,45 @@ mod style {
     // raw escape for the rare case where a specific code is needed
     pub fn paint_raw(s: &str, code: &str, c: bool) -> String {
         paint(s, code, c)
+    }
+
+    // Like `paint`, but the byte ranges in `ranges` (e.g. from
+    // `highlight_ranges`) are painted bold red — grep's own default match
+    // color — instead of `code`, which still applies to the rest of the
+    // text. `code` may be empty for a column with no color of its own.
+    pub fn paint_with_matches(
+        text: &str,
+        code: &str,
+        ranges: &[(usize, usize)],
+        c: bool,
+    ) -> String {
+        if !c || ranges.is_empty() {
+            return if code.is_empty() {
+                text.to_string()
+            } else {
+                paint(text, code, c)
+            };
+        }
+        let based = |s: &str| {
+            if code.is_empty() {
+                s.to_string()
+            } else {
+                paint(s, code, true)
+            }
+        };
+        let mut out = String::new();
+        let mut pos = 0;
+        for &(s, e) in ranges {
+            if s > pos {
+                out.push_str(&based(&text[pos..s]));
+            }
+            out.push_str(&paint(&text[s..e], "1;31", true));
+            pos = e;
+        }
+        if pos < text.len() {
+            out.push_str(&based(&text[pos..]));
+        }
+        out
     }
 }
 
@@ -1760,10 +1803,25 @@ fn format_ambiguous_entry(entry: &DecryptedSearchCipher, c: bool) -> String {
     )
 }
 
+// The `SearchField` a table column's cells should be matched against for
+// grep-style highlighting, or `None` for a column search doesn't reason
+// about at all (id, password, type, …). The `uri` column is the only one
+// rendered with `TableColumnStyle::Default` today.
+fn search_field_for_column(style: TableColumnStyle) -> Option<SearchField> {
+    match style {
+        TableColumnStyle::Name => Some(SearchField::Name),
+        TableColumnStyle::User => Some(SearchField::User),
+        TableColumnStyle::Folder => Some(SearchField::Folder),
+        TableColumnStyle::Default => Some(SearchField::Uri),
+        _ => None,
+    }
+}
+
 fn colorize_table_cell(
     text: &str,
     col_style: TableColumnStyle,
     color: bool,
+    ranges: &[(usize, usize)],
 ) -> String {
     if text.is_empty() {
         return String::new();
@@ -1775,19 +1833,19 @@ fn colorize_table_cell(
         return style::empty(text, color);
     }
 
-    match col_style {
-        TableColumnStyle::Id => style::uid(text, color),
-        TableColumnStyle::Name => style::name(text, color),
-        TableColumnStyle::User => style::user(text, color),
-        TableColumnStyle::Password => style::secret(text, color),
-        TableColumnStyle::Folder => style::folder(text, color),
-        TableColumnStyle::EntryType => style::entry_type(text, color),
-        TableColumnStyle::Collections => style::collections(text, color),
-        TableColumnStyle::Attachments => style::uri(text, color),
-        TableColumnStyle::Size => style::size(text, color),
-        TableColumnStyle::Account => style::dim(text, color),
-        TableColumnStyle::Default => text.to_string(),
-    }
+    let code = match col_style {
+        TableColumnStyle::Id => "2;36",
+        TableColumnStyle::Name => "1",
+        TableColumnStyle::User => "32",
+        TableColumnStyle::Password => "33",
+        TableColumnStyle::Folder => "34",
+        TableColumnStyle::EntryType => "35",
+        TableColumnStyle::Collections | TableColumnStyle::Size
+        | TableColumnStyle::Account => "2",
+        TableColumnStyle::Attachments => "36",
+        TableColumnStyle::Default => "",
+    };
+    style::paint_with_matches(text, code, ranges, color)
 }
 
 fn table_cell_width(text: &str) -> usize {
@@ -1839,9 +1897,13 @@ where
     rendered
 }
 
+// `term` is the search/filter query behind these rows, if any (empty for a
+// plain `rbw list`) — matched substrings are painted grep-style (bold red)
+// within a cell's usual color, same match logic as `search_match`.
 fn print_table(
     columns: &[TableColumn<'_>],
     rows: &[Vec<String>],
+    term: &str,
 ) -> anyhow::Result<()> {
     if stdout_is_terminal() {
         let widths = compute_table_widths(columns, rows);
@@ -1856,10 +1918,14 @@ fn print_table(
         for row in rows {
             let rendered = render_table_row(row, &widths, |index, cell| {
                 columns.get(index).map_or_else(String::new, |column| {
+                    let ranges = search_field_for_column(column.style)
+                        .map(|field| highlight_ranges(term, field, cell))
+                        .unwrap_or_default();
                     colorize_table_cell(
                         cell,
                         column.style,
                         stdout_supports_color(),
+                        &ranges,
                     )
                 })
             });
@@ -2629,7 +2695,7 @@ pub fn list(
     }
     entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
-    print_entry_list(&entries, &fields, output)?;
+    print_entry_list(&entries, &fields, output, "")?;
 
     Ok(())
 }
@@ -2806,6 +2872,7 @@ pub fn attachment_list(
                 },
             ],
             &rows,
+            "",
         )?;
     }
 
@@ -2969,6 +3036,7 @@ fn print_entry_list(
     entries: &[DecryptedListCipher],
     fields: &[ListField],
     output: OutputMode,
+    term: &str,
 ) -> anyhow::Result<()> {
     if output_is_structured(output) {
         write_serialized_pretty(
@@ -3087,7 +3155,7 @@ fn print_entry_list(
             })
             .collect::<Vec<_>>();
 
-        print_table(&columns, &rows)?;
+        print_table(&columns, &rows, term)?;
     }
 
     Ok(())
@@ -3212,7 +3280,7 @@ pub fn search(
         std::process::exit(1);
     }
 
-    print_entry_list(&entries, &fields, output)?;
+    print_entry_list(&entries, &fields, output, term)?;
 
     Ok(())
 }
@@ -4512,6 +4580,7 @@ pub fn list_collections(output: OutputMode) -> anyhow::Result<()> {
                 },
             ],
             &rows,
+            "",
         )?;
     }
 
@@ -8439,6 +8508,62 @@ mod test {
             highlight_ranges("", SearchField::Name, "Google"),
             Vec::new()
         );
+    }
+
+    #[test]
+    fn test_paint_with_matches_colors_the_matched_ranges_grep_style() {
+        // No ranges: falls back to plain base-color painting (or none, for
+        // an empty base code).
+        assert_eq!(
+            style::paint_with_matches("hi", "32", &[], true),
+            "\x1b[32mhi\x1b[0m"
+        );
+        assert_eq!(style::paint_with_matches("hi", "", &[], true), "hi");
+
+        // A match is bold red, wrapped by the base color on either side.
+        assert_eq!(
+            style::paint_with_matches(
+                "philipp@schmitt.co",
+                "32",
+                &[(0, 7)],
+                true
+            ),
+            "\x1b[1;31mphilipp\x1b[0m\x1b[32m@schmitt.co\x1b[0m"
+        );
+
+        // Same, but with no base color (e.g. the uri column).
+        assert_eq!(
+            style::paint_with_matches("google.com", "", &[(0, 6)], true),
+            "\x1b[1;31mgoogle\x1b[0m.com"
+        );
+
+        // Color disabled: always plain, match or not.
+        assert_eq!(
+            style::paint_with_matches("hi", "32", &[(0, 2)], false),
+            "hi"
+        );
+    }
+
+    #[test]
+    fn test_search_field_for_column_covers_the_matchable_columns() {
+        assert!(matches!(
+            search_field_for_column(TableColumnStyle::Name),
+            Some(SearchField::Name)
+        ));
+        assert!(matches!(
+            search_field_for_column(TableColumnStyle::User),
+            Some(SearchField::User)
+        ));
+        assert!(matches!(
+            search_field_for_column(TableColumnStyle::Folder),
+            Some(SearchField::Folder)
+        ));
+        assert!(matches!(
+            search_field_for_column(TableColumnStyle::Default),
+            Some(SearchField::Uri)
+        ));
+        assert!(search_field_for_column(TableColumnStyle::Id).is_none());
+        assert!(search_field_for_column(TableColumnStyle::Password).is_none());
     }
 
     #[test]

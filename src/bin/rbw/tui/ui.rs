@@ -306,7 +306,7 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
         return;
     };
 
-    let lines = detail_lines(detail, app.reveal);
+    let lines = detail_lines(detail, app.reveal, app.filter.value());
     let para = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .scroll((app.detail_scroll, 0));
@@ -321,6 +321,26 @@ fn row(label: &str, value: impl Into<String>) -> Line<'static> {
         ),
         Span::raw(value.into()),
     ])
+}
+
+// Like `row`, but highlights the parts of `value` that matched `query` (see
+// `commands::highlight_ranges`) instead of rendering it plain.
+fn highlighted_row(
+    label: &str,
+    value: &str,
+    query: &str,
+    field: commands::SearchField,
+) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        format!("{label:>LABEL_W$}  "),
+        Style::default().fg(DIM),
+    )];
+    spans.extend(highlighted_spans(
+        value,
+        &commands::highlight_ranges(query, field, value),
+        Style::default(),
+    ));
+    Line::from(spans)
 }
 
 fn secret_row(label: &str, value: &str, reveal: bool) -> Line<'static> {
@@ -354,11 +374,17 @@ fn opt_row(
 fn detail_lines(
     detail: &DecryptedCipher,
     reveal: bool,
+    query: &str,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    lines.push(Line::from(Span::styled(
-        detail.name.clone(),
+    lines.push(Line::from(highlighted_spans(
+        &detail.name,
+        &commands::highlight_ranges(
+            query,
+            commands::SearchField::Name,
+            &detail.name,
+        ),
         Style::default().fg(ACCENT).bold(),
     )));
     lines.push(Line::from(Span::styled(
@@ -366,7 +392,12 @@ fn detail_lines(
         Style::default().fg(DIM).italic(),
     )));
     if let Some(folder) = &detail.folder {
-        lines.push(row("folder", folder.clone()));
+        lines.push(highlighted_row(
+            "folder",
+            folder,
+            query,
+            commands::SearchField::Folder,
+        ));
     }
     lines.push(Line::raw(""));
 
@@ -377,7 +408,14 @@ fn detail_lines(
             totp,
             uris,
         } => {
-            opt_row(&mut lines, "username", username);
+            if let Some(username) = username {
+                lines.push(highlighted_row(
+                    "username",
+                    username,
+                    query,
+                    commands::SearchField::User,
+                ));
+            }
             if let Some(pw) = password {
                 lines.push(secret_row("password", pw, reveal));
             }
@@ -387,7 +425,12 @@ fn detail_lines(
             if let Some(uris) = uris {
                 for (i, uri) in uris.iter().enumerate() {
                     let label = if i == 0 { "url" } else { "" };
-                    lines.push(row(label, uri.uri.clone()));
+                    lines.push(highlighted_row(
+                        label,
+                        &uri.uri,
+                        query,
+                        commands::SearchField::Uri,
+                    ));
                 }
             }
         }
@@ -435,7 +478,14 @@ fn detail_lines(
             if !name.is_empty() {
                 lines.push(row("name", name.join(" ")));
             }
-            opt_row(&mut lines, "username", username);
+            if let Some(username) = username {
+                lines.push(highlighted_row(
+                    "username",
+                    username,
+                    query,
+                    commands::SearchField::User,
+                ));
+            }
             opt_row(&mut lines, "email", email);
             opt_row(&mut lines, "phone", phone);
             opt_row(&mut lines, "address", address1);
@@ -469,7 +519,12 @@ fn detail_lines(
             if hidden {
                 lines.push(secret_row(&label, &value, reveal));
             } else {
-                lines.push(row(&label, value));
+                lines.push(highlighted_row(
+                    &label,
+                    &value,
+                    query,
+                    commands::SearchField::Field,
+                ));
             }
         }
     }
@@ -479,7 +534,15 @@ fn detail_lines(
             lines.push(Line::raw(""));
             lines.push(section("notes"));
             for line in notes.lines() {
-                lines.push(Line::raw(line.to_string()));
+                lines.push(Line::from(highlighted_spans(
+                    line,
+                    &commands::highlight_ranges(
+                        query,
+                        commands::SearchField::Notes,
+                        line,
+                    ),
+                    Style::default(),
+                )));
             }
         }
     }
@@ -948,7 +1011,7 @@ fn render_help(f: &mut Frame, area: Rect) {
 
 #[cfg(test)]
 mod test {
-    use super::{detail_lines, render};
+    use super::{detail_lines, render, MATCH};
     use crate::commands::{
         AttachmentMetadata, DecryptedCipher, DecryptedData, DecryptedField,
         DecryptedUri,
@@ -1077,7 +1140,7 @@ mod test {
         };
 
         // Masked: the password value must not appear in plain text.
-        let masked = detail_lines(&cipher, false);
+        let masked = detail_lines(&cipher, false, "");
         let masked_text: String = masked
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -1087,12 +1150,81 @@ mod test {
         assert!(!masked_text.contains("hunter2"));
 
         // Revealed: the password value is shown.
-        let shown = detail_lines(&cipher, true);
+        let shown = detail_lines(&cipher, true, "");
         let shown_text: String = shown
             .iter()
             .flat_map(|l| l.spans.iter())
             .map(|s| s.content.as_ref())
             .collect();
         assert!(shown_text.contains("hunter2"));
+    }
+
+    #[test]
+    fn detail_lines_highlight_the_matched_field() {
+        let cipher = DecryptedCipher {
+            id: "id".to_string(),
+            folder: Some("Dev".to_string()),
+            name: "GitHub".to_string(),
+            data: DecryptedData::Login {
+                username: Some("octocat".to_string()),
+                password: None,
+                totp: None,
+                uris: Some(vec![DecryptedUri {
+                    uri: "https://github.com".to_string(),
+                    match_type: None,
+                }]),
+            },
+            fields: vec![DecryptedField {
+                name: Some("scope".to_string()),
+                value: Some("repo-admin".to_string()),
+                ty: None,
+            }],
+            notes: Some("rotate this token yearly".to_string()),
+            history: Vec::new(),
+            attachments: Vec::new(),
+            attachment_metadata: AttachmentMetadata {
+                attachment_count: 0,
+            },
+            account: None,
+        };
+
+        // A span whose content is exactly `text` and whose style carries the
+        // match color — the marker `highlighted_spans` uses for a match.
+        let has_highlight = |lines: &[super::Line<'_>], text: &str| {
+            lines.iter().flat_map(|l| l.spans.iter()).any(|s| {
+                s.content.as_ref() == text && s.style.fg == Some(MATCH)
+            })
+        };
+
+        assert!(has_highlight(
+            &detail_lines(&cipher, false, "n:git"),
+            "Git"
+        ));
+        assert!(has_highlight(
+            &detail_lines(&cipher, false, "u:cat"),
+            "cat"
+        ));
+        assert!(has_highlight(
+            &detail_lines(&cipher, false, "uri:github"),
+            "github"
+        ));
+        assert!(has_highlight(
+            &detail_lines(&cipher, false, "f:dev"),
+            "Dev"
+        ));
+        assert!(has_highlight(
+            &detail_lines(&cipher, false, "field:admin"),
+            "admin"
+        ));
+        assert!(has_highlight(
+            &detail_lines(&cipher, false, "notes:yearly"),
+            "yearly"
+        ));
+
+        // A scoped query with no field match highlights nothing.
+        assert!(!has_highlight(
+            &detail_lines(&cipher, false, "u:git"),
+            "Git"
+        ));
     }
 }
