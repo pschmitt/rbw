@@ -807,6 +807,11 @@ enum CompletionShell {
 enum Config {
     #[command(about = "Show the values of all configuration settings")]
     Show,
+    #[command(about = "Print the value of a single configuration setting")]
+    Get {
+        #[arg(help = "Configuration key to print")]
+        key: String,
+    },
     #[command(about = "Set a configuration option")]
     Set {
         #[arg(help = "Configuration key to set")]
@@ -992,6 +997,31 @@ enum Attachment {
         #[arg(short, long, help = "Ignore case")]
         ignorecase: bool,
     },
+    #[command(
+        about = "Delete an attachment from an entry",
+        visible_aliases = ["remove", "delete"]
+    )]
+    Rm {
+        #[arg(
+            help = "Name, URI, UUID (or multiple terms, all required to match)",
+            value_parser = commands::parse_needle,
+            num_args = 1..,
+            required = true,
+        )]
+        needles: Vec<commands::Needle>,
+        #[arg(
+            long,
+            help = "Attachment ID or filename (see `rbw attachment list \
+                <entry>`); omit to delete the entry's only attachment"
+        )]
+        attachment: Option<String>,
+        #[arg(long, help = "Username of the entry")]
+        user: Option<String>,
+        #[arg(long, help = "Folder name to search in")]
+        folder: Option<String>,
+        #[arg(short, long, help = "Ignore case")]
+        ignorecase: bool,
+    },
 }
 
 impl Attachment {
@@ -1000,6 +1030,7 @@ impl Attachment {
             Self::List { .. } => "list",
             Self::Get { .. } => "get",
             Self::Create { .. } => "create",
+            Self::Rm { .. } => "rm",
         }
         .to_string()
     }
@@ -1009,6 +1040,7 @@ impl Config {
     fn subcommand_name(&self) -> String {
         match self {
             Self::Show => "show",
+            Self::Get { .. } => "get",
             Self::Set { .. } => "set",
             Self::Unset { .. } => "unset",
             Self::Edit => "edit",
@@ -1067,6 +1099,7 @@ fn main() {
     let res = match opt {
         Opt::Config { config } => match config {
             Config::Show => commands::config_show(),
+            Config::Get { key } => commands::config_get(&key),
             Config::Set { key, value } => commands::config_set(&key, &value),
             Config::Unset { key } => commands::config_unset(&key),
             Config::Edit => commands::config_edit(),
@@ -1224,6 +1257,19 @@ fn main() {
                 folder.as_deref(),
                 ignorecase,
                 &file,
+            ),
+            Attachment::Rm {
+                needles,
+                attachment,
+                user,
+                folder,
+                ignorecase,
+            } => commands::attachment_rm(
+                needles,
+                user.as_deref(),
+                folder.as_deref(),
+                ignorecase,
+                attachment.as_deref(),
             ),
         },
         Opt::Get {

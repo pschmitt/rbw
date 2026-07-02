@@ -126,8 +126,10 @@ program is installed (to display password prompts).
 
 ## Configuration
 
-Configuration options are set using the `rbw config` command. Available
-configuration options:
+Configuration options are set using the `rbw config` command (`rbw config set
+<key> <value>`, `rbw config get <key>`, `rbw config unset <key>`, `rbw config
+show`, or `rbw config edit` to edit the whole config.json in `$EDITOR`).
+Available configuration options:
 
 * `email`: The email address to use as the account name when logging into the
   Bitwarden server. Required.
@@ -200,9 +202,11 @@ headers, smart coloring, and default `UID`, `NAME`, `USER`, and
 `ATTACHMENTS` columns. To inspect attachments directly, run
 `rbw attachment list <entry>` (or `rbw attachment list <entry> --json`). To
 download one, run
-`rbw attachment get <entry> --attachment <attachment-id-or-filename>`. If you
-omit or mistype the attachment name, `rbw` will print the available
-attachments. Use
+`rbw attachment get <entry> --attachment <attachment-id-or-filename>`, and to
+delete one, `rbw attachment rm <entry> --attachment <attachment-id-or-filename>`
+(aliases: `remove`, `delete`). When an entry has exactly one attachment,
+`--attachment` can be omitted. If you omit or mistype the attachment name,
+`rbw` will print the available attachments. Use
 `rbw attachment get <entry> --attachment <attachment-id-or-filename> --output -`
 to write the attachment to stdout instead of a file. Using the entry UUID is
 the most precise option and avoids shell quoting issues for names with spaces.

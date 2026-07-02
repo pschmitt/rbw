@@ -1878,7 +1878,7 @@ fn available_attachments_error(
     }
     let _ = write!(
         &mut message,
-        "Use `rbw attachment get <entry> <attachment-id-or-filename>` to download one."
+        "Use `rbw attachment get <entry> --attachment <id-or-filename>` to download one."
     );
     anyhow::anyhow!(message)
 }
@@ -2225,6 +2225,34 @@ impl std::convert::TryFrom<&String> for ListField {
 pub fn config_show() -> anyhow::Result<()> {
     let config = rbw::config::Config::load()?;
     write_json_pretty(&config, "failed to write config to stdout")
+}
+
+// Print a single setting's effective value: account-scoped keys resolve
+// through the primary account (matching what rbw actually uses), global
+// preferences come straight off the config.
+pub fn config_get(key: &str) -> anyhow::Result<()> {
+    let config = rbw::config::Config::load()?;
+    let primary = config.primary();
+    let value = match key {
+        "email" => primary.email,
+        "sso_id" => primary.sso_id,
+        "base_url" => primary.base_url,
+        "identity_url" => primary.identity_url,
+        "ui_url" => primary.ui_url,
+        "notifications_url" => primary.notifications_url,
+        "client_cert_path" => {
+            primary.client_cert_path.map(|p| p.display().to_string())
+        }
+        "lock_timeout" => Some(config.lock_timeout.to_string()),
+        "sync_interval" => Some(config.sync_interval.to_string()),
+        "pinentry" => Some(config.pinentry),
+        _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
+    };
+    let Some(value) = value else {
+        anyhow::bail!("{key} is not set");
+    };
+    println!("{value}");
+    Ok(())
 }
 
 // Open the whole config.json as pretty JSON in $EDITOR, the same
@@ -3079,21 +3107,8 @@ pub fn attachment_get(
     let mut db = load_db()?;
     let (entry, decrypted) =
         find_entry(&db, needles, user, folder, ignore_case, false)?;
-    let Some(attachment) = attachment else {
-        return Err(available_attachments_error(
-            &decrypted.name,
-            &decrypted.attachments,
-            "attachment id or filename is required",
-        ));
-    };
     let (attachment, decrypted_attachment) =
-        find_attachment(&entry, &decrypted, attachment).map_err(|err| {
-            available_attachments_error(
-                &decrypted.name,
-                &decrypted.attachments,
-                &err.to_string(),
-            )
-        })?;
+        resolve_attachment(&entry, &decrypted, attachment)?;
 
     let access_token = db
         .access_token
@@ -3213,6 +3228,62 @@ pub fn attachment_create(
         "{} {} \u{2192} {}",
         style::success("Attached", c),
         style::name(filename, c),
+        style::name(&decrypted.name, c),
+    );
+
+    Ok(())
+}
+
+// Delete an attachment from an entry and sync. Shares the entry/attachment
+// resolution behavior of `attachment_get`, including the only-attachment
+// fallback when --attachment is omitted.
+pub fn attachment_rm(
+    needles: Vec<Needle>,
+    user: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    attachment: Option<&str>,
+) -> anyhow::Result<()> {
+    unlock(None)?;
+    let mut db = load_db()?;
+    let (entry, decrypted) =
+        find_entry(&db, needles, user, folder, ignore_case, false)?;
+    let (attachment, decrypted_attachment) =
+        resolve_attachment(&entry, &decrypted, attachment)?;
+
+    let access_token = db
+        .access_token
+        .as_ref()
+        .context("failed to find access token in db")?
+        .clone();
+    let refresh_token = db
+        .refresh_token
+        .as_ref()
+        .context("failed to find refresh token in db")?
+        .clone();
+
+    let attachment_id = attachment.id.clone();
+    let file_name = decrypted_attachment
+        .file_name
+        .clone()
+        .unwrap_or_else(|| attachment_id.clone());
+    if let (Some(new_token), ()) = rbw::actions::delete_attachment(
+        &access_token,
+        &refresh_token,
+        &entry.id,
+        &attachment_id,
+    )? {
+        db.access_token = Some(new_token);
+        save_db(&db)?;
+    }
+
+    crate::actions::sync()?;
+
+    let c = stdout_supports_color();
+    eprintln!(
+        "{} {} from {}",
+        style::success("Deleted", c),
+        style::name(&file_name, c),
         style::name(&decrypted.name, c),
     );
 
@@ -6766,6 +6837,44 @@ fn find_entry_multi(
     let (entry, decrypted) =
         find_entry(&db, needles, username, folder, ignore_case, force_exact)?;
     Ok((account.clone(), entry, decrypted))
+}
+
+// Resolve which attachment a command should operate on: the one matching
+// `needle` when given, else the entry's only attachment. No needle with
+// several attachments is an error listing what's available.
+fn resolve_attachment<'a>(
+    entry: &'a rbw::db::Entry,
+    decrypted: &'a DecryptedCipher,
+    needle: Option<&str>,
+) -> anyhow::Result<(&'a rbw::db::Attachment, &'a DecryptedAttachment)> {
+    needle
+        .map_or_else(
+            || match entry.attachments.as_slice() {
+                [] => Err(anyhow::anyhow!(
+                    "no attachments available for this item"
+                )),
+                [attachment] => decrypted
+                    .attachments
+                    .first()
+                    .map(|decrypted| (attachment, decrypted))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "failed to decrypt attachment metadata"
+                        )
+                    }),
+                _ => Err(anyhow::anyhow!(
+                    "attachment id or filename is required"
+                )),
+            },
+            |needle| find_attachment(entry, decrypted, needle),
+        )
+        .map_err(|err| {
+            available_attachments_error(
+                &decrypted.name,
+                &decrypted.attachments,
+                &err.to_string(),
+            )
+        })
 }
 
 fn find_attachment<'a>(
