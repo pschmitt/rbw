@@ -266,6 +266,31 @@ fn parse_query(input: &str) -> Vec<QueryToken> {
     input.split_whitespace().map(QueryToken::parse).collect()
 }
 
+// Byte ranges within `query` covering a *recognized* scope prefix, colon
+// included (e.g. the "u:" in "u:alice") — used by the TUI to color the
+// prefix distinctly in the search bar, so a scoped search is visibly
+// different from a plain one. A word with an unrecognized prefix (which
+// `QueryToken::parse` treats as a literal bare word) isn't included.
+pub fn scope_prefix_ranges(query: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut search_from = 0;
+    for word in query.split_whitespace() {
+        let Some(rel) = query[search_from..].find(word) else {
+            continue;
+        };
+        let start = search_from + rel;
+        search_from = start + word.len();
+
+        if matches!(QueryToken::parse(word), QueryToken::Any(_)) {
+            continue;
+        }
+        if let Some((prefix, _)) = word.split_once(':') {
+            ranges.push((start, start + prefix.len() + 1));
+        }
+    }
+    ranges
+}
+
 // Which displayed field a piece of text (a TUI list row, a TUI detail-pane
 // row, or a CLI table cell) is showing — used to decide which query words
 // apply to it for `highlight_ranges`.
@@ -8579,6 +8604,31 @@ mod test {
         ));
         assert!(search_field_for_column(TableColumnStyle::Id).is_none());
         assert!(search_field_for_column(TableColumnStyle::Password).is_none());
+    }
+
+    #[test]
+    fn test_scope_prefix_ranges_marks_only_recognized_prefixes() {
+        // "u:" is recognized; the value after it is not part of the range.
+        assert_eq!(
+            scope_prefix_ranges("u:alice"),
+            vec![(0, 2)]
+        );
+
+        // Multiple scoped words, each found at its own position, plus a
+        // bare word (no range) in between.
+        assert_eq!(
+            scope_prefix_ranges("u:alice google uri:github"),
+            vec![(0, 2), (15, 19)]
+        );
+
+        // An unrecognized prefix isn't marked (it's a literal bare word to
+        // `QueryToken`).
+        assert_eq!(scope_prefix_ranges("bogus:alice"), Vec::new());
+
+        // A trailing bare colon (no value) isn't marked either.
+        assert_eq!(scope_prefix_ranges("u:"), Vec::new());
+
+        assert_eq!(scope_prefix_ranges(""), Vec::new());
     }
 
     #[test]

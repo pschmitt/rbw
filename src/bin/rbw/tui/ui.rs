@@ -111,10 +111,17 @@ fn render_search(f: &mut Frame, app: &App, area: Rect) {
             ),
         ])
     } else {
-        Line::from(vec![
-            Span::styled(SEARCH_PROMPT, Style::default().fg(prompt_color)),
-            Span::raw(value),
-        ])
+        let mut spans = vec![Span::styled(
+            SEARCH_PROMPT,
+            Style::default().fg(prompt_color),
+        )];
+        spans.extend(styled_ranges(
+            value,
+            &commands::scope_prefix_ranges(value),
+            Style::default(),
+            Style::default().fg(ACCENT).bold(),
+        ));
+        Line::from(spans)
     };
     f.render_widget(Paragraph::new(text), area);
 
@@ -194,17 +201,27 @@ fn highlighted_spans(
     ranges: &[(usize, usize)],
     base_style: Style,
 ) -> Vec<Span<'static>> {
+    styled_ranges(text, ranges, base_style, base_style.fg(MATCH).bold())
+}
+
+// Splits `text` into styled spans: the byte ranges in `ranges` (sorted,
+// non-overlapping) get `range_style`, everything else gets `base_style`.
+fn styled_ranges(
+    text: &str,
+    ranges: &[(usize, usize)],
+    base_style: Style,
+    range_style: Style,
+) -> Vec<Span<'static>> {
     if ranges.is_empty() {
         return vec![Span::styled(text.to_string(), base_style)];
     }
-    let match_style = base_style.fg(MATCH).bold();
     let mut spans = Vec::new();
     let mut pos = 0;
     for &(s, e) in ranges {
         if s > pos {
             spans.push(Span::styled(text[pos..s].to_string(), base_style));
         }
-        spans.push(Span::styled(text[s..e].to_string(), match_style));
+        spans.push(Span::styled(text[s..e].to_string(), range_style));
         pos = e;
     }
     if pos < text.len() {
