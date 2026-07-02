@@ -139,11 +139,12 @@ headers, smart coloring, and default `UID`, `NAME`, `USER`, and
 `ATTACHMENTS` columns. To inspect attachments directly, run
 `rbw attachment list <entry>` (or `rbw attachment list <entry> --json`). To
 download one, run
-`rbw attachment get <entry> <attachment-id-or-filename>`. If you omit or mistype
-the attachment name, `rbw` will print the available attachments. Use
-`rbw attachment get <entry> <attachment-id-or-filename> --output -` to write the
-attachment to stdout instead of a file. Using the entry UUID is the most precise
-option and avoids shell quoting issues for names with spaces.
+`rbw attachment get <entry> --attachment <attachment-id-or-filename>`. If you
+omit or mistype the attachment name, `rbw` will print the available
+attachments. Use
+`rbw attachment get <entry> --attachment <attachment-id-or-filename> --output -`
+to write the attachment to stdout instead of a file. Using the entry UUID is
+the most precise option and avoids shell quoting issues for names with spaces.
 
 For commands that support formatted output, use `-o name`, `-o json`, or
 `-o yaml`. `-o json` is equivalent to `--json`, and `-o yaml` emits YAML.

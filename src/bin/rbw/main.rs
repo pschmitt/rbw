@@ -811,7 +811,9 @@ enum Attachment {
         )]
         needles: Vec<commands::Needle>,
         #[arg(
-            help = "Attachment ID or filename (see `rbw attachment list <entry>`)"
+            long,
+            help = "Attachment ID or filename (see `rbw attachment list \
+                <entry>`); omit to download the entry's only attachment"
         )]
         attachment: Option<String>,
         #[arg(long, help = "Username of the entry")]
