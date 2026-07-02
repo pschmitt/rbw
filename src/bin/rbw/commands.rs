@@ -729,6 +729,9 @@ impl DecryptedCipher {
     // place (here) instead of every consumer reimplementing it. The second
     // tuple element records *where* the value came from (for --verbose).
     fn default_secret(&self) -> Option<(String, SecretSource)> {
+        const FIELD_NAMES: [&str; 4] =
+            ["password", "passphrase", "pass", "passwd"];
+
         if let DecryptedData::Login {
             password: Some(password),
             ..
@@ -737,8 +740,6 @@ impl DecryptedCipher {
             return Some((password.clone(), SecretSource::Password));
         }
 
-        const FIELD_NAMES: [&str; 4] =
-            ["password", "passphrase", "pass", "passwd"];
         if let Some(field) = self.fields.iter().find(|field| {
             field.name.as_deref().is_some_and(|name| {
                 FIELD_NAMES.contains(&name.to_lowercase().as_str())
@@ -1100,174 +1101,6 @@ impl DecryptedCipher {
         }
     }
 
-    fn display_long(&self, desc: &str, clipboard: bool) {
-        match &self.data {
-            DecryptedData::Login {
-                username,
-                totp,
-                uris,
-                ..
-            } => {
-                let mut displayed = self.display_short(desc, clipboard);
-                displayed |=
-                    display_field("Username", username.as_deref(), clipboard);
-                displayed |=
-                    display_field("TOTP Secret", totp.as_deref(), clipboard);
-
-                if let Some(uris) = uris {
-                    for uri in uris {
-                        displayed |=
-                            display_field("URI", Some(&uri.uri), clipboard);
-                        let match_type =
-                            uri.match_type.map(|ty| format!("{ty}"));
-                        displayed |= display_field(
-                            "Match type",
-                            match_type.as_deref(),
-                            clipboard,
-                        );
-                    }
-                }
-
-                for field in &self.fields {
-                    displayed |= display_field(
-                        field.name.as_deref().unwrap_or("(null)"),
-                        Some(field.value.as_deref().unwrap_or("")),
-                        clipboard,
-                    );
-                }
-
-                if let Some(notes) = &self.notes {
-                    if displayed {
-                        println!();
-                    }
-                    println!("{notes}");
-                }
-            }
-            DecryptedData::Card {
-                cardholder_name,
-                brand,
-                exp_month,
-                exp_year,
-                code,
-                ..
-            } => {
-                let mut displayed = false;
-
-                displayed |= self.display_short(desc, clipboard);
-                if let (Some(exp_month), Some(exp_year)) =
-                    (exp_month, exp_year)
-                {
-                    println!(
-                        "{}: {exp_month}/{exp_year}",
-                        format_label("Expiration")
-                    );
-                    displayed = true;
-                }
-                displayed |= display_field("CVV", code.as_deref(), clipboard);
-                displayed |= display_field(
-                    "Name",
-                    cardholder_name.as_deref(),
-                    clipboard,
-                );
-                displayed |=
-                    display_field("Brand", brand.as_deref(), clipboard);
-
-                if let Some(notes) = &self.notes {
-                    if displayed {
-                        println!();
-                    }
-                    println!("{notes}");
-                }
-            }
-            DecryptedData::Identity {
-                address1,
-                address2,
-                address3,
-                city,
-                state,
-                postal_code,
-                country,
-                phone,
-                email,
-                ssn,
-                license_number,
-                passport_number,
-                username,
-                ..
-            } => {
-                let mut displayed = self.display_short(desc, clipboard);
-
-                displayed |=
-                    display_field("Address", address1.as_deref(), clipboard);
-                displayed |=
-                    display_field("Address", address2.as_deref(), clipboard);
-                displayed |=
-                    display_field("Address", address3.as_deref(), clipboard);
-                displayed |=
-                    display_field("City", city.as_deref(), clipboard);
-                displayed |=
-                    display_field("State", state.as_deref(), clipboard);
-                displayed |= display_field(
-                    "Postcode",
-                    postal_code.as_deref(),
-                    clipboard,
-                );
-                displayed |=
-                    display_field("Country", country.as_deref(), clipboard);
-                displayed |=
-                    display_field("Phone", phone.as_deref(), clipboard);
-                displayed |=
-                    display_field("Email", email.as_deref(), clipboard);
-                displayed |= display_field("SSN", ssn.as_deref(), clipboard);
-                displayed |= display_field(
-                    "License",
-                    license_number.as_deref(),
-                    clipboard,
-                );
-                displayed |= display_field(
-                    "Passport",
-                    passport_number.as_deref(),
-                    clipboard,
-                );
-                displayed |=
-                    display_field("Username", username.as_deref(), clipboard);
-
-                if let Some(notes) = &self.notes {
-                    if displayed {
-                        println!();
-                    }
-                    println!("{notes}");
-                }
-            }
-            DecryptedData::SecureNote => {
-                self.display_short(desc, clipboard);
-            }
-            DecryptedData::SshKey { fingerprint, .. } => {
-                let mut displayed = self.display_short(desc, clipboard);
-                displayed |= display_field(
-                    "Fingerprint",
-                    fingerprint.as_deref(),
-                    clipboard,
-                );
-
-                for field in &self.fields {
-                    displayed |= display_field(
-                        field.name.as_deref().unwrap_or("(null)"),
-                        Some(field.value.as_deref().unwrap_or("")),
-                        clipboard,
-                    );
-                }
-
-                if let Some(notes) = &self.notes {
-                    if displayed {
-                        println!();
-                    }
-                    println!("{notes}");
-                }
-            }
-        }
-    }
-
     /// This implementation mirror the `fn display_fied` method on which field to list
     fn display_fields_list(&self) {
         match &self.data {
@@ -1624,6 +1457,8 @@ impl DecryptedCipher {
     }
 }
 
+// serde's `skip_serializing_if` requires a `fn(&T) -> bool`.
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_zero(value: &usize) -> bool {
     *value == 0
 }
@@ -1778,10 +1613,6 @@ where
     println!();
 
     Ok(())
-}
-
-fn format_label(name: &str) -> String {
-    style::label(name, stdout_supports_color())
 }
 
 fn write_json_pretty<T>(
@@ -2034,15 +1865,14 @@ fn available_attachments_error(
 ) -> anyhow::Error {
     if attachments.is_empty() {
         return anyhow::anyhow!(
-            "{reason}\nNo attachments are available for '{}'.",
-            entry_name
+            "{reason}\nNo attachments are available for '{entry_name}'."
         );
     }
 
     let mut message = String::new();
     let _ = writeln!(&mut message, "{reason}");
     let _ =
-        writeln!(&mut message, "Available attachments for '{}':", entry_name);
+        writeln!(&mut message, "Available attachments for '{entry_name}':");
     for row in attachment_rows(attachments, false) {
         let _ = writeln!(&mut message, "{row}");
     }
@@ -2514,14 +2344,14 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn account_list() -> anyhow::Result<()> {
+pub fn account_list() {
     let config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());
     let primary = config.primary_account_name();
     let accounts = config.accounts();
     if accounts.is_empty() {
         eprintln!("no accounts configured");
-        return Ok(());
+        return;
     }
     for account in &accounts {
         let marker = if account.name == primary { " *" } else { "" };
@@ -2532,7 +2362,6 @@ pub fn account_list() -> anyhow::Result<()> {
             .unwrap_or("(public bitwarden.com)");
         println!("{}{marker}\t{email}\t{server}", account.name);
     }
-    Ok(())
 }
 
 pub fn account_add(
@@ -3078,7 +2907,7 @@ pub fn get(
 
     let needle_str = needles
         .iter()
-        .map(|n| n.to_string())
+        .map(std::string::ToString::to_string)
         .collect::<Vec<_>>()
         .join(" ");
     let desc = format!(
@@ -3150,7 +2979,7 @@ pub fn show(
     let db = load_db()?;
     let needle_str = needles
         .iter()
-        .map(|n| n.to_string())
+        .map(std::string::ToString::to_string)
         .collect::<Vec<_>>()
         .join(" ");
     let desc = format!(
@@ -3371,7 +3200,7 @@ pub fn attachment_create(
         &entry.id,
         &encrypted_filename,
         &encrypted_key,
-        encrypted_data,
+        &encrypted_data,
     )? {
         db.access_token = Some(new_token);
         save_db(&db)?;
@@ -3657,7 +3486,7 @@ pub fn code(
 
     let needle_str = needles
         .iter()
-        .map(|n| n.to_string())
+        .map(std::string::ToString::to_string)
         .collect::<Vec<_>>()
         .join(" ");
     let desc = format!(
@@ -3833,7 +3662,7 @@ pub fn remove(
 
     let needle_str = needles
         .iter()
-        .map(|n| n.to_string())
+        .map(std::string::ToString::to_string)
         .collect::<Vec<_>>()
         .join(" ");
     let desc = format!(
@@ -3874,7 +3703,7 @@ fn edit_structured(
 
     let needle_str = needles
         .iter()
-        .map(|n| n.to_string())
+        .map(std::string::ToString::to_string)
         .collect::<Vec<_>>()
         .join(" ");
     let desc = format!(
@@ -4147,16 +3976,18 @@ pub fn set(
     yes: bool,
     force_exact: bool,
 ) -> anyhow::Result<()> {
+    use std::io::Write as _;
+
+    struct BulkPending {
+        entry: rbw::db::Entry,
+        entry_name: String,
+        changes: Vec<(&'static str, String, String)>,
+    }
+
     if bulk {
         unlock(None)?;
         let mut db = load_db()?;
         let mut any_err = false;
-
-        struct BulkPending {
-            entry: rbw::db::Entry,
-            entry_name: String,
-            changes: Vec<(&'static str, String, String)>,
-        }
 
         let mut pending: Vec<BulkPending> = Vec::new();
 
@@ -4237,7 +4068,6 @@ pub fn set(
             }
             eprintln!();
             eprint!("Apply all ({})? [y/N] ", pending.len());
-            use std::io::Write as _;
             let _ = std::io::stderr().flush();
             let mut answer = String::new();
             std::io::stdin()
@@ -4251,7 +4081,7 @@ pub fn set(
 
         let c = stdout_supports_color();
         for pu in pending {
-            match apply_entry_update(
+            if let Err(e) = apply_entry_update(
                 &mut db,
                 &pu.entry,
                 new_name,
@@ -4263,18 +4093,15 @@ pub fn set(
                 !pu.changes.is_empty(),
                 new_attachments,
             ) {
-                Err(e) => {
-                    eprintln!("{}: {e:#}", pu.entry_name);
-                    any_err = true;
-                }
-                Ok(()) => {
-                    println!(
-                        "Item {} was updated",
-                        style::name(&pu.entry_name, c)
-                    );
-                    if diff {
-                        print_entry_diff(&pu.changes);
-                    }
+                eprintln!("{}: {e:#}", pu.entry_name);
+                any_err = true;
+            } else {
+                println!(
+                    "Item {} was updated",
+                    style::name(&pu.entry_name, c)
+                );
+                if diff {
+                    print_entry_diff(&pu.changes);
                 }
             }
         }
@@ -4380,7 +4207,7 @@ fn set_one(
 
     let needle_str = needles
         .iter()
-        .map(|n| n.to_string())
+        .map(std::string::ToString::to_string)
         .collect::<Vec<_>>()
         .join(" ");
     let desc = format!(
@@ -4395,8 +4222,8 @@ fn set_one(
 
     set_entry(
         &mut db,
-        entry,
-        decrypted,
+        &entry,
+        &decrypted,
         new_name,
         new_username,
         new_password,
@@ -4463,19 +4290,19 @@ fn compute_entry_changes(
     {
         if let Some(u) = new_username {
             if Some(u) != cur_user.as_deref() {
-                let old = cur_user
-                    .as_deref()
-                    .map(std::string::ToString::to_string)
-                    .unwrap_or_else(|| "(none)".to_string());
+                let old = cur_user.as_deref().map_or_else(
+                    || "(none)".to_string(),
+                    std::string::ToString::to_string,
+                );
                 changes.push(("username", old, u.to_string()));
             }
         }
         if let Some(p) = new_password {
             if Some(p) != cur_pw.as_deref() {
-                let old = cur_pw
-                    .as_deref()
-                    .map(|s| format!("\"{}\"", censor(s)))
-                    .unwrap_or_else(|| "(none)".to_string());
+                let old = cur_pw.as_deref().map_or_else(
+                    || "(none)".to_string(),
+                    |s| format!("\"{}\"", censor(s)),
+                );
                 changes.push(("password", old, format!("\"{}\"", censor(p))));
             }
         }
@@ -4501,10 +4328,10 @@ fn compute_entry_changes(
         }
         if let Some(t) = new_totp {
             if Some(t) != cur_totp.as_deref() {
-                let old = cur_totp
-                    .as_deref()
-                    .map(|s| format!("\"{}\"", censor(s)))
-                    .unwrap_or_else(|| "(none)".to_string());
+                let old = cur_totp.as_deref().map_or_else(
+                    || "(none)".to_string(),
+                    |s| format!("\"{}\"", censor(s)),
+                );
                 changes.push(("totp", old, format!("\"{}\"", censor(t))));
             }
         }
@@ -4652,7 +4479,7 @@ fn apply_entry_update(
             &entry.id,
             &encrypted_filename,
             &encrypted_key,
-            encrypted_data,
+            &encrypted_data,
         )? {
             db.access_token = Some(new_token);
             save_db(db)?;
@@ -4666,8 +4493,8 @@ fn apply_entry_update(
 #[allow(clippy::too_many_arguments)]
 fn set_entry(
     db: &mut rbw::db::Db,
-    entry: rbw::db::Entry,
-    decrypted: DecryptedCipher,
+    entry: &rbw::db::Entry,
+    decrypted: &DecryptedCipher,
     new_name: Option<&str>,
     new_username: Option<&str>,
     new_password: Option<&str>,
@@ -4678,10 +4505,12 @@ fn set_entry(
     new_attachments: &[std::path::PathBuf],
     yes: bool,
 ) -> anyhow::Result<()> {
+    use std::io::Write as _;
+
     let entry_name = decrypted.name.clone();
 
     let changes = compute_entry_changes(
-        &decrypted,
+        decrypted,
         new_name,
         new_username,
         new_password,
@@ -4714,7 +4543,6 @@ fn set_entry(
         }
         eprintln!();
         eprint!("Apply? [y/N] ");
-        use std::io::Write as _;
         let _ = std::io::stderr().flush();
         let mut answer = String::new();
         std::io::stdin()
@@ -4728,7 +4556,7 @@ fn set_entry(
 
     apply_entry_update(
         db,
-        &entry,
+        entry,
         new_name,
         new_username,
         new_password,
@@ -4793,8 +4621,8 @@ fn censor(s: &str) -> String {
     if len <= 4 {
         return "****".to_string();
     }
-    let prefix = ((len + 2) / 3).min(8);
-    let suffix = ((len + 3) / 4).min(5);
+    let prefix = len.div_ceil(3).min(8);
+    let suffix = len.div_ceil(4).min(5);
     if prefix + suffix >= len {
         return "****".to_string();
     }
@@ -5402,16 +5230,15 @@ fn imported_history_to_encrypted(
 fn read_import_input(
     file: Option<&std::path::Path>,
 ) -> anyhow::Result<Vec<u8>> {
-    match file {
-        Some(path) => std::fs::read(path)
-            .with_context(|| format!("failed to read {}", path.display())),
-        None => {
-            let mut buf = Vec::new();
-            std::io::stdin()
-                .read_to_end(&mut buf)
-                .context("failed to read import data from stdin")?;
-            Ok(buf)
-        }
+    if let Some(path) = file {
+        std::fs::read(path)
+            .with_context(|| format!("failed to read {}", path.display()))
+    } else {
+        let mut buf = Vec::new();
+        std::io::stdin()
+            .read_to_end(&mut buf)
+            .context("failed to read import data from stdin")?;
+        Ok(buf)
     }
 }
 
@@ -5634,7 +5461,7 @@ fn upload_imported_attachments(
             &entry.id,
             &encrypted_filename,
             &encrypted_key,
-            encrypted_data,
+            &encrypted_data,
         ) {
             Ok((new_token, ())) => {
                 if let Some(new_token) = new_token {
@@ -6683,7 +6510,7 @@ pub fn history(
 
     let needle_str = needles
         .iter()
-        .map(|n| n.to_string())
+        .map(std::string::ToString::to_string)
         .collect::<Vec<_>>()
         .join(" ");
     let desc = format!(
@@ -8528,11 +8355,7 @@ fn list_target_accounts(all: bool) -> anyhow::Result<Vec<String>> {
 // too (pinentry runs once per locked account, same as `rbw sync --all`);
 // otherwise only accounts that are already unlocked are loaded, and the
 // rest are reported as locked for lazy unlock from the accounts panel.
-pub fn tui_open(all: bool) -> anyhow::Result<TuiOpen> {
-    tui_open_with_progress(all, false, |_| {})
-}
-
-pub(crate) fn tui_open_with_progress<F>(
+pub fn tui_open_with_progress<F>(
     all: bool,
     target_unlocked: bool,
     mut progress: F,
@@ -8582,7 +8405,7 @@ where
     })
 }
 
-pub(crate) fn tui_unlock_target() -> anyhow::Result<()> {
+pub fn tui_unlock_target() -> anyhow::Result<()> {
     let config = rbw::config::Config::load()?;
     let target = crate::actions::current_account()
         .unwrap_or_else(|| config.primary_account_name());
@@ -8691,7 +8514,7 @@ pub fn tui_attachment_create(
         &entry.id,
         &encrypted_filename,
         &encrypted_key,
-        encrypted_data,
+        &encrypted_data,
     )? {
         db.access_token = Some(new_token);
         save_db(db)?;
@@ -10116,18 +9939,6 @@ pub fn generate_totp(secret: &str) -> anyhow::Result<String> {
     }
 }
 
-fn display_field(name: &str, field: Option<&str>, clipboard: bool) -> bool {
-    field.map_or_else(
-        || false,
-        |field| {
-            val_display_or_store(
-                clipboard,
-                &format!("{}: {field}", format_label(name)),
-            )
-        },
-    )
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -10620,7 +10431,7 @@ mod test {
         );
         let smappee =
             entry_with_secret("smappee.com", Some("note mentions gpg"));
-        let entries = &[gpg.clone(), github.clone(), smappee.clone()];
+        let entries = &[gpg.clone(), github, smappee.clone()];
 
         let find = |needles: &[&str]| {
             let needles: Vec<_> =

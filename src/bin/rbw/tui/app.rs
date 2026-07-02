@@ -1125,7 +1125,7 @@ impl App {
     // `credential_source`, unlock+sync can usually happen entirely inside
     // the TUI with no pinentry round-trip; otherwise the event loop handles
     // the unlock on the real terminal, then syncs immediately afterwards.
-    fn sync_selected_account(&mut self) -> Action {
+    fn sync_selected_account(&self) -> Action {
         let Some((name, unlocked)) = self.selected_account() else {
             return Action::None;
         };
@@ -1418,18 +1418,20 @@ impl App {
         self.vaults
             .iter()
             .find(|v| v.name == source_account)
-            .map(|v| {
-                let mut items = vec![CREDENTIAL_SOURCE_AUTO_ITEM.to_string()];
-                items.extend(
-                    v.search
-                        .iter()
-                        .filter(|s| s.entry_type == "Login")
-                        .map(|s| s.name.clone())
-                        .collect::<Vec<_>>(),
-                );
-                items
-            })
-            .unwrap_or_else(|| vec![CREDENTIAL_SOURCE_AUTO_ITEM.to_string()])
+            .map_or_else(
+                || vec![CREDENTIAL_SOURCE_AUTO_ITEM.to_string()],
+                |v| {
+                    let mut items =
+                        vec![CREDENTIAL_SOURCE_AUTO_ITEM.to_string()];
+                    items.extend(
+                        v.search
+                            .iter()
+                            .filter(|s| s.entry_type == "Login")
+                            .map(|s| s.name.clone()),
+                    );
+                    items
+                },
+            )
     }
 
     fn handle_picker(&mut self, key: KeyEvent) -> Action {
@@ -1488,8 +1490,7 @@ impl App {
                 let name = name.clone();
                 let source_account = source_account.clone();
                 let source_item = match value.trim() {
-                    "" => None,
-                    CREDENTIAL_SOURCE_AUTO_ITEM => None,
+                    "" | CREDENTIAL_SOURCE_AUTO_ITEM => None,
                     item => Some(item),
                 };
                 match commands::tui_account_set_credential_source(
@@ -1825,10 +1826,10 @@ impl App {
             Some(TuiAction::StartAdd) => self.start_add(),
             Some(TuiAction::OpenAccounts) => self.open_accounts(),
             Some(TuiAction::OpenSettings) => self.open_settings(),
-            Some(TuiAction::DeleteEntry) => {
-                if self.current_search().is_some() {
-                    self.mode = Mode::ConfirmDelete;
-                }
+            Some(TuiAction::DeleteEntry)
+                if self.current_search().is_some() =>
+            {
+                self.mode = Mode::ConfirmDelete;
             }
             Some(TuiAction::Sync) => self.sync(),
             Some(TuiAction::Help) => self.mode = Mode::Help,

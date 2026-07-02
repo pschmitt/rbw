@@ -1,6 +1,7 @@
 use crate::prelude::*;
 
 use std::io::{Read as _, Write as _};
+use std::os::unix::fs::OpenOptionsExt as _;
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -298,7 +299,14 @@ impl Db {
         })?;
         let tmp = tmp_path(&file);
         let write = || -> std::io::Result<()> {
-            let mut fh = std::fs::File::create(&tmp)?;
+            // 0600: the db holds access/refresh tokens and protected keys
+            // (defense in depth on top of the 0700 data dir).
+            let mut fh = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
             fh.write_all(json.as_bytes())?;
             fh.sync_all()?;
             drop(fh);
@@ -332,7 +340,14 @@ impl Db {
         // See `save`: write to a sibling temp file, then atomically rename.
         let tmp = tmp_path(&file);
         let write = || async {
-            let mut fh = tokio::fs::File::create(&tmp).await?;
+            // 0600: see `save`.
+            let mut fh = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)
+                .await?;
             fh.write_all(json.as_bytes()).await?;
             fh.sync_all().await?;
             drop(fh);

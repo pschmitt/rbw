@@ -140,10 +140,7 @@ fn resolve_output_mode(
         );
     }
 
-    let mut structured = None;
-    if json {
-        structured = Some(commands::OutputMode::Json);
-    }
+    let mut structured = json.then_some(commands::OutputMode::Json);
     if yaml {
         if structured.is_some() {
             anyhow::bail!("conflicting output formats requested");
@@ -1075,7 +1072,10 @@ fn main() {
             Config::Edit => commands::config_edit(),
         },
         Opt::Account { account } => match account {
-            AccountCmd::List => commands::account_list(),
+            AccountCmd::List => {
+                commands::account_list();
+                Ok(())
+            }
             AccountCmd::Add {
                 name,
                 email,
@@ -1155,25 +1155,28 @@ fn main() {
             all,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
-            if let Some(term) = term {
-                commands::search(
-                    &term,
-                    &fields,
-                    None,
-                    with_attachments,
-                    insecure,
-                    output,
-                    all,
-                )
-            } else {
-                commands::list(
-                    &fields,
-                    with_attachments,
-                    insecure,
-                    output,
-                    all,
-                )
-            }
+            term.map_or_else(
+                || {
+                    commands::list(
+                        &fields,
+                        with_attachments,
+                        insecure,
+                        output,
+                        all,
+                    )
+                },
+                |term| {
+                    commands::search(
+                        &term,
+                        &fields,
+                        None,
+                        with_attachments,
+                        insecure,
+                        output,
+                        all,
+                    )
+                },
+            )
         })(),
         Opt::Attachment { attachment } => match attachment {
             Attachment::List {

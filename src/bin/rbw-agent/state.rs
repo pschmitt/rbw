@@ -74,6 +74,8 @@ impl State {
     }
 
     // True if at least one account is currently unlocked.
+    // Not called yet: needed by the in-flight multi-account branch.
+    #[allow(dead_code)]
     pub fn any_unlocked(&self) -> bool {
         self.accounts.values().any(|a| !a.needs_unlock())
     }
@@ -100,6 +102,8 @@ impl State {
     }
 
     // Lock a single account.
+    // Not called yet: needed by the in-flight multi-account branch.
+    #[allow(dead_code)]
     pub fn clear_account(&mut self, account: &str) {
         self.accounts.remove(account);
     }

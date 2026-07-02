@@ -151,6 +151,57 @@ mod test {
         assert_duplicates(&pw);
     }
 
+    #[test]
+    fn test_resolve_length_priority() {
+        let cli = GenFlags {
+            length: Some(12),
+            ..GenFlags::default()
+        };
+        let policy = GenFlags {
+            length: Some(32),
+            ..GenFlags::default()
+        };
+
+        // An explicit CLI length wins over the configured policy.
+        assert_eq!(resolve(cli, policy), (12, Type::AllChars));
+
+        // The policy length wins over the hardcoded default.
+        assert_eq!(
+            resolve(GenFlags::default(), policy),
+            (32, Type::AllChars)
+        );
+
+        // Neither set: fall back to DEFAULT_LEN.
+        assert_eq!(
+            resolve(GenFlags::default(), GenFlags::default()),
+            (DEFAULT_LEN, Type::AllChars)
+        );
+    }
+
+    #[test]
+    fn test_resolve_type_priority() {
+        let cli = GenFlags {
+            diceware: true,
+            ..GenFlags::default()
+        };
+        let policy = GenFlags {
+            no_symbols: true,
+            ..GenFlags::default()
+        };
+
+        // An explicit CLI type wins over the configured policy.
+        assert_eq!(resolve(cli, policy).1, Type::Diceware);
+
+        // The policy type wins over the AllChars fallback.
+        assert_eq!(resolve(GenFlags::default(), policy).1, Type::NoSymbols);
+
+        // Neither set: fall back to AllChars.
+        assert_eq!(
+            resolve(GenFlags::default(), GenFlags::default()).1,
+            Type::AllChars
+        );
+    }
+
     #[track_caller]
     fn assert_duplicates(s: &str) {
         let mut set = std::collections::HashSet::new();
