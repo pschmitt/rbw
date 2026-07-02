@@ -3,6 +3,9 @@ pub enum Error {
     #[error("email address not set")]
     ConfigMissingEmail,
 
+    #[error("no account named {name:?} is configured")]
+    UnknownAccount { name: String },
+
     #[error("failed to create block mode decryptor")]
     CreateBlockMode { source: aes::cipher::InvalidLength },
 

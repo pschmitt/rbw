@@ -590,7 +590,7 @@ fn api_client() -> Result<(crate::api::Client, crate::config::Config)> {
         &config.base_url(),
         &config.identity_url(),
         &config.ui_url(),
-        config.client_cert_path(),
+        config.client_cert_path().as_deref(),
     );
     Ok((client, config))
 }
@@ -602,7 +602,7 @@ async fn api_client_async(
         &config.base_url(),
         &config.identity_url(),
         &config.ui_url(),
-        config.client_cert_path(),
+        config.client_cert_path().as_deref(),
     );
     Ok((client, config))
 }
