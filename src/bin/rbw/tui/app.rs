@@ -50,6 +50,7 @@ pub enum Mode {
     Attachments(AttachmentView),
     Accounts(AccountsView),
     Prompt(Prompt),
+    Settings(SettingsView),
     Help,
 }
 
@@ -1143,6 +1144,54 @@ impl App {
         }
     }
 
+    // ---- settings panel ---------------------------------------------------
+
+    fn open_settings(&mut self) {
+        let policy = commands::tui_password_gen_policy();
+        self.mode = Mode::Settings(SettingsView::new(&policy));
+    }
+
+    fn handle_settings(&mut self, key: KeyEvent) -> Action {
+        let Mode::Settings(view) = &mut self.mode else {
+            return Action::None;
+        };
+        match key.code {
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => self.submit_settings(),
+            KeyCode::Tab | KeyCode::Down => view.focus_next(),
+            KeyCode::BackTab | KeyCode::Up => view.focus_prev(),
+            KeyCode::Char(' ') => view.toggle_focused(),
+            _ => view.handle_input(key),
+        }
+        Action::None
+    }
+
+    fn submit_settings(&mut self) {
+        // Pull the rebuilt policy out first so the `Mode::Settings` borrow is
+        // released before saving/closing mutate the app.
+        let policy = {
+            let Mode::Settings(view) = &self.mode else {
+                return;
+            };
+            view.rebuild_policy()
+        };
+        match policy {
+            Ok(policy) => {
+                match commands::tui_save_password_gen_policy(policy) {
+                    Ok(()) => {
+                        self.mode = Mode::Normal;
+                        self.set_status(
+                            Level::Success,
+                            "saved password-gen settings",
+                        );
+                    }
+                    Err(e) => self.set_status(Level::Error, format!("{e:#}")),
+                }
+            }
+            Err(e) => self.set_status(Level::Error, format!("{e:#}")),
+        }
+    }
+
     // ---- mouse handling ---------------------------------------------------
 
     // Right-arrow equivalent (also used for a detail-pane click): focus the
@@ -1194,6 +1243,7 @@ impl App {
             }
             Mode::Accounts(_) => self.handle_accounts(key),
             Mode::Prompt(_) => self.handle_prompt(key),
+            Mode::Settings(_) => self.handle_settings(key),
             Mode::Help => {
                 self.mode = Mode::Normal;
                 Action::None
@@ -1265,6 +1315,7 @@ impl App {
             Some(TuiAction::OpenEditor) => return Action::OpenEditor,
             Some(TuiAction::StartAdd) => self.start_add(),
             Some(TuiAction::OpenAccounts) => self.open_accounts(),
+            Some(TuiAction::OpenSettings) => self.open_settings(),
             Some(TuiAction::DeleteEntry) => {
                 if self.current_search().is_some() {
                     self.mode = Mode::ConfirmDelete;
@@ -1724,6 +1775,161 @@ fn apply_field(
     }
 }
 
+// ---- settings panel -------------------------------------------------------
+//
+// A general key/value settings editor, currently populated with just the
+// password-generation policy (see `rbw::config::PasswordGenPolicy`). Meant
+// to grow other config.json knobs later (e.g. the not-yet-implemented
+// cross-account credential linking noted in TODO.md) by adding cases to
+// `SettingKind`/`build_settings_fields`/`SettingsView::rebuild_policy`
+// rather than restructuring the panel.
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingKind {
+    Length,
+    NoSymbols,
+    OnlyNumbers,
+    Nonconfusables,
+    Diceware,
+}
+
+// A field's current value: free text (with its own cursor) or an on/off
+// toggle. `render_settings` (in `ui.rs`) draws these differently and
+// `SettingsView::handle_input`/`toggle_focused` route keys to the right one.
+pub enum SettingValue {
+    Text(Input),
+    Toggle(bool),
+}
+
+pub struct SettingsField {
+    pub label: &'static str,
+    kind: SettingKind,
+    pub value: SettingValue,
+}
+
+// The settings panel: a flat, navigable list of editable fields plus a
+// cursor. Opened from `Mode::Normal` via `TuiAction::OpenSettings`; mirrors
+// `EditForm`'s focus/submit/cancel shape (see `handle_settings` in `App`).
+pub struct SettingsView {
+    pub fields: Vec<SettingsField>,
+    pub focus: usize,
+}
+
+impl SettingsView {
+    pub fn new(policy: &rbw::config::PasswordGenPolicy) -> Self {
+        Self {
+            fields: build_settings_fields(policy),
+            focus: 0,
+        }
+    }
+
+    fn focus_next(&mut self) {
+        if !self.fields.is_empty() {
+            self.focus = (self.focus + 1) % self.fields.len();
+        }
+    }
+
+    fn focus_prev(&mut self) {
+        if !self.fields.is_empty() {
+            self.focus =
+                (self.focus + self.fields.len() - 1) % self.fields.len();
+        }
+    }
+
+    // Space toggles the focused field if it's a `Toggle`; a no-op on a
+    // `Text` field (typing a literal space into the length field has no
+    // legitimate use, so this can't shadow real input).
+    fn toggle_focused(&mut self) {
+        if let Some(field) = self.fields.get_mut(self.focus) {
+            if let SettingValue::Toggle(b) = &mut field.value {
+                *b = !*b;
+            }
+        }
+    }
+
+    fn handle_input(&mut self, key: KeyEvent) {
+        if let Some(field) = self.fields.get_mut(self.focus) {
+            if let SettingValue::Text(input) = &mut field.value {
+                let _consumed = input.handle_key(key);
+            }
+        }
+    }
+
+    // Fold the edited fields back into a policy, validating the free-text
+    // length field along the way.
+    fn rebuild_policy(
+        &self,
+    ) -> anyhow::Result<rbw::config::PasswordGenPolicy> {
+        let mut policy = rbw::config::PasswordGenPolicy::default();
+        for field in &self.fields {
+            match (field.kind, &field.value) {
+                (SettingKind::Length, SettingValue::Text(input)) => {
+                    let v = input.value().trim();
+                    policy.length = if v.is_empty() {
+                        None
+                    } else {
+                        Some(v.parse().map_err(|_| {
+                            anyhow::anyhow!(
+                                "length must be a positive whole number"
+                            )
+                        })?)
+                    };
+                }
+                (SettingKind::NoSymbols, SettingValue::Toggle(b)) => {
+                    policy.no_symbols = *b;
+                }
+                (SettingKind::OnlyNumbers, SettingValue::Toggle(b)) => {
+                    policy.only_numbers = *b;
+                }
+                (SettingKind::Nonconfusables, SettingValue::Toggle(b)) => {
+                    policy.nonconfusables = *b;
+                }
+                (SettingKind::Diceware, SettingValue::Toggle(b)) => {
+                    policy.diceware = *b;
+                }
+                // Kinds and values always pair up as built by
+                // `build_settings_fields`; nothing else to match.
+                _ => {}
+            }
+        }
+        Ok(policy)
+    }
+}
+
+fn build_settings_fields(
+    policy: &rbw::config::PasswordGenPolicy,
+) -> Vec<SettingsField> {
+    vec![
+        SettingsField {
+            label: "Length",
+            kind: SettingKind::Length,
+            value: SettingValue::Text(Input::new(
+                policy.length.map_or_else(String::new, |l| l.to_string()),
+            )),
+        },
+        SettingsField {
+            label: "No symbols",
+            kind: SettingKind::NoSymbols,
+            value: SettingValue::Toggle(policy.no_symbols),
+        },
+        SettingsField {
+            label: "Only numbers",
+            kind: SettingKind::OnlyNumbers,
+            value: SettingValue::Toggle(policy.only_numbers),
+        },
+        SettingsField {
+            label: "Non-confusables",
+            kind: SettingKind::Nonconfusables,
+            value: SettingValue::Toggle(policy.nonconfusables),
+        },
+        SettingsField {
+            label: "Diceware",
+            kind: SettingKind::Diceware,
+            value: SettingValue::Toggle(policy.diceware),
+        },
+    ]
+}
+
 // ---- small helpers ------------------------------------------------------
 
 #[allow(clippy::ref_option)]
@@ -1789,7 +1995,7 @@ fn detail_first_uri(detail: &DecryptedCipher) -> Option<String> {
 
 #[cfg(test)]
 mod test {
-    use super::{Action, App, Keymap, Mode};
+    use super::{Action, App, Keymap, Mode, SettingValue};
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn app() -> App {
@@ -2004,5 +2210,100 @@ mod test {
         a.mouse_scroll_detail(1);
         assert_eq!(a.detail_scroll, 1);
         assert_eq!(a.selected, 0);
+    }
+
+    // `S` opens the settings panel from Normal mode; Esc backs out without
+    // touching anything (mirrors the Accounts/Prompt panels' cancel path).
+    #[test]
+    fn s_opens_settings_and_esc_closes_it() {
+        let mut a = app_with_entries(1);
+        assert!(matches!(a.mode, Mode::Normal));
+        a.handle_key(key(KeyCode::Char('S')));
+        assert!(matches!(a.mode, Mode::Settings(_)));
+        a.handle_key(key(KeyCode::Esc));
+        assert!(matches!(a.mode, Mode::Normal));
+    }
+
+    // Tab moves focus to the next field, and Space toggles a focused boolean
+    // field in place -- doesn't touch the (unfocused) length field.
+    #[test]
+    fn settings_tab_and_space_toggle_a_boolean_field() {
+        let mut a = app_with_entries(1);
+        a.handle_key(key(KeyCode::Char('S')));
+
+        let Mode::Settings(view) = &a.mode else {
+            panic!("expected settings mode");
+        };
+        assert!(matches!(view.fields[1].value, SettingValue::Toggle(false)));
+
+        a.handle_key(key(KeyCode::Tab)); // Length -> No symbols
+        a.handle_key(key(KeyCode::Char(' '))); // toggle it on
+
+        let Mode::Settings(view) = &a.mode else {
+            panic!("expected settings mode");
+        };
+        assert!(matches!(view.fields[1].value, SettingValue::Toggle(true)));
+        // Toggling only affects the focused field.
+        let SettingValue::Text(length) = &view.fields[0].value else {
+            panic!("expected the length field to stay text");
+        };
+        assert!(length.value().is_empty());
+    }
+
+    // Typed digits land in the (initially focused) length field.
+    #[test]
+    fn settings_length_field_accepts_typed_digits() {
+        let mut a = app_with_entries(1);
+        a.handle_key(key(KeyCode::Char('S')));
+        a.handle_key(key(KeyCode::Char('3')));
+        a.handle_key(key(KeyCode::Char('2')));
+
+        let Mode::Settings(view) = &a.mode else {
+            panic!("expected settings mode");
+        };
+        let SettingValue::Text(length) = &view.fields[0].value else {
+            panic!("expected the length field to be text");
+        };
+        assert_eq!(length.value(), "32");
+    }
+
+    // What Enter would persist: edits to the length field and a toggle both
+    // fold into the rebuilt policy correctly. Stops short of actually
+    // exercising `commands::tui_save_password_gen_policy` (which Enter also
+    // triggers), since that writes the real config.json -- same reason
+    // `tui_account_add`/`tui_set_primary` aren't exercised end-to-end here
+    // either.
+    #[test]
+    fn settings_rebuild_policy_reflects_edits() {
+        let mut a = app_with_entries(1);
+        a.handle_key(key(KeyCode::Char('S')));
+        a.handle_key(key(KeyCode::Char('2')));
+        a.handle_key(key(KeyCode::Char('4')));
+        a.handle_key(key(KeyCode::Tab)); // Length -> No symbols
+        a.handle_key(key(KeyCode::Char(' '))); // toggle it on
+
+        let Mode::Settings(view) = &a.mode else {
+            panic!("expected settings mode");
+        };
+        let policy = view.rebuild_policy().unwrap();
+        assert_eq!(policy.length, Some(24));
+        assert!(policy.no_symbols);
+        assert!(!policy.only_numbers);
+        assert!(!policy.nonconfusables);
+        assert!(!policy.diceware);
+    }
+
+    // A non-numeric length is rejected rather than silently discarded, so a
+    // typo can't quietly wipe out the configured length.
+    #[test]
+    fn settings_rebuild_policy_rejects_non_numeric_length() {
+        let mut a = app_with_entries(1);
+        a.handle_key(key(KeyCode::Char('S')));
+        a.handle_key(key(KeyCode::Char('x')));
+
+        let Mode::Settings(view) = &a.mode else {
+            panic!("expected settings mode");
+        };
+        assert!(view.rebuild_policy().is_err());
     }
 }

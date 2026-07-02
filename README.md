@@ -151,6 +151,12 @@ configuration options:
 * `pinentry`: The
   [pinentry](https://www.gnupg.org/related_software/pinentry/index.html)
   executable to use. Defaults to `pinentry`.
+* `password_gen`: The default password-generation policy used by `rbw gen`
+  and `rbw create --generate` whenever the equivalent flag isn't passed
+  explicitly (`length`, `no_symbols`, `only_numbers`, `nonconfusables`,
+  `diceware` -- same fields as those commands' flags). Not settable via `rbw
+  config set`; edit `config.json` directly, or use the TUI's settings view
+  (`S` from the main screen).
 
 ### Profiles
 
@@ -203,6 +209,14 @@ the most precise option and avoids shell quoting issues for names with spaces.
 
 For commands that support formatted output, use `-o name`, `-o json`, or
 `-o yaml`. `-o json` is equivalent to `--json`, and `-o yaml` emits YAML.
+
+`rbw create --generate` (`-g`) generates the password instead of prompting
+for one, using the same flags as `rbw gen` (`--length`/`-l`, `--no-symbols`,
+`--only-numbers`, `--nonconfusables`, `--diceware`); any of those flags
+implies `--generate`. Omitted flags fall back to the `password_gen` config
+policy, then to a 20-character password from the full character set. This
+is mutually exclusive with piping a fully-formed entry into `rbw create` via
+stdin.
 
 ### Template and command injection
 

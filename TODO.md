@@ -7,10 +7,14 @@
 - [x] `rbw import`: import data produced by `rbw export`, including
       attachments. Reference implementation:
       `/home/pschmitt/devel/private/pschmitt/bw-backup.git`.
-- [ ] `rbw create --generate`/`-g`: generate a password with the same flags
+- [x] `rbw create --generate`/`-g`: generate a password with the same flags
       as `rbw gen` (length, no-symbols, numbers-only, etc). Backed by a
-      configurable default password-generation policy in config.json, with
-      a TUI view to edit it (general settings panel).
+      configurable default password-generation policy in config.json
+      (`password_gen`), with a TUI view to edit it (`S` from the main
+      screen, `Mode::Settings`). The settings panel is deliberately generic
+      (a flat list of editable key/value fields, currently just the
+      password-gen policy) so the cross-account credential linking config
+      below can be added to it later without restructuring.
 - [ ] Cross-account credential linking: let an entry in one account's vault
       hold another configured account's login credentials (username,
       password, TOTP), configurable via config.json and the TUI. Use it to
@@ -23,9 +27,14 @@
       the password-generation policy and account-linking config above,
       etc.) — keep this in sync whenever a new config option is added.
       Done for everything currently in `src/config.rs` (see
-      `nix/hm-module.nix`); the password-generation policy and
-      account-linking config don't exist in `Config` yet, so they're not
-      modeled yet — extend the module when those land.
+      `nix/hm-module.nix`) as of when this module was added; the
+      account-linking config still doesn't exist in `Config` yet, so it
+      isn't modeled. **Gap:** `password_gen`/`PasswordGenPolicy` (see the
+      `rbw create --generate` item above) landed in `src/config.rs` after
+      `nix/hm-module.nix` was written and isn't mirrored there yet — extend
+      the module with a `programs.rbw.declarative.settings.password_gen`
+      option (`length`, `no_symbols`, `only_numbers`, `nonconfusables`,
+      `diceware`) to close this.
 
 ## Known gaps
 

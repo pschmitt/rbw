@@ -1,5 +1,7 @@
 use rand::seq::IteratorRandom as _;
 
+use crate::config::PasswordGenPolicy;
+
 const SYMBOLS: &[u8] = b"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 const NUMBERS: &[u8] = b"0123456789";
 const LETTERS: &[u8] =
@@ -55,6 +57,60 @@ pub fn pwgen(ty: Type, len: usize) -> String {
     // unwrap is safe because the method of generating passwords guarantees
     // valid utf8
     String::from_utf8(pass).unwrap()
+}
+
+// Password-generation flags, independent of where they came from (an
+// explicit CLI flag, or the configured default policy). `resolve` layers a
+// CLI-sourced instance over a config-sourced one over these hardcoded
+// fallbacks, so `rbw gen` and `rbw create --generate` share one priority
+// order.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GenFlags {
+    pub length: Option<usize>,
+    pub no_symbols: bool,
+    pub only_numbers: bool,
+    pub nonconfusables: bool,
+    pub diceware: bool,
+}
+
+impl GenFlags {
+    fn ty(self) -> Option<Type> {
+        if self.no_symbols {
+            Some(Type::NoSymbols)
+        } else if self.only_numbers {
+            Some(Type::Numbers)
+        } else if self.nonconfusables {
+            Some(Type::NonConfusables)
+        } else if self.diceware {
+            Some(Type::Diceware)
+        } else {
+            None
+        }
+    }
+}
+
+impl From<&PasswordGenPolicy> for GenFlags {
+    fn from(policy: &PasswordGenPolicy) -> Self {
+        Self {
+            length: policy.length,
+            no_symbols: policy.no_symbols,
+            only_numbers: policy.only_numbers,
+            nonconfusables: policy.nonconfusables,
+            diceware: policy.diceware,
+        }
+    }
+}
+
+// Hardcoded fallback length, used only when neither an explicit CLI flag nor
+// the configured policy sets one.
+pub const DEFAULT_LEN: usize = 20;
+
+// The length/type to actually generate with: an explicit `cli` flag wins,
+// then the configured default `policy`, then `DEFAULT_LEN`/`Type::AllChars`.
+pub fn resolve(cli: GenFlags, policy: GenFlags) -> (usize, Type) {
+    let len = cli.length.or(policy.length).unwrap_or(DEFAULT_LEN);
+    let ty = cli.ty().or_else(|| policy.ty()).unwrap_or(Type::AllChars);
+    (len, ty)
 }
 
 fn diceware(rng: &mut impl rand::RngCore, len: usize) -> String {
