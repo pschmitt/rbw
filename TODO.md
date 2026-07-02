@@ -1,8 +1,8 @@
 # TODO
 
-- [ ] `rbw export --attachments`: include decrypted attachment contents in
+- [x] `rbw export --attachments`: include decrypted attachment contents in
       the export, not just entry data.
-- [ ] `rbw export --encrypt PASSPHRASE`: produce a gpg-encrypted tar.gz
+- [x] `rbw export --encrypt PASSPHRASE`: produce a gpg-encrypted tar.gz
       archive instead of raw JSON to stdout.
 - [ ] `rbw import`: import data produced by `rbw export`, including
       attachments. Reference implementation:
