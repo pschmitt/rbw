@@ -3,10 +3,18 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      home-manager,
+    }:
     let
       systems = [
         "aarch64-darwin"
@@ -53,5 +61,72 @@
       overlays.default = final: _prev: {
         rbw = self.packages.${final.stdenv.hostPlatform.system}.default;
       };
+
+      homeManagerModules.default = import ./nix/hm-module.nix { inherit self; };
+
+      # Smoke test: build a minimal home-manager configuration exercising
+      # `programs.rbw.declarative`, and assert the rendered `config.json` matches what
+      # we expect (field naming, kebab-case `unlock` enum, `accounts`
+      # attrsOf->list conversion, null-stripping).
+      checks = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          hm = home-manager.lib.homeManagerConfiguration {
+            inherit pkgs;
+            modules = [
+              self.homeManagerModules.default
+              {
+                home.username = "rbw-test";
+                home.homeDirectory = "/home/rbw-test";
+                home.stateVersion = "24.05";
+                programs.rbw.declarative = {
+                  enable = true;
+                  settings = {
+                    pinentry = "pinentry-gtk2";
+                    lock_timeout = 120;
+                    primary_account = "personal";
+                    accounts.personal = {
+                      email = "me@example.com";
+                      base_url = "https://vault.example.com";
+                    };
+                  };
+                };
+              }
+            ];
+          };
+          actual = hm.config.xdg.configFile."rbw/config.json".text;
+          expected =
+            builtins.toJSON {
+              pinentry = "pinentry-gtk2";
+              lock_timeout = 120;
+              sync_interval = 3600;
+              primary_account = "personal";
+              accounts = [
+                {
+                  name = "personal";
+                  email = "me@example.com";
+                  base_url = "https://vault.example.com";
+                  unlock = "on-demand";
+                  exclude_from_list = false;
+                }
+              ];
+              tui_keybindings = { };
+            }
+            + "\n";
+        in
+        {
+          hm-module-config-json = pkgs.runCommand "rbw-hm-module-check" { } ''
+            cat > actual.json <<'ACTUAL_EOF'
+            ${actual}
+            ACTUAL_EOF
+            cat > expected.json <<'EXPECTED_EOF'
+            ${expected}
+            EXPECTED_EOF
+            diff -u expected.json actual.json
+            touch "$out"
+          '';
+        }
+      );
     };
 }

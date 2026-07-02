@@ -18,10 +18,14 @@
 - [ ] TUI: detect the background agent getting locked while the TUI is
       open, clear in-memory secrets, and show a dialog that on accept opens
       pinentry to unlock again.
-- [ ] Home-manager module exposing every config.json option as Nix options
+- [x] Home-manager module exposing every config.json option as Nix options
       (accounts, `unlock` policy, `exclude_from_list`, `tui_keybindings`,
       the password-generation policy and account-linking config above,
       etc.) — keep this in sync whenever a new config option is added.
+      Done for everything currently in `src/config.rs` (see
+      `nix/hm-module.nix`); the password-generation policy and
+      account-linking config don't exist in `Config` yet, so they're not
+      modeled yet — extend the module when those land.
 
 ## Known gaps
 

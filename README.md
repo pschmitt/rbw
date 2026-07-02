@@ -58,6 +58,61 @@ You can install it using `sudo dnf install rbw`.
 [NixOS repository](https://search.nixos.org/packages?show=rbw). You can try
 it out via `nix-shell -p rbw`.
 
+#### Home Manager
+
+This flake also exports a Home Manager module (`homeManagerModules.default`)
+that exposes `config.json` as declarative Nix options (mirroring `Config`
+and `Account` in `src/config.rs`), and installs `rbw` itself.
+
+Its options live under `programs.rbw.declarative`, not `programs.rbw`
+directly: recent Home Manager releases ship their own built-in, minimal
+`programs.rbw` module (freeform-typed, install-only), and its `enable`/
+`package`/`settings` options are unconditionally declared as soon as Home
+Manager is imported. This module can't redeclare those same option paths,
+so it lives at a sibling path instead. It's fully independent of the
+built-in module -- don't set both `programs.rbw.settings` (upstream,
+freeform) and `programs.rbw.declarative.enable` (this module) at once, as
+only this module actually renders `config.json`.
+
+Add the flake as an input:
+
+```nix
+inputs.rbw.url = "github:pschmitt/rbw";
+```
+
+Import the module in your Home Manager configuration:
+
+```nix
+{
+  imports = [ inputs.rbw.homeManagerModules.default ];
+}
+```
+
+Then configure it:
+
+```nix
+programs.rbw.declarative = {
+  enable = true;
+  settings = {
+    pinentry = "pinentry-gnome3";
+    lock_timeout = 3600;
+    primary_account = "personal";
+    accounts.personal = {
+      email = "me@example.com";
+      base_url = "https://vault.bitwarden.com";
+    };
+  };
+};
+```
+
+This writes `~/.config/rbw/config.json` (or
+`$XDG_CONFIG_HOME/rbw/config.json`) from `programs.rbw.declarative.settings`;
+unset options are omitted from the generated file rather than written as
+`null`. See the module's option documentation (e.g. via `home-manager
+option programs.rbw.declarative` or your editor's Nix LSP) for the full
+list of settings, including `accounts.<name>.unlock`,
+`accounts.<name>.exclude_from_list`, and `tui_keybindings`.
+
 ### Alpine
 
 `rbw` is available in the [community repository](https://pkgs.alpinelinux.org/packages?name=rbw). You can install it with `apk add rbw`.
