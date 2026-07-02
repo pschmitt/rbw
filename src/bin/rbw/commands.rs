@@ -4626,6 +4626,1078 @@ pub fn export() -> anyhow::Result<()> {
     write_json_pretty(&vault, "failed to write export to stdout")
 }
 
+// ===========================================================================
+// Import
+//
+// Reads the JSON produced by `rbw export` (optionally wrapped in a
+// gpg-encrypted tar.gz, as produced by `rbw export --encrypt`) and recreates
+// its entries and collections in the active account's vault (the active
+// account is whatever the global `--account`/`-a` flag or $RBW_ACCOUNT
+// resolved to, same as every other command). Deliberately reuses the same
+// add/edit/create-collection/create-attachment protocol calls the rest of
+// this file already uses instead of hand-rolling anything new.
+// ===========================================================================
+
+// Deserialize-only mirrors of the `Decrypted*`/`Exported*` export shapes.
+// Kept separate from those (serialize-only) types rather than adding
+// `Deserialize` to them, since the wire format mixes representations (field
+// types are strings, URI match types are numbers) that are easier to pin
+// down explicitly here. Every field that isn't strictly required uses
+// `#[serde(default)]` so small differences in a newer/older export (an
+// absent `attachments` array, an unrecognized extra field, etc.) degrade
+// gracefully instead of failing the whole import.
+#[derive(Debug, serde::Deserialize)]
+struct ImportedUri {
+    uri: String,
+    #[serde(default)]
+    match_type: Option<rbw::api::UriMatchType>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ImportedField {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    value: Option<String>,
+    #[serde(rename = "type", default)]
+    ty: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ImportedHistoryEntry {
+    #[serde(default)]
+    last_used_date: String,
+    #[serde(default)]
+    password: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "type")]
+enum ImportedData {
+    Login {
+        #[serde(default)]
+        username: Option<String>,
+        #[serde(default)]
+        password: Option<String>,
+        #[serde(default)]
+        totp: Option<String>,
+        #[serde(default)]
+        uris: Option<Vec<ImportedUri>>,
+    },
+    Card {
+        #[serde(default)]
+        cardholder_name: Option<String>,
+        #[serde(default)]
+        number: Option<String>,
+        #[serde(default)]
+        brand: Option<String>,
+        #[serde(default)]
+        exp_month: Option<String>,
+        #[serde(default)]
+        exp_year: Option<String>,
+        #[serde(default)]
+        code: Option<String>,
+    },
+    Identity {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        first_name: Option<String>,
+        #[serde(default)]
+        middle_name: Option<String>,
+        #[serde(default)]
+        last_name: Option<String>,
+        #[serde(default)]
+        address1: Option<String>,
+        #[serde(default)]
+        address2: Option<String>,
+        #[serde(default)]
+        address3: Option<String>,
+        #[serde(default)]
+        city: Option<String>,
+        #[serde(default)]
+        state: Option<String>,
+        #[serde(default)]
+        postal_code: Option<String>,
+        #[serde(default)]
+        country: Option<String>,
+        #[serde(default)]
+        phone: Option<String>,
+        #[serde(default)]
+        email: Option<String>,
+        #[serde(default)]
+        ssn: Option<String>,
+        #[serde(default)]
+        license_number: Option<String>,
+        #[serde(default)]
+        passport_number: Option<String>,
+        #[serde(default)]
+        username: Option<String>,
+    },
+    SecureNote,
+    SshKey {
+        #[serde(default)]
+        public_key: Option<String>,
+        #[serde(default)]
+        fingerprint: Option<String>,
+        #[serde(default)]
+        private_key: Option<String>,
+    },
+}
+
+// Mirrors the (still-unlanded, as of this writing) `ExportedAttachment`
+// shape from `rbw export --attachments`. Kept as raw `serde_json::Value`s on
+// `ImportedEntry` rather than a typed `Vec<ImportedAttachment>` so that if
+// the real field name/shape ends up slightly different, we still parse the
+// rest of the entry -- we just skip (and warn about) the attachments that
+// don't match this shape instead of failing to parse the whole entry.
+#[derive(Debug, serde::Deserialize)]
+struct ImportedAttachment {
+    #[serde(default)]
+    file_name: Option<String>,
+    #[serde(default)]
+    data_base64: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ImportedEntry {
+    #[serde(default)]
+    org_id: Option<String>,
+    #[serde(default)]
+    folder: Option<String>,
+    name: String,
+    #[serde(flatten)]
+    data: ImportedData,
+    #[serde(default)]
+    fields: Vec<ImportedField>,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default)]
+    history: Vec<ImportedHistoryEntry>,
+    #[serde(default)]
+    collection_ids: Vec<String>,
+    #[serde(default)]
+    attachments: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ImportedCollection {
+    #[serde(default)]
+    id: Option<String>,
+    org_id: String,
+    name: String,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ImportedVault {
+    #[serde(default)]
+    entries: Vec<ImportedEntry>,
+    #[serde(default)]
+    collections: Vec<ImportedCollection>,
+}
+
+fn imported_data_to_editable(data: &ImportedData) -> EditableData {
+    match data {
+        ImportedData::Login {
+            username,
+            password,
+            totp,
+            uris,
+        } => EditableData::Login {
+            username: username.clone(),
+            password: password.clone(),
+            uris: uris
+                .as_ref()
+                .map(|v| {
+                    v.iter()
+                        .map(|u| EditableUri {
+                            uri: u.uri.clone(),
+                            match_type: u
+                                .match_type
+                                .map(|mt| uri_match_type_str(mt).to_string()),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            totp: totp.clone(),
+        },
+        ImportedData::Card {
+            cardholder_name,
+            number,
+            brand,
+            exp_month,
+            exp_year,
+            code,
+        } => EditableData::Card {
+            cardholder_name: cardholder_name.clone(),
+            number: number.clone(),
+            brand: brand.clone(),
+            exp_month: exp_month.clone(),
+            exp_year: exp_year.clone(),
+            code: code.clone(),
+        },
+        ImportedData::Identity {
+            title,
+            first_name,
+            middle_name,
+            last_name,
+            address1,
+            address2,
+            address3,
+            city,
+            state,
+            postal_code,
+            country,
+            phone,
+            email,
+            ssn,
+            license_number,
+            passport_number,
+            username,
+        } => EditableData::Identity {
+            title: title.clone(),
+            first_name: first_name.clone(),
+            middle_name: middle_name.clone(),
+            last_name: last_name.clone(),
+            address1: address1.clone(),
+            address2: address2.clone(),
+            address3: address3.clone(),
+            city: city.clone(),
+            state: state.clone(),
+            postal_code: postal_code.clone(),
+            country: country.clone(),
+            phone: phone.clone(),
+            email: email.clone(),
+            ssn: ssn.clone(),
+            license_number: license_number.clone(),
+            passport_number: passport_number.clone(),
+            username: username.clone(),
+        },
+        ImportedData::SecureNote => EditableData::SecureNote,
+        ImportedData::SshKey {
+            public_key,
+            fingerprint,
+            private_key,
+        } => EditableData::SshKey {
+            private_key: private_key.clone(),
+            public_key: public_key.clone(),
+            fingerprint: fingerprint.clone(),
+        },
+    }
+}
+
+fn imported_to_editable(imported: &ImportedEntry) -> EditableCipher {
+    EditableCipher {
+        name: imported.name.clone(),
+        folder: imported.folder.clone(),
+        notes: imported.notes.clone(),
+        data: imported_data_to_editable(&imported.data),
+        fields: imported
+            .fields
+            .iter()
+            .map(|f| EditableCustomField {
+                name: f.name.clone(),
+                value: f.value.clone(),
+                ty: f.ty.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn imported_history_to_encrypted(
+    history: &[ImportedHistoryEntry],
+    org_id: Option<&str>,
+) -> anyhow::Result<Vec<rbw::db::HistoryEntry>> {
+    history
+        .iter()
+        .map(|h| {
+            Ok(rbw::db::HistoryEntry {
+                last_used_date: h.last_used_date.clone(),
+                password: crate::actions::encrypt(&h.password, org_id)?,
+            })
+        })
+        .collect()
+}
+
+fn read_import_input(
+    file: Option<&std::path::Path>,
+) -> anyhow::Result<Vec<u8>> {
+    match file {
+        Some(path) => std::fs::read(path)
+            .with_context(|| format!("failed to read {}", path.display())),
+        None => {
+            let mut buf = Vec::new();
+            std::io::stdin()
+                .read_to_end(&mut buf)
+                .context("failed to read import data from stdin")?;
+            Ok(buf)
+        }
+    }
+}
+
+// Finds the first `*.json` file in `dir` (recursively), falling back to the
+// first file of any kind if none has a `.json` extension. `rbw export
+// --encrypt` is expected to wrap a single JSON file in the tar.gz, but the
+// exact filename isn't something worth hard-coding here.
+fn find_first_json_file(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut stack = vec![dir.to_path_buf()];
+    let mut fallback: Option<std::path::PathBuf> = None;
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().and_then(std::ffi::OsStr::to_str)
+                == Some("json")
+            {
+                return Some(path);
+            } else if fallback.is_none() {
+                fallback = Some(path);
+            }
+        }
+    }
+    fallback
+}
+
+// Decrypts a gpg-encrypted tar.gz archive (as produced by `rbw export
+// --encrypt`) and returns the JSON text found inside it. Shells out to `gpg`
+// and `tar` rather than pulling in new crates, matching how this codebase
+// already shells out to an external program for `rbw::edit` and `rbw run`.
+fn decrypt_import_archive(
+    data: &[u8],
+    passphrase: &str,
+) -> anyhow::Result<String> {
+    let dir = tempfile::tempdir()
+        .context("failed to create a temp dir for import")?;
+
+    let archive_path = dir.path().join("import.gpg");
+    std::fs::write(&archive_path, data)
+        .context("failed to stage the encrypted archive")?;
+
+    let mut child = std::process::Command::new("gpg")
+        .args(["--batch", "--yes", "--passphrase-fd", "0", "--decrypt"])
+        .arg(&archive_path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("failed to run gpg (is it installed and on $PATH?)")?;
+
+    {
+        let stdin =
+            child.stdin.as_mut().context("failed to open gpg's stdin")?;
+        stdin
+            .write_all(passphrase.as_bytes())
+            .and_then(|()| stdin.write_all(b"\n"))
+            .context("failed to write the passphrase to gpg")?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .context("failed to read gpg's output")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "gpg decryption failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let tar_path = dir.path().join("import.tar.gz");
+    std::fs::write(&tar_path, &output.stdout)
+        .context("failed to stage the decrypted archive")?;
+
+    let extract_dir = dir.path().join("extracted");
+    std::fs::create_dir_all(&extract_dir)
+        .context("failed to create an extraction dir")?;
+    let tar_status = std::process::Command::new("tar")
+        .arg("-xzf")
+        .arg(&tar_path)
+        .arg("-C")
+        .arg(&extract_dir)
+        .status()
+        .context("failed to run tar (is it installed and on $PATH?)")?;
+    if !tar_status.success() {
+        anyhow::bail!(
+            "failed to extract the decrypted archive (tar exited with \
+             {tar_status})"
+        );
+    }
+
+    let json_path = find_first_json_file(&extract_dir).ok_or_else(|| {
+        anyhow::anyhow!("no JSON file found inside the decrypted archive")
+    })?;
+    std::fs::read_to_string(&json_path)
+        .with_context(|| format!("failed to read {}", json_path.display()))
+}
+
+// Figures out whether `raw` is plain JSON (today's `rbw export` output) or a
+// gpg-encrypted tar.gz (`rbw export --encrypt`'s output) and returns the
+// JSON text either way.
+fn load_import_json(
+    raw: &[u8],
+    decrypt_passphrase: Option<&str>,
+) -> anyhow::Result<String> {
+    if decrypt_passphrase.is_none() {
+        if let Ok(text) = std::str::from_utf8(raw) {
+            if serde_json::from_str::<serde_json::Value>(text).is_ok() {
+                return Ok(text.to_string());
+            }
+        }
+    }
+
+    if let Some(passphrase) = decrypt_passphrase {
+        return decrypt_import_archive(raw, passphrase);
+    }
+
+    anyhow::bail!(
+        "failed to parse import data as JSON; if this is a gpg-encrypted \
+         export archive (from `rbw export --encrypt`), pass \
+         --decrypt-passphrase"
+    );
+}
+
+// Uploads any embedded attachments on an imported entry to `entry` (the
+// entry's current, post-creation-or-update state). `skip_names` are
+// filenames already present on the entry (used by the `--overwrite` path so
+// re-running an import doesn't pile up duplicate attachments). Returns
+// (restored, failed) counts; a failure to restore one attachment is a
+// warning, not a fatal error for the whole import.
+fn upload_imported_attachments(
+    db: &mut rbw::db::Db,
+    access_token: &mut String,
+    refresh_token: &str,
+    entry: &rbw::db::Entry,
+    attachments: &[serde_json::Value],
+    skip_names: &std::collections::HashSet<String>,
+) -> anyhow::Result<(usize, usize)> {
+    if attachments.is_empty() {
+        return Ok((0, 0));
+    }
+
+    let c = stdout_supports_color();
+    let mut restored = 0usize;
+    let mut failed = 0usize;
+
+    for raw in attachments {
+        let parsed: ImportedAttachment =
+            match serde_json::from_value(raw.clone()) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!(
+                        "{} couldn't parse an attachment on '{}': {e}",
+                        style::warning("Warning:", c),
+                        entry.name,
+                    );
+                    failed += 1;
+                    continue;
+                }
+            };
+
+        let (Some(file_name), Some(data_base64)) =
+            (parsed.file_name.as_deref(), parsed.data_base64.as_deref())
+        else {
+            eprintln!(
+                "{} an attachment on '{}' is missing file_name/data_base64; \
+                 skipped",
+                style::warning("Warning:", c),
+                entry.name,
+            );
+            failed += 1;
+            continue;
+        };
+
+        if skip_names.contains(file_name) {
+            continue;
+        }
+
+        let data = match rbw::base64::decode(data_base64) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!(
+                    "{} couldn't decode attachment '{file_name}' on '{}': \
+                     {e}",
+                    style::warning("Warning:", c),
+                    entry.name,
+                );
+                failed += 1;
+                continue;
+            }
+        };
+
+        let encrypted = crate::actions::encrypt_attachment(
+            data,
+            file_name,
+            entry.key.as_deref(),
+            entry.org_id.as_deref(),
+        );
+        let (encrypted_data, encrypted_key, encrypted_filename) =
+            match encrypted {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!(
+                        "{} couldn't encrypt attachment '{file_name}' on \
+                         '{}': {e}",
+                        style::warning("Warning:", c),
+                        entry.name,
+                    );
+                    failed += 1;
+                    continue;
+                }
+            };
+
+        match rbw::actions::create_attachment(
+            access_token,
+            refresh_token,
+            &entry.id,
+            &encrypted_filename,
+            &encrypted_key,
+            encrypted_data,
+        ) {
+            Ok((new_token, ())) => {
+                if let Some(new_token) = new_token {
+                    access_token.clone_from(&new_token);
+                    db.access_token = Some(new_token);
+                    save_db(db)?;
+                }
+                restored += 1;
+            }
+            Err(e) => {
+                eprintln!(
+                    "{} failed to upload attachment '{file_name}' to '{}': \
+                     {e}",
+                    style::warning("Warning:", c),
+                    entry.name,
+                );
+                failed += 1;
+            }
+        }
+    }
+
+    if restored > 0 {
+        crate::actions::sync()?;
+    }
+
+    Ok((restored, failed))
+}
+
+// Creates a brand-new entry for `imported`. Always creates it in the
+// personal vault first (`rbw::actions::add` has no organization parameter),
+// then -- only if we're a member of the entry's original organization
+// locally -- moves it into that organization and assigns the collections we
+// were able to map, mirroring what a human would do by hand. Entries whose
+// source organization isn't available locally are left as personal-vault
+// entries (a `Warning:` line is not printed for this case to avoid being
+// noisy on large multi-org imports; see the final summary's "collections
+// skipped" count instead).
+fn import_create_entry(
+    db: &mut rbw::db::Db,
+    access_token: &mut String,
+    refresh_token: &mut String,
+    collection_id_map: &std::collections::HashMap<String, String>,
+    imported: &ImportedEntry,
+) -> anyhow::Result<(usize, usize)> {
+    let editable = imported_to_editable(imported);
+
+    let (data, _fields, notes) = editable_to_encrypted(&editable, None)?;
+    let encrypted_name = crate::actions::encrypt(&imported.name, None)?;
+    let encrypted_notes = notes
+        .as_deref()
+        .map(|n| crate::actions::encrypt(n, None))
+        .transpose()?;
+
+    let folder_id = if let Some(folder_name) = imported.folder.as_deref() {
+        resolve_folder_id(db, access_token, refresh_token, folder_name)?
+    } else {
+        None
+    };
+
+    let before_ids: std::collections::HashSet<String> =
+        db.entries.iter().map(|e| e.id.clone()).collect();
+
+    if let (Some(new_token), ()) = rbw::actions::add(
+        access_token,
+        refresh_token,
+        &encrypted_name,
+        &data,
+        encrypted_notes.as_deref(),
+        folder_id.as_deref(),
+    )? {
+        access_token.clone_from(&new_token);
+        db.access_token = Some(new_token);
+        save_db(db)?;
+    }
+
+    crate::actions::sync()?;
+    *db = load_db()?;
+    *access_token = db.access_token.as_ref().unwrap().clone();
+    *refresh_token = db.refresh_token.as_ref().unwrap().clone();
+
+    // `add` doesn't return the new entry's id, so find it by diffing the
+    // entry id set from before/after the sync above.
+    let Some(new_entry) = db
+        .entries
+        .iter()
+        .find(|e| !before_ids.contains(&e.id))
+        .cloned()
+    else {
+        anyhow::bail!(
+            "entry was created but couldn't be located afterward (sync may \
+             be delayed)"
+        );
+    };
+
+    let target_org = imported
+        .org_id
+        .as_deref()
+        .filter(|org_id| db.protected_org_keys.contains_key(*org_id));
+
+    let has_fields_or_history =
+        !imported.fields.is_empty() || !imported.history.is_empty();
+
+    if target_org.is_some() || has_fields_or_history {
+        let org_id = target_org;
+        let (org_data, org_fields, org_notes) =
+            editable_to_encrypted(&editable, org_id)?;
+        let org_encrypted_name =
+            crate::actions::encrypt(&imported.name, org_id)?;
+        let org_encrypted_notes = org_notes
+            .as_deref()
+            .map(|n| crate::actions::encrypt(n, org_id))
+            .transpose()?;
+        let history =
+            imported_history_to_encrypted(&imported.history, org_id)?;
+
+        if let (Some(new_token), ()) = rbw::actions::edit(
+            access_token,
+            refresh_token,
+            &new_entry.id,
+            org_id,
+            &org_encrypted_name,
+            &org_data,
+            &org_fields,
+            org_encrypted_notes.as_deref(),
+            folder_id.as_deref(),
+            &history,
+        )? {
+            access_token.clone_from(&new_token);
+            db.access_token = Some(new_token);
+            save_db(db)?;
+        }
+        crate::actions::sync()?;
+        *db = load_db()?;
+        *access_token = db.access_token.as_ref().unwrap().clone();
+        *refresh_token = db.refresh_token.as_ref().unwrap().clone();
+    }
+
+    if target_org.is_some() {
+        let resolved_collections: Vec<String> = imported
+            .collection_ids
+            .iter()
+            .filter_map(|id| collection_id_map.get(id).cloned())
+            .collect();
+        if !resolved_collections.is_empty() {
+            if let (Some(new_token), ()) = rbw::actions::edit_collections(
+                access_token,
+                refresh_token,
+                &new_entry.id,
+                &resolved_collections,
+            )? {
+                access_token.clone_from(&new_token);
+                db.access_token = Some(new_token);
+                save_db(db)?;
+            }
+            crate::actions::sync()?;
+            *db = load_db()?;
+            *access_token = db.access_token.as_ref().unwrap().clone();
+            *refresh_token = db.refresh_token.as_ref().unwrap().clone();
+        }
+    }
+
+    let Some(final_entry) =
+        db.entries.iter().find(|e| e.id == new_entry.id).cloned()
+    else {
+        anyhow::bail!("entry disappeared from the vault after import");
+    };
+
+    upload_imported_attachments(
+        db,
+        access_token,
+        refresh_token,
+        &final_entry,
+        &imported.attachments,
+        &std::collections::HashSet::new(),
+    )
+}
+
+// Updates an already-existing entry (`--overwrite`) in place: data, fields,
+// notes and history are replaced, but the entry keeps its current id,
+// organization, and folder (unless `imported` names a different folder) --
+// import never moves an existing entry between organizations, to keep
+// `--overwrite` predictable.
+fn import_overwrite_entry(
+    db: &mut rbw::db::Db,
+    access_token: &mut String,
+    refresh_token: &mut String,
+    existing: &rbw::db::Entry,
+    imported: &ImportedEntry,
+) -> anyhow::Result<(usize, usize)> {
+    let editable = imported_to_editable(imported);
+
+    let org_id = existing.org_id.as_deref();
+    let (data, fields, notes) = editable_to_encrypted(&editable, org_id)?;
+    let encrypted_name = crate::actions::encrypt(&imported.name, org_id)?;
+    let encrypted_notes = notes
+        .as_deref()
+        .map(|n| crate::actions::encrypt(n, org_id))
+        .transpose()?;
+    let history = imported_history_to_encrypted(&imported.history, org_id)?;
+
+    let folder_id = if let Some(folder_name) = imported.folder.as_deref() {
+        resolve_folder_id(db, access_token, refresh_token, folder_name)?
+    } else {
+        existing.folder_id.clone()
+    };
+
+    if let (Some(new_token), ()) = rbw::actions::edit(
+        access_token,
+        refresh_token,
+        &existing.id,
+        org_id,
+        &encrypted_name,
+        &data,
+        &fields,
+        encrypted_notes.as_deref(),
+        folder_id.as_deref(),
+        &history,
+    )? {
+        access_token.clone_from(&new_token);
+        db.access_token = Some(new_token);
+        save_db(db)?;
+    }
+
+    crate::actions::sync()?;
+    *db = load_db()?;
+    *access_token = db.access_token.as_ref().unwrap().clone();
+    *refresh_token = db.refresh_token.as_ref().unwrap().clone();
+
+    let Some(refreshed) =
+        db.entries.iter().find(|e| e.id == existing.id).cloned()
+    else {
+        anyhow::bail!("entry disappeared from the vault after update");
+    };
+
+    let already_attached: std::collections::HashSet<String> =
+        decrypt_cipher(&refreshed).map_or_else(
+            |_| std::collections::HashSet::new(),
+            |d| {
+                d.attachments
+                    .into_iter()
+                    .filter_map(|a| a.file_name)
+                    .collect()
+            },
+        );
+
+    upload_imported_attachments(
+        db,
+        access_token,
+        refresh_token,
+        &refreshed,
+        &imported.attachments,
+        &already_attached,
+    )
+}
+
+pub fn import(
+    file: Option<&std::path::Path>,
+    decrypt_passphrase: Option<&str>,
+    overwrite: bool,
+) -> anyhow::Result<()> {
+    let raw = read_import_input(file)?;
+    let json_text = load_import_json(&raw, decrypt_passphrase)?;
+
+    let vault: ImportedVault = serde_json::from_str(&json_text).context(
+        "failed to parse import data (expected the JSON shape produced by \
+         `rbw export`)",
+    )?;
+
+    unlock(None)?;
+
+    let mut db = load_db()?;
+    let mut access_token = db.access_token.as_ref().unwrap().clone();
+    let mut refresh_token = db.refresh_token.as_ref().unwrap().clone();
+
+    let c = stdout_supports_color();
+
+    let mut collections_created = 0usize;
+    let mut collections_reused = 0usize;
+    let mut collections_unavailable = 0usize;
+
+    // Existing collections, decrypted once up front: (collection, plaintext
+    // name).
+    let mut existing_collections: Vec<(rbw::db::Collection, String)> = db
+        .collections
+        .iter()
+        .cloned()
+        .map(|col| {
+            let name =
+                crate::actions::decrypt(&col.name, None, Some(&col.org_id))?;
+            Ok((col, name))
+        })
+        .collect::<anyhow::Result<_>>()?;
+
+    // Maps an imported collection id to the id it has (or now has) in this
+    // vault.
+    let mut collection_id_map: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
+    for imported_col in &vault.collections {
+        if !db.protected_org_keys.contains_key(&imported_col.org_id) {
+            // We're not a member of this organization locally, so we can't
+            // create (or assign entries to) its collections.
+            collections_unavailable += 1;
+            continue;
+        }
+
+        if let Some((existing, _)) =
+            existing_collections.iter().find(|(col, name)| {
+                col.org_id == imported_col.org_id
+                    && *name == imported_col.name
+            })
+        {
+            if let Some(orig_id) = &imported_col.id {
+                collection_id_map
+                    .insert(orig_id.clone(), existing.id.clone());
+            }
+            collections_reused += 1;
+            continue;
+        }
+
+        let encrypted_name = crate::actions::encrypt(
+            &imported_col.name,
+            Some(&imported_col.org_id),
+        )?;
+        match rbw::actions::create_collection(
+            &access_token,
+            &refresh_token,
+            &imported_col.org_id,
+            &encrypted_name,
+        ) {
+            Ok((new_token, new_id)) => {
+                if let Some(new_token) = new_token {
+                    access_token.clone_from(&new_token);
+                    db.access_token = Some(new_token);
+                    save_db(&db)?;
+                }
+                if let Some(orig_id) = &imported_col.id {
+                    collection_id_map.insert(orig_id.clone(), new_id.clone());
+                }
+                existing_collections.push((
+                    rbw::db::Collection {
+                        id: new_id,
+                        org_id: imported_col.org_id.clone(),
+                        name: encrypted_name,
+                    },
+                    imported_col.name.clone(),
+                ));
+                collections_created += 1;
+            }
+            Err(e) => {
+                eprintln!(
+                    "{} failed to create collection '{}': {e:#}",
+                    style::warning("Warning:", c),
+                    imported_col.name,
+                );
+            }
+        }
+    }
+
+    if collections_created > 0 {
+        crate::actions::sync()?;
+        db = load_db()?;
+        access_token = db.access_token.as_ref().unwrap().clone();
+        refresh_token = db.refresh_token.as_ref().unwrap().clone();
+    }
+
+    // Index existing entries by (name, username) so already-imported
+    // entries can be detected without recreating them. Login-typed entries
+    // are additionally keyed on their username, so two different logins
+    // that happen to share a name don't collide with each other.
+    let existing_index = {
+        let mut requests = BatchRequests::new();
+        let plans: Vec<SearchCipherPlan> = db
+            .entries
+            .iter()
+            .map(|entry| SearchCipherPlan::build(entry, &mut requests))
+            .collect();
+        let results = if requests.is_empty() {
+            Vec::new()
+        } else {
+            crate::actions::decrypt_batch(requests.into_vec())?
+        };
+        let mut index: std::collections::HashMap<
+            (String, Option<String>),
+            rbw::db::Entry,
+        > = std::collections::HashMap::new();
+        for (entry, plan) in db.entries.iter().zip(plans) {
+            if let Ok(decrypted) = plan.resolve(&results) {
+                index.insert((decrypted.name, decrypted.user), entry.clone());
+            }
+        }
+        index
+    };
+
+    let mut entries_created = 0usize;
+    let mut entries_updated = 0usize;
+    let mut entries_skipped = 0usize;
+    let mut entries_unsupported = 0usize;
+    let mut entries_failed = 0usize;
+    let mut attachments_restored = 0usize;
+    let mut attachments_failed = 0usize;
+
+    for imported in &vault.entries {
+        if matches!(imported.data, ImportedData::SshKey { .. }) {
+            eprintln!(
+                "{} '{}' (SSH key entries can't be created via the API yet)",
+                style::warning("Skipped", c),
+                imported.name,
+            );
+            entries_unsupported += 1;
+            continue;
+        }
+
+        let username = match &imported.data {
+            ImportedData::Login { username, .. } => username.clone(),
+            _ => None,
+        };
+        let key = (imported.name.clone(), username);
+        let is_update = existing_index.contains_key(&key);
+
+        let result = if let Some(existing) = existing_index.get(&key) {
+            if overwrite {
+                import_overwrite_entry(
+                    &mut db,
+                    &mut access_token,
+                    &mut refresh_token,
+                    existing,
+                    imported,
+                )
+            } else {
+                eprintln!(
+                    "{} '{}' (already exists; use --overwrite to replace)",
+                    style::warning("Skipped", c),
+                    imported.name,
+                );
+                entries_skipped += 1;
+                continue;
+            }
+        } else {
+            import_create_entry(
+                &mut db,
+                &mut access_token,
+                &mut refresh_token,
+                &collection_id_map,
+                imported,
+            )
+        };
+
+        match result {
+            Ok((restored, failed)) => {
+                attachments_restored += restored;
+                attachments_failed += failed;
+                if is_update {
+                    entries_updated += 1;
+                } else {
+                    entries_created += 1;
+                }
+                eprintln!(
+                    "{} '{}'",
+                    style::success(
+                        if is_update { "Updated" } else { "Created" },
+                        c
+                    ),
+                    imported.name,
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "{} failed to import '{}': {e:#}",
+                    style_error("Error:", c),
+                    imported.name,
+                );
+                entries_failed += 1;
+            }
+        }
+    }
+
+    eprintln!();
+    eprintln!("{}", style::section("Import summary:", c));
+    eprintln!(
+        "  entries created:      {}",
+        style::success(&entries_created.to_string(), c)
+    );
+    if entries_updated > 0 {
+        eprintln!(
+            "  entries updated:      {}",
+            style::success(&entries_updated.to_string(), c)
+        );
+    }
+    if entries_skipped > 0 {
+        eprintln!(
+            "  entries skipped:      {}",
+            style::warning(&entries_skipped.to_string(), c)
+        );
+    }
+    if entries_unsupported > 0 {
+        eprintln!(
+            "  entries unsupported:  {}",
+            style::warning(&entries_unsupported.to_string(), c)
+        );
+    }
+    if entries_failed > 0 {
+        eprintln!(
+            "  entries failed:       {}",
+            style_error(&entries_failed.to_string(), c)
+        );
+    }
+    if attachments_restored > 0 {
+        eprintln!(
+            "  attachments restored: {}",
+            style::success(&attachments_restored.to_string(), c)
+        );
+    }
+    if attachments_failed > 0 {
+        eprintln!(
+            "  attachments failed:   {}",
+            style_error(&attachments_failed.to_string(), c)
+        );
+    }
+    if collections_created > 0 || collections_reused > 0 {
+        eprintln!(
+            "  collections created:  {collections_created} (reused \
+             {collections_reused})"
+        );
+    }
+    if collections_unavailable > 0 {
+        eprintln!(
+            "  collections skipped:  {} (organization not available \
+             locally)",
+            style::warning(&collections_unavailable.to_string(), c)
+        );
+    }
+
+    if entries_failed > 0 {
+        anyhow::bail!(
+            "{entries_failed} entr{} failed to import",
+            if entries_failed == 1 { "y" } else { "ies" }
+        );
+    }
+
+    Ok(())
+}
+
 pub fn list_collections(output: OutputMode) -> anyhow::Result<()> {
     #[derive(serde::Serialize)]
     struct DecryptedCollection {
@@ -11141,5 +12213,270 @@ mod test {
         } else {
             panic!("expected Login variant");
         }
+    }
+
+    #[test]
+    fn test_import_json_parses_plain_export_shape() {
+        let json = r#"{
+            "entries": [
+                {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "org_id": null,
+                    "folder": "Work",
+                    "name": "example",
+                    "type": "Login",
+                    "username": "user@example.com",
+                    "password": "hunter2",
+                    "totp": null,
+                    "uris": [
+                        { "uri": "https://example.com", "match_type": 0 }
+                    ],
+                    "fields": [
+                        { "name": "custom", "value": "val", "type": "text" }
+                    ],
+                    "notes": "some notes",
+                    "history": [
+                        { "last_used_date": "2024-01-01T00:00:00Z", "password": "old" }
+                    ],
+                    "collection_ids": ["c1"]
+                }
+            ],
+            "collections": [
+                { "id": "c1", "org_id": "org1", "name": "Engineering" }
+            ]
+        }"#;
+
+        let vault: ImportedVault = serde_json::from_str(json).unwrap();
+        assert_eq!(vault.entries.len(), 1);
+        assert_eq!(vault.collections.len(), 1);
+
+        let entry = &vault.entries[0];
+        assert_eq!(entry.name, "example");
+        assert_eq!(entry.folder.as_deref(), Some("Work"));
+        assert_eq!(entry.collection_ids, vec!["c1".to_string()]);
+        assert!(entry.attachments.is_empty());
+        assert_eq!(entry.history.len(), 1);
+        assert_eq!(entry.history[0].password, "old");
+
+        match &entry.data {
+            ImportedData::Login {
+                username, password, ..
+            } => {
+                assert_eq!(username.as_deref(), Some("user@example.com"));
+                assert_eq!(password.as_deref(), Some("hunter2"));
+            }
+            other => panic!("expected Login variant, got {other:?}"),
+        }
+
+        let collection = &vault.collections[0];
+        assert_eq!(collection.org_id, "org1");
+        assert_eq!(collection.name, "Engineering");
+    }
+
+    #[test]
+    fn test_import_json_tolerates_absent_attachments_field() {
+        // Today's `rbw export` (no --attachments support yet) never emits
+        // an `attachments` key at all -- make sure that still parses.
+        let json = r#"{
+            "entries": [
+                {
+                    "id": "1",
+                    "name": "no-attachments",
+                    "type": "SecureNote",
+                    "fields": [],
+                    "notes": null,
+                    "history": [],
+                    "collection_ids": []
+                }
+            ],
+            "collections": []
+        }"#;
+
+        let vault: ImportedVault = serde_json::from_str(json).unwrap();
+        assert_eq!(vault.entries.len(), 1);
+        assert!(vault.entries[0].attachments.is_empty());
+        assert!(matches!(vault.entries[0].data, ImportedData::SecureNote));
+    }
+
+    #[test]
+    fn test_import_json_tolerates_unrecognized_attachment_shape() {
+        // If `rbw export --attachments` ends up emitting a slightly
+        // different shape than we guessed, entries should still parse --
+        // individual attachments just get skipped (with a warning) at
+        // upload time instead of the whole entry failing to parse.
+        let json = r#"{
+            "entries": [
+                {
+                    "id": "1",
+                    "name": "weird-attachments",
+                    "type": "SecureNote",
+                    "fields": [],
+                    "notes": null,
+                    "history": [],
+                    "collection_ids": [],
+                    "attachments": [
+                        { "totally": "unexpected", "shape": 42 },
+                        { "file_name": "known.txt", "data_base64": "aGVsbG8=" }
+                    ]
+                }
+            ],
+            "collections": []
+        }"#;
+
+        let vault: ImportedVault = serde_json::from_str(json).unwrap();
+        assert_eq!(vault.entries[0].attachments.len(), 2);
+
+        // The first doesn't match `ImportedAttachment`'s shape...
+        let bad: Result<ImportedAttachment, _> =
+            serde_json::from_value(vault.entries[0].attachments[0].clone());
+        assert!(bad.is_ok(), "unknown fields are simply ignored");
+        let bad = bad.unwrap();
+        assert!(bad.file_name.is_none() && bad.data_base64.is_none());
+
+        // ...while the second parses cleanly.
+        let good: ImportedAttachment =
+            serde_json::from_value(vault.entries[0].attachments[1].clone())
+                .unwrap();
+        assert_eq!(good.file_name.as_deref(), Some("known.txt"));
+        assert_eq!(good.data_base64.as_deref(), Some("aGVsbG8="));
+    }
+
+    #[test]
+    fn test_import_json_tolerates_unknown_extra_entry_fields() {
+        // Forward-compatibility: an entry with a field we don't know about
+        // shouldn't break parsing.
+        let json = r#"{
+            "entries": [
+                {
+                    "id": "1",
+                    "name": "future-proof",
+                    "type": "SecureNote",
+                    "fields": [],
+                    "notes": null,
+                    "history": [],
+                    "collection_ids": [],
+                    "some_future_field": { "nested": true }
+                }
+            ],
+            "collections": []
+        }"#;
+
+        let vault: ImportedVault = serde_json::from_str(json).unwrap();
+        assert_eq!(vault.entries[0].name, "future-proof");
+    }
+
+    #[test]
+    fn test_load_import_json_accepts_plain_json_without_passphrase() {
+        let json = r#"{"entries":[],"collections":[]}"#;
+        let loaded = load_import_json(json.as_bytes(), None).unwrap();
+        assert_eq!(loaded, json);
+    }
+
+    #[test]
+    fn test_load_import_json_errors_helpfully_for_non_json_without_passphrase(
+    ) {
+        let err = load_import_json(b"not json and not gpg either", None)
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("--decrypt-passphrase"),
+            "error should point at --decrypt-passphrase: {err}"
+        );
+    }
+
+    #[test]
+    fn test_imported_data_to_editable_login_preserves_fields_and_uris() {
+        let data = ImportedData::Login {
+            username: Some("user@example.com".to_string()),
+            password: Some("hunter2".to_string()),
+            totp: Some("otpauth://totp/x".to_string()),
+            uris: Some(vec![ImportedUri {
+                uri: "https://example.com".to_string(),
+                match_type: Some(rbw::api::UriMatchType::Domain),
+            }]),
+        };
+
+        let editable = imported_data_to_editable(&data);
+        match editable {
+            EditableData::Login {
+                username,
+                password,
+                totp,
+                uris,
+            } => {
+                assert_eq!(username.as_deref(), Some("user@example.com"));
+                assert_eq!(password.as_deref(), Some("hunter2"));
+                assert_eq!(totp.as_deref(), Some("otpauth://totp/x"));
+                assert_eq!(uris.len(), 1);
+                assert_eq!(uris[0].uri, "https://example.com");
+                assert_eq!(uris[0].match_type.as_deref(), Some("domain"));
+            }
+            other => panic!("expected Login variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_imported_data_to_editable_login_without_uris_is_empty() {
+        let data = ImportedData::Login {
+            username: None,
+            password: None,
+            totp: None,
+            uris: None,
+        };
+        match imported_data_to_editable(&data) {
+            EditableData::Login { uris, .. } => assert!(uris.is_empty()),
+            other => panic!("expected Login variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ssh_key_entries_are_detected_for_skip() {
+        let json = r#"{
+            "entries": [
+                {
+                    "id": "1",
+                    "name": "server key",
+                    "type": "SshKey",
+                    "public_key": "ssh-ed25519 AAAA...",
+                    "fingerprint": "SHA256:abc",
+                    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----",
+                    "fields": [],
+                    "notes": null,
+                    "history": [],
+                    "collection_ids": []
+                }
+            ],
+            "collections": []
+        }"#;
+
+        let vault: ImportedVault = serde_json::from_str(json).unwrap();
+        assert!(matches!(vault.entries[0].data, ImportedData::SshKey { .. }));
+    }
+
+    #[test]
+    fn test_find_first_json_file_prefers_json_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("readme.txt"), b"not json").unwrap();
+        std::fs::write(dir.path().join("export.json"), b"{}").unwrap();
+
+        let found = find_first_json_file(dir.path()).unwrap();
+        assert_eq!(found.extension().and_then(|e| e.to_str()), Some("json"));
+    }
+
+    #[test]
+    fn test_find_first_json_file_falls_back_to_any_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("export.dat"), b"{}").unwrap();
+
+        let found = find_first_json_file(dir.path()).unwrap();
+        assert_eq!(
+            found.file_name().and_then(|f| f.to_str()),
+            Some("export.dat")
+        );
+    }
+
+    #[test]
+    fn test_find_first_json_file_none_when_dir_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(find_first_json_file(dir.path()).is_none());
     }
 }
