@@ -102,6 +102,12 @@ pub fn pane_at(full: Rect, x: u16, y: u16) -> Option<Pane> {
 }
 
 pub fn render(f: &mut Frame, app: &App) {
+    if let Mode::LockedPrompt(name) = &app.mode {
+        f.render_widget(Clear, f.area());
+        render_locked_prompt(f, name, f.area());
+        return;
+    }
+
     // Search bar sits at the bottom (fzf-style), just above the status line.
     let [main, search, status] = Layout::vertical([
         Constraint::Min(0),
@@ -128,8 +134,8 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::Picker(picker) => render_picker(f, picker, main),
         Mode::Settings(view) => render_settings(f, view, main),
         Mode::Help => render_help(f, app, main),
-        Mode::LockedPrompt(name) => render_locked_prompt(f, name, main),
         Mode::Normal | Mode::Search => {}
+        Mode::LockedPrompt(_) => unreachable!(),
     }
 }
 
@@ -1254,7 +1260,6 @@ fn render_confirm(f: &mut Frame, app: &App, area: Rect) {
 // destructive confirm, just a "reauthenticate to continue" notice.
 fn render_locked_prompt(f: &mut Frame, name: &str, area: Rect) {
     let rect = centered(56, 6, area);
-    f.render_widget(Clear, rect);
     let b = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)

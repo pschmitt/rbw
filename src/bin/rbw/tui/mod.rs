@@ -1,10 +1,11 @@
 // Interactive terminal UI for browsing, searching, and editing the vault.
 //
-// `run` unlocks the vault and loads the search index *before* taking over the
-// screen (so pinentry works on the real terminal), then drives a draw/read
-// loop. Agent round-trips (decrypt, save, sync, clipboard) happen synchronously
-// inside the loop; only `$EDITOR` needs the real terminal back, so it briefly
-// suspends and restores the UI around the editor invocation.
+// `run` unlocks the target account on the real terminal first (so pinentry
+// works), then brings up a tiny loading screen while loading the remaining
+// vault state and updating its footer with progress. Agent round-trips
+// (decrypt, save, sync, clipboard) happen synchronously inside the loop; only
+// `$EDITOR` needs the real terminal back, so it briefly suspends and restores
+// the UI around the editor invocation.
 
 mod app;
 mod input;
@@ -19,6 +20,12 @@ use ratatui::crossterm::{
         MouseButton, MouseEventKind,
     },
     execute,
+};
+use ratatui::{
+    layout::{Alignment, Constraint, Flex, Layout},
+    style::{Color, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
 };
 
 use app::{Action, App};
@@ -39,15 +46,52 @@ fn disable_mouse() {
 }
 
 pub fn run(initial_term: Option<&str>, all: bool) -> anyhow::Result<()> {
-    let open = crate::commands::tui_open(all)?;
-    let mut app = App::new(open, initial_term);
-
+    crate::commands::tui_unlock_target()?;
     let mut terminal = ratatui::init();
     enable_mouse();
+    draw_loading(&mut terminal, "loading vaults...")?;
+    let open = crate::commands::tui_open_with_progress(all, true, |msg| {
+        let _ = draw_loading(&mut terminal, msg);
+    })?;
+    let mut app = App::new(open, initial_term);
     let res = run_loop(&mut terminal, &mut app);
     disable_mouse();
     ratatui::restore();
     res
+}
+
+fn draw_loading(
+    terminal: &mut ratatui::DefaultTerminal,
+    status: &str,
+) -> anyhow::Result<()> {
+    terminal.draw(|f| {
+        let [main, _search, footer] = Layout::vertical([
+            Constraint::Min(0),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(f.area());
+        let [center] = Layout::vertical([Constraint::Length(1)])
+            .flex(Flex::Center)
+            .areas(main);
+
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "rbw",
+                Style::default().fg(Color::Cyan).bold(),
+            )))
+            .alignment(Alignment::Center),
+            center,
+        );
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!(" {status}"),
+                Style::default().fg(Color::Cyan).bold(),
+            ))),
+            footer,
+        );
+    })?;
+    Ok(())
 }
 
 fn run_loop(
@@ -77,6 +121,9 @@ fn run_loop(
                     Action::OpenEditor => open_editor(terminal, app),
                     Action::UnlockAccount(name) => {
                         unlock_account(terminal, app, &name);
+                    }
+                    Action::UnlockAndSyncAccount(name) => {
+                        unlock_and_sync_account(terminal, app, &name);
                     }
                 }
             }
@@ -144,6 +191,25 @@ fn unlock_account(
     let _ = terminal.clear();
     match res {
         Ok(()) => app.set_unlocked_status(name),
+        Err(e) => app.set_error(format!("{e:#}")),
+    }
+}
+
+fn unlock_and_sync_account(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    name: &str,
+) {
+    disable_mouse();
+    ratatui::restore();
+    let res = app
+        .unlock_account(name)
+        .and_then(|()| app.sync_account(name));
+    *terminal = ratatui::init();
+    enable_mouse();
+    let _ = terminal.clear();
+    match res {
+        Ok(()) => app.set_synced_status(name),
         Err(e) => app.set_error(format!("{e:#}")),
     }
 }

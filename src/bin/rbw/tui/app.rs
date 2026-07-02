@@ -27,6 +27,8 @@ pub enum Action {
     // Unlock the named account; bounced to the event loop because pinentry
     // needs the real terminal (like OpenEditor).
     UnlockAccount(String),
+    // Unlock the named account and immediately sync it afterwards.
+    UnlockAndSyncAccount(String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1103,37 +1105,48 @@ impl App {
         }
     }
 
-    // Sync the highlighted account, unlocking it first (the loop handles it,
-    // same as `AccountUnlock` -- pinentry needs the terminal) if it's
-    // locked, rather than just refusing. A `credential_source`-linked
-    // account resolves silently there without ever needing pinentry, so
-    // this is usually a transparent one-key sync even from cold; note that
-    // the unlock and the sync are still two separate steps under the hood
-    // -- pressing `s` again once it reports unlocked actually syncs it.
+    fn selected_account_is_linked(&self) -> Option<bool> {
+        if let Mode::Accounts(view) = &self.mode {
+            view.accounts
+                .get(view.selected)
+                .map(|a| a.credential_source.is_some())
+        } else {
+            None
+        }
+    }
+
+    // Sync the highlighted account. If it's locked and linked via
+    // `credential_source`, unlock+sync can usually happen entirely inside
+    // the TUI with no pinentry round-trip; otherwise the event loop handles
+    // the unlock on the real terminal, then syncs immediately afterwards.
     fn sync_selected_account(&mut self) -> Action {
         let Some((name, unlocked)) = self.selected_account() else {
             return Action::None;
         };
         if !unlocked {
-            return Action::UnlockAccount(name);
-        }
-        match commands::tui_account_sync(&name) {
-            Ok(v) => {
-                if let Some(slot) =
-                    self.vaults.iter_mut().find(|x| x.name == name)
+            if self.selected_account_is_linked() == Some(true) {
+                match self
+                    .unlock_account(&name)
+                    .and_then(|_| self.sync_account(&name))
                 {
-                    slot.db = v.db;
-                    slot.search = v.search;
+                    Ok(()) => {
+                        self.set_status(
+                            Level::Success,
+                            format!("synced {name}"),
+                        );
+                    }
+                    Err(e) => self.set_status(Level::Error, format!("{e:#}")),
                 }
-                self.detail_cache.clear();
-                self.rebuild_flat();
-                self.recompute_filter();
-                self.ensure_detail();
-                self.set_status(Level::Success, format!("synced {name}"));
+                return Action::None;
+            }
+            return Action::UnlockAndSyncAccount(name);
+        }
+        match self.sync_account(&name) {
+            Ok(()) => {
+                self.set_status(Level::Success, format!("synced {name}"))
             }
             Err(e) => self.set_status(Level::Error, format!("{e:#}")),
         }
-        self.refresh_accounts_view();
         Action::None
     }
 
@@ -1185,8 +1198,32 @@ impl App {
         Ok(())
     }
 
+    pub fn sync_account(&mut self, name: &str) -> anyhow::Result<()> {
+        let vault = commands::tui_account_sync(name)?;
+        if let Some(slot) = self.vaults.iter_mut().find(|x| x.name == name) {
+            slot.db = vault.db;
+            slot.search = vault.search;
+        } else {
+            self.vaults.push(AccountVault {
+                name: vault.account,
+                db: vault.db,
+                search: vault.search,
+            });
+        }
+        self.detail_cache.clear();
+        self.rebuild_flat();
+        self.recompute_filter();
+        self.ensure_detail();
+        self.refresh_accounts_view();
+        Ok(())
+    }
+
     pub fn set_unlocked_status(&mut self, name: &str) {
         self.set_status(Level::Success, format!("unlocked {name}"));
+    }
+
+    pub fn set_synced_status(&mut self, name: &str) {
+        self.set_status(Level::Success, format!("synced {name}"));
     }
 
     // ---- agent lock detection --------------------------------------------
@@ -2987,17 +3024,14 @@ mod test {
         a
     }
 
-    // `s` (sync) on a locked account now unlocks it first (the loop handles
-    // it, same as explicit `AccountUnlock`) instead of just refusing with a
-    // "locked" status -- a credential_source-linked account resolves
-    // silently there, so this makes syncing a not-yet-unlocked linked
-    // account a transparent one-key operation from the accounts panel.
+    // `s` (sync) on a locked account now requests the event loop's
+    // unlock+sync path instead of just refusing with a "locked" status.
     #[test]
-    fn accounts_s_on_a_locked_account_requests_unlock_instead_of_refusing() {
+    fn accounts_s_on_a_locked_account_requests_unlock_and_sync() {
         let mut a = app_on_accounts_panel(None);
         assert!(matches!(
             a.handle_key(key(KeyCode::Char('s'))),
-            Action::UnlockAccount(name) if name == "work"
+            Action::UnlockAndSyncAccount(name) if name == "work"
         ));
     }
 

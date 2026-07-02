@@ -8519,21 +8519,27 @@ fn list_target_accounts(all: bool) -> anyhow::Result<Vec<String>> {
 // otherwise only accounts that are already unlocked are loaded, and the
 // rest are reported as locked for lazy unlock from the accounts panel.
 pub fn tui_open(all: bool) -> anyhow::Result<TuiOpen> {
+    tui_open_with_progress(all, false, |_| {})
+}
+
+pub(crate) fn tui_open_with_progress<F>(
+    all: bool,
+    target_unlocked: bool,
+    mut progress: F,
+) -> anyhow::Result<TuiOpen>
+where
+    F: FnMut(&str),
+{
     let config = rbw::config::Config::load()?;
     let accounts = config.accounts();
 
-    let target = crate::actions::current_account()
-        .unwrap_or_else(|| config.primary_account_name());
-    crate::actions::set_active_account(Some(target))?;
-    unlock(None)?;
+    if !target_unlocked {
+        let target = crate::actions::current_account()
+            .unwrap_or_else(|| config.primary_account_name());
+        crate::actions::set_active_account(Some(target))?;
+        unlock(None)?;
+    }
 
-    // This whole loop runs before the TUI takes over the screen (see this
-    // function's caller), so it's still fine to print status here -- and
-    // worth doing, since unlocking (a credential_source chain can mean
-    // logging in and syncing several accounts in sequence) plus the sync
-    // below can take long enough with `--all` that a silent terminal looks
-    // hung otherwise.
-    let c = stdout_supports_color();
     let mut vaults = Vec::new();
     let mut locked = Vec::new();
     for account in &accounts {
@@ -8541,19 +8547,13 @@ pub fn tui_open(all: bool) -> anyhow::Result<TuiOpen> {
         let should_unlock = all
             && !matches!(account.unlock, rbw::config::UnlockPolicy::Never);
         if should_unlock && !active_account_unlocked() {
-            eprintln!(
-                "{} '{}'...",
-                style::dim("unlocking", c),
-                style::name(&account.name, c),
-            );
+            let msg = format!("unlocking '{}'...", account.name);
+            progress(&msg);
             unlock(None)?;
         }
         if active_account_unlocked() {
-            eprintln!(
-                "{} '{}'...",
-                style::dim("syncing", c),
-                style::name(&account.name, c),
-            );
+            let msg = format!("syncing '{}'...", account.name);
+            progress(&msg);
             let (db, search) = tui_reload()?;
             vaults.push(TuiVault {
                 account: account.name.clone(),
@@ -8570,6 +8570,15 @@ pub fn tui_open(all: bool) -> anyhow::Result<TuiOpen> {
         vaults,
         locked,
     })
+}
+
+pub(crate) fn tui_unlock_target() -> anyhow::Result<()> {
+    let config = rbw::config::Config::load()?;
+    let target = crate::actions::current_account()
+        .unwrap_or_else(|| config.primary_account_name());
+    crate::actions::set_active_account(Some(target))?;
+    unlock(None)?;
+    Ok(())
 }
 
 // Lazily unlock one account and load its vault. pinentry runs here, so the
