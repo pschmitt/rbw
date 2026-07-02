@@ -8,6 +8,13 @@ impl Sock {
         Self(s)
     }
 
+    // The underlying stream, so that pinentry prompts can watch for the client
+    // disconnecting and cancel accordingly.
+    pub fn inner(&mut self) -> &mut tokio::net::UnixStream {
+        let Self(sock) = self;
+        sock
+    }
+
     pub async fn send(
         &mut self,
         res: &rbw::protocol::Response,

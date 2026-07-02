@@ -45,6 +45,7 @@ pub async fn register(
                 err.as_deref(),
                 environment,
                 false,
+                Some(sock.inner()),
             )
             .await
             .context("failed to read client_id from pinentry")?;
@@ -55,6 +56,7 @@ pub async fn register(
                 err.as_deref(),
                 environment,
                 false,
+                Some(sock.inner()),
             )
             .await
             .context("failed to read client_secret from pinentry")?;
@@ -119,6 +121,7 @@ pub async fn login(
                         None,
                         environment,
                         true,
+                        Some(sock.inner()),
                     )
                     .await
                     .context("failed to read password from pinentry")?
@@ -136,6 +139,7 @@ pub async fn login(
                     err.as_deref(),
                     environment,
                     true,
+                    Some(sock.inner()),
                 )
                 .await
                 .context("failed to read password from pinentry")?
@@ -202,6 +206,7 @@ pub async fn login(
                                 parallelism,
                                 protected_key,
                             ) = two_factor(
+                                sock,
                                 environment,
                                 &email,
                                 password.clone(),
@@ -252,6 +257,7 @@ pub async fn login(
 }
 
 async fn two_factor(
+    sock: &mut crate::sock::Sock,
     environment: &rbw::protocol::Environment,
     email: &str,
     password: rbw::locked::Password,
@@ -281,6 +287,7 @@ async fn two_factor(
             err.as_deref(),
             environment,
             provider.grab(),
+            Some(sock.inner()),
         )
         .await
         .context("failed to read code from pinentry")?;
@@ -402,6 +409,7 @@ async fn unlock_state(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     environment: &rbw::protocol::Environment,
     password: Option<&rbw::locked::Password>,
+    mut client: Option<&mut tokio::net::UnixStream>,
 ) -> anyhow::Result<()> {
     if state.lock().await.needs_unlock() {
         let db = load_db().await?;
@@ -470,6 +478,7 @@ async fn unlock_state(
                         None,
                         environment,
                         true,
+                        client.as_deref_mut(),
                     )
                     .await
                     .context("failed to read password from pinentry")?
@@ -490,6 +499,7 @@ async fn unlock_state(
                     err.as_deref(),
                     environment,
                     true,
+                    client.as_deref_mut(),
                 )
                 .await
                 .context("failed to read password from pinentry")?
@@ -532,7 +542,7 @@ pub async fn unlock(
     environment: &rbw::protocol::Environment,
     password: Option<&rbw::locked::Password>,
 ) -> anyhow::Result<()> {
-    unlock_state(state, environment, password).await?;
+    unlock_state(state, environment, password, Some(sock.inner())).await?;
 
     respond_ack(sock).await?;
 
@@ -630,6 +640,7 @@ async fn decrypt_cipher(
     cipherstring: &str,
     entry_key: Option<&str>,
     org_id: Option<&str>,
+    mut client: Option<&mut tokio::net::UnixStream>,
 ) -> anyhow::Result<String> {
     let mut state = state.lock().await;
     if !state.master_password_reprompt_initialized() {
@@ -704,6 +715,7 @@ async fn decrypt_cipher(
                         None,
                         environment,
                         true,
+                        client.as_deref_mut(),
                     )
                     .await
                     .context("failed to read password from pinentry")?
@@ -721,6 +733,7 @@ async fn decrypt_cipher(
                     err.as_deref(),
                     environment,
                     true,
+                    client.as_deref_mut(),
                 )
                 .await
                 .context("failed to read password from pinentry")?
@@ -773,9 +786,15 @@ pub async fn decrypt(
     entry_key: Option<&str>,
     org_id: Option<&str>,
 ) -> anyhow::Result<()> {
-    let plaintext =
-        decrypt_cipher(state, environment, cipherstring, entry_key, org_id)
-            .await?;
+    let plaintext = decrypt_cipher(
+        state,
+        environment,
+        cipherstring,
+        entry_key,
+        org_id,
+        Some(sock.inner()),
+    )
+    .await?;
     respond_decrypt(sock, plaintext).await?;
 
     Ok(())
@@ -795,6 +814,7 @@ pub async fn decrypt_batch(
             &entry.cipherstring,
             entry.entry_key.as_deref(),
             entry.org_id.as_deref(),
+            Some(sock.inner()),
         )
         .await;
         results.push(match result {
@@ -910,12 +930,11 @@ pub async fn encrypt_attachment(
         .chain(attachment_keys.mac_key().iter())
         .copied()
         .collect();
-    let encrypted_key =
-        rbw::cipherstring::CipherString::encrypt_symmetric(
-            effective_keys,
-            &raw_attachment_key,
-        )
-        .context("failed to encrypt attachment key")?;
+    let encrypted_key = rbw::cipherstring::CipherString::encrypt_symmetric(
+        effective_keys,
+        &raw_attachment_key,
+    )
+    .context("failed to encrypt attachment key")?;
 
     // Encrypt filename with the attachment key
     let encrypted_filename =
@@ -1104,7 +1123,7 @@ pub async fn get_ssh_public_keys(
         state.set_timeout();
         state.last_environment().clone()
     };
-    unlock_state(state.clone(), &environment, None).await?;
+    unlock_state(state.clone(), &environment, None, None).await?;
 
     let db = load_db().await?;
     let mut pubkeys = Vec::new();
@@ -1121,6 +1140,7 @@ pub async fn get_ssh_public_keys(
                 encrypted,
                 entry.key.as_deref(),
                 entry.org_id.as_deref(),
+                None,
             )
             .await?;
 
@@ -1140,7 +1160,7 @@ pub async fn find_ssh_private_key(
         state.set_timeout();
         state.last_environment().clone()
     };
-    unlock_state(state.clone(), &environment, None).await?;
+    unlock_state(state.clone(), &environment, None, None).await?;
 
     let request_bytes = request_public_key.to_bytes();
 
@@ -1162,6 +1182,7 @@ pub async fn find_ssh_private_key(
                 public_key_enc,
                 entry.key.as_deref(),
                 entry.org_id.as_deref(),
+                None,
             )
             .await?;
             let public_key_bytes =
@@ -1183,6 +1204,7 @@ pub async fn find_ssh_private_key(
                     private_key_enc,
                     entry.key.as_deref(),
                     entry.org_id.as_deref(),
+                    None,
                 )
                 .await?;
 

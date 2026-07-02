@@ -74,12 +74,21 @@ impl Agent {
                         let res =
                             handle_request(&mut sock, state.clone()).await;
                         if let Err(e) = res {
-                            // unwrap is the only option here
-                            sock.send(&rbw::protocol::Response::Error {
-                                error: format!("{e:#}"),
-                            })
-                            .await
-                            .unwrap();
+                            // The client may already be gone (e.g. it was
+                            // interrupted with Ctrl+C while we were prompting
+                            // for a pin), in which case sending the error will
+                            // itself fail; there's nothing useful to do but
+                            // log it.
+                            if let Err(send_err) = sock
+                                .send(&rbw::protocol::Response::Error {
+                                    error: format!("{e:#}"),
+                                })
+                                .await
+                            {
+                                log::warn!(
+                                    "failed to send error to client: {send_err:#}"
+                                );
+                            }
                         }
                     });
                 }

@@ -2,7 +2,7 @@ use crate::prelude::*;
 
 use std::convert::TryFrom as _;
 
-use tokio::io::AsyncWriteExt as _;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 pub async fn getpin(
     pinentry: &str,
@@ -11,6 +11,12 @@ pub async fn getpin(
     err: Option<&str>,
     environment: &crate::protocol::Environment,
     grab: bool,
+    // When present, this is the client connection that requested the pin. If
+    // the client goes away (e.g. the user hits Ctrl+C in the rbw process)
+    // while we're waiting for the pin, we interrupt pinentry rather than
+    // leaving it as an orphan competing for the terminal. See
+    // https://github.com/doy/rbw/issues/352.
+    cancel: Option<&mut tokio::net::UnixStream>,
 ) -> Result<crate::locked::Password> {
     let mut opts = tokio::process::Command::new(pinentry);
     opts.stdin(std::process::Stdio::piped())
@@ -80,13 +86,26 @@ pub async fn getpin(
     let mut buf = crate::locked::Vec::new();
     buf.zero();
     // unwrap is safe because we specified stdout as piped in the command opts
-    // above
-    let len = read_password(
-        ncommands,
-        buf.data_mut(),
-        child.stdout.as_mut().unwrap(),
-    )
-    .await?;
+    // above. Take it out of the child so that the cancellation branch below is
+    // free to borrow the child (to signal and reap it) without conflicting
+    // with the in-flight read.
+    let mut stdout = child.stdout.take().unwrap();
+    let len = if let Some(cancel) = cancel {
+        tokio::select! {
+            res = read_password(ncommands, buf.data_mut(), &mut stdout) => {
+                res?
+            }
+            () = wait_for_client_disconnect(cancel) => {
+                // The client that asked for this pin is gone. Interrupt
+                // pinentry so it stops reading the terminal, then reap it.
+                interrupt_pinentry(&child);
+                let _ = child.wait().await;
+                return Err(Error::PinentryCancelled);
+            }
+        }
+    } else {
+        read_password(ncommands, buf.data_mut(), &mut stdout).await?
+    };
     buf.truncate(len);
 
     child
@@ -95,6 +114,34 @@ pub async fn getpin(
         .map_err(|source| Error::PinentryWait { source })?;
 
     Ok(crate::locked::Password::new(buf))
+}
+
+// Resolves once the client connection is closed (EOF) or otherwise
+// unreadable. The client isn't expected to send anything while we prompt for
+// a pin, so any data it does send is ignored and we keep waiting.
+async fn wait_for_client_disconnect(sock: &mut tokio::net::UnixStream) {
+    let mut buf = [0u8; 64];
+    loop {
+        match sock.read(&mut buf).await {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+    }
+}
+
+// Send SIGINT (rather than killing outright) so that terminal-based pinentry
+// programs get a chance to restore the terminal before exiting, mirroring
+// what would happen if the user had pressed Ctrl+C at the pinentry prompt.
+fn interrupt_pinentry(child: &tokio::process::Child) {
+    if let Some(pid) = child.id() {
+        if let Ok(pid) = libc::pid_t::try_from(pid) {
+            // SAFETY: calling kill with a valid pid and signal number has no
+            // memory-safety implications.
+            unsafe {
+                libc::kill(pid, libc::SIGINT);
+            }
+        }
+    }
 }
 
 async fn read_password<R>(
@@ -248,4 +295,62 @@ fn test_read_password() {
             assert_eq!(&buf[0..len], &output[..]);
         });
     }
+}
+
+#[tokio::test]
+async fn test_getpin_cancelled_when_client_disconnects() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // Stand-in for pinentry: acknowledges the greeting and the three SET*
+    // commands with OK, then goes silent (simulating pinentry blocked waiting
+    // for the user to type at the terminal) instead of answering GETPIN. It
+    // sleeps long enough that the test's cancellation, rather than its own
+    // exit, is what ends getpin.
+    let mut script = tempfile::NamedTempFile::new().unwrap();
+    script
+        .write_all(
+            b"#!/bin/sh\n\
+              printf 'OK\\n'\n\
+              count=0\n\
+              while IFS= read -r _line; do\n\
+              \tcount=$((count + 1))\n\
+              \tif [ \"$count\" -le 3 ]; then\n\
+              \t\tprintf 'OK\\n'\n\
+              \telse\n\
+              \t\tbreak\n\
+              \tfi\n\
+              done\n\
+              exec sleep 30\n",
+        )
+        .unwrap();
+    script.flush().unwrap();
+    let path = script.into_temp_path();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+        .unwrap();
+
+    let (mut agent_side, client_side) =
+        tokio::net::UnixStream::pair().unwrap();
+    let environment = crate::protocol::Environment::default();
+
+    let (res, ()) = tokio::join!(
+        getpin(
+            path.to_str().unwrap(),
+            "prompt",
+            "desc",
+            None,
+            &environment,
+            false,
+            Some(&mut agent_side),
+        ),
+        async {
+            // Give getpin time to spawn the fake pinentry and block reading
+            // its (never-arriving) GETPIN response, then simulate the client
+            // being interrupted with Ctrl+C by dropping its end of the socket.
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            drop(client_side);
+        }
+    );
+
+    assert!(matches!(res, Err(Error::PinentryCancelled)));
 }
