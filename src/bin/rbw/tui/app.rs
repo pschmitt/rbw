@@ -274,7 +274,10 @@ pub struct App {
     // scroll the preview instead of moving the list selection; Left/Esc (or
     // a list-pane click) moves it back. Only meaningful in `Mode::Normal`.
     pub detail_focused: bool,
-    keymap: Keymap,
+    // Resolved once at startup from `tui_keybindings` (config.json) merged
+    // over the built-in defaults (see `keymap::Keymap::resolve`). `super::ui`
+    // reads it to render live keybinding hints instead of hardcoded text.
+    pub keymap: Keymap,
     // Throttle for `poll_agent_lock`: the IPC round trip to the agent is
     // cheap, but there's no need to make it on every ~500ms UI tick, so we
     // only actually check once `LOCK_CHECK_INTERVAL` has elapsed.
@@ -296,10 +299,10 @@ impl App {
         Self::with_keymap(open, initial_term, keymap)
     }
 
-    // Split out from `new` so tests can supply a deterministic keymap
-    // instead of picking up whatever the machine running them happens to
-    // have in `~/.config/rbw/config.json`.
-    fn with_keymap(
+    // Split out from `new` so tests (including `super::ui`'s) can supply a
+    // deterministic keymap instead of picking up whatever the machine
+    // running them happens to have in `~/.config/rbw/config.json`.
+    pub(crate) fn with_keymap(
         open: commands::TuiOpen,
         initial_term: Option<&str>,
         keymap: Keymap,
@@ -1128,7 +1131,8 @@ impl App {
         // Anything other than a confirmed `Ok(true)` (including an IPC
         // error, e.g. the agent process died) is treated as "can no longer
         // be trusted as unlocked" and triggers the same recovery flow.
-        let unlocked = matches!(commands::tui_account_unlocked(&name), Ok(true));
+        let unlocked =
+            matches!(commands::tui_account_unlocked(&name), Ok(true));
         if !unlocked {
             self.handle_agent_locked(name);
         }
@@ -2637,8 +2641,11 @@ mod test {
         let mut a = app_with_entries(1);
         a.handle_agent_locked("default".to_string());
 
-        for k in [key(KeyCode::Enter), key(KeyCode::Char('y')), key(KeyCode::Char('Y'))]
-        {
+        for k in [
+            key(KeyCode::Enter),
+            key(KeyCode::Char('y')),
+            key(KeyCode::Char('Y')),
+        ] {
             a.mode = Mode::LockedPrompt("default".to_string());
             match a.handle_key(k) {
                 Action::UnlockAccount(name) => assert_eq!(name, "default"),
@@ -2655,10 +2662,7 @@ mod test {
     fn locked_prompt_other_keys_dismiss_to_normal() {
         let mut a = app_with_entries(1);
         a.handle_agent_locked("default".to_string());
-        assert!(matches!(
-            a.handle_key(key(KeyCode::Esc)),
-            Action::None
-        ));
+        assert!(matches!(a.handle_key(key(KeyCode::Esc)), Action::None));
         assert!(matches!(a.mode, Mode::Normal));
     }
 

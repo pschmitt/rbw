@@ -25,5 +25,3 @@ repo unless separately asked.
   `tui_keybindings`, etc.) should stay configurable through the
   home-manager module — when adding a new config option, add the matching
   Nix option in the same change.
-- The TUI's status-bar hints and Help screen still show default keybindings
-  even when `tui_keybindings` overrides them — known gap, not yet fixed.

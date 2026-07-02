@@ -25,11 +25,64 @@ impl KeyChord {
         self.code == key.code && self.modifiers == key.modifiers
     }
 
+    // A chord that a text-input context (the search filter) never sees as
+    // an action trigger — a plain, unmodified character key, which is
+    // swallowed by the input widget instead. Mirrors the `allow_plain`
+    // check in `Keymap::action_for`.
+    fn usable_while_typing(self) -> bool {
+        !matches!(self.code, KeyCode::Char(_))
+            || self
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    }
+
+    // Renders back to the terse glyph style used in the TUI's own hints
+    // (status bar / help screen): `^`/`⌥`/`⇧` prefixes for ctrl/alt/shift,
+    // arrows for the arrow keys, `⏎`/`⇥`/`⇤` for Enter/Tab/BackTab, and the
+    // key's own name or character otherwise. `parse` accepts exactly this
+    // form back (see `parse_glyphs`), as well as the more verbose
+    // "ctrl-alt-key" form it documents, so a chord shown in the UI can be
+    // pasted straight back into `tui_keybindings`.
+    pub fn display(&self) -> String {
+        let mut out = String::new();
+        if self.modifiers.contains(KeyModifiers::CONTROL) {
+            out.push('^');
+        }
+        if self.modifiers.contains(KeyModifiers::ALT) {
+            out.push('⌥');
+        }
+        if self.modifiers.contains(KeyModifiers::SHIFT) {
+            out.push('⇧');
+        }
+        match self.code {
+            KeyCode::Up => out.push('↑'),
+            KeyCode::Down => out.push('↓'),
+            KeyCode::Left => out.push('←'),
+            KeyCode::Right => out.push('→'),
+            KeyCode::PageUp => out.push_str("pageup"),
+            KeyCode::PageDown => out.push_str("pagedown"),
+            KeyCode::Home => out.push_str("home"),
+            KeyCode::End => out.push_str("end"),
+            KeyCode::Enter => out.push('⏎'),
+            KeyCode::Esc => out.push_str("esc"),
+            KeyCode::Tab => out.push('⇥'),
+            KeyCode::BackTab => out.push('⇤'),
+            KeyCode::Char(' ') => out.push_str("space"),
+            KeyCode::Char(c) => out.push(c),
+            other => out.push_str(&format!("{other:?}").to_lowercase()),
+        }
+        out
+    }
+
     // Parses e.g. "ctrl-y", "alt-shift-g", "pagedown", "g", "G". Modifier and
     // special-key names are case-insensitive; a lone trailing character is
     // taken literally (so "G" alone already implies shift, same as the
     // terminal reports it — no need to write "shift-g").
     fn parse(s: &str) -> Option<Self> {
+        if let Some(chord) = Self::parse_glyphs(s) {
+            return Some(chord);
+        }
+
         let parts: Vec<&str> = s.split('-').collect();
         let (mods, key) = parts.split_at(parts.len().saturating_sub(1));
         let key = key.first()?;
@@ -69,6 +122,51 @@ impl KeyChord {
                 }
                 KeyCode::Char(c)
             }
+        };
+        Some(Self { code, modifiers })
+    }
+
+    // Accepts the terse glyph form `display` emits — a run of modifier
+    // glyphs (`^` ctrl, `⌥` alt, `⇧` shift) with no separator, followed by a
+    // plain character or one of the named glyphs below — so a chord shown
+    // in the UI can be pasted straight back into `tui_keybindings`. Returns
+    // `None` (falling back to the textual "ctrl-alt-key" parser above) for
+    // anything that isn't in this form, including a glyph-free string.
+    fn parse_glyphs(s: &str) -> Option<Self> {
+        let mut modifiers = KeyModifiers::NONE;
+        let mut rest = s;
+        loop {
+            rest = if let Some(r) = rest.strip_prefix('^') {
+                modifiers |= KeyModifiers::CONTROL;
+                r
+            } else if let Some(r) = rest.strip_prefix('⌥') {
+                modifiers |= KeyModifiers::ALT;
+                r
+            } else if let Some(r) = rest.strip_prefix('⇧') {
+                modifiers |= KeyModifiers::SHIFT;
+                r
+            } else {
+                break;
+            };
+        }
+
+        let code = match rest {
+            "↑" => KeyCode::Up,
+            "↓" => KeyCode::Down,
+            "←" => KeyCode::Left,
+            "→" => KeyCode::Right,
+            "⏎" => KeyCode::Enter,
+            "⇥" => KeyCode::Tab,
+            "⇤" => KeyCode::BackTab,
+            _ if modifiers != KeyModifiers::NONE => {
+                let mut chars = rest.chars();
+                let c = chars.next()?;
+                if chars.next().is_some() {
+                    return None;
+                }
+                KeyCode::Char(c)
+            }
+            _ => return None,
         };
         Some(Self { code, modifiers })
     }
@@ -337,6 +435,42 @@ impl Keymap {
             .find(|(_, chords)| chords.iter().any(|c| c.matches(key)))
             .map(|(action, _)| *action)
     }
+
+    // Every chord currently resolved for `action` (post override), as
+    // display strings in priority order — for building live hint text
+    // instead of a hardcoded default. Empty only if a config typo dropped
+    // every chord for an action the user did try to override.
+    pub fn display_chords(&self, action: TuiAction) -> Vec<String> {
+        self.bindings
+            .iter()
+            .find(|(a, _)| *a == action)
+            .map(|(_, chords)| chords.iter().map(KeyChord::display).collect())
+            .unwrap_or_default()
+    }
+
+    // The first (highest-priority) resolved chord for `action`, for a
+    // compact single-chord hint. Falls back to `"?"` so a hint never
+    // renders empty if a config typo left the action with no chords at all.
+    pub fn primary_chord(&self, action: TuiAction) -> String {
+        self.display_chords(action)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "?".to_string())
+    }
+
+    // Like `primary_chord`, but skips chords a text-input context would
+    // swallow before they ever reach `action_for` (see its `allow_plain`
+    // parameter and `KeyChord::usable_while_typing`) — for hints shown
+    // while the search filter has focus.
+    pub fn primary_chord_while_typing(&self, action: TuiAction) -> String {
+        self.bindings
+            .iter()
+            .find(|(a, _)| *a == action)
+            .and_then(|(_, chords)| {
+                chords.iter().find(|c| c.usable_while_typing())
+            })
+            .map_or_else(|| "?".to_string(), KeyChord::display)
+    }
 }
 
 #[cfg(test)]
@@ -429,6 +563,70 @@ mod test {
         assert_eq!(
             keymap.action_for(pagedown, false),
             Some(TuiAction::PageDown)
+        );
+    }
+
+    #[test]
+    fn display_round_trips_through_parse() {
+        for s in ["g", "G", "ctrl-y", "alt-p", "pagedown", "enter", "tab"] {
+            let chord = KeyChord::parse(s).unwrap_or_else(|| {
+                panic!("test fixture {s:?} should itself parse")
+            });
+            let displayed = chord.display();
+            assert_eq!(
+                KeyChord::parse(&displayed),
+                Some(chord),
+                "{s:?} displayed as {displayed:?}, which didn't round-trip"
+            );
+        }
+    }
+
+    #[test]
+    fn display_matches_the_established_glyph_style() {
+        assert_eq!(KeyChord::parse("g").unwrap().display(), "g");
+        assert_eq!(KeyChord::parse("ctrl-y").unwrap().display(), "^y");
+        assert_eq!(KeyChord::parse("alt-p").unwrap().display(), "⌥p");
+        assert_eq!(
+            KeyChord::parse("pagedown").unwrap().display(),
+            "pagedown"
+        );
+        assert_eq!(KeyChord::parse("enter").unwrap().display(), "⏎");
+        assert_eq!(KeyChord::parse("tab").unwrap().display(), "⇥");
+    }
+
+    #[test]
+    fn resolved_keymap_reports_the_overridden_chord_not_the_default() {
+        let mut overrides = std::collections::HashMap::new();
+        overrides
+            .insert("copy_password".to_string(), vec!["ctrl-y".to_string()]);
+        let keymap = Keymap::resolve(&overrides);
+
+        assert_eq!(keymap.primary_chord(TuiAction::CopyPassword), "^y");
+        assert_eq!(
+            keymap.display_chords(TuiAction::CopyPassword),
+            vec!["^y".to_string()]
+        );
+
+        // An action nobody configured still reports its built-in default.
+        assert_eq!(keymap.primary_chord(TuiAction::CopyUsername), "u");
+    }
+
+    #[test]
+    fn primary_chord_while_typing_skips_plain_char_chords() {
+        let keymap = Keymap::resolve(&std::collections::HashMap::new());
+        // `copy_password`'s defaults are ["p", "y", "alt-p", "ctrl-y"]; the
+        // first two are plain chars that a text-input context swallows, so
+        // the first chord usable there is "alt-p".
+        assert_eq!(
+            keymap.primary_chord_while_typing(TuiAction::CopyPassword),
+            "⌥p"
+        );
+        // `move_down`'s defaults are ["j", "down", "ctrl-n"]; "down" isn't a
+        // char at all, so it's usable while typing even though it isn't the
+        // first (highest-priority) chord.
+        assert_eq!(
+            keymap.primary_chord_while_typing(TuiAction::MoveDown),
+            "↓"
         );
     }
 }

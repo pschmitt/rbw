@@ -38,8 +38,6 @@
 
 ## Known gaps
 
-- The TUI's status-bar hints and Help screen show default keybindings even
-  when `tui_keybindings` overrides them.
 - SSH key creation via the API (`rbw::api::Client::add`/`edit`) and `rbw
   import` restoring SSH key entries were both fixed by wiring up
   `CiphersPostReq`/`CiphersPutReq`'s `sshKey` field and cipher type `5`.
