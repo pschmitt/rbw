@@ -2520,6 +2520,7 @@ pub fn account_add(
         client_cert_path: None,
         unlock: rbw::config::UnlockPolicy::default(),
         exclude_from_list: false,
+        credential_source: None,
     });
     // The first account is always primary; otherwise only if asked.
     if primary || first {
@@ -2583,19 +2584,47 @@ pub fn account_set_primary(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-// Change one or more per-account settings (currently `unlock` and
-// `exclude_from_list` — see `rbw::config::Account`). Leaves a setting
-// unchanged when its argument is `None`.
+// Change one or more per-account settings (currently `unlock`,
+// `exclude_from_list`, and `credential_source` — see `rbw::config::Account`).
+// Leaves a setting unchanged when its argument is `None`/`false`.
+#[allow(clippy::fn_params_excessive_bools)]
 pub fn account_set(
     name: &str,
     unlock: Option<rbw::config::UnlockPolicy>,
     exclude_from_list: Option<bool>,
+    credential_source_account: Option<String>,
+    credential_source_entry: Option<String>,
+    clear_credential_source: bool,
 ) -> anyhow::Result<()> {
-    if unlock.is_none() && exclude_from_list.is_none() {
+    if unlock.is_none()
+        && exclude_from_list.is_none()
+        && credential_source_account.is_none()
+        && credential_source_entry.is_none()
+        && !clear_credential_source
+    {
         anyhow::bail!(
-            "nothing to change: pass --unlock and/or --exclude-from-list"
+            "nothing to change: pass --unlock, --exclude-from-list, \
+            --credential-source-account and --credential-source-entry, or \
+            --clear-credential-source"
         );
     }
+    if clear_credential_source
+        && (credential_source_account.is_some()
+            || credential_source_entry.is_some())
+    {
+        anyhow::bail!(
+            "--clear-credential-source can't be combined with \
+            --credential-source-account/--credential-source-entry"
+        );
+    }
+    if credential_source_account.is_some() != credential_source_entry.is_some()
+    {
+        anyhow::bail!(
+            "--credential-source-account and --credential-source-entry must \
+            be given together"
+        );
+    }
+
     let mut config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());
     config.migrate_legacy();
@@ -2609,6 +2638,20 @@ pub fn account_set(
     if let Some(exclude_from_list) = exclude_from_list {
         account.exclude_from_list = exclude_from_list;
     }
+    if clear_credential_source {
+        account.credential_source = None;
+    } else if let (Some(source_account), Some(entry)) =
+        (credential_source_account, credential_source_entry)
+    {
+        account.credential_source =
+            Some(rbw::config::CredentialSource { account: source_account, entry });
+    }
+
+    // Reject a self-reference or a cycle before persisting, rather than
+    // writing a config that would silently fall back to pinentry (or worse)
+    // the next time this account tries to unlock.
+    config.credential_source_chain(name)?;
+
     config.save()?;
     println!("updated account '{name}'");
     Ok(())
@@ -2636,11 +2679,148 @@ pub fn login() -> anyhow::Result<()> {
 }
 
 pub fn unlock(password: Option<String>) -> anyhow::Result<()> {
+    unlock_impl(password, &mut Vec::new())
+}
+
+// Max hops to follow through `credential_source` chains before giving up.
+// `Config::credential_source_chain` already rejects self-references and
+// cycles up front (see `resolve_credential_source_password`), so this is
+// only a defense-in-depth backstop against ever recursing unboundedly.
+const MAX_CREDENTIAL_SOURCE_DEPTH: usize = 16;
+
+// `visited` accumulates the chain of account names already being unlocked
+// on the current call stack, so a `credential_source` chain can't recurse
+// into itself even if the static cycle check somehow missed something.
+fn unlock_impl(
+    password: Option<String>,
+    visited: &mut Vec<String>,
+) -> anyhow::Result<()> {
     ensure_agent()?;
     crate::actions::login()?;
+    let password =
+        password.or_else(|| resolve_credential_source_password(visited));
     crate::actions::unlock(password)?;
 
     Ok(())
+}
+
+// If the currently-active account has a `credential_source` configured,
+// resolve its master password from the linked entry in the source
+// account's vault instead of prompting via pinentry: unlock the source
+// account (recursively following its own `credential_source`, if it has
+// one), find the linked entry in its already-unlocked vault, and pull the
+// master password from its Login `password` field. TOTP-protected accounts
+// and non-Login entry types aren't handled specially -- only the plain
+// password field is used.
+//
+// Returns `None` (falling back to the normal pinentry prompt) if there's no
+// `credential_source` configured, or if resolution fails for any reason: a
+// misconfigured link should never brick the account's ability to unlock at
+// all.
+fn resolve_credential_source_password(
+    visited: &mut Vec<String>,
+) -> Option<String> {
+    let target = crate::actions::current_account().or_else(|| {
+        rbw::config::Config::load()
+            .ok()
+            .map(|c| c.primary_account_name())
+    })?;
+
+    if visited.contains(&target)
+        || visited.len() >= MAX_CREDENTIAL_SOURCE_DEPTH
+    {
+        log::warn!(
+            "credential_source chain reaches '{target}' again (or is too \
+            deep); falling back to pinentry"
+        );
+        return None;
+    }
+
+    let config = rbw::config::Config::load().ok()?;
+    if let Err(e) = config.credential_source_chain(&target) {
+        log::warn!(
+            "credential_source misconfigured for account '{target}': {e:#}; \
+            falling back to pinentry"
+        );
+        return None;
+    }
+
+    let account = config.account(Some(&target)).ok()?;
+    let source = account.credential_source.as_ref()?;
+
+    visited.push(target.clone());
+    let result = resolve_from_credential_source(source, visited);
+    visited.pop();
+
+    // Whatever happened, route subsequent api calls back at the account we
+    // were actually asked to unlock -- `unlock_impl`'s caller still needs to
+    // send the Unlock request to it, not to (some ancestor of) the source.
+    let _ = crate::actions::set_active_account(Some(target.clone()));
+
+    match result {
+        Ok(password) => Some(password),
+        Err(e) => {
+            log::warn!(
+                "failed to resolve credential_source for account '{target}' \
+                from account '{}': {e:#}; falling back to pinentry",
+                source.account
+            );
+            None
+        }
+    }
+}
+
+// Unlocks `source.account` (recursing into its own `credential_source` if it
+// has one) and looks up `source.entry` in its vault, matched the same way as
+// an `rbw get NAME` name lookup.
+fn resolve_from_credential_source(
+    source: &rbw::config::CredentialSource,
+    visited: &mut Vec<String>,
+) -> anyhow::Result<String> {
+    crate::actions::set_active_account(Some(source.account.clone()))?;
+    unlock_impl(None, visited)?;
+    if !active_account_unlocked() {
+        anyhow::bail!("source account '{}' did not unlock", source.account);
+    }
+
+    let db = load_db()?;
+    // parse_needle is Infallible -- it always returns Ok.
+    let needle = parse_needle(&source.entry).unwrap();
+    let (_, decrypted) =
+        find_entry(&db, vec![needle], None, None, false, false)
+            .with_context(|| {
+                format!(
+                    "entry '{}' not found in account '{}'",
+                    source.entry, source.account
+                )
+            })?;
+
+    credential_source_password(&decrypted, &source.entry, &source.account)
+}
+
+// Pulls the master password out of a decrypted credential_source entry: a
+// plain Login entry's `password` field. TOTP-protected accounts and non-
+// Login entry types aren't handled specially -- resolution just fails
+// (falling back to pinentry) for anything else.
+fn credential_source_password(
+    decrypted: &DecryptedCipher,
+    entry: &str,
+    account: &str,
+) -> anyhow::Result<String> {
+    match &decrypted.data {
+        DecryptedData::Login {
+            password: Some(password),
+            ..
+        } => Ok(password.clone()),
+        DecryptedData::Login { password: None, .. } => {
+            Err(anyhow::anyhow!(
+                "entry '{entry}' in account '{account}' has no password set"
+            ))
+        }
+        _ => Err(anyhow::anyhow!(
+            "entry '{entry}' in account '{account}' is not a login entry"
+        )),
+    }
 }
 
 // Unlocks every configured account per its `unlock` policy, same target
