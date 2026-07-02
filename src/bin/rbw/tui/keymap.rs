@@ -21,8 +21,24 @@ pub struct KeyChord {
 }
 
 impl KeyChord {
+    // Real terminals (crossterm included) report `KeyModifiers::SHIFT`
+    // alongside a `Char` code whenever the produced character required
+    // shift to type (e.g. 'A', '!') — the character itself already fully
+    // encodes that, so a default chord like "A" (parsed with no explicit
+    // modifiers, see `parse`'s doc comment) would otherwise never match a
+    // real keypress of Shift+A. Shift is only a meaningful, independent
+    // modifier for non-`Char` codes (arrows, function keys, etc.), where it
+    // doesn't already show up baked into the reported character.
     fn matches(self, key: KeyEvent) -> bool {
-        self.code == key.code && self.modifiers == key.modifiers
+        if self.code != key.code {
+            return false;
+        }
+        let mask = if matches!(self.code, KeyCode::Char(_)) {
+            KeyModifiers::CONTROL | KeyModifiers::ALT
+        } else {
+            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT
+        };
+        (self.modifiers & mask) == (key.modifiers & mask)
     }
 
     // A chord that a text-input context (the search filter) never sees as
@@ -76,8 +92,9 @@ impl KeyChord {
 
     // Parses e.g. "ctrl-y", "alt-shift-g", "pagedown", "g", "G". Modifier and
     // special-key names are case-insensitive; a lone trailing character is
-    // taken literally (so "G" alone already implies shift, same as the
-    // terminal reports it — no need to write "shift-g").
+    // taken literally (so "G" alone is enough for Shift+g — no need to write
+    // "shift-g"; `KeyChord::matches` ignores the redundant `SHIFT` modifier
+    // a real terminal reports alongside the already-uppercase `Char('G')`).
     fn parse(s: &str) -> Option<Self> {
         if let Some(chord) = Self::parse_glyphs(s) {
             return Some(chord);
@@ -545,6 +562,31 @@ mod test {
         let keymap = Keymap::resolve(&std::collections::HashMap::new());
         let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
         assert_eq!(keymap.action_for(j, true), Some(TuiAction::MoveDown));
+    }
+
+    // Regression test: real terminals (crossterm included) report
+    // `KeyModifiers::SHIFT` alongside a `Char` code whenever the produced
+    // character required shift to type, so a real keypress of Shift+A
+    // arrives as `KeyEvent { code: Char('A'), modifiers: SHIFT }` — not
+    // `modifiers: NONE`, which is what `KeyChord::parse("A")` (the default
+    // binding for `open_accounts`) stores. Without stripping the redundant
+    // shift bit for `Char` codes in `KeyChord::matches`, this default (and
+    // every other single-uppercase-letter default: "S", "L", "G", "E", "J",
+    // "K", ...) would never fire from a real keypress, only from
+    // hand-crafted `KeyModifiers::NONE` test events.
+    #[test]
+    fn uppercase_letter_defaults_match_a_real_shift_reported_keypress() {
+        let keymap = Keymap::resolve(&std::collections::HashMap::new());
+        let shift_a = KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT);
+        assert_eq!(
+            keymap.action_for(shift_a, true),
+            Some(TuiAction::OpenAccounts)
+        );
+        let shift_s = KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT);
+        assert_eq!(
+            keymap.action_for(shift_s, true),
+            Some(TuiAction::OpenSettings)
+        );
     }
 
     #[test]
