@@ -341,13 +341,27 @@ fn row(label: &str, value: impl Into<String>) -> Line<'static> {
     ])
 }
 
+// Appended after a row's value to remind you it's one keypress away from the
+// clipboard — ⌥ (Alt) because that's the chord that works no matter whether
+// the search bar or the list has focus; the plain letter (e.g. 'u') only
+// works from the list. Doesn't reflect a rebound `copy_username`/
+// `copy_password`/`copy_totp` — see the `tui_keybindings` known gap.
+fn copy_hint(chord: &str) -> Span<'static> {
+    Span::styled(
+        format!("  (⌥{chord} copy)"),
+        Style::default().fg(DIM).italic(),
+    )
+}
+
 // Like `row`, but highlights the parts of `value` that matched `query` (see
-// `commands::highlight_ranges`) instead of rendering it plain.
+// `commands::highlight_ranges`) instead of rendering it plain. `hint`, if
+// non-empty, is passed to `copy_hint` and appended after the value.
 fn highlighted_row(
     label: &str,
     value: &str,
     query: &str,
     field: commands::SearchField,
+    hint: &str,
 ) -> Line<'static> {
     let mut spans = vec![Span::styled(
         format!("{label:>LABEL_W$}  "),
@@ -358,6 +372,9 @@ fn highlighted_row(
         &commands::highlight_ranges(query, field, value),
         Style::default(),
     ));
+    if !hint.is_empty() {
+        spans.push(copy_hint(hint));
+    }
     Line::from(spans)
 }
 
@@ -366,13 +383,15 @@ fn highlighted_row(
 // value itself stays hidden but a red " *" after the mask still tells you
 // it's *why* this entry matched (mirrors `search_match`'s own scan of
 // hidden/sensitive fields, which already counts them — this just makes that
-// visible).
+// visible). `hint`, if non-empty, is passed to `copy_hint` and appended
+// after the value (either mask or, revealed, the real thing).
 fn secret_row(
     label: &str,
     value: &str,
     reveal: bool,
     query: &str,
     field: commands::SearchField,
+    hint: &str,
 ) -> Line<'static> {
     let ranges = commands::highlight_ranges(query, field, value);
     let mut spans = vec![Span::styled(
@@ -393,6 +412,9 @@ fn secret_row(
         if !ranges.is_empty() {
             spans.push(Span::styled(" *", Style::default().fg(MATCH).bold()));
         }
+    }
+    if !hint.is_empty() {
+        spans.push(copy_hint(hint));
     }
     Line::from(spans)
 }
@@ -436,6 +458,7 @@ fn detail_lines(
             folder,
             query,
             commands::SearchField::Folder,
+            "",
         ));
     }
     lines.push(Line::raw(""));
@@ -453,6 +476,7 @@ fn detail_lines(
                     username,
                     query,
                     commands::SearchField::User,
+                    "u",
                 ));
             }
             if let Some(pw) = password {
@@ -462,6 +486,7 @@ fn detail_lines(
                     reveal,
                     query,
                     commands::SearchField::Secret,
+                    "p",
                 ));
             }
             if let Some(totp) = totp {
@@ -475,6 +500,7 @@ fn detail_lines(
                         &uri.uri,
                         query,
                         commands::SearchField::Uri,
+                        "",
                     ));
                 }
             }
@@ -495,6 +521,7 @@ fn detail_lines(
                     reveal,
                     query,
                     commands::SearchField::Secret,
+                    "",
                 ));
             }
             opt_row(&mut lines, "brand", brand);
@@ -510,6 +537,7 @@ fn detail_lines(
                     reveal,
                     query,
                     commands::SearchField::Secret,
+                    "",
                 ));
             }
         }
@@ -541,6 +569,7 @@ fn detail_lines(
                     username,
                     query,
                     commands::SearchField::User,
+                    "u",
                 ));
             }
             opt_row(&mut lines, "email", email);
@@ -566,6 +595,7 @@ fn detail_lines(
                     reveal,
                     query,
                     commands::SearchField::Secret,
+                    "",
                 ));
             }
         }
@@ -586,6 +616,7 @@ fn detail_lines(
                     reveal,
                     query,
                     commands::SearchField::Field,
+                    "",
                 ));
             } else {
                 lines.push(highlighted_row(
@@ -593,6 +624,7 @@ fn detail_lines(
                     &value,
                     query,
                     commands::SearchField::Field,
+                    "",
                 ));
             }
         }
@@ -643,8 +675,12 @@ fn section(title: &str) -> Line<'static> {
 }
 
 fn totp_line(secret: &str, reveal: bool) -> Line<'static> {
-    let value = if reveal {
-        crate::commands::generate_totp(secret).map_or_else(
+    let mut spans = vec![Span::styled(
+        format!("{:>LABEL_W$}  ", "totp"),
+        Style::default().fg(DIM),
+    )];
+    if reveal {
+        let value = crate::commands::generate_totp(secret).map_or_else(
             |_| "invalid TOTP".to_string(),
             |code| {
                 let now = std::time::SystemTime::now()
@@ -653,17 +689,16 @@ fn totp_line(secret: &str, reveal: bool) -> Line<'static> {
                 let remaining = 30 - (now % 30);
                 format!("{code}   ({remaining}s)")
             },
-        )
+        );
+        spans.push(Span::styled(value, Style::default().fg(Color::Green)));
     } else {
-        format!("{MASK}   (t to copy)")
-    };
-    Line::from(vec![
-        Span::styled(
-            format!("{:>LABEL_W$}  ", "totp"),
-            Style::default().fg(DIM),
-        ),
-        Span::styled(value, Style::default().fg(Color::Green)),
-    ])
+        spans.push(Span::styled(
+            MASK.to_string(),
+            Style::default().fg(Color::Green),
+        ));
+        spans.push(copy_hint("t"));
+    }
+    Line::from(spans)
 }
 
 fn type_name(data: &DecryptedData) -> &'static str {
@@ -1080,7 +1115,7 @@ fn render_help(f: &mut Frame, area: Rect) {
 
 #[cfg(test)]
 mod test {
-    use super::{detail_lines, render, MATCH};
+    use super::{detail_lines, render, totp_line, MATCH};
     use crate::commands::{
         AttachmentMetadata, DecryptedCipher, DecryptedData, DecryptedField,
         DecryptedUri,
@@ -1226,6 +1261,16 @@ mod test {
             .map(|s| s.content.as_ref())
             .collect();
         assert!(shown_text.contains("hunter2"));
+
+        // Username and password show an Alt-chord copy hint; unrelated
+        // fields (uri, the hidden custom field) don't.
+        assert!(masked_text.contains("(⌥u copy)"));
+        assert!(masked_text.contains("(⌥p copy)"));
+        assert_eq!(
+            masked_text.matches("copy)").count(),
+            2,
+            "only username and password get a hint here (no totp)"
+        );
     }
 
     #[test]
@@ -1341,5 +1386,22 @@ mod test {
         assert!(revealed.iter().flat_map(|l| l.spans.iter()).any(|s| {
             s.content.as_ref() == "battery" && s.style.fg == Some(MATCH)
         }));
+    }
+
+    #[test]
+    fn totp_line_masked_hint_names_the_alt_chord() {
+        let masked = totp_line("JBSWY3DPEHPK3PXP", false);
+        let masked_text: String =
+            masked.spans.iter().map(|s| s.content.as_ref()).collect();
+        // Names the chord that works from anywhere (search or list), not
+        // the plain letter that only works from the list.
+        assert!(masked_text.contains("(⌥t copy)"));
+        assert!(!masked_text.contains("(t to copy)"));
+
+        // Revealed shows the live code + countdown instead, no copy hint.
+        let revealed = totp_line("JBSWY3DPEHPK3PXP", true);
+        let revealed_text: String =
+            revealed.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(!revealed_text.contains("copy"));
     }
 }

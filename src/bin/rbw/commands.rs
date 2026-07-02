@@ -241,11 +241,35 @@ enum QueryToken {
 }
 
 impl QueryToken {
+    // Whether `prefix` (case-insensitive) is a recognized field-scoping
+    // prefix — shared with `scope_prefix_ranges` so the TUI's "this word is
+    // scoped" coloring can never drift from what parsing actually
+    // recognizes. Deliberately doesn't care whether a value follows: the
+    // prefix alone (e.g. "uri:", value still empty) is enough to color it,
+    // even though `parse` below still needs a non-empty value to actually
+    // scope a match by it.
+    fn recognizes_prefix(prefix: &str) -> bool {
+        matches!(
+            prefix.to_ascii_lowercase().as_str(),
+            "n" | "name"
+                | "u"
+                | "user"
+                | "username"
+                | "uri"
+                | "url"
+                | "f"
+                | "folder"
+                | "note"
+                | "notes"
+                | "field"
+        )
+    }
+
     fn parse(word: &str) -> Self {
         let Some((prefix, value)) = word.split_once(':') else {
             return Self::Any(word.to_string());
         };
-        if value.is_empty() {
+        if value.is_empty() || !Self::recognizes_prefix(prefix) {
             return Self::Any(word.to_string());
         }
         match prefix.to_ascii_lowercase().as_str() {
@@ -255,7 +279,7 @@ impl QueryToken {
             "f" | "folder" => Self::Folder(value.to_string()),
             "note" | "notes" => Self::Notes(value.to_string()),
             "field" => Self::Field(value.to_string()),
-            _ => Self::Any(word.to_string()),
+            _ => unreachable!("checked by recognizes_prefix"),
         }
     }
 }
@@ -281,10 +305,10 @@ pub fn scope_prefix_ranges(query: &str) -> Vec<(usize, usize)> {
         let start = search_from + rel;
         search_from = start + word.len();
 
-        if matches!(QueryToken::parse(word), QueryToken::Any(_)) {
+        let Some((prefix, _)) = word.split_once(':') else {
             continue;
-        }
-        if let Some((prefix, _)) = word.split_once(':') {
+        };
+        if QueryToken::recognizes_prefix(prefix) {
             ranges.push((start, start + prefix.len() + 1));
         }
     }
@@ -8625,8 +8649,10 @@ mod test {
         // `QueryToken`).
         assert_eq!(scope_prefix_ranges("bogus:alice"), Vec::new());
 
-        // A trailing bare colon (no value) isn't marked either.
-        assert_eq!(scope_prefix_ranges("u:"), Vec::new());
+        // A recognized prefix marks immediately, even with no value typed
+        // yet — no need to wait for the first character after the colon.
+        assert_eq!(scope_prefix_ranges("u:"), vec![(0, 2)]);
+        assert_eq!(scope_prefix_ranges("uri:"), vec![(0, 4)]);
 
         assert_eq!(scope_prefix_ranges(""), Vec::new());
     }
