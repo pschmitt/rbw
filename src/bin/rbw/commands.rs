@@ -2617,7 +2617,8 @@ pub fn account_set(
             --credential-source-account/--credential-source-entry"
         );
     }
-    if credential_source_account.is_some() != credential_source_entry.is_some()
+    if credential_source_account.is_some()
+        != credential_source_entry.is_some()
     {
         anyhow::bail!(
             "--credential-source-account and --credential-source-entry must \
@@ -2643,8 +2644,10 @@ pub fn account_set(
     } else if let (Some(source_account), Some(entry)) =
         (credential_source_account, credential_source_entry)
     {
-        account.credential_source =
-            Some(rbw::config::CredentialSource { account: source_account, entry });
+        account.credential_source = Some(rbw::config::CredentialSource {
+            account: source_account,
+            entry,
+        });
     }
 
     // Reject a self-reference or a cycle before persisting, rather than
@@ -2812,11 +2815,9 @@ fn credential_source_password(
             password: Some(password),
             ..
         } => Ok(password.clone()),
-        DecryptedData::Login { password: None, .. } => {
-            Err(anyhow::anyhow!(
-                "entry '{entry}' in account '{account}' has no password set"
-            ))
-        }
+        DecryptedData::Login { password: None, .. } => Err(anyhow::anyhow!(
+            "entry '{entry}' in account '{account}' has no password set"
+        )),
         _ => Err(anyhow::anyhow!(
             "entry '{entry}' in account '{account}' is not a login entry"
         )),
@@ -8375,6 +8376,10 @@ pub struct TuiAccount {
     pub server: String,
     pub unlocked: bool,
     pub primary: bool,
+    // `(source account, source entry)` from `Account::credential_source`,
+    // if this account's master password is linked to another account's
+    // vault entry.
+    pub credential_source: Option<(String, String)>,
 }
 
 // True if the currently-active account is unlocked in the agent.
@@ -8523,6 +8528,10 @@ pub fn tui_accounts() -> anyhow::Result<Vec<TuiAccount>> {
                 .clone()
                 .unwrap_or_else(|| "bitwarden.com".to_string()),
             email: account.email.clone(),
+            credential_source: account
+                .credential_source
+                .as_ref()
+                .map(|cs| (cs.account.clone(), cs.entry.clone())),
             name: account.name,
         });
     }
@@ -8675,6 +8684,52 @@ pub fn tui_save_password_gen_policy(
         .unwrap_or_else(|_| rbw::config::Config::new());
     config.migrate_legacy();
     config.password_gen = policy;
+    config.save()?;
+    Ok(())
+}
+
+// Link (or edit) an account's `credential_source` from the TUI accounts
+// panel. Mirrors `account_set`'s credential_source handling but without
+// printing, per the other tui_* wrappers (see `tui_account_add`).
+pub fn tui_account_set_credential_source(
+    name: &str,
+    source_account: &str,
+    source_entry: &str,
+) -> anyhow::Result<()> {
+    if source_account.trim().is_empty() || source_entry.trim().is_empty() {
+        anyhow::bail!("source account and source entry are both required");
+    }
+
+    let mut config = rbw::config::Config::load()
+        .unwrap_or_else(|_| rbw::config::Config::new());
+    config.migrate_legacy();
+    let Some(account) = config.accounts.iter_mut().find(|a| a.name == name)
+    else {
+        anyhow::bail!("account '{name}' not found");
+    };
+    account.credential_source = Some(rbw::config::CredentialSource {
+        account: source_account.to_string(),
+        entry: source_entry.to_string(),
+    });
+
+    // Reject a self-reference or a cycle before persisting, same guard as
+    // the CLI's `account_set`.
+    config.credential_source_chain(name)?;
+
+    config.save()?;
+    Ok(())
+}
+
+// Clear an account's `credential_source` link from the TUI accounts panel.
+pub fn tui_account_clear_credential_source(name: &str) -> anyhow::Result<()> {
+    let mut config = rbw::config::Config::load()
+        .unwrap_or_else(|_| rbw::config::Config::new());
+    config.migrate_legacy();
+    let Some(account) = config.accounts.iter_mut().find(|a| a.name == name)
+    else {
+        anyhow::bail!("account '{name}' not found");
+    };
+    account.credential_source = None;
     config.save()?;
     Ok(())
 }

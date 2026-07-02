@@ -13,16 +13,20 @@
       (`password_gen`), with a TUI view to edit it (`S` from the main
       screen, `Mode::Settings`). The settings panel is deliberately generic
       (a flat list of editable key/value fields, currently just the
-      password-gen policy) so the cross-account credential linking config
-      below can be added to it later without restructuring.
+      password-gen policy) so other config.json knobs can be added to it
+      later without restructuring.
 - [x] Cross-account credential linking: `Account::credential_source` points
       at a Login entry in another configured account's vault; `rbw account
       set --credential-source-account/--credential-source-entry` (or
       `--clear-credential-source`) configures it, with cycle/self-reference
       detection via `Config::credential_source_chain`. The agent's unlock
       flow resolves it automatically, recursing through chained accounts
-      and falling back to pinentry on any failure. **Gap:** not yet exposed
-      in the TUI settings panel — see below.
+      and falling back to pinentry on any failure. The TUI accounts panel
+      exposes it too: `l` opens a prompt to link (or edit) the highlighted
+      account's source, `L` clears it (with a y/n confirm), and a linked
+      account shows a "→ linked to account/entry" line beneath it in the
+      panel. Only the master password is pulled from the linked entry today
+      (not username/TOTP).
 - [x] TUI: detect the background agent getting locked while the TUI is
       open (`App::poll_agent_lock`, throttled to every few seconds), clear
       in-memory secrets, and show `Mode::LockedPrompt` that on accept opens
@@ -31,8 +35,6 @@
       (accounts, `unlock` policy, `exclude_from_list`, `tui_keybindings`,
       `password_gen`/`PasswordGenPolicy`, per-account `credential_source`,
       etc.) — keep this in sync whenever a new config option is added.
-- [ ] TUI: expose `credential_source` in the settings/accounts panel (it's
-      currently CLI-only via `rbw account set`).
 
 ## Known gaps
 

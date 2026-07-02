@@ -136,17 +136,17 @@ let
                   type = types.str;
                   description = ''
                     Name of the *other* configured account whose vault holds
-                    this account's credentials. Must not be this account's
-                    own name, and must not form a cycle with other
+                    this account's master password. Must not be this
+                    account's own name, and must not form a cycle with other
                     accounts' `credential_source`s.
                   '';
                 };
                 entry = mkOption {
                   type = types.str;
                   description = ''
-                    Which entry in that account's vault holds the
-                    credentials, matched the same way as an `rbw get NAME`
-                    name lookup.
+                    Name of the Login entry in that account's vault holding
+                    this account's master password (matched the same way as
+                    an `rbw get NAME` lookup); its `password` field is used.
                   '';
                 };
               };
@@ -162,7 +162,9 @@ let
             `password` field is used as this account's master password.
             Mirrors `Option<CredentialSource>` in `src/config.rs`. Unset
             (`null`, the default) means this account is unlocked normally
-            via pinentry.
+            via pinentry. See `rbw account set --credential-source-account/
+            --credential-source-entry`, or the equivalent TUI accounts-panel
+            action.
           '';
         };
       };
