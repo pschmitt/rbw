@@ -15,26 +15,31 @@
       (a flat list of editable key/value fields, currently just the
       password-gen policy) so the cross-account credential linking config
       below can be added to it later without restructuring.
-- [ ] Cross-account credential linking: let an entry in one account's vault
-      hold another configured account's login credentials (username,
-      password, TOTP), configurable via config.json and the TUI. Use it to
-      auto-unlock the dependent account.
-- [ ] TUI: detect the background agent getting locked while the TUI is
-      open, clear in-memory secrets, and show a dialog that on accept opens
+- [x] Cross-account credential linking: `Account::credential_source` points
+      at a Login entry in another configured account's vault; `rbw account
+      set --credential-source-account/--credential-source-entry` (or
+      `--clear-credential-source`) configures it, with cycle/self-reference
+      detection via `Config::credential_source_chain`. The agent's unlock
+      flow resolves it automatically, recursing through chained accounts
+      and falling back to pinentry on any failure. **Gap:** not yet exposed
+      in the TUI settings panel or `nix/hm-module.nix` — see below.
+- [x] TUI: detect the background agent getting locked while the TUI is
+      open (`App::poll_agent_lock`, throttled to every few seconds), clear
+      in-memory secrets, and show `Mode::LockedPrompt` that on accept opens
       pinentry to unlock again.
 - [x] Home-manager module exposing every config.json option as Nix options
       (accounts, `unlock` policy, `exclude_from_list`, `tui_keybindings`,
-      the password-generation policy and account-linking config above,
       etc.) — keep this in sync whenever a new config option is added.
-      Done for everything currently in `src/config.rs` (see
-      `nix/hm-module.nix`) as of when this module was added; the
-      account-linking config still doesn't exist in `Config` yet, so it
-      isn't modeled. **Gap:** `password_gen`/`PasswordGenPolicy` (see the
-      `rbw create --generate` item above) landed in `src/config.rs` after
-      `nix/hm-module.nix` was written and isn't mirrored there yet — extend
-      the module with a `programs.rbw.declarative.settings.password_gen`
-      option (`length`, `no_symbols`, `only_numbers`, `nonconfusables`,
-      `diceware`) to close this.
+      **Gaps:** `password_gen`/`PasswordGenPolicy` and
+      `Account::credential_source` (see above) both landed in
+      `src/config.rs` after `nix/hm-module.nix` was written and aren't
+      mirrored there yet — extend the module with
+      `programs.rbw.declarative.settings.password_gen` (`length`,
+      `no_symbols`, `only_numbers`, `nonconfusables`, `diceware`) and a
+      per-account `credential_source` (`account`, `entry`) option to close
+      this.
+- [ ] TUI: expose `credential_source` in the settings/accounts panel (it's
+      currently CLI-only via `rbw account set`).
 
 ## Known gaps
 

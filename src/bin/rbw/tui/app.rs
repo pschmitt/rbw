@@ -2528,8 +2528,9 @@ mod test {
     fn poll_agent_lock_skips_while_prompt_already_showing() {
         let mut a = app_with_entries(1);
         a.mode = Mode::LockedPrompt("default".to_string());
-        a.last_lock_check =
-            std::time::Instant::now() - super::LOCK_CHECK_INTERVAL * 2;
+        a.last_lock_check = std::time::Instant::now()
+            .checked_sub(super::LOCK_CHECK_INTERVAL * 2)
+            .unwrap();
         a.poll_agent_lock();
         assert!(
             matches!(&a.mode, Mode::LockedPrompt(name) if name == "default")
