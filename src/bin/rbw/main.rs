@@ -43,6 +43,24 @@ enum OutputArg {
     Yaml,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+#[value(rename_all = "kebab-case")]
+enum UnlockArg {
+    Always,
+    Never,
+    OnDemand,
+}
+
+impl From<UnlockArg> for rbw::config::UnlockPolicy {
+    fn from(value: UnlockArg) -> Self {
+        match value {
+            UnlockArg::Always => Self::Always,
+            UnlockArg::Never => Self::Never,
+            UnlockArg::OnDemand => Self::OnDemand,
+        }
+    }
+}
+
 fn resolve_output_mode(
     output: Option<OutputArg>,
     json: bool,
@@ -208,6 +226,13 @@ enum Opt {
             help = "Include password column (shows sensitive data in plain text)"
         )]
         insecure: bool,
+        #[arg(
+            long,
+            help = "With multiple accounts configured, unlock (prompting as \
+                needed) and include every account instead of just the \
+                already-unlocked ones"
+        )]
+        all: bool,
     },
 
     #[command(about = "Get the primary value (password) of a given entry")]
@@ -239,6 +264,13 @@ enum Opt {
         list_fields: bool,
         #[arg(short = 'v', long, help = "Print matched item name to stderr")]
         verbose: bool,
+        #[arg(
+            long,
+            help = "With multiple accounts configured, unlock (prompting as \
+                needed) and search every account instead of just the \
+                already-unlocked ones"
+        )]
+        all: bool,
     },
 
     #[command(about = "Show all details of a given entry")]
@@ -293,6 +325,13 @@ enum Opt {
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
+        #[arg(
+            long,
+            help = "With multiple accounts configured, unlock (prompting as \
+                needed) and include every account instead of just the \
+                already-unlocked ones"
+        )]
+        all: bool,
     },
 
     #[command(about = "List or download file attachments")]
@@ -686,6 +725,28 @@ enum AccountCmd {
         #[arg(help = "Name of the account to make primary")]
         name: String,
     },
+    #[command(about = "Change settings for an existing account")]
+    Set {
+        #[arg(help = "Name of the account to modify")]
+        name: String,
+        #[arg(
+            long,
+            value_enum,
+            help = "When `list`/`search`/`get` should proactively unlock \
+                this account for a multi-account merge: always, never, or \
+                on-demand (the default \u{2014} only if already unlocked, \
+                or with --all)"
+        )]
+        unlock: Option<UnlockArg>,
+        #[arg(
+            long,
+            value_parser = clap::value_parser!(bool),
+            help = "Exclude this account's entries from list/search/get \
+                merges, even when unlocked or with --all (still reachable \
+                via --account)"
+        )]
+        exclude_from_list: Option<bool>,
+    },
 }
 
 #[derive(Debug, clap::Parser)]
@@ -719,6 +780,7 @@ enum Attachment {
             help = "Name, URI, UUID (or multiple terms, all required to match)",
             value_parser = commands::parse_needle,
             num_args = 1..,
+            required = true,
         )]
         needles: Vec<commands::Needle>,
         #[arg(
@@ -857,6 +919,15 @@ fn main() {
             AccountCmd::Primary { name } => {
                 commands::account_set_primary(&name)
             }
+            AccountCmd::Set {
+                name,
+                unlock,
+                exclude_from_list,
+            } => commands::account_set(
+                &name,
+                unlock.map(std::convert::Into::into),
+                exclude_from_list,
+            ),
         },
         Opt::Register => commands::register(),
         Opt::Login => commands::login(),
@@ -885,6 +956,7 @@ fn main() {
             raw,
             yaml,
             insecure,
+            all,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             if let Some(term) = term {
@@ -895,9 +967,10 @@ fn main() {
                     with_attachments,
                     insecure,
                     output,
+                    all,
                 )
             } else {
-                commands::list(&fields, with_attachments, insecure, output)
+                commands::list(&fields, with_attachments, insecure, output, all)
             }
         })(),
         Opt::Attachment { attachment } => match attachment {
@@ -958,6 +1031,7 @@ fn main() {
             clipboard,
             list_fields,
             verbose,
+            all,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             commands::get(
@@ -974,6 +1048,7 @@ fn main() {
                 list_fields,
                 verbose,
                 find_args.exact,
+                all,
             )
         })(),
         Opt::Show {
@@ -999,6 +1074,7 @@ fn main() {
             output,
             raw,
             yaml,
+            all,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             commands::search(
@@ -1008,6 +1084,7 @@ fn main() {
                 with_attachments,
                 false,
                 output,
+                all,
             )
         })(),
         Opt::Code {

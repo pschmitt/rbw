@@ -1014,6 +1014,7 @@ mod test {
             attachment_metadata: AttachmentMetadata {
                 attachment_count: 0,
             },
+            account: None,
         };
 
         // Masked: the password value must not appear in plain text.

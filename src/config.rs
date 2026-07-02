@@ -4,6 +4,35 @@ use std::io::{Read as _, Write as _};
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
+// Whether `list`/`search`/`get` should proactively unlock this account
+// (prompting as needed) when merging entries across every configured
+// account. Independent of `Account::exclude_from_list`, which controls
+// whether the account's entries show up in the merge at all.
+#[derive(
+    serde::Serialize,
+    serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum UnlockPolicy {
+    // Always unlock this account (prompting as needed) for a multi-account
+    // merge, even on a plain `rbw list` with no `--all`.
+    Always,
+    // Never proactively unlock this account for a merge, not even with
+    // `--all`; only included if it happens to already be unlocked.
+    Never,
+    // Default: included in a merge only if already unlocked; `--all` (or
+    // another account's `Always`, which has no bearing on this one) unlocks
+    // it too.
+    #[default]
+    OnDemand,
+}
+
 // A single Bitwarden/Vaultwarden account. The per-server connection details
 // live here so that several accounts (with different servers) can coexist in
 // one config; global preferences (lock timeout, pinentry, …) stay on `Config`.
@@ -21,6 +50,14 @@ pub struct Account {
     pub ui_url: Option<String>,
     pub notifications_url: Option<String>,
     pub client_cert_path: Option<std::path::PathBuf>,
+    // See `UnlockPolicy`.
+    #[serde(default)]
+    pub unlock: UnlockPolicy,
+    // Hard opt-out: never include this account's entries in a `list`/
+    // `search`/`get` merge across accounts (even if unlocked, even with
+    // `--all`). Still reachable via `--account <name>` directly.
+    #[serde(default)]
+    pub exclude_from_list: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -210,6 +247,8 @@ impl Config {
                 ui_url: self.ui_url.clone(),
                 notifications_url: self.notifications_url.clone(),
                 client_cert_path: self.client_cert_path.clone(),
+                unlock: UnlockPolicy::default(),
+                exclude_from_list: false,
             }];
         }
         Vec::new()
@@ -269,6 +308,8 @@ impl Config {
             ui_url: self.ui_url.take(),
             notifications_url: self.notifications_url.take(),
             client_cert_path: self.client_cert_path.take(),
+            unlock: UnlockPolicy::default(),
+            exclude_from_list: false,
         });
         if self.primary_account.is_none() {
             self.primary_account = Some(name);

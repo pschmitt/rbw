@@ -198,6 +198,11 @@ struct DecryptedListCipher {
     collection_ids: Option<Vec<String>>,
     #[serde(flatten)]
     attachment_metadata: AttachmentMetadata,
+    // Set when this entry was merged in from a non-active account (multi-
+    // account `list`/`search`); omitted otherwise so single-account output is
+    // unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -440,6 +445,7 @@ impl From<DecryptedSearchCipher> for DecryptedListCipher {
             uris: Some(value.uris.into_iter().map(|(s, _)| s).collect()),
             collection_ids: None,
             attachment_metadata,
+            account: None,
         }
     }
 }
@@ -483,6 +489,11 @@ pub struct DecryptedCipher {
     pub attachments: Vec<DecryptedAttachment>,
     #[serde(flatten)]
     pub attachment_metadata: AttachmentMetadata,
+    // Set when this entry was merged in from a non-active account (multi-
+    // account `list`/`search`); omitted otherwise so single-account output is
+    // unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 // Where a plain `rbw get` value was resolved from — surfaced by --verbose.
@@ -1658,6 +1669,7 @@ fn colorize_table_cell(
         TableColumnStyle::Collections => style::collections(text, color),
         TableColumnStyle::Attachments => style::uri(text, color),
         TableColumnStyle::Size => style::size(text, color),
+        TableColumnStyle::Account => style::dim(text, color),
         TableColumnStyle::Default => text.to_string(),
     }
 }
@@ -2082,6 +2094,7 @@ enum TableColumnStyle {
     Collections,
     Attachments,
     Size,
+    Account,
     Default,
 }
 
@@ -2241,6 +2254,8 @@ pub fn account_add(
         ui_url: None,
         notifications_url: None,
         client_cert_path: None,
+        unlock: rbw::config::UnlockPolicy::default(),
+        exclude_from_list: false,
     });
     // The first account is always primary; otherwise only if asked.
     if primary || first {
@@ -2304,6 +2319,36 @@ pub fn account_set_primary(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+// Change one or more per-account settings (currently `unlock` and
+// `exclude_from_list` — see `rbw::config::Account`). Leaves a setting
+// unchanged when its argument is `None`.
+pub fn account_set(
+    name: &str,
+    unlock: Option<rbw::config::UnlockPolicy>,
+    exclude_from_list: Option<bool>,
+) -> anyhow::Result<()> {
+    if unlock.is_none() && exclude_from_list.is_none() {
+        anyhow::bail!("nothing to change: pass --unlock and/or --exclude-from-list");
+    }
+    let mut config = rbw::config::Config::load()
+        .unwrap_or_else(|_| rbw::config::Config::new());
+    config.migrate_legacy();
+    let Some(account) =
+        config.accounts.iter_mut().find(|a| a.name == name)
+    else {
+        anyhow::bail!("account '{name}' not found");
+    };
+    if let Some(unlock) = unlock {
+        account.unlock = unlock;
+    }
+    if let Some(exclude_from_list) = exclude_from_list {
+        account.exclude_from_list = exclude_from_list;
+    }
+    config.save()?;
+    println!("updated account '{name}'");
+    Ok(())
+}
+
 fn clipboard_store(val: &str) -> anyhow::Result<()> {
     ensure_agent()?;
     crate::actions::clipboard_store(val)?;
@@ -2355,19 +2400,32 @@ pub fn list(
     with_attachments: bool,
     insecure: bool,
     output: OutputMode,
+    all: bool,
 ) -> anyhow::Result<()> {
+    let target_accounts = list_target_accounts(all)?;
+    let tag_account = target_accounts.len() > 1;
+
     // Structured output (`--json`/`--yaml`) always emits the *full* decrypted
     // entry — same shape as `rbw get --json`: password, custom fields with
     // values, notes, totp, uris, etc. This lets consumers retrieve everything
     // in a single call instead of following up with `rbw get`.
     if output_is_structured(output) {
-        unlock(None)?;
-        let db = load_db()?;
-        let mut entries: Vec<DecryptedCipher> = db
-            .entries
-            .iter()
-            .map(decrypt_cipher)
-            .collect::<anyhow::Result<_>>()?;
+        let mut entries: Vec<DecryptedCipher> = Vec::new();
+        for account in &target_accounts {
+            crate::actions::set_active_account(Some(account.clone()))?;
+            let db = load_db()?;
+            let mut account_entries: Vec<DecryptedCipher> = db
+                .entries
+                .iter()
+                .map(decrypt_cipher)
+                .collect::<anyhow::Result<_>>()?;
+            if tag_account {
+                for entry in &mut account_entries {
+                    entry.account = Some(account.clone());
+                }
+            }
+            entries.extend(account_entries);
+        }
         if with_attachments {
             entries
                 .retain(|entry| entry.attachment_metadata.has_attachments());
@@ -2393,31 +2451,39 @@ pub fn list(
         fields.insert(insert_pos, ListField::Password);
     }
 
-    unlock(None)?;
+    let mut entries: Vec<DecryptedListCipher> = Vec::new();
+    for account in &target_accounts {
+        crate::actions::set_active_account(Some(account.clone()))?;
+        let db = load_db()?;
 
-    let db = load_db()?;
+        // Gather every cipherstring that needs decrypting across all entries,
+        // then decrypt them in a single batch request to the agent. This
+        // avoids a separate socket round-trip per field per entry, which
+        // dominates the runtime of `list` on large vaults.
+        let mut requests = BatchRequests::new();
+        let plans: Vec<ListCipherPlan> = db
+            .entries
+            .iter()
+            .map(|entry| ListCipherPlan::build(entry, &fields, &mut requests))
+            .collect();
 
-    // Gather every cipherstring that needs decrypting across all entries, then
-    // decrypt them in a single batch request to the agent. This avoids a
-    // separate socket round-trip per field per entry, which dominates the
-    // runtime of `list` on large vaults.
-    let mut requests = BatchRequests::new();
-    let plans: Vec<ListCipherPlan> = db
-        .entries
-        .iter()
-        .map(|entry| ListCipherPlan::build(entry, &fields, &mut requests))
-        .collect();
+        let results = if requests.is_empty() {
+            Vec::new()
+        } else {
+            crate::actions::decrypt_batch(requests.into_vec())?
+        };
 
-    let results = if requests.is_empty() {
-        Vec::new()
-    } else {
-        crate::actions::decrypt_batch(requests.into_vec())?
-    };
-
-    let mut entries: Vec<DecryptedListCipher> = plans
-        .into_iter()
-        .map(|plan| plan.resolve(&results))
-        .collect::<anyhow::Result<_>>()?;
+        let mut account_entries: Vec<DecryptedListCipher> = plans
+            .into_iter()
+            .map(|plan| plan.resolve(&results))
+            .collect::<anyhow::Result<_>>()?;
+        if tag_account {
+            for entry in &mut account_entries {
+                entry.account = Some(account.clone());
+            }
+        }
+        entries.extend(account_entries);
+    }
     if with_attachments {
         entries.retain(|entry| entry.attachment_metadata.has_attachments());
     }
@@ -2429,6 +2495,7 @@ pub fn list(
 }
 
 #[allow(clippy::fn_params_excessive_bools)]
+#[allow(clippy::too_many_arguments)]
 pub fn get(
     needles: Vec<Needle>,
     user: Option<&str>,
@@ -2440,10 +2507,10 @@ pub fn get(
     list_fields: bool,
     verbose: bool,
     force_exact: bool,
+    all: bool,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
-
-    let db = load_db()?;
+    let target_accounts = list_target_accounts(all)?;
+    let tag_account = target_accounts.len() > 1;
 
     let needle_str = needles
         .iter()
@@ -2456,9 +2523,15 @@ pub fn get(
         needle_str
     );
 
-    let (_, decrypted) =
-        find_entry(&db, needles, user, folder, ignore_case, force_exact)
-            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    let (account, _, decrypted) = find_entry_multi(
+        &target_accounts,
+        needles,
+        user,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     if verbose {
         let c = std::io::stderr().is_terminal()
@@ -2472,13 +2545,17 @@ pub fn get(
         } else {
             decrypted.default_secret().map(|(_, src)| src.label())
         };
+        let account_suffix = if tag_account {
+            format!(" [{account}]")
+        } else {
+            String::new()
+        };
         let suffix = source
             .map(|s| format!(" {}", style::dim(&format!("({s})"), c)))
             .unwrap_or_default();
         eprintln!(
-            "Matched item: {}{}",
+            "Matched item: {}{account_suffix}{suffix}",
             style::name(&decrypted.name, c),
-            suffix
         );
     }
 
@@ -2801,6 +2878,13 @@ fn print_entry_list(
                 },
             })
             .collect::<Vec<_>>();
+        let show_account = entries.iter().any(|e| e.account.is_some());
+        if show_account {
+            columns.push(TableColumn {
+                header: "account",
+                style: TableColumnStyle::Account,
+            });
+        }
         let show_attachments = entries
             .iter()
             .any(|e| e.attachment_metadata.has_attachments());
@@ -2851,6 +2935,9 @@ fn print_entry_list(
                         }
                     })
                     .collect::<Vec<_>>();
+                if show_account {
+                    values.push(entry.account.clone().unwrap_or_default());
+                }
                 if show_attachments {
                     values.push(attachments_cell(
                         entry.attachment_metadata.attachment_count,
@@ -2873,30 +2960,43 @@ pub fn search(
     with_attachments: bool,
     insecure: bool,
     output: OutputMode,
+    all: bool,
 ) -> anyhow::Result<()> {
+    let target_accounts = list_target_accounts(all)?;
+    let tag_account = target_accounts.len() > 1;
+
     // Structured output (`--json`/`--yaml`) emits the *full* decrypted entry
     // (same shape as `rbw get --json`) for every match, so consumers get
     // everything in one call. Matching still uses the lightweight searchable
     // view; only the matching entries are fully decrypted.
     if output_is_structured(output) {
-        unlock(None)?;
-        let db = load_db()?;
-        let mut entries: Vec<DecryptedCipher> = db
-            .entries
-            .iter()
-            .filter_map(|entry| match decrypt_search_cipher(entry) {
-                Ok(searchable)
-                    if searchable.search_match(
-                        term,
-                        folder,
-                        with_attachments,
-                    ) =>
-                {
-                    decrypt_cipher(entry).ok()
+        let mut entries: Vec<DecryptedCipher> = Vec::new();
+        for account in &target_accounts {
+            crate::actions::set_active_account(Some(account.clone()))?;
+            let db = load_db()?;
+            let mut account_entries: Vec<DecryptedCipher> = db
+                .entries
+                .iter()
+                .filter_map(|entry| match decrypt_search_cipher(entry) {
+                    Ok(searchable)
+                        if searchable.search_match(
+                            term,
+                            folder,
+                            with_attachments,
+                        ) =>
+                    {
+                        decrypt_cipher(entry).ok()
+                    }
+                    Ok(_) | Err(_) => None,
+                })
+                .collect();
+            if tag_account {
+                for entry in &mut account_entries {
+                    entry.account = Some(account.clone());
                 }
-                Ok(_) | Err(_) => None,
-            })
-            .collect();
+            }
+            entries.extend(account_entries);
+        }
         entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         if entries.is_empty() {
             let c = std::io::stderr().is_terminal()
@@ -2924,35 +3024,44 @@ pub fn search(
         fields.insert(insert_pos, ListField::Password);
     }
 
-    unlock(None)?;
+    let mut entries: Vec<DecryptedListCipher> = Vec::new();
+    for account in &target_accounts {
+        crate::actions::set_active_account(Some(account.clone()))?;
+        let db = load_db()?;
 
-    let db = load_db()?;
+        // As in `list`, decrypt every entry's searchable fields in a single
+        // batch request rather than one socket round-trip per field per
+        // entry.
+        let mut requests = BatchRequests::new();
+        let plans: Vec<SearchCipherPlan> = db
+            .entries
+            .iter()
+            .map(|entry| SearchCipherPlan::build(entry, &mut requests))
+            .collect();
 
-    // As in `list`, decrypt every entry's searchable fields in a single batch
-    // request rather than one socket round-trip per field per entry.
-    let mut requests = BatchRequests::new();
-    let plans: Vec<SearchCipherPlan> = db
-        .entries
-        .iter()
-        .map(|entry| SearchCipherPlan::build(entry, &mut requests))
-        .collect();
+        let results = if requests.is_empty() {
+            Vec::new()
+        } else {
+            crate::actions::decrypt_batch(requests.into_vec())?
+        };
 
-    let results = if requests.is_empty() {
-        Vec::new()
-    } else {
-        crate::actions::decrypt_batch(requests.into_vec())?
-    };
-
-    let mut entries: Vec<DecryptedListCipher> = plans
-        .into_iter()
-        .map(|plan| plan.resolve(&results))
-        .filter(|entry| {
-            entry.as_ref().map_or(true, |entry| {
-                entry.search_match(term, folder, with_attachments)
+        let mut account_entries: Vec<DecryptedListCipher> = plans
+            .into_iter()
+            .map(|plan| plan.resolve(&results))
+            .filter(|entry| {
+                entry.as_ref().map_or(true, |entry| {
+                    entry.search_match(term, folder, with_attachments)
+                })
             })
-        })
-        .map(|entry| entry.map(std::convert::Into::into))
-        .collect::<Result<_, anyhow::Error>>()?;
+            .map(|entry| entry.map(std::convert::Into::into))
+            .collect::<Result<_, anyhow::Error>>()?;
+        if tag_account {
+            for entry in &mut account_entries {
+                entry.account = Some(account.clone());
+            }
+        }
+        entries.extend(account_entries);
+    }
     entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
     if entries.is_empty() {
@@ -4908,6 +5017,86 @@ fn find_entry(
     Ok((entry, decrypted_entry))
 }
 
+// Like `find_entry`, but resolves against every account in `target_accounts`
+// (see `list_target_accounts`) instead of a single db. With one target
+// account this is exactly `find_entry`. With several, every account's
+// entries are pooled into one list and scored together by the same
+// `find_entry_raw` logic used within a single vault — a name match in one
+// account beats a weaker match in another exactly as it would within one
+// vault, and genuine ties across accounts are reported as ambiguous. Returns
+// the name of the account that owns the winning entry alongside it, since the
+// caller needs to route the follow-up detail decrypt to the right account.
+fn find_entry_multi(
+    target_accounts: &[String],
+    needles: Vec<Needle>,
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+) -> anyhow::Result<(String, rbw::db::Entry, DecryptedCipher)> {
+    let [account] = target_accounts else {
+        let mut pool: Vec<(rbw::db::Entry, DecryptedSearchCipher)> =
+            Vec::new();
+        let mut owner: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for account in target_accounts {
+            crate::actions::set_active_account(Some(account.clone()))?;
+            let db = load_db()?;
+            let mut requests = BatchRequests::new();
+            let plans: Vec<SearchCipherPlan> = db
+                .entries
+                .iter()
+                .map(|entry| SearchCipherPlan::build(entry, &mut requests))
+                .collect();
+            let results = if requests.is_empty() {
+                Vec::new()
+            } else {
+                crate::actions::decrypt_batch(requests.into_vec())?
+            };
+            for (entry, plan) in db.entries.iter().zip(plans) {
+                owner.insert(entry.id.clone(), account.clone());
+                pool.push((entry.clone(), plan.resolve(&results)?));
+            }
+        }
+
+        // Fast-path a single UUID needle, same as `find_entry`.
+        let mut needles = needles;
+        if let [Needle::Uuid(uuid, s)] = needles.as_slice() {
+            let uuid = *uuid;
+            if let Some((entry, _)) = pool
+                .iter()
+                .find(|(e, _)| uuid::Uuid::parse_str(&e.id) == Ok(uuid))
+            {
+                let entry = entry.clone();
+                let account = owner[&entry.id].clone();
+                crate::actions::set_active_account(Some(account.clone()))?;
+                let decrypted = decrypt_cipher(&entry)?;
+                return Ok((account, entry, decrypted));
+            }
+            needles = vec![Needle::Name(s.clone())];
+        }
+
+        let (entry, _) = find_entry_raw(
+            &pool,
+            &needles,
+            username,
+            folder,
+            ignore_case,
+            force_exact,
+        )?;
+        let account = owner[&entry.id].clone();
+        crate::actions::set_active_account(Some(account.clone()))?;
+        let decrypted = decrypt_cipher(&entry)?;
+        return Ok((account, entry, decrypted));
+    };
+
+    crate::actions::set_active_account(Some(account.clone()))?;
+    let db = load_db()?;
+    let (entry, decrypted) =
+        find_entry(&db, needles, username, folder, ignore_case, force_exact)?;
+    Ok((account.clone(), entry, decrypted))
+}
+
 fn find_attachment<'a>(
     entry: &'a rbw::db::Entry,
     decrypted: &'a DecryptedCipher,
@@ -5325,6 +5514,7 @@ impl ListCipherPlan {
             entry_type: self.entry_type,
             collection_ids: self.collection_ids,
             attachment_metadata,
+            account: None,
         })
     }
 }
@@ -6056,6 +6246,7 @@ pub fn decrypt_cipher(
             &entry.id,
             attachment_count,
         ),
+        account: None,
     })
 }
 
@@ -6425,6 +6616,50 @@ fn active_account_unlocked() -> bool {
     crate::actions::unlocked().is_ok()
 }
 
+// Which accounts `list`/`search`/`get` should query. An explicit --account/
+// RBW_ACCOUNT always wins and scopes to just that one account, unchanged from
+// single-account behavior. Otherwise every configured account is a candidate,
+// filtered per-account by `Account::exclude_from_list` and `Account::unlock`:
+// `Always` accounts are unlocked unconditionally, `Never` accounts only make
+// it in if already unlocked (never prompted, not even by `--all`), and the
+// default `OnDemand` behaves like `Never` unless `all` (the --all flag) is
+// set, in which case it's unlocked too — same as the pre-multi-account
+// behavior of a plain `rbw list` extended to every on-demand account.
+fn list_target_accounts(all: bool) -> anyhow::Result<Vec<String>> {
+    if let Some(name) = crate::actions::current_account() {
+        return Ok(vec![name]);
+    }
+
+    crate::actions::set_active_account(None)?;
+    unlock(None)?;
+
+    let config = rbw::config::Config::load()?;
+    let accounts = config.accounts();
+    if accounts.len() <= 1 {
+        return Ok(vec![config.primary_account_name()]);
+    }
+
+    let mut out = Vec::new();
+    for account in &accounts {
+        if account.exclude_from_list {
+            continue;
+        }
+        crate::actions::set_active_account(Some(account.name.clone()))?;
+        let should_unlock = match account.unlock {
+            rbw::config::UnlockPolicy::Always => true,
+            rbw::config::UnlockPolicy::Never => false,
+            rbw::config::UnlockPolicy::OnDemand => all,
+        };
+        if should_unlock {
+            unlock(None)?;
+            out.push(account.name.clone());
+        } else if active_account_unlocked() {
+            out.push(account.name.clone());
+        }
+    }
+    Ok(out)
+}
+
 // Open the multi-account TUI. Unlocks the target account (--account /
 // RBW_ACCOUNT, else primary) up front — pinentry runs here, on the real
 // terminal, before the UI takes over the screen — then loads every account
@@ -6611,6 +6846,8 @@ pub fn tui_account_add(
         ui_url: None,
         notifications_url: None,
         client_cert_path: None,
+        unlock: rbw::config::UnlockPolicy::default(),
+        exclude_from_list: false,
     });
     if first {
         config.primary_account = Some(name.to_string());
@@ -8281,6 +8518,7 @@ mod test {
                 attachment_metadata: AttachmentMetadata {
                     attachment_count: 0,
                 },
+                account: None,
             };
         let login = |password: Option<&str>| DecryptedData::Login {
             username: None,
@@ -10281,6 +10519,7 @@ mod test {
                 history: vec![],
                 attachments: vec![],
                 attachment_metadata: AttachmentMetadata::new("example-id", 0),
+                account: None,
             };
 
             assert_eq!(
