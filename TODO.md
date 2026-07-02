@@ -22,22 +22,15 @@
       detection via `Config::credential_source_chain`. The agent's unlock
       flow resolves it automatically, recursing through chained accounts
       and falling back to pinentry on any failure. **Gap:** not yet exposed
-      in the TUI settings panel or `nix/hm-module.nix` — see below.
+      in the TUI settings panel — see below.
 - [x] TUI: detect the background agent getting locked while the TUI is
       open (`App::poll_agent_lock`, throttled to every few seconds), clear
       in-memory secrets, and show `Mode::LockedPrompt` that on accept opens
       pinentry to unlock again.
 - [x] Home-manager module exposing every config.json option as Nix options
       (accounts, `unlock` policy, `exclude_from_list`, `tui_keybindings`,
+      `password_gen`/`PasswordGenPolicy`, per-account `credential_source`,
       etc.) — keep this in sync whenever a new config option is added.
-      **Gaps:** `password_gen`/`PasswordGenPolicy` and
-      `Account::credential_source` (see above) both landed in
-      `src/config.rs` after `nix/hm-module.nix` was written and aren't
-      mirrored there yet — extend the module with
-      `programs.rbw.declarative.settings.password_gen` (`length`,
-      `no_symbols`, `only_numbers`, `nonconfusables`, `diceware`) and a
-      per-account `credential_source` (`account`, `entry`) option to close
-      this.
 - [ ] TUI: expose `credential_source` in the settings/accounts panel (it's
       currently CLI-only via `rbw account set`).
 
