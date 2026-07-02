@@ -119,6 +119,9 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::ConfirmDelete => render_confirm(f, app, main),
         Mode::Attachments(view) => render_attachments(f, view, main),
         Mode::Accounts(view) => render_accounts(f, view, main),
+        Mode::ConfirmClearCredentialSource(name) => {
+            render_confirm_clear_credential_source(f, name, main);
+        }
         Mode::Prompt(prompt) => render_prompt(f, prompt, main),
         Mode::Help => render_help(f, main),
         Mode::Normal | Mode::Search => {}
@@ -820,12 +823,14 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
             "type to filter · ↑/↓ select · ⇥ actions · ⌥p/u/t/o copy · ^E editor · esc clear"
         }
         Mode::Edit(_) => "⏎ save · esc cancel · ⇥ next field · ^R reveal · ^E editor",
-        Mode::ConfirmDelete => "y confirm · n/esc cancel",
+        Mode::ConfirmDelete | Mode::ConfirmClearCredentialSource(_) => {
+            "y confirm · n/esc cancel"
+        }
         Mode::Attachments(_) => {
             "⏎ download · a upload · d delete · ↑/↓ select · esc cancel"
         }
         Mode::Accounts(_) => {
-            "⏎/u unlock · s sync · p primary · a add · ↑/↓ select · esc close"
+            "⏎/u unlock · s sync · p primary · a add · l link · L unlink · ↑/↓ select · esc close"
         }
         Mode::Prompt(prompt) => prompt.hint,
         Mode::Help => "any key to close",
@@ -1028,6 +1033,41 @@ fn render_confirm(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(text).alignment(Alignment::Center), inner);
 }
 
+fn render_confirm_clear_credential_source(
+    f: &mut Frame,
+    name: &str,
+    area: Rect,
+) {
+    let rect = centered(60, 5, area);
+    f.render_widget(Clear, rect);
+    let b = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Red))
+        .title(Span::styled(
+            " clear credential source ",
+            Style::default().fg(Color::Red).bold(),
+        ));
+    let inner = b.inner(rect);
+    f.render_widget(b, rect);
+    let text = Text::from(vec![
+        Line::from(vec![
+            Span::raw("Clear the credential_source link for "),
+            Span::styled(
+                format!("'{name}'"),
+                Style::default().fg(Color::White).bold(),
+            ),
+            Span::raw("?"),
+        ]),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "y confirm · n/esc cancel",
+            Style::default().fg(DIM),
+        )),
+    ]);
+    f.render_widget(Paragraph::new(text).alignment(Alignment::Center), inner);
+}
+
 fn render_attachments(f: &mut Frame, view: &AttachmentView, area: Rect) {
     let height =
         (view.items.len() as u16 + 4).clamp(5, area.height.saturating_sub(2));
@@ -1088,7 +1128,13 @@ fn render_attachments(f: &mut Frame, view: &AttachmentView, area: Rect) {
 }
 
 fn render_accounts(f: &mut Frame, view: &AccountsView, area: Rect) {
-    let height = (view.accounts.len() as u16 + 5)
+    // One extra line per account that shows a credential_source indicator.
+    let linked = view
+        .accounts
+        .iter()
+        .filter(|a| a.credential_source.is_some())
+        .count() as u16;
+    let height = (view.accounts.len() as u16 + linked + 5)
         .clamp(6, area.height.saturating_sub(2));
     let rect = centered(70.min(area.width.saturating_sub(4)), height, area);
     f.render_widget(Clear, rect);
@@ -1134,10 +1180,17 @@ fn render_accounts(f: &mut Frame, view: &AccountsView, area: Rect) {
             Style::default().fg(Color::Blue),
         ));
         lines.push(Line::from(spans));
+        if let Some((source_account, source_entry)) = &acct.credential_source
+        {
+            lines.push(Line::from(Span::styled(
+                format!("      → linked to {source_account}/{source_entry}"),
+                Style::default().fg(Color::Magenta).italic(),
+            )));
+        }
     }
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
-        "⏎/u unlock · s sync · p set primary · a add · esc close",
+        "⏎/u unlock · s sync · p set primary · a add · l link · L unlink · esc close",
         Style::default().fg(DIM),
     )));
 
@@ -1179,7 +1232,10 @@ fn render_help(f: &mut Frame, area: Rect) {
         ("e · ⏎", "edit entry (inline form)"),
         ("^e · E", "edit entry in $EDITOR (any focus)"),
         ("a", "add a new login"),
-        ("A", "accounts: unlock / sync / set primary"),
+        (
+            "A",
+            "accounts: unlock / sync / set primary / link credential source",
+        ),
         ("d", "delete entry"),
         ("?", "this help"),
         ("q · esc", "quit"),
@@ -1287,6 +1343,7 @@ mod test {
                     server: "bitwarden.com".to_string(),
                     unlocked: true,
                     primary: true,
+                    credential_source: None,
                 },
                 crate::commands::TuiAccount {
                     name: "work".to_string(),
@@ -1294,6 +1351,10 @@ mod test {
                     server: "https://vault.corp.com".to_string(),
                     unlocked: false,
                     primary: false,
+                    credential_source: Some((
+                        "personal".to_string(),
+                        "Work VPN master password".to_string(),
+                    )),
                 },
             ],
             selected: 0,

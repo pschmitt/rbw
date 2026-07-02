@@ -119,6 +119,39 @@ let
             directly.
           '';
         };
+        credential_source = mkOption {
+          type = types.nullOr (
+            types.submodule {
+              options = {
+                account = mkOption {
+                  type = types.str;
+                  description = ''
+                    Name of the *other* configured account whose vault holds
+                    this account's master password. Must not be this
+                    account's own name, and must not form a cycle with other
+                    accounts' `credential_source`s.
+                  '';
+                };
+                entry = mkOption {
+                  type = types.str;
+                  description = ''
+                    Name of the Login entry in that account's vault holding
+                    this account's master password (matched the same way as
+                    an `rbw get NAME` lookup); its `password` field is used.
+                  '';
+                };
+              };
+            }
+          );
+          default = null;
+          description = ''
+            Link this account's master password to a Login entry in another
+            configured account's vault, so unlocking this account can pull
+            its password from there instead of prompting via pinentry. See
+            `rbw account set --credential-source-account/--credential-
+            source-entry`, or the equivalent TUI accounts-panel action.
+          '';
+        };
       };
     }
   );

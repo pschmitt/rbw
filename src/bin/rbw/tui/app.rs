@@ -49,6 +49,10 @@ pub enum Mode {
     ConfirmDelete,
     Attachments(AttachmentView),
     Accounts(AccountsView),
+    // Confirm clearing the named account's `credential_source` link, from
+    // the accounts panel. Carries the account name since this mode replaces
+    // `Mode::Accounts` (and its cursor/list) while the dialog is up.
+    ConfirmClearCredentialSource(String),
     Prompt(Prompt),
     Help,
 }
@@ -67,6 +71,9 @@ pub enum PromptKind {
     AttachmentUpload { owner: usize, id: String },
     // Add a new account from the entered name / email / server-url fields.
     AddAccount,
+    // Link (or edit) the named account's `credential_source` from the
+    // entered source-account / source-entry fields.
+    SetCredentialSource { name: String },
 }
 
 pub struct PromptField {
@@ -122,6 +129,34 @@ impl Prompt {
         }
     }
 
+    // `current`, if the account already has a `credential_source`, prefills
+    // the fields so the prompt doubles as an editor rather than only being
+    // usable to set the link the first time.
+    pub fn set_credential_source(
+        name: &str,
+        current: Option<(String, String)>,
+    ) -> Self {
+        let (source_account, source_entry) = current.unwrap_or_default();
+        Self {
+            title: format!("Link credential source → {name}"),
+            hint: "⏎ save · ⇥ next · esc cancel",
+            fields: vec![
+                PromptField {
+                    label: "Source acct",
+                    input: Input::new(source_account),
+                },
+                PromptField {
+                    label: "Source entry",
+                    input: Input::new(source_entry),
+                },
+            ],
+            focus: 0,
+            kind: PromptKind::SetCredentialSource {
+                name: name.to_string(),
+            },
+        }
+    }
+
     fn focus_next(&mut self) {
         if !self.fields.is_empty() {
             self.focus = (self.focus + 1) % self.fields.len();
@@ -154,6 +189,11 @@ enum PromptSubmit {
         name: String,
         email: Option<String>,
         base_url: Option<String>,
+    },
+    SetCredentialSource {
+        name: String,
+        source_account: String,
+        source_entry: String,
     },
 }
 
@@ -933,6 +973,20 @@ impl App {
         }
     }
 
+    // The highlighted account's name and current `credential_source` link,
+    // if any.
+    fn selected_account_credential_source(
+        &self,
+    ) -> Option<(String, Option<(String, String)>)> {
+        if let Mode::Accounts(view) = &self.mode {
+            view.accounts
+                .get(view.selected)
+                .map(|a| (a.name.clone(), a.credential_source.clone()))
+        } else {
+            None
+        }
+    }
+
     // Sync the highlighted account (must be unlocked) and refresh its entries.
     fn sync_selected_account(&mut self) {
         let Some((name, unlocked)) = self.selected_account() else {
@@ -1021,6 +1075,12 @@ impl App {
                 self.set_primary_selected_account();
             }
             Some(TuiAction::AccountAdd) => self.start_add_account(),
+            Some(TuiAction::AccountSetCredentialSource) => {
+                self.start_set_credential_source();
+            }
+            Some(TuiAction::AccountClearCredentialSource) => {
+                self.start_clear_credential_source();
+            }
             _ => {}
         }
         Action::None
@@ -1044,6 +1104,35 @@ impl App {
 
     fn start_add_account(&mut self) {
         self.mode = Mode::Prompt(Prompt::add_account());
+    }
+
+    // Open the link/edit prompt for the highlighted account's
+    // `credential_source`, prefilled if it already has one.
+    fn start_set_credential_source(&mut self) {
+        let Some((name, current)) = self.selected_account_credential_source()
+        else {
+            return;
+        };
+        self.mode =
+            Mode::Prompt(Prompt::set_credential_source(&name, current));
+    }
+
+    // Ask for confirmation before clearing the highlighted account's
+    // `credential_source` link; a no-op (with a status message) if it has
+    // none to clear.
+    fn start_clear_credential_source(&mut self) {
+        let Some((name, current)) = self.selected_account_credential_source()
+        else {
+            return;
+        };
+        if current.is_none() {
+            self.set_status(
+                Level::Info,
+                format!("{name} has no credential_source set"),
+            );
+            return;
+        }
+        self.mode = Mode::ConfirmClearCredentialSource(name);
     }
 
     fn handle_prompt(&mut self, key: KeyEvent) -> Action {
@@ -1084,6 +1173,13 @@ impl App {
                     email: non_empty(p.value(1).trim().to_string()),
                     base_url: non_empty(p.value(2).trim().to_string()),
                 },
+                PromptKind::SetCredentialSource { name } => {
+                    PromptSubmit::SetCredentialSource {
+                        name: name.clone(),
+                        source_account: p.value(0).trim().to_string(),
+                        source_entry: p.value(1).trim().to_string(),
+                    }
+                }
             }
         };
         match submit {
@@ -1140,6 +1236,36 @@ impl App {
                 }
                 Err(e) => self.set_status(Level::Error, format!("{e:#}")),
             },
+            PromptSubmit::SetCredentialSource {
+                name,
+                source_account,
+                source_entry,
+            } => {
+                if source_account.is_empty() || source_entry.is_empty() {
+                    self.set_status(
+                        Level::Warn,
+                        "source account and source entry are both required",
+                    );
+                    return;
+                }
+                match commands::tui_account_set_credential_source(
+                    &name,
+                    &source_account,
+                    &source_entry,
+                ) {
+                    Ok(()) => {
+                        self.set_status(
+                            Level::Success,
+                            format!(
+                                "linked '{name}' → {source_account}/{source_entry}"
+                            ),
+                        );
+                        // Back to the (refreshed) accounts panel.
+                        self.open_accounts();
+                    }
+                    Err(e) => self.set_status(Level::Error, format!("{e:#}")),
+                }
+            }
         }
     }
 
@@ -1193,6 +1319,10 @@ impl App {
                 Action::None
             }
             Mode::Accounts(_) => self.handle_accounts(key),
+            Mode::ConfirmClearCredentialSource(_) => {
+                self.handle_confirm_clear_credential_source(key);
+                Action::None
+            }
             Mode::Prompt(_) => self.handle_prompt(key),
             Mode::Help => {
                 self.mode = Mode::Normal;
@@ -1406,6 +1536,26 @@ impl App {
             }
             _ => self.mode = Mode::Normal,
         }
+    }
+
+    // Either way (confirm or cancel), back out to the (refreshed) accounts
+    // panel rather than all the way to `Mode::Normal` -- this dialog is only
+    // reachable from there.
+    fn handle_confirm_clear_credential_source(&mut self, key: KeyEvent) {
+        let Mode::ConfirmClearCredentialSource(name) = &self.mode else {
+            return;
+        };
+        let name = name.clone();
+        if matches!(key.code, KeyCode::Char('y' | 'Y') | KeyCode::Enter) {
+            match commands::tui_account_clear_credential_source(&name) {
+                Ok(()) => self.set_status(
+                    Level::Success,
+                    format!("cleared credential_source for '{name}'"),
+                ),
+                Err(e) => self.set_status(Level::Error, format!("{e:#}")),
+            }
+        }
+        self.open_accounts();
     }
 }
 
@@ -1789,7 +1939,7 @@ fn detail_first_uri(detail: &DecryptedCipher) -> Option<String> {
 
 #[cfg(test)]
 mod test {
-    use super::{Action, App, Keymap, Mode};
+    use super::{AccountsView, Action, App, Keymap, Mode, PromptKind};
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn app() -> App {
@@ -2004,5 +2154,92 @@ mod test {
         a.mouse_scroll_detail(1);
         assert_eq!(a.detail_scroll, 1);
         assert_eq!(a.selected, 0);
+    }
+
+    // Builds an `App` already sitting on `Mode::Accounts` with one account,
+    // bypassing `open_accounts`/`commands::tui_accounts` (which would hit
+    // the real config file) since only the accounts-panel keybinding logic
+    // is under test here, not the account listing itself.
+    fn app_on_accounts_panel(
+        credential_source: Option<(String, String)>,
+    ) -> App {
+        let mut a = app();
+        a.mode = Mode::Accounts(AccountsView {
+            accounts: vec![crate::commands::TuiAccount {
+                name: "work".to_string(),
+                email: None,
+                server: "bitwarden.com".to_string(),
+                unlocked: false,
+                primary: false,
+                credential_source,
+            }],
+            selected: 0,
+        });
+        a
+    }
+
+    // `l` on a highlighted account opens the link/edit prompt, prefilled
+    // with its current `credential_source` (if any) so the prompt doubles
+    // as an editor.
+    #[test]
+    fn accounts_l_opens_prefilled_credential_source_prompt() {
+        let mut a = app_on_accounts_panel(Some((
+            "personal".to_string(),
+            "Work master password".to_string(),
+        )));
+        a.handle_key(key(KeyCode::Char('l')));
+
+        let Mode::Prompt(prompt) = &a.mode else {
+            panic!("expected Mode::Prompt after 'l'");
+        };
+        assert!(matches!(
+            &prompt.kind,
+            PromptKind::SetCredentialSource { name } if name == "work"
+        ));
+        assert_eq!(prompt.fields[0].input.value(), "personal");
+        assert_eq!(prompt.fields[1].input.value(), "Work master password");
+    }
+
+    // `l` with no existing `credential_source` opens the same prompt with
+    // both fields blank.
+    #[test]
+    fn accounts_l_with_no_credential_source_opens_blank_prompt() {
+        let mut a = app_on_accounts_panel(None);
+        a.handle_key(key(KeyCode::Char('l')));
+
+        let Mode::Prompt(prompt) = &a.mode else {
+            panic!("expected Mode::Prompt after 'l'");
+        };
+        assert_eq!(prompt.fields[0].input.value(), "");
+        assert_eq!(prompt.fields[1].input.value(), "");
+    }
+
+    // `L` (shift-l) with no `credential_source` to clear is a no-op that
+    // just surfaces a status message -- it must not open the confirm dialog
+    // (there'd be nothing to confirm).
+    #[test]
+    fn accounts_shift_l_with_no_credential_source_is_a_noop_with_status() {
+        let mut a = app_on_accounts_panel(None);
+        a.handle_key(key(KeyCode::Char('L')));
+
+        assert!(matches!(a.mode, Mode::Accounts(_)));
+        assert!(a.status.is_some());
+    }
+
+    // `L` with a `credential_source` set opens the clear-confirm dialog,
+    // carrying the account name along (the dialog replaces `Mode::Accounts`
+    // and its cursor/list while it's up).
+    #[test]
+    fn accounts_shift_l_with_credential_source_opens_confirm() {
+        let mut a = app_on_accounts_panel(Some((
+            "personal".to_string(),
+            "entry".to_string(),
+        )));
+        a.handle_key(key(KeyCode::Char('L')));
+
+        assert!(matches!(
+            &a.mode,
+            Mode::ConfirmClearCredentialSource(name) if name == "work"
+        ));
     }
 }

@@ -7,9 +7,10 @@
 //
 // Deliberately out of scope, and not reachable through this map: the search
 // filter's own text input, the Edit/Prompt overlays' field navigation, and
-// small binary confirms (`ConfirmDelete`'s y/n, Help's "any key closes") —
-// these are tied to the widget's own semantics rather than being freely
-// rebindable single actions.
+// small binary confirms (`ConfirmDelete`'s y/n,
+// `ConfirmClearCredentialSource`'s y/n, Help's "any key closes") — these are
+// tied to the widget's own semantics rather than being freely rebindable
+// single actions.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -113,6 +114,11 @@ pub enum TuiAction {
     AccountSync,
     AccountSetPrimary,
     AccountAdd,
+    // Link (or edit) the highlighted account's `credential_source` to a
+    // Login entry in another account's vault.
+    AccountSetCredentialSource,
+    // Clear the highlighted account's `credential_source` link.
+    AccountClearCredentialSource,
 }
 
 impl TuiAction {
@@ -158,6 +164,8 @@ impl TuiAction {
         Self::AccountSync,
         Self::AccountSetPrimary,
         Self::AccountAdd,
+        Self::AccountSetCredentialSource,
+        Self::AccountClearCredentialSource,
     ];
 
     // The config.json key used to override this action's chords.
@@ -201,6 +209,12 @@ impl TuiAction {
             Self::AccountSync => "account_sync",
             Self::AccountSetPrimary => "account_set_primary",
             Self::AccountAdd => "account_add",
+            Self::AccountSetCredentialSource => {
+                "account_set_credential_source"
+            }
+            Self::AccountClearCredentialSource => {
+                "account_clear_credential_source"
+            }
         }
     }
 
@@ -244,6 +258,8 @@ impl TuiAction {
             Self::AccountUnlock => &["enter", "u"],
             Self::AccountSync => &["s"],
             Self::AccountSetPrimary => &["p"],
+            Self::AccountSetCredentialSource => &["l"],
+            Self::AccountClearCredentialSource => &["L"],
         }
     }
 }

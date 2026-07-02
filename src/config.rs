@@ -383,18 +383,22 @@ impl Config {
     // never legitimately be longer than the number of configured accounts, so
     // that doubles as a max-depth guard even if the explicit checks below
     // somehow miss a malformed config.
-    pub fn credential_source_chain(&self, start: &str) -> Result<Vec<String>> {
+    pub fn credential_source_chain(
+        &self,
+        start: &str,
+    ) -> Result<Vec<String>> {
         let accounts = self.accounts();
         let max_depth = accounts.len().max(1);
         let mut chain = vec![start.to_string()];
         let mut current = start.to_string();
 
         loop {
-            let account = accounts.iter().find(|a| a.name == current).ok_or_else(
-                || Error::UnknownAccount {
+            let account = accounts
+                .iter()
+                .find(|a| a.name == current)
+                .ok_or_else(|| Error::UnknownAccount {
                     name: current.clone(),
-                },
-            )?;
+                })?;
             let Some(source) = &account.credential_source else {
                 break;
             };
