@@ -4,7 +4,8 @@ pub async fn register(
     email: &str,
     apikey: crate::locked::ApiKey,
 ) -> Result<()> {
-    let (client, config) = api_client_async().await?;
+    let (client, _account) = api_client_async().await?;
+    let config = crate::config::Config::load_async().await?;
 
     client
         .register(email, &crate::config::device_id(&config).await?, &apikey)
@@ -27,7 +28,8 @@ pub async fn login(
     Option<u32>,
     String,
 )> {
-    let (client, config) = api_client_async().await?;
+    let (client, account) = api_client_async().await?;
+    let config = crate::config::Config::load_async().await?;
     let (kdf, iterations, memory, parallelism) =
         client.prelogin(email).await?;
 
@@ -42,7 +44,7 @@ pub async fn login(
     let (access_token, refresh_token, protected_key) = client
         .login(
             email,
-            config.sso_id.as_deref(),
+            account.sso_id.as_deref(),
             &crate::config::device_id(&config).await?,
             &identity.master_password_hash,
             two_factor_token,
@@ -65,7 +67,8 @@ pub async fn send_two_factor_email(
     email: &str,
     sso_email_2fa_session_token: &str,
 ) -> Result<()> {
-    let (client, config) = api_client_async().await?;
+    let (client, _account) = api_client_async().await?;
+    let config = crate::config::Config::load_async().await?;
     client
         .send_email_login(
             email,
@@ -584,25 +587,55 @@ async fn exchange_refresh_token_async(refresh_token: &str) -> Result<String> {
     client.exchange_refresh_token_async(refresh_token).await
 }
 
-fn api_client() -> Result<(crate::api::Client, crate::config::Config)> {
+tokio::task_local! {
+    // Set by the agent around each request (via `AGENT_ACCOUNT.scope`) so that
+    // `api_client`/`api_client_async` target the right account's server. It is
+    // readable from both async and sync code running within that task.
+    pub static AGENT_ACCOUNT: crate::config::Account;
+}
+
+// Set once by the CLI (from --account / RBW_ACCOUNT) so that the synchronous api
+// calls it makes target the right account's server.
+static CLIENT_ACCOUNT: std::sync::OnceLock<crate::config::Account> =
+    std::sync::OnceLock::new();
+
+pub fn set_client_account(account: crate::config::Account) {
+    let _ = CLIENT_ACCOUNT.set(account);
+}
+
+// Which account the current api call targets: the agent's per-request account,
+// else the CLI's selected account, else the primary account.
+fn resolve_account(config: &crate::config::Config) -> crate::config::Account {
+    if let Ok(account) = AGENT_ACCOUNT.try_with(Clone::clone) {
+        return account;
+    }
+    if let Some(account) = CLIENT_ACCOUNT.get() {
+        return account.clone();
+    }
+    config.primary()
+}
+
+fn api_client() -> Result<(crate::api::Client, crate::config::Account)> {
     let config = crate::config::Config::load()?;
+    let account = resolve_account(&config);
     let client = crate::api::Client::new(
-        &config.base_url(),
-        &config.identity_url(),
-        &config.ui_url(),
-        config.client_cert_path().as_deref(),
+        &account.base_url(),
+        &account.identity_url(),
+        &account.ui_url(),
+        account.client_cert_path.as_deref(),
     );
-    Ok((client, config))
+    Ok((client, account))
 }
 
 async fn api_client_async(
-) -> Result<(crate::api::Client, crate::config::Config)> {
+) -> Result<(crate::api::Client, crate::config::Account)> {
     let config = crate::config::Config::load_async().await?;
+    let account = resolve_account(&config);
     let client = crate::api::Client::new(
-        &config.base_url(),
-        &config.identity_url(),
-        &config.ui_url(),
-        config.client_cert_path().as_deref(),
+        &account.base_url(),
+        &account.identity_url(),
+        &account.ui_url(),
+        account.client_cert_path.as_deref(),
     );
-    Ok((client, config))
+    Ok((client, account))
 }

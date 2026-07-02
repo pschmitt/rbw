@@ -1,16 +1,37 @@
 use sha2::Digest as _;
 
-pub struct State {
+// Decrypted key material for a single unlocked account. Present in
+// `State::accounts` only while that account is unlocked.
+#[derive(Default)]
+pub struct AccountKeys {
     pub priv_key: Option<rbw::locked::Keys>,
     pub org_keys:
         Option<std::collections::HashMap<String, rbw::locked::Keys>>,
+    pub master_password_reprompt: std::collections::HashSet<[u8; 32]>,
+    pub master_password_reprompt_initialized: bool,
+}
+
+impl AccountKeys {
+    fn key(&self, org_id: Option<&str>) -> Option<&rbw::locked::Keys> {
+        org_id.map_or(self.priv_key.as_ref(), |id| {
+            self.org_keys.as_ref().and_then(|h| h.get(id))
+        })
+    }
+
+    fn needs_unlock(&self) -> bool {
+        self.priv_key.is_none() || self.org_keys.is_none()
+    }
+}
+
+pub struct State {
+    // Per-account key material, keyed by account name. A single global timeout
+    // (below) locks all of them at once.
+    pub accounts: std::collections::HashMap<String, AccountKeys>,
     pub timeout: crate::timeout::Timeout,
     pub timeout_duration: std::time::Duration,
     pub sync_timeout: crate::timeout::Timeout,
     pub sync_timeout_duration: std::time::Duration,
     pub notifications_handler: crate::notifications::Handler,
-    pub master_password_reprompt: std::collections::HashSet<[u8; 32]>,
-    pub master_password_reprompt_initialized: bool,
 
     // this is stored here specifically for the use of the ssh agent, because
     // requests made to the ssh agent don't include an environment, and so we
@@ -29,24 +50,58 @@ pub struct State {
 }
 
 impl State {
-    pub fn key(&self, org_id: Option<&str>) -> Option<&rbw::locked::Keys> {
-        org_id.map_or(self.priv_key.as_ref(), |id| {
-            self.org_keys.as_ref().and_then(|h| h.get(id))
-        })
+    pub fn account(&self, account: &str) -> Option<&AccountKeys> {
+        self.accounts.get(account)
     }
 
-    pub fn needs_unlock(&self) -> bool {
-        self.priv_key.is_none() || self.org_keys.is_none()
+    // Get (creating if absent) the mutable key slot for an account.
+    pub fn account_mut(&mut self, account: &str) -> &mut AccountKeys {
+        self.accounts.entry(account.to_string()).or_default()
+    }
+
+    pub fn key(
+        &self,
+        account: &str,
+        org_id: Option<&str>,
+    ) -> Option<&rbw::locked::Keys> {
+        self.accounts.get(account).and_then(|a| a.key(org_id))
+    }
+
+    pub fn needs_unlock(&self, account: &str) -> bool {
+        self.accounts
+            .get(account)
+            .is_none_or(AccountKeys::needs_unlock)
+    }
+
+    // True if at least one account is currently unlocked.
+    pub fn any_unlocked(&self) -> bool {
+        self.accounts.values().any(|a| !a.needs_unlock())
+    }
+
+    pub fn set_unlocked(
+        &mut self,
+        account: &str,
+        keys: rbw::locked::Keys,
+        org_keys: std::collections::HashMap<String, rbw::locked::Keys>,
+    ) {
+        let acct = self.account_mut(account);
+        acct.priv_key = Some(keys);
+        acct.org_keys = Some(org_keys);
     }
 
     pub fn set_timeout(&self) {
         self.timeout.set(self.timeout_duration);
     }
 
+    // Lock every account (the single global timeout clears them all at once).
     pub fn clear(&mut self) {
-        self.priv_key = None;
-        self.org_keys = None;
+        self.accounts.clear();
         self.timeout.clear();
+    }
+
+    // Lock a single account.
+    pub fn clear_account(&mut self, account: &str) {
+        self.accounts.remove(account);
     }
 
     pub fn set_sync_timeout(&self) {
@@ -73,20 +128,20 @@ impl State {
     // a sync, so it can't be bypassed by editing the on-disk file directly.
     // if the agent gets a request for any of those cipherstrings that it saw
     // marked as master password reprompt during the most recent sync, it
-    // forces a reprompt.
+    // forces a reprompt. this is tracked per account.
     pub fn set_master_password_reprompt(
         &mut self,
+        account: &str,
         entries: &[rbw::db::Entry],
     ) {
-        self.master_password_reprompt.clear();
+        let mut set = std::collections::HashSet::new();
 
         let mut hasher = sha2::Sha256::new();
         let mut insert = |s: Option<&str>| {
             if let Some(s) = s {
                 if !s.is_empty() {
                     hasher.update(s);
-                    self.master_password_reprompt
-                        .insert(hasher.finalize_reset().into());
+                    set.insert(hasher.finalize_reset().into());
                 }
             }
         };
@@ -126,11 +181,26 @@ impl State {
             }
         }
 
-        self.master_password_reprompt_initialized = true;
+        let acct = self.account_mut(account);
+        acct.master_password_reprompt = set;
+        acct.master_password_reprompt_initialized = true;
     }
 
-    pub fn master_password_reprompt_initialized(&self) -> bool {
-        self.master_password_reprompt_initialized
+    pub fn master_password_reprompt_initialized(
+        &self,
+        account: &str,
+    ) -> bool {
+        self.account(account)
+            .is_some_and(|a| a.master_password_reprompt_initialized)
+    }
+
+    pub fn master_password_reprompt_contains(
+        &self,
+        account: &str,
+        hash: &[u8; 32],
+    ) -> bool {
+        self.account(account)
+            .is_some_and(|a| a.master_password_reprompt.contains(hash))
     }
 
     pub fn last_environment(&self) -> &rbw::protocol::Environment {

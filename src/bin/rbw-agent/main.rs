@@ -32,15 +32,12 @@ async fn tokio_main(
     let notifications_handler = crate::notifications::Handler::new();
     let state =
         std::sync::Arc::new(tokio::sync::Mutex::new(crate::state::State {
-            priv_key: None,
-            org_keys: None,
+            accounts: std::collections::HashMap::new(),
             timeout,
             timeout_duration,
             sync_timeout,
             sync_timeout_duration,
             notifications_handler,
-            master_password_reprompt: std::collections::HashSet::new(),
-            master_password_reprompt_initialized: false,
             last_environment: rbw::protocol::Environment::default(),
             #[cfg(feature = "clipboard")]
             clipboard: arboard::Clipboard::new()

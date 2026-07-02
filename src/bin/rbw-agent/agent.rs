@@ -98,13 +98,10 @@ impl Agent {
                 Event::Sync(()) => {
                     let state = self.state.clone();
                     tokio::spawn(async move {
-                        // this could fail if we aren't logged in, but we
-                        // don't care about that
-                        if let Err(e) =
-                            crate::actions::sync(None, state.clone()).await
-                        {
-                            eprintln!("failed to sync: {e:#}");
-                        }
+                        // Syncs every configured account; failures (e.g.
+                        // accounts we aren't logged in to) are logged and
+                        // skipped inside sync_all.
+                        crate::actions::sync_all(state).await;
                     });
                     self.state.lock().await.set_sync_timeout();
                 }
@@ -126,14 +123,43 @@ async fn handle_request(
             return Ok(());
         }
     };
-    let (action, environment) = req.into_parts();
+    let (action, environment, account_name) = req.into_parts();
+    // Resolve the target account (by name, or the primary account when the
+    // client didn't specify one) and run the whole dispatch within its scope
+    // so that any server-bound lib call targets that account's server.
+    let account =
+        crate::actions::resolve_account(account_name.as_deref()).await?;
+    let set_timeout = rbw::actions::AGENT_ACCOUNT
+        .scope(
+            account.clone(),
+            dispatch(action, sock, state.clone(), &environment, &account),
+        )
+        .await?;
+
+    let mut state = state.lock().await;
+    state.set_last_environment(environment);
+    if set_timeout {
+        state.set_timeout();
+    }
+
+    Ok(())
+}
+
+async fn dispatch(
+    action: rbw::protocol::Action,
+    sock: &mut crate::sock::Sock,
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    environment: &rbw::protocol::Environment,
+    account: &rbw::config::Account,
+) -> anyhow::Result<bool> {
     let set_timeout = match action {
         rbw::protocol::Action::Register => {
-            crate::actions::register(sock, &environment).await?;
+            crate::actions::register(sock, environment, account).await?;
             true
         }
         rbw::protocol::Action::Login => {
-            crate::actions::login(sock, state.clone(), &environment).await?;
+            crate::actions::login(sock, state.clone(), environment, account)
+                .await?;
             true
         }
         rbw::protocol::Action::Unlock { mut password } => {
@@ -151,14 +177,15 @@ async fn handle_request(
             crate::actions::unlock(
                 sock,
                 state.clone(),
-                &environment,
+                environment,
                 locked_password.as_ref(),
+                account,
             )
             .await?;
             true
         }
         rbw::protocol::Action::CheckLock => {
-            crate::actions::check_lock(sock, state.clone()).await?;
+            crate::actions::check_lock(sock, state.clone(), account).await?;
             false
         }
         rbw::protocol::Action::Lock => {
@@ -166,7 +193,7 @@ async fn handle_request(
             false
         }
         rbw::protocol::Action::Sync => {
-            crate::actions::sync(Some(sock), state.clone()).await?;
+            crate::actions::sync(Some(sock), state.clone(), account).await?;
             false
         }
         rbw::protocol::Action::Decrypt {
@@ -177,10 +204,11 @@ async fn handle_request(
             crate::actions::decrypt(
                 sock,
                 state.clone(),
-                &environment,
+                environment,
                 &cipherstring,
                 entry_key.as_deref(),
                 org_id.as_deref(),
+                account,
             )
             .await?;
             true
@@ -189,8 +217,9 @@ async fn handle_request(
             crate::actions::decrypt_batch(
                 sock,
                 state.clone(),
-                &environment,
+                environment,
                 &entries,
+                account,
             )
             .await?;
             true
@@ -208,6 +237,7 @@ async fn handle_request(
                 attachment_key.as_deref(),
                 entry_key.as_deref(),
                 org_id.as_deref(),
+                account,
             )
             .await?;
             true
@@ -225,6 +255,7 @@ async fn handle_request(
                 &filename,
                 entry_key.as_deref(),
                 org_id.as_deref(),
+                account,
             )
             .await?;
             true
@@ -235,6 +266,7 @@ async fn handle_request(
                 state.clone(),
                 &plaintext,
                 org_id.as_deref(),
+                account,
             )
             .await?;
             true
@@ -251,11 +283,5 @@ async fn handle_request(
         }
     };
 
-    let mut state = state.lock().await;
-    state.set_last_environment(environment);
-    if set_timeout {
-        state.set_timeout();
-    }
-
-    Ok(())
+    Ok(set_timeout)
 }

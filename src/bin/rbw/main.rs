@@ -88,6 +88,21 @@ fn resolve_output_mode(
 
 #[derive(Debug, clap::Parser)]
 #[command(version, about = "Unofficial Bitwarden CLI")]
+struct Cli {
+    #[arg(
+        short = 'a',
+        long,
+        global = true,
+        help = "Account to operate on (overrides RBW_ACCOUNT; defaults to \
+            the primary account)"
+    )]
+    account: Option<String>,
+
+    #[command(subcommand)]
+    command: Opt,
+}
+
+#[derive(Debug, clap::Subcommand)]
 enum Opt {
     #[command(about = "Get or set configuration options")]
     Config {
@@ -208,9 +223,9 @@ enum Opt {
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
         #[cfg(feature = "clipboard")]
-        #[structopt(short, long, help = "Copy result to clipboard")]
+        #[arg(short, long, help = "Copy result to clipboard")]
         clipboard: bool,
-        #[structopt(short, long, help = "List fields in this entry")]
+        #[arg(short, long, help = "List fields in this entry")]
         list_fields: bool,
         #[arg(short = 'v', long, help = "Print matched item name to stderr")]
         verbose: bool,
@@ -274,7 +289,7 @@ enum Opt {
         #[command(flatten)]
         find_args: FindArgs,
         #[cfg(feature = "clipboard")]
-        #[structopt(long, help = "Copy result to clipboard")]
+        #[arg(long, help = "Copy result to clipboard")]
         clipboard: bool,
     },
 
@@ -737,7 +752,32 @@ impl Config {
 }
 
 fn main() {
-    let opt = Opt::parse();
+    let cli = Cli::parse();
+    let opt = cli.command;
+
+    // Resolve the target account: --account, else $RBW_ACCOUNT, else the
+    // primary account (None). This is threaded into every request sent to the
+    // agent and used to point any direct lib api calls at the right server.
+    let account = cli.account.or_else(|| {
+        std::env::var("RBW_ACCOUNT").ok().filter(|s| !s.is_empty())
+    });
+    actions::set_account(account.clone());
+    if let Some(name) = &account {
+        match rbw::config::Config::load() {
+            Ok(config) => match config.account(Some(name)) {
+                Ok(account) => rbw::actions::set_client_account(account),
+                Err(e) => {
+                    eprintln!("{}", commands::style_error(&format!("{e:#}"),
+                        std::io::stderr().is_terminal()
+                            && std::env::var_os("NO_COLOR").is_none()));
+                    std::process::exit(1);
+                }
+            },
+            // If the config can't be loaded, downstream commands surface a
+            // clearer error; nothing to point the api client at here.
+            Err(_) => {}
+        }
+    }
 
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info"),
@@ -1092,7 +1132,7 @@ fn main() {
                 CompletionShell::Bash => {
                     clap_complete::generate(
                         clap_complete::Shell::Bash,
-                        &mut Opt::command(),
+                        &mut Cli::command(),
                         "rbw",
                         &mut std::io::stdout(),
                     );
@@ -1101,7 +1141,7 @@ fn main() {
                 CompletionShell::Fish => {
                     clap_complete::generate(
                         clap_complete::Shell::Fish,
-                        &mut Opt::command(),
+                        &mut Cli::command(),
                         "rbw",
                         &mut std::io::stdout(),
                     );
@@ -1110,7 +1150,7 @@ fn main() {
                 CompletionShell::Zsh => {
                     clap_complete::generate(
                         clap_complete::Shell::Zsh,
-                        &mut Opt::command(),
+                        &mut Cli::command(),
                         "rbw",
                         &mut std::io::stdout(),
                     );
@@ -1119,7 +1159,7 @@ fn main() {
                 CompletionShell::Powershell => {
                     clap_complete::generate(
                         clap_complete::Shell::PowerShell,
-                        &mut Opt::command(),
+                        &mut Cli::command(),
                         "rbw",
                         &mut std::io::stdout(),
                     );
@@ -1127,7 +1167,7 @@ fn main() {
                 CompletionShell::Elvish => {
                     clap_complete::generate(
                         clap_complete::Shell::Elvish,
-                        &mut Opt::command(),
+                        &mut Cli::command(),
                         "rbw",
                         &mut std::io::stdout(),
                     );
@@ -1135,7 +1175,7 @@ fn main() {
                 CompletionShell::Nushell => {
                     clap_complete::generate(
                         clap_complete_nushell::Nushell,
-                        &mut Opt::command(),
+                        &mut Cli::command(),
                         "rbw",
                         &mut std::io::stdout(),
                     );
@@ -1143,7 +1183,7 @@ fn main() {
                 CompletionShell::Fig => {
                     clap_complete::generate(
                         clap_complete_fig::Fig,
-                        &mut Opt::command(),
+                        &mut Cli::command(),
                         "rbw",
                         &mut std::io::stdout(),
                     );

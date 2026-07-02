@@ -14,11 +14,12 @@ fn password_from_env() -> Option<rbw::locked::Password> {
 pub async fn register(
     sock: &mut crate::sock::Sock,
     environment: &rbw::protocol::Environment,
+    account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
-    let db = load_db().await.unwrap_or_else(|_| rbw::db::Db::new());
+    let db = load_db(account).await.unwrap_or_else(|_| rbw::db::Db::new());
 
     if db.needs_login() {
-        let url_str = config_base_url().await?;
+        let url_str = account.base_url();
         let url = reqwest::Url::parse(&url_str)
             .context("failed to parse base url")?;
         let Some(host) = url.host_str() else {
@@ -27,7 +28,7 @@ pub async fn register(
             ));
         };
 
-        let email = config_email().await?;
+        let email = account_email(account)?;
 
         let mut err_msg = None;
         for i in 1_u8..=3 {
@@ -91,11 +92,12 @@ pub async fn login(
     sock: &mut crate::sock::Sock,
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     environment: &rbw::protocol::Environment,
+    account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
-    let db = load_db().await.unwrap_or_else(|_| rbw::db::Db::new());
+    let db = load_db(account).await.unwrap_or_else(|_| rbw::db::Db::new());
 
     if db.needs_login() {
-        let url_str = config_base_url().await?;
+        let url_str = account.base_url();
         let url = reqwest::Url::parse(&url_str)
             .context("failed to parse base url")?;
         let Some(host) = url.host_str() else {
@@ -104,7 +106,7 @@ pub async fn login(
             ));
         };
 
-        let email = config_email().await?;
+        let email = account_email(account)?;
 
         let mut err_msg = None;
         let mut env_password_tried = false;
@@ -168,6 +170,7 @@ pub async fn login(
                         password,
                         db,
                         email,
+                        account,
                     )
                     .await?;
                     break 'attempts;
@@ -225,6 +228,7 @@ pub async fn login(
                                 password,
                                 db,
                                 email,
+                                account,
                             )
                             .await?;
                             break 'attempts;
@@ -362,6 +366,7 @@ async fn login_success(
     password: rbw::locked::Password,
     mut db: rbw::db::Db,
     email: String,
+    account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
     db.access_token = Some(access_token.clone());
     db.refresh_token = Some(refresh_token.clone());
@@ -370,10 +375,10 @@ async fn login_success(
     db.memory = memory;
     db.parallelism = parallelism;
     db.protected_key = Some(protected_key.clone());
-    save_db(&db).await?;
+    save_db(account, &db).await?;
 
-    sync(None, state.clone()).await?;
-    let db = load_db().await?;
+    sync(None, state.clone(), account).await?;
+    let db = load_db(account).await?;
 
     let Some(protected_private_key) = db.protected_private_key else {
         return Err(anyhow::anyhow!(
@@ -395,9 +400,7 @@ async fn login_success(
 
     match res {
         Ok((keys, org_keys)) => {
-            let mut state = state.lock().await;
-            state.priv_key = Some(keys);
-            state.org_keys = Some(org_keys);
+            state.lock().await.set_unlocked(&account.name, keys, org_keys);
         }
         Err(e) => return Err(e).context("failed to unlock database"),
     }
@@ -410,9 +413,10 @@ async fn unlock_state(
     environment: &rbw::protocol::Environment,
     password: Option<&rbw::locked::Password>,
     mut client: Option<&mut tokio::net::UnixStream>,
+    account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
-    if state.lock().await.needs_unlock() {
-        let db = load_db().await?;
+    if state.lock().await.needs_unlock(&account.name) {
+        let db = load_db(account).await?;
 
         let Some(kdf) = db.kdf else {
             return Err(anyhow::anyhow!("failed to find kdf type in db"));
@@ -438,7 +442,9 @@ async fn unlock_state(
             ));
         };
 
-        let email = config_email().await?;
+        let email = account_email(account)?;
+        let description =
+            format!("Unlock account '{}' ({email})", account.name);
 
         if let Some(password) = password {
             // Password was passed through stdin
@@ -454,7 +460,8 @@ async fn unlock_state(
                 &db.protected_org_keys,
             ) {
                 Ok((keys, org_keys)) => {
-                    return unlock_success(state, keys, org_keys).await
+                    return unlock_success(state, keys, org_keys, account)
+                        .await
                 }
                 Err(e) => return Err(e).context("failed to unlock database"),
             }
@@ -471,10 +478,7 @@ async fn unlock_state(
                     rbw::pinentry::getpin(
                         &config_pinentry().await?,
                         "Master Password",
-                        &format!(
-                            "Unlock the local database for '{}'",
-                            rbw::dirs::profile()
-                        ),
+                        &description,
                         None,
                         environment,
                         true,
@@ -492,10 +496,7 @@ async fn unlock_state(
                 rbw::pinentry::getpin(
                     &config_pinentry().await?,
                     "Master Password",
-                    &format!(
-                        "Unlock the local database for '{}'",
-                        rbw::dirs::profile()
-                    ),
+                    &description,
                     err.as_deref(),
                     environment,
                     true,
@@ -516,7 +517,7 @@ async fn unlock_state(
                 &db.protected_org_keys,
             ) {
                 Ok((keys, org_keys)) => {
-                    unlock_success(state, keys, org_keys).await?;
+                    unlock_success(state, keys, org_keys, account).await?;
                     break;
                 }
                 Err(rbw::error::Error::IncorrectPassword { message }) => {
@@ -541,8 +542,10 @@ pub async fn unlock(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     environment: &rbw::protocol::Environment,
     password: Option<&rbw::locked::Password>,
+    account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
-    unlock_state(state, environment, password, Some(sock.inner())).await?;
+    unlock_state(state, environment, password, Some(sock.inner()), account)
+        .await?;
 
     respond_ack(sock).await?;
 
@@ -553,10 +556,9 @@ async fn unlock_success(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     keys: rbw::locked::Keys,
     org_keys: std::collections::HashMap<String, rbw::locked::Keys>,
+    account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
-    let mut state = state.lock().await;
-    state.priv_key = Some(keys);
-    state.org_keys = Some(org_keys);
+    state.lock().await.set_unlocked(&account.name, keys, org_keys);
     Ok(())
 }
 
@@ -574,8 +576,9 @@ pub async fn lock(
 pub async fn check_lock(
     sock: &mut crate::sock::Sock,
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
-    if state.lock().await.needs_unlock() {
+    if state.lock().await.needs_unlock(&account.name) {
         return Err(anyhow::anyhow!("agent is locked"));
     }
 
@@ -587,8 +590,9 @@ pub async fn check_lock(
 pub async fn sync(
     sock: Option<&mut crate::sock::Sock>,
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
-    let mut db = load_db().await?;
+    let mut db = load_db(account).await?;
 
     let access_token = if let Some(access_token) = &db.access_token {
         access_token.clone()
@@ -612,7 +616,10 @@ pub async fn sync(
     ) = rbw::actions::sync(&access_token, &refresh_token)
         .await
         .context("failed to sync database from server")?;
-    state.lock().await.set_master_password_reprompt(&entries);
+    state
+        .lock()
+        .await
+        .set_master_password_reprompt(&account.name, &entries);
     if let Some(access_token) = access_token {
         db.access_token = Some(access_token);
     }
@@ -621,9 +628,11 @@ pub async fn sync(
     db.protected_org_keys = protected_org_keys;
     db.entries = entries;
     db.collections = collections;
-    save_db(&db).await?;
+    save_db(account, &db).await?;
 
-    if let Err(e) = subscribe_to_notifications(state.clone()).await {
+    if let Err(e) =
+        subscribe_to_notifications(state.clone(), account).await
+    {
         eprintln!("failed to subscribe to notifications: {e}");
     }
 
@@ -641,13 +650,14 @@ async fn decrypt_cipher(
     entry_key: Option<&str>,
     org_id: Option<&str>,
     mut client: Option<&mut tokio::net::UnixStream>,
+    account: &rbw::config::Account,
 ) -> anyhow::Result<String> {
     let mut state = state.lock().await;
-    if !state.master_password_reprompt_initialized() {
-        let db = load_db().await?;
-        state.set_master_password_reprompt(&db.entries);
+    if !state.master_password_reprompt_initialized(&account.name) {
+        let db = load_db(account).await?;
+        state.set_master_password_reprompt(&account.name, &db.entries);
     }
-    let Some(keys) = state.key(org_id) else {
+    let Some(keys) = state.key(&account.name, org_id) else {
         return Err(anyhow::anyhow!(
             "failed to find decryption keys in in-memory state"
         ));
@@ -668,11 +678,11 @@ async fn decrypt_cipher(
     let mut sha256 = sha2::Sha256::new();
     sha256.update(cipherstring);
     let master_password_reprompt: [u8; 32] = sha256.finalize().into();
-    if state
-        .master_password_reprompt
-        .contains(&master_password_reprompt)
-    {
-        let db = load_db().await?;
+    if state.master_password_reprompt_contains(
+        &account.name,
+        &master_password_reprompt,
+    ) {
+        let db = load_db(account).await?;
 
         let Some(kdf) = db.kdf else {
             return Err(anyhow::anyhow!("failed to find kdf type in db"));
@@ -698,7 +708,7 @@ async fn decrypt_cipher(
             ));
         };
 
-        let email = config_email().await?;
+        let email = account_email(account)?;
 
         let mut err_msg = None;
         let mut env_password_tried = false;
@@ -785,6 +795,7 @@ pub async fn decrypt(
     cipherstring: &str,
     entry_key: Option<&str>,
     org_id: Option<&str>,
+    account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
     let plaintext = decrypt_cipher(
         state,
@@ -793,6 +804,7 @@ pub async fn decrypt(
         entry_key,
         org_id,
         Some(sock.inner()),
+        account,
     )
     .await?;
     respond_decrypt(sock, plaintext).await?;
@@ -805,6 +817,7 @@ pub async fn decrypt_batch(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     environment: &rbw::protocol::Environment,
     entries: &[rbw::protocol::DecryptRequest],
+    account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
     let mut results = Vec::with_capacity(entries.len());
     for entry in entries {
@@ -815,6 +828,7 @@ pub async fn decrypt_batch(
             entry.entry_key.as_deref(),
             entry.org_id.as_deref(),
             Some(sock.inner()),
+            account,
         )
         .await;
         results.push(match result {
@@ -840,9 +854,10 @@ pub async fn decrypt_attachment(
     attachment_key: Option<&str>,
     entry_key: Option<&str>,
     org_id: Option<&str>,
+    account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
     let state = state.lock().await;
-    let Some(keys) = state.key(org_id) else {
+    let Some(keys) = state.key(&account.name, org_id) else {
         return Err(anyhow::anyhow!(
             "failed to find decryption keys in in-memory state"
         ));
@@ -894,9 +909,10 @@ pub async fn encrypt_attachment(
     filename: &str,
     entry_key: Option<&str>,
     org_id: Option<&str>,
+    account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
     let state = state.lock().await;
-    let Some(keys) = state.key(org_id) else {
+    let Some(keys) = state.key(&account.name, org_id) else {
         return Err(anyhow::anyhow!(
             "failed to find encryption keys in in-memory state"
         ));
@@ -958,9 +974,10 @@ pub async fn encrypt(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     plaintext: &str,
     org_id: Option<&str>,
+    account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
     let state = state.lock().await;
-    let Some(keys) = state.key(org_id) else {
+    let Some(keys) = state.key(&account.name, org_id) else {
         return Err(anyhow::anyhow!(
             "failed to find encryption keys in in-memory state"
         ));
@@ -1043,39 +1060,63 @@ async fn respond_encrypt(
     Ok(())
 }
 
-async fn config_email() -> anyhow::Result<String> {
-    let config = rbw::config::Config::load_async().await?;
-    config.email.map_or_else(
-        || Err(anyhow::anyhow!("failed to find email address in config")),
-        Ok,
-    )
+// The account's email, or an error if it isn't configured yet.
+fn account_email(account: &rbw::config::Account) -> anyhow::Result<String> {
+    account.email.clone().ok_or_else(|| {
+        anyhow::anyhow!("failed to find email address in config")
+    })
 }
 
-async fn load_db() -> anyhow::Result<rbw::db::Db> {
+// Resolve the requested account (by name, or the primary account when None).
+pub async fn resolve_account(
+    account: Option<&str>,
+) -> anyhow::Result<rbw::config::Account> {
     let config = rbw::config::Config::load_async().await?;
-    if let Some(email) = &config.email {
-        rbw::db::Db::load_async(&config.server_name(), email)
-            .await
-            .map_err(anyhow::Error::new)
-    } else {
-        Err(anyhow::anyhow!("failed to find email address in config"))
+    config.account(account).map_err(anyhow::Error::new)
+}
+
+// Sync every configured account whose local db has an access token, each
+// within its own account scope so api calls target the right server. Used by
+// the periodic sync timer and server-pushed sync notifications, neither of
+// which carries a target account. Failures (e.g. accounts not logged in) are
+// logged and skipped.
+pub async fn sync_all(
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+) {
+    let config = match rbw::config::Config::load_async().await {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("failed to load config for sync: {e:#}");
+            return;
+        }
+    };
+    for account in config.accounts() {
+        let res = rbw::actions::AGENT_ACCOUNT
+            .scope(account.clone(), sync(None, state.clone(), &account))
+            .await;
+        if let Err(e) = res {
+            log::debug!("failed to sync account {}: {e:#}", account.name);
+        }
     }
 }
 
-async fn save_db(db: &rbw::db::Db) -> anyhow::Result<()> {
-    let config = rbw::config::Config::load_async().await?;
-    if let Some(email) = &config.email {
-        db.save_async(&config.server_name(), email)
-            .await
-            .map_err(anyhow::Error::new)
-    } else {
-        Err(anyhow::anyhow!("failed to find email address in config"))
-    }
+async fn load_db(
+    account: &rbw::config::Account,
+) -> anyhow::Result<rbw::db::Db> {
+    let email = account_email(account)?;
+    rbw::db::Db::load_async(&account.server_name(), &email)
+        .await
+        .map_err(anyhow::Error::new)
 }
 
-async fn config_base_url() -> anyhow::Result<String> {
-    let config = rbw::config::Config::load_async().await?;
-    Ok(config.base_url())
+async fn save_db(
+    account: &rbw::config::Account,
+    db: &rbw::db::Db,
+) -> anyhow::Result<()> {
+    let email = account_email(account)?;
+    db.save_async(&account.server_name(), &email)
+        .await
+        .map_err(anyhow::Error::new)
 }
 
 async fn config_pinentry() -> anyhow::Result<String> {
@@ -1085,23 +1126,22 @@ async fn config_pinentry() -> anyhow::Result<String> {
 
 pub async fn subscribe_to_notifications(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
     if state.lock().await.notifications_handler.is_connected() {
         return Ok(());
     }
 
-    let config = rbw::config::Config::load_async()
-        .await
-        .context("Config is missing")?;
-    let email = config.email.clone().context("Config is missing email")?;
-    let db = rbw::db::Db::load_async(config.server_name().as_str(), &email)
-        .await?;
+    let email = account_email(account)?;
+    let db =
+        rbw::db::Db::load_async(account.server_name().as_str(), &email)
+            .await?;
     let access_token =
         db.access_token.context("Error getting access token")?;
 
     let websocket_url = format!(
         "{}/hub?access_token={}",
-        config.notifications_url(),
+        account.notifications_url(),
         access_token
     )
     .replace("https://", "wss://");
@@ -1123,9 +1163,12 @@ pub async fn get_ssh_public_keys(
         state.set_timeout();
         state.last_environment().clone()
     };
-    unlock_state(state.clone(), &environment, None, None).await?;
+    // The ssh agent has no per-request account, so it operates on the
+    // primary account.
+    let account = resolve_account(None).await?;
+    unlock_state(state.clone(), &environment, None, None, &account).await?;
 
-    let db = load_db().await?;
+    let db = load_db(&account).await?;
     let mut pubkeys = Vec::new();
 
     for entry in db.entries {
@@ -1141,6 +1184,7 @@ pub async fn get_ssh_public_keys(
                 entry.key.as_deref(),
                 entry.org_id.as_deref(),
                 None,
+                &account,
             )
             .await?;
 
@@ -1160,11 +1204,14 @@ pub async fn find_ssh_private_key(
         state.set_timeout();
         state.last_environment().clone()
     };
-    unlock_state(state.clone(), &environment, None, None).await?;
+    // The ssh agent has no per-request account, so it operates on the
+    // primary account.
+    let account = resolve_account(None).await?;
+    unlock_state(state.clone(), &environment, None, None, &account).await?;
 
     let request_bytes = request_public_key.to_bytes();
 
-    let db = load_db().await?;
+    let db = load_db(&account).await?;
 
     for entry in db.entries {
         if let rbw::db::EntryData::SshKey {
@@ -1183,6 +1230,7 @@ pub async fn find_ssh_private_key(
                 entry.key.as_deref(),
                 entry.org_id.as_deref(),
                 None,
+                &account,
             )
             .await?;
             let public_key_bytes =
@@ -1205,6 +1253,7 @@ pub async fn find_ssh_private_key(
                     entry.key.as_deref(),
                     entry.org_id.as_deref(),
                     None,
+                    &account,
                 )
                 .await?;
 

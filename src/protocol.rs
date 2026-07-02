@@ -21,6 +21,10 @@ pub const VERSION: u32 = {
 pub struct Request {
     tty: Option<String>,
     environment: Option<Environment>,
+    // Which configured account this request targets. `None` (including requests
+    // from older clients that omit the field) means the primary account.
+    #[serde(default)]
+    account: Option<String>,
     action: Action,
 }
 
@@ -29,17 +33,32 @@ impl Request {
         Self {
             tty: None,
             environment: Some(environment),
+            account: None,
             action,
         }
     }
 
-    pub fn into_parts(self) -> (Action, Environment) {
+    pub fn with_account(
+        environment: Environment,
+        account: Option<String>,
+        action: Action,
+    ) -> Self {
+        Self {
+            tty: None,
+            environment: Some(environment),
+            account,
+            action,
+        }
+    }
+
+    pub fn into_parts(self) -> (Action, Environment, Option<String>) {
         (
             self.action,
             self.environment.unwrap_or_else(|| Environment {
                 tty: self.tty.map(|tty| SerializableOsString(tty.into())),
                 env_vars: vec![],
             }),
+            self.account,
         )
     }
 }

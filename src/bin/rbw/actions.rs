@@ -2,6 +2,20 @@ use std::{io::Read as _, os::unix::ffi::OsStringExt as _};
 
 use anyhow::Context as _;
 
+// The account every request targets, set once from --account / RBW_ACCOUNT in
+// main. `None` means the primary account (also the default for older agents
+// that ignore the field).
+static ACCOUNT: std::sync::OnceLock<Option<String>> =
+    std::sync::OnceLock::new();
+
+pub fn set_account(account: Option<String>) {
+    let _ = ACCOUNT.set(account);
+}
+
+fn current_account() -> Option<String> {
+    ACCOUNT.get().cloned().flatten()
+}
+
 pub fn register() -> anyhow::Result<()> {
     simple_action(rbw::protocol::Action::Register)
 }
@@ -17,8 +31,9 @@ pub fn unlock(password: Option<String>) -> anyhow::Result<()> {
 pub fn unlocked() -> anyhow::Result<()> {
     match crate::sock::Sock::connect() {
         Ok(mut sock) => {
-            sock.send(&rbw::protocol::Request::new(
+            sock.send(&rbw::protocol::Request::with_account(
                 get_environment(),
+                current_account(),
                 rbw::protocol::Action::CheckLock,
             ))?;
 
@@ -63,8 +78,9 @@ pub fn quit() -> anyhow::Result<()> {
             else {
                 anyhow::bail!("failed to read pid from pidfile");
             };
-            sock.send(&rbw::protocol::Request::new(
+            sock.send(&rbw::protocol::Request::with_account(
                 get_environment(),
+                current_account(),
                 rbw::protocol::Action::Quit,
             ))?;
             wait_for_exit(pid);
@@ -86,8 +102,9 @@ pub fn decrypt(
     org_id: Option<&str>,
 ) -> anyhow::Result<String> {
     let mut sock = connect()?;
-    sock.send(&rbw::protocol::Request::new(
+    sock.send(&rbw::protocol::Request::with_account(
         get_environment(),
+        current_account(),
         rbw::protocol::Action::Decrypt {
             cipherstring: cipherstring.to_string(),
             entry_key: entry_key.map(std::string::ToString::to_string),
@@ -109,8 +126,9 @@ pub fn decrypt_batch(
     requests: Vec<rbw::protocol::DecryptRequest>,
 ) -> anyhow::Result<Vec<rbw::protocol::DecryptResult>> {
     let mut sock = connect()?;
-    sock.send(&rbw::protocol::Request::new(
+    sock.send(&rbw::protocol::Request::with_account(
         get_environment(),
+        current_account(),
         rbw::protocol::Action::DecryptBatch { entries: requests },
     ))?;
 
@@ -131,8 +149,9 @@ pub fn decrypt_attachment(
     org_id: Option<&str>,
 ) -> anyhow::Result<Vec<u8>> {
     let mut sock = connect()?;
-    sock.send(&rbw::protocol::Request::new(
+    sock.send(&rbw::protocol::Request::with_account(
         get_environment(),
+        current_account(),
         rbw::protocol::Action::DecryptAttachment {
             data,
             attachment_key: attachment_key
@@ -159,8 +178,9 @@ pub fn encrypt_attachment(
     org_id: Option<&str>,
 ) -> anyhow::Result<(Vec<u8>, String, String)> {
     let mut sock = connect()?;
-    sock.send(&rbw::protocol::Request::new(
+    sock.send(&rbw::protocol::Request::with_account(
         get_environment(),
+        current_account(),
         rbw::protocol::Action::EncryptAttachment {
             data,
             filename: filename.to_string(),
@@ -187,8 +207,9 @@ pub fn encrypt(
     org_id: Option<&str>,
 ) -> anyhow::Result<String> {
     let mut sock = connect()?;
-    sock.send(&rbw::protocol::Request::new(
+    sock.send(&rbw::protocol::Request::with_account(
         get_environment(),
+        current_account(),
         rbw::protocol::Action::Encrypt {
             plaintext: plaintext.to_string(),
             org_id: org_id.map(std::string::ToString::to_string),
@@ -213,8 +234,9 @@ pub fn clipboard_store(text: &str) -> anyhow::Result<()> {
 
 pub fn version() -> anyhow::Result<u32> {
     let mut sock = connect()?;
-    sock.send(&rbw::protocol::Request::new(
+    sock.send(&rbw::protocol::Request::with_account(
         get_environment(),
+        current_account(),
         rbw::protocol::Action::Version,
     ))?;
 
@@ -231,7 +253,11 @@ pub fn version() -> anyhow::Result<u32> {
 fn simple_action(action: rbw::protocol::Action) -> anyhow::Result<()> {
     let mut sock = connect()?;
 
-    sock.send(&rbw::protocol::Request::new(get_environment(), action))?;
+    sock.send(&rbw::protocol::Request::with_account(
+        get_environment(),
+        current_account(),
+        action,
+    ))?;
 
     let res = sock.recv()?;
     match res {
