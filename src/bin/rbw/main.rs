@@ -871,6 +871,33 @@ enum AccountCmd {
                 via --account)"
         )]
         exclude_from_list: Option<bool>,
+        #[arg(
+            long,
+            requires = "credential_source_entry",
+            help = "Name of another configured account whose vault holds \
+                this account's master password; use with \
+                --credential-source-entry so this account can be \
+                auto-unlocked instead of prompting via pinentry"
+        )]
+        credential_source_account: Option<String>,
+        #[arg(
+            long,
+            requires = "credential_source_account",
+            help = "Name of the Login entry, in the \
+                --credential-source-account vault, whose password field \
+                holds this account's master password"
+        )]
+        credential_source_entry: Option<String>,
+        #[arg(
+            long,
+            conflicts_with_all = [
+                "credential_source_account",
+                "credential_source_entry"
+            ],
+            help = "Remove this account's credential_source, going back to \
+                a normal pinentry prompt to unlock it"
+        )]
+        clear_credential_source: bool,
     },
 }
 
@@ -1050,10 +1077,16 @@ fn main() {
                 name,
                 unlock,
                 exclude_from_list,
+                credential_source_account,
+                credential_source_entry,
+                clear_credential_source,
             } => commands::account_set(
                 &name,
                 unlock.map(std::convert::Into::into),
                 exclude_from_list,
+                credential_source_account,
+                credential_source_entry,
+                clear_credential_source,
             ),
         },
         Opt::Register => commands::register(),
