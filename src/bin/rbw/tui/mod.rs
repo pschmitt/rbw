@@ -55,6 +55,9 @@ fn run_loop(
     app: &mut App,
 ) -> anyhow::Result<()> {
     loop {
+        // Piggyback agent-lock detection on this same ~2Hz tick (throttled
+        // internally to every few seconds) rather than adding a second timer.
+        app.poll_agent_lock();
         terminal.draw(|f| ui::render(f, app))?;
 
         if !event::poll(TICK)? {
