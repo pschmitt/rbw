@@ -29,6 +29,10 @@ pub enum Action {
     UnlockAccount(String),
     // Unlock the named account and immediately sync it afterwards.
     UnlockAndSyncAccount(String),
+    // Sync the named account entirely inside the TUI.
+    SyncAccount(String),
+    // Auto-unlock a linked account and sync it entirely inside the TUI.
+    AutoUnlockAndSyncAccount(String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1125,29 +1129,11 @@ impl App {
         };
         if !unlocked {
             if self.selected_account_is_linked() == Some(true) {
-                match self
-                    .unlock_account(&name)
-                    .and_then(|_| self.sync_account(&name))
-                {
-                    Ok(()) => {
-                        self.set_status(
-                            Level::Success,
-                            format!("synced {name}"),
-                        );
-                    }
-                    Err(e) => self.set_status(Level::Error, format!("{e:#}")),
-                }
-                return Action::None;
+                return Action::AutoUnlockAndSyncAccount(name);
             }
             return Action::UnlockAndSyncAccount(name);
         }
-        match self.sync_account(&name) {
-            Ok(()) => {
-                self.set_status(Level::Success, format!("synced {name}"))
-            }
-            Err(e) => self.set_status(Level::Error, format!("{e:#}")),
-        }
-        Action::None
+        Action::SyncAccount(name)
     }
 
     fn set_primary_selected_account(&mut self) {
@@ -1224,6 +1210,14 @@ impl App {
 
     pub fn set_synced_status(&mut self, name: &str) {
         self.set_status(Level::Success, format!("synced {name}"));
+    }
+
+    pub fn set_unlocking_status(&mut self, name: &str) {
+        self.set_status(Level::Info, format!("unlocking {name}..."));
+    }
+
+    pub fn set_syncing_status(&mut self, name: &str) {
+        self.set_status(Level::Info, format!("syncing {name}..."));
     }
 
     // ---- agent lock detection --------------------------------------------
@@ -3032,6 +3026,18 @@ mod test {
         assert!(matches!(
             a.handle_key(key(KeyCode::Char('s'))),
             Action::UnlockAndSyncAccount(name) if name == "work"
+        ));
+    }
+
+    #[test]
+    fn accounts_s_on_a_linked_locked_account_uses_auto_unlock_path() {
+        let mut a = app_on_accounts_panel(Some((
+            "personal".to_string(),
+            "vault".to_string(),
+        )));
+        assert!(matches!(
+            a.handle_key(key(KeyCode::Char('s'))),
+            Action::AutoUnlockAndSyncAccount(name) if name == "work"
         ));
     }
 

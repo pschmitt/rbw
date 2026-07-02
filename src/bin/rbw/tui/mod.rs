@@ -125,6 +125,12 @@ fn run_loop(
                     Action::UnlockAndSyncAccount(name) => {
                         unlock_and_sync_account(terminal, app, &name);
                     }
+                    Action::SyncAccount(name) => {
+                        sync_account(terminal, app, &name)?;
+                    }
+                    Action::AutoUnlockAndSyncAccount(name) => {
+                        auto_unlock_and_sync_account(terminal, app, &name)?;
+                    }
                 }
             }
             Event::Mouse(mouse) => {
@@ -176,6 +182,14 @@ fn open_editor(terminal: &mut ratatui::DefaultTerminal, app: &mut App) {
     let _ = terminal.clear();
 }
 
+fn draw_app(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &App,
+) -> anyhow::Result<()> {
+    terminal.draw(|f| ui::render(f, app))?;
+    Ok(())
+}
+
 // Unlocking an account runs pinentry, which needs the real terminal, so drop
 // out of the alternate screen for it (like the editor) and rebuild afterwards.
 fn unlock_account(
@@ -183,6 +197,8 @@ fn unlock_account(
     app: &mut App,
     name: &str,
 ) {
+    app.set_unlocking_status(name);
+    let _ = draw_app(terminal, app);
     disable_mouse();
     ratatui::restore();
     let res = app.unlock_account(name);
@@ -200,16 +216,58 @@ fn unlock_and_sync_account(
     app: &mut App,
     name: &str,
 ) {
+    app.set_unlocking_status(name);
+    let _ = draw_app(terminal, app);
     disable_mouse();
     ratatui::restore();
-    let res = app
-        .unlock_account(name)
-        .and_then(|()| app.sync_account(name));
+    let unlock_res = app.unlock_account(name);
     *terminal = ratatui::init();
     enable_mouse();
     let _ = terminal.clear();
-    match res {
+    match unlock_res {
+        Ok(()) => {
+            app.set_syncing_status(name);
+            let _ = draw_app(terminal, app);
+            match app.sync_account(name) {
+                Ok(()) => app.set_synced_status(name),
+                Err(e) => app.set_error(format!("{e:#}")),
+            }
+        }
+        Err(e) => app.set_error(format!("{e:#}")),
+    }
+}
+
+fn sync_account(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    name: &str,
+) -> anyhow::Result<()> {
+    app.set_syncing_status(name);
+    draw_app(terminal, app)?;
+    match app.sync_account(name) {
         Ok(()) => app.set_synced_status(name),
         Err(e) => app.set_error(format!("{e:#}")),
     }
+    Ok(())
+}
+
+fn auto_unlock_and_sync_account(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    name: &str,
+) -> anyhow::Result<()> {
+    app.set_unlocking_status(name);
+    draw_app(terminal, app)?;
+    match app.unlock_account(name) {
+        Ok(()) => {
+            app.set_syncing_status(name);
+            draw_app(terminal, app)?;
+            match app.sync_account(name) {
+                Ok(()) => app.set_synced_status(name),
+                Err(e) => app.set_error(format!("{e:#}")),
+            }
+        }
+        Err(e) => app.set_error(format!("{e:#}")),
+    }
+    Ok(())
 }
