@@ -1103,14 +1103,19 @@ impl App {
         }
     }
 
-    // Sync the highlighted account (must be unlocked) and refresh its entries.
-    fn sync_selected_account(&mut self) {
+    // Sync the highlighted account, unlocking it first (the loop handles it,
+    // same as `AccountUnlock` -- pinentry needs the terminal) if it's
+    // locked, rather than just refusing. A `credential_source`-linked
+    // account resolves silently there without ever needing pinentry, so
+    // this is usually a transparent one-key sync even from cold; note that
+    // the unlock and the sync are still two separate steps under the hood
+    // -- pressing `s` again once it reports unlocked actually syncs it.
+    fn sync_selected_account(&mut self) -> Action {
         let Some((name, unlocked)) = self.selected_account() else {
-            return;
+            return Action::None;
         };
         if !unlocked {
-            self.set_status(Level::Warn, format!("{name} is locked"));
-            return;
+            return Action::UnlockAccount(name);
         }
         match commands::tui_account_sync(&name) {
             Ok(v) => {
@@ -1129,6 +1134,7 @@ impl App {
             Err(e) => self.set_status(Level::Error, format!("{e:#}")),
         }
         self.refresh_accounts_view();
+        Action::None
     }
 
     fn set_primary_selected_account(&mut self) {
@@ -1298,7 +1304,9 @@ impl App {
                     }
                 }
             }
-            Some(TuiAction::AccountSync) => self.sync_selected_account(),
+            Some(TuiAction::AccountSync) => {
+                return self.sync_selected_account();
+            }
             Some(TuiAction::AccountSetPrimary) => {
                 self.set_primary_selected_account();
             }
@@ -2977,6 +2985,20 @@ mod test {
             selected: 0,
         });
         a
+    }
+
+    // `s` (sync) on a locked account now unlocks it first (the loop handles
+    // it, same as explicit `AccountUnlock`) instead of just refusing with a
+    // "locked" status -- a credential_source-linked account resolves
+    // silently there, so this makes syncing a not-yet-unlocked linked
+    // account a transparent one-key operation from the accounts panel.
+    #[test]
+    fn accounts_s_on_a_locked_account_requests_unlock_instead_of_refusing() {
+        let mut a = app_on_accounts_panel(None);
+        assert!(matches!(
+            a.handle_key(key(KeyCode::Char('s'))),
+            Action::UnlockAccount(name) if name == "work"
+        ));
     }
 
     // Regression test: `q`/arrow-down must resolve to `AccountClose`/

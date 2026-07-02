@@ -8527,6 +8527,13 @@ pub fn tui_open(all: bool) -> anyhow::Result<TuiOpen> {
     crate::actions::set_active_account(Some(target))?;
     unlock(None)?;
 
+    // This whole loop runs before the TUI takes over the screen (see this
+    // function's caller), so it's still fine to print status here -- and
+    // worth doing, since unlocking (a credential_source chain can mean
+    // logging in and syncing several accounts in sequence) plus the sync
+    // below can take long enough with `--all` that a silent terminal looks
+    // hung otherwise.
+    let c = stdout_supports_color();
     let mut vaults = Vec::new();
     let mut locked = Vec::new();
     for account in &accounts {
@@ -8534,9 +8541,19 @@ pub fn tui_open(all: bool) -> anyhow::Result<TuiOpen> {
         let should_unlock = all
             && !matches!(account.unlock, rbw::config::UnlockPolicy::Never);
         if should_unlock && !active_account_unlocked() {
+            eprintln!(
+                "{} '{}'...",
+                style::dim("unlocking", c),
+                style::name(&account.name, c),
+            );
             unlock(None)?;
         }
         if active_account_unlocked() {
+            eprintln!(
+                "{} '{}'...",
+                style::dim("syncing", c),
+                style::name(&account.name, c),
+            );
             let (db, search) = tui_reload()?;
             vaults.push(TuiVault {
                 account: account.name.clone(),
