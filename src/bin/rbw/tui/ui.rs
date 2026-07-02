@@ -31,6 +31,9 @@ const DIM: Color = Color::Rgb(128, 132, 148);
 const MASK: &str = "••••••••";
 const SEARCH_PROMPT: &str = "❯ ";
 const LABEL_W: usize = 12;
+// Below this many columns the side-by-side list/details split gets too cramped,
+// so we stack them vertically instead.
+const NARROW_WIDTH: u16 = 80;
 
 pub fn render(f: &mut Frame, app: &App) {
     // Search bar sits at the bottom (fzf-style), just above the status line.
@@ -41,12 +44,26 @@ pub fn render(f: &mut Frame, app: &App) {
     ])
     .areas(f.area());
 
-    let [list_area, detail_area] =
-        Layout::horizontal([Constraint::Percentage(40), Constraint::Min(0)])
-            .areas(main);
-
-    render_list(f, app, list_area);
-    render_detail(f, app, detail_area);
+    // On a wide terminal, put the list and details side by side. When there
+    // isn't room for a readable details column, stack them instead — details
+    // on top, list below (so the selection and its details stay together).
+    if main.width >= NARROW_WIDTH {
+        let [list_area, detail_area] = Layout::horizontal([
+            Constraint::Percentage(40),
+            Constraint::Min(0),
+        ])
+        .areas(main);
+        render_list(f, app, list_area);
+        render_detail(f, app, detail_area);
+    } else {
+        let [detail_area, list_area] = Layout::vertical([
+            Constraint::Percentage(50),
+            Constraint::Min(0),
+        ])
+        .areas(main);
+        render_detail(f, app, detail_area);
+        render_list(f, app, list_area);
+    }
     render_search(f, app, search);
     render_status(f, app, status);
 
@@ -726,11 +743,14 @@ mod test {
     }
 
     // Render the current state to an off-screen buffer; panics (layout math,
-    // out-of-bounds cursor) would fail the test.
+    // out-of-bounds cursor) would fail the test. Draws at both a wide and a
+    // narrow width to exercise the side-by-side and stacked layouts.
     fn draw(app: &App) {
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| render(f, app)).unwrap();
+        for (w, h) in [(80u16, 24u16), (48, 30)] {
+            let backend = TestBackend::new(w, h);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal.draw(|f| render(f, app)).unwrap();
+        }
     }
 
     #[test]
