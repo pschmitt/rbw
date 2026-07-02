@@ -100,7 +100,10 @@ pub struct Config {
     // "g", "pagedown") that fully replace that action's built-in default
     // chords. Actions not listed here keep their defaults. See
     // `src/bin/rbw/tui/keymap.rs` for the full action list and defaults.
-    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "std::collections::HashMap::is_empty"
+    )]
     pub tui_keybindings: std::collections::HashMap<String, Vec<String>>,
     // backcompat, no longer generated in new configs
     #[serde(skip_serializing)]

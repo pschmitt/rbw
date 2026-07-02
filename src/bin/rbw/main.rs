@@ -978,7 +978,13 @@ fn main() {
                     all,
                 )
             } else {
-                commands::list(&fields, with_attachments, insecure, output, all)
+                commands::list(
+                    &fields,
+                    with_attachments,
+                    insecure,
+                    output,
+                    all,
+                )
             }
         })(),
         Opt::Attachment { attachment } => match attachment {
