@@ -2158,6 +2158,110 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn account_list() -> anyhow::Result<()> {
+    let config = rbw::config::Config::load()
+        .unwrap_or_else(|_| rbw::config::Config::new());
+    let primary = config.primary_account_name();
+    let accounts = config.accounts();
+    if accounts.is_empty() {
+        eprintln!("no accounts configured");
+        return Ok(());
+    }
+    for account in &accounts {
+        let marker = if account.name == primary { " *" } else { "" };
+        let email = account.email.as_deref().unwrap_or("-");
+        let server = account
+            .base_url
+            .as_deref()
+            .unwrap_or("(public bitwarden.com)");
+        println!("{}{marker}\t{email}\t{server}", account.name);
+    }
+    Ok(())
+}
+
+pub fn account_add(
+    name: &str,
+    email: Option<String>,
+    base_url: Option<String>,
+    sso_id: Option<String>,
+    primary: bool,
+) -> anyhow::Result<()> {
+    let mut config = rbw::config::Config::load()
+        .unwrap_or_else(|_| rbw::config::Config::new());
+    config.migrate_legacy();
+    if config.accounts.iter().any(|a| a.name == name) {
+        anyhow::bail!("account '{name}' already exists");
+    }
+    let old_primary = config.primary_account_name();
+    let first = config.accounts.is_empty();
+    config.accounts.push(rbw::config::Account {
+        name: name.to_string(),
+        email,
+        sso_id,
+        base_url,
+        identity_url: None,
+        ui_url: None,
+        notifications_url: None,
+        client_cert_path: None,
+    });
+    // The first account is always primary; otherwise only if asked.
+    if primary || first {
+        config.primary_account = Some(name.to_string());
+    }
+    config.save()?;
+
+    let now_primary = config.primary_account_name();
+    if now_primary != old_primary {
+        // Primary changed, so any keys the agent holds are for the wrong
+        // account; drop them (mirrors `config set email`).
+        stop_agent()?;
+    }
+    let suffix = if now_primary == name { " (primary)" } else { "" };
+    println!("added account '{name}'{suffix}");
+    Ok(())
+}
+
+pub fn account_remove(name: &str) -> anyhow::Result<()> {
+    let mut config = rbw::config::Config::load()
+        .unwrap_or_else(|_| rbw::config::Config::new());
+    config.migrate_legacy();
+    let old_primary = config.primary_account_name();
+    let before = config.accounts.len();
+    config.accounts.retain(|a| a.name != name);
+    if config.accounts.len() == before {
+        anyhow::bail!("account '{name}' not found");
+    }
+    if config.primary_account.as_deref() == Some(name) {
+        config.primary_account =
+            config.accounts.first().map(|a| a.name.clone());
+    }
+    config.save()?;
+
+    if config.primary_account_name() != old_primary {
+        stop_agent()?;
+    }
+    println!("removed account '{name}'");
+    Ok(())
+}
+
+pub fn account_set_primary(name: &str) -> anyhow::Result<()> {
+    let mut config = rbw::config::Config::load()
+        .unwrap_or_else(|_| rbw::config::Config::new());
+    config.migrate_legacy();
+    if !config.accounts.iter().any(|a| a.name == name) {
+        anyhow::bail!("account '{name}' not found");
+    }
+    let old_primary = config.primary_account_name();
+    config.primary_account = Some(name.to_string());
+    config.save()?;
+
+    if old_primary != name {
+        stop_agent()?;
+    }
+    println!("primary account is now '{name}'");
+    Ok(())
+}
+
 fn clipboard_store(val: &str) -> anyhow::Result<()> {
     ensure_agent()?;
     crate::actions::clipboard_store(val)?;

@@ -237,6 +237,39 @@ impl Config {
             })
     }
 
+    // Fold the legacy top-level fields into an explicit account entry, clearing
+    // them so the config is fully account-based going forward. Idempotent and a
+    // no-op once `accounts` is populated. Call before mutating `accounts` so the
+    // pre-existing (legacy) account is never lost.
+    pub fn migrate_legacy(&mut self) {
+        if !self.accounts.is_empty() {
+            return;
+        }
+        if self.email.is_none()
+            && self.base_url.is_none()
+            && self.sso_id.is_none()
+        {
+            return;
+        }
+        let name = self
+            .primary_account
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        self.accounts.push(Account {
+            name: name.clone(),
+            email: self.email.take(),
+            sso_id: self.sso_id.take(),
+            base_url: self.base_url.take(),
+            identity_url: self.identity_url.take(),
+            ui_url: self.ui_url.take(),
+            notifications_url: self.notifications_url.take(),
+            client_cert_path: self.client_cert_path.take(),
+        });
+        if self.primary_account.is_none() {
+            self.primary_account = Some(name);
+        }
+    }
+
     // Resolve an account by name, or the primary account when `name` is None.
     pub fn account(&self, name: Option<&str>) -> Result<Account> {
         match name {
@@ -430,5 +463,27 @@ mod test {
         c.accounts = vec![named("personal", "a@x.com"), named("work", "b@co.com")];
         c.primary_account = Some("work".to_string());
         assert_eq!(c.primary().name, "work");
+    }
+
+    // migrate_legacy folds top-level fields into a "default" account and clears
+    // them, and is a no-op once accounts exist.
+    #[test]
+    fn migrate_legacy_moves_fields_into_default_account() {
+        let mut c = Config::new();
+        c.email = Some("me@x.com".to_string());
+        c.base_url = Some("https://vault.example.com".to_string());
+        c.migrate_legacy();
+
+        assert_eq!(c.accounts.len(), 1);
+        assert_eq!(c.accounts[0].name, "default");
+        assert_eq!(c.accounts[0].email.as_deref(), Some("me@x.com"));
+        assert_eq!(c.primary_account.as_deref(), Some("default"));
+        // Legacy fields are cleared so we don't shadow the account.
+        assert!(c.email.is_none());
+        assert!(c.base_url.is_none());
+
+        // Idempotent: a second call adds nothing.
+        c.migrate_legacy();
+        assert_eq!(c.accounts.len(), 1);
     }
 }

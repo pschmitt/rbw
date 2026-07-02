@@ -95,6 +95,12 @@ enum Opt {
         config: Config,
     },
 
+    #[command(about = "Manage configured accounts")]
+    Account {
+        #[command(subcommand)]
+        account: AccountCmd,
+    },
+
     #[command(
         about = "Register this device with the Bitwarden server",
         long_about = "Register this device with the Bitwarden server\n\n\
@@ -537,6 +543,7 @@ impl Opt {
             Self::Config { config } => {
                 format!("config {}", config.subcommand_name())
             }
+            Self::Account { .. } => "account".to_string(),
             Self::Register => "register".to_string(),
             Self::Login => "login".to_string(),
             Self::Unlock { .. } => "unlock".to_string(),
@@ -602,6 +609,38 @@ enum Config {
     Unset {
         #[arg(help = "Configuration key to unset")]
         key: String,
+    },
+}
+
+#[derive(Debug, clap::Parser)]
+enum AccountCmd {
+    #[command(about = "List configured accounts")]
+    List,
+    #[command(about = "Add a new account")]
+    Add {
+        #[arg(help = "Name for the account (used with --account)")]
+        name: String,
+        #[arg(long, help = "Email address for the account")]
+        email: Option<String>,
+        #[arg(
+            long,
+            help = "Base URL of the server (omit for the public Bitwarden)"
+        )]
+        base_url: Option<String>,
+        #[arg(long, help = "SSO identifier")]
+        sso_id: Option<String>,
+        #[arg(long, help = "Make this the primary account")]
+        primary: bool,
+    },
+    #[command(about = "Remove an account")]
+    Remove {
+        #[arg(help = "Name of the account to remove")]
+        name: String,
+    },
+    #[command(about = "Set the primary account")]
+    Primary {
+        #[arg(help = "Name of the account to make primary")]
+        name: String,
     },
 }
 
@@ -721,6 +760,22 @@ fn main() {
             Config::Show => commands::config_show(),
             Config::Set { key, value } => commands::config_set(&key, &value),
             Config::Unset { key } => commands::config_unset(&key),
+        },
+        Opt::Account { account } => match account {
+            AccountCmd::List => commands::account_list(),
+            AccountCmd::Add {
+                name,
+                email,
+                base_url,
+                sso_id,
+                primary,
+            } => commands::account_add(
+                &name, email, base_url, sso_id, primary,
+            ),
+            AccountCmd::Remove { name } => commands::account_remove(&name),
+            AccountCmd::Primary { name } => {
+                commands::account_set_primary(&name)
+            }
         },
         Opt::Register => commands::register(),
         Opt::Login => commands::login(),
