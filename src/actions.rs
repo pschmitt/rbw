@@ -339,7 +339,7 @@ pub fn create_attachment(
     cipher_id: &str,
     encrypted_filename: &str,
     encrypted_key: &str,
-    encrypted_data: Vec<u8>,
+    encrypted_data: &[u8],
 ) -> Result<(Option<String>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         create_attachment_once(
@@ -347,7 +347,7 @@ pub fn create_attachment(
             cipher_id,
             encrypted_filename,
             encrypted_key,
-            encrypted_data.clone(),
+            encrypted_data.to_vec(),
         )
     })
 }
@@ -635,7 +635,10 @@ fn resolve_account(config: &crate::config::Config) -> crate::config::Account {
     if let Ok(account) = AGENT_ACCOUNT.try_with(Clone::clone) {
         return account;
     }
-    if let Some(account) = CLIENT_ACCOUNT.read().unwrap().clone() {
+    // Clone out of the lock before matching so the read guard is dropped
+    // immediately (clippy::significant_drop_in_scrutinee).
+    let selected = CLIENT_ACCOUNT.read().unwrap().clone();
+    if let Some(account) = selected {
         return account;
     }
     config.primary()

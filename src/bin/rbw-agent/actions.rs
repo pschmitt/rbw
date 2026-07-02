@@ -942,15 +942,20 @@ async fn decrypt_cipher(
 
     let cipherstring = rbw::cipherstring::CipherString::new(cipherstring)
         .context("failed to parse encrypted secret")?;
-    let decrypted = match attachment_key.as_ref() {
-        Some(attachment_key) => cipherstring
-            .decrypt_symmetric(keys, Some(attachment_key))
-            .or_else(|_| {
-                cipherstring.decrypt_symmetric(keys, entry_key.as_ref())
-            }),
-        None => cipherstring.decrypt_symmetric(keys, entry_key.as_ref()),
-    }
-    .context("failed to decrypt encrypted secret")?;
+    let decrypted = attachment_key
+        .as_ref()
+        .map_or_else(
+            || cipherstring.decrypt_symmetric(keys, entry_key.as_ref()),
+            |attachment_key| {
+                cipherstring
+                    .decrypt_symmetric(keys, Some(attachment_key))
+                    .or_else(|_| {
+                        cipherstring
+                            .decrypt_symmetric(keys, entry_key.as_ref())
+                    })
+            },
+        )
+        .context("failed to decrypt encrypted secret")?;
     let plaintext = String::from_utf8(decrypted)
         .context("failed to parse decrypted secret")?;
 

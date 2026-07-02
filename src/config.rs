@@ -1,6 +1,7 @@
 use crate::prelude::*;
 
 use std::io::{Read as _, Write as _};
+use std::os::unix::fs::OpenOptionsExt as _;
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -280,12 +281,18 @@ impl Config {
                 file: file.clone(),
             },
         )?;
-        let mut fh = std::fs::File::create(&file).map_err(|source| {
-            Error::SaveConfig {
+        // 0600: the config can hold client secrets (defense in depth on
+        // top of the 0700 config dir).
+        let mut fh = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&file)
+            .map_err(|source| Error::SaveConfig {
                 source,
                 file: file.clone(),
-            }
-        })?;
+            })?;
         fh.write_all(
             serde_json::to_string_pretty(self)
                 .map_err(|source| Error::SaveConfigJson {
@@ -405,16 +412,17 @@ impl Config {
 
     // Resolve an account by name, or the primary account when `name` is None.
     pub fn account(&self, name: Option<&str>) -> Result<Account> {
-        match name {
-            Some(name) => self
-                .accounts()
-                .into_iter()
-                .find(|a| a.name == name)
-                .ok_or_else(|| Error::UnknownAccount {
-                    name: name.to_string(),
-                }),
-            None => Ok(self.primary()),
-        }
+        name.map_or_else(
+            || Ok(self.primary()),
+            |name| {
+                self.accounts()
+                    .into_iter()
+                    .find(|a| a.name == name)
+                    .ok_or_else(|| Error::UnknownAccount {
+                        name: name.to_string(),
+                    })
+            },
+        )
     }
 
     // ---- credential_source resolution ---------------------------------------
@@ -581,12 +589,18 @@ pub async fn device_id(config: &Config) -> Result<String> {
             || uuid::Uuid::new_v4().hyphenated().to_string(),
             String::to_string,
         );
-        let mut fh = tokio::fs::File::create(&file).await.map_err(|e| {
-            Error::LoadDeviceId {
+        // 0600: the device id is used in login requests; keep it private.
+        let mut fh = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&file)
+            .await
+            .map_err(|e| Error::LoadDeviceId {
                 source: e,
                 file: file.clone(),
-            }
-        })?;
+            })?;
         fh.write_all(id.as_bytes()).await.map_err(|e| {
             Error::LoadDeviceId {
                 source: e,
