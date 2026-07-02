@@ -70,7 +70,7 @@ _rbw_wrapper() {
     fi
 
     if [[ "$cur" == -* ]]; then
-      res="-f --field --full --raw --clipboard -i --ignorecase -h --help $res"
+      res="-f --field --full --raw --clipboard -i --ignorecase --all -h --help $res"
       if [ -z "$folder" ]; then
         res="--folder $res"
       fi

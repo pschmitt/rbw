@@ -60,7 +60,7 @@ _rbw_wrapper() {
     fi
 
     if [[ "$cur" == -* ]] && [[ "$cur" != "--folder="* ]]; then
-      res=$'-f\n--field\n--full\n--raw\n--clipboard\n-i\n--ignorecase\n-h\n--help\n'"$res"
+      res=$'-f\n--field\n--full\n--raw\n--clipboard\n-i\n--ignorecase\n--all\n-h\n--help\n'"$res"
       if [ -z "$folder" ]; then
         res=$'--folder\n'"$res"
       fi
