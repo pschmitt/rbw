@@ -33,6 +33,28 @@ pub enum UnlockPolicy {
     OnDemand,
 }
 
+// Points at a Login entry, in another configured account's vault, that holds
+// this account's master password. Used by the agent's unlock flow to skip
+// the pinentry prompt: the source account is unlocked (recursively, if it
+// itself has a `credential_source`), the named entry is looked up in its
+// vault, and the entry's `password` field is used as this account's master
+// password. Only that field is used -- TOTP-protected accounts and non-Login
+// entry types aren't handled specially. If resolution fails for any reason
+// (source account can't unlock, entry not found, wrong entry type), the
+// normal pinentry prompt is used instead.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq,
+)]
+pub struct CredentialSource {
+    // Name of the *other* configured account whose vault holds this
+    // account's credentials. Must not be this account's own name, and must
+    // not form a cycle with other accounts' `credential_source`s.
+    pub account: String,
+    // Which entry in that account's vault holds the credentials, matched the
+    // same way as an `rbw get NAME` name lookup.
+    pub entry: String,
+}
+
 // A single Bitwarden/Vaultwarden account. The per-server connection details
 // live here so that several accounts (with different servers) can coexist in
 // one config; global preferences (lock timeout, pinentry, …) stay on `Config`.
@@ -58,6 +80,9 @@ pub struct Account {
     // `--all`). Still reachable via `--account <name>` directly.
     #[serde(default)]
     pub exclude_from_list: bool,
+    // See `CredentialSource`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_source: Option<CredentialSource>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -260,6 +285,7 @@ impl Config {
                 client_cert_path: self.client_cert_path.clone(),
                 unlock: UnlockPolicy::default(),
                 exclude_from_list: false,
+                credential_source: None,
             }];
         }
         Vec::new()
@@ -321,6 +347,7 @@ impl Config {
             client_cert_path: self.client_cert_path.take(),
             unlock: UnlockPolicy::default(),
             exclude_from_list: false,
+            credential_source: None,
         });
         if self.primary_account.is_none() {
             self.primary_account = Some(name);
@@ -339,6 +366,53 @@ impl Config {
                 }),
             None => Ok(self.primary()),
         }
+    }
+
+    // ---- credential_source resolution ---------------------------------------
+
+    // Walk the `credential_source` chain starting at account `start`,
+    // returning the ordered list of account names visited (starting with
+    // `start` itself) up to the first account that has no `credential_source`
+    // (the one that must ultimately be unlocked via pinentry). Pure account-
+    // graph validation only -- no vault access.
+    //
+    // Fails clearly, rather than looping forever or overflowing the stack, on
+    // a self-reference (an account's `credential_source` naming itself), a
+    // cycle (A depends on B depends on ... depends on A), or a
+    // `credential_source` naming an account that doesn't exist. A chain can
+    // never legitimately be longer than the number of configured accounts, so
+    // that doubles as a max-depth guard even if the explicit checks below
+    // somehow miss a malformed config.
+    pub fn credential_source_chain(&self, start: &str) -> Result<Vec<String>> {
+        let accounts = self.accounts();
+        let max_depth = accounts.len().max(1);
+        let mut chain = vec![start.to_string()];
+        let mut current = start.to_string();
+
+        loop {
+            let account = accounts.iter().find(|a| a.name == current).ok_or_else(
+                || Error::UnknownAccount {
+                    name: current.clone(),
+                },
+            )?;
+            let Some(source) = &account.credential_source else {
+                break;
+            };
+            if source.account == account.name {
+                return Err(Error::CredentialSourceSelfReference {
+                    name: account.name.clone(),
+                });
+            }
+            if chain.contains(&source.account) || chain.len() > max_depth {
+                return Err(Error::CredentialSourceCycle {
+                    name: start.to_string(),
+                });
+            }
+            chain.push(source.account.clone());
+            current = source.account.clone();
+        }
+
+        Ok(chain)
     }
 
     // ---- URL helpers (delegate to the primary account) ---------------------
@@ -472,7 +546,7 @@ pub async fn device_id(config: &Config) -> Result<String> {
 
 #[cfg(test)]
 mod test {
-    use super::{Account, Config};
+    use super::{Account, Config, CredentialSource, Error};
 
     fn named(name: &str, email: &str) -> Account {
         Account {
@@ -544,5 +618,98 @@ mod test {
         // Idempotent: a second call adds nothing.
         c.migrate_legacy();
         assert_eq!(c.accounts.len(), 1);
+    }
+
+    // A chain with no `credential_source` at all is just the start account.
+    #[test]
+    fn credential_source_chain_trivial_with_no_source() {
+        let mut c = Config::new();
+        c.accounts = vec![named("personal", "a@x.com")];
+        assert_eq!(
+            c.credential_source_chain("personal").unwrap(),
+            vec!["personal".to_string()]
+        );
+    }
+
+    // A valid chain (work's password lives in personal's vault, and personal
+    // has no further source) resolves to the full ordered chain.
+    #[test]
+    fn credential_source_chain_resolves_valid_chain() {
+        let mut c = Config::new();
+        let mut work = named("work", "b@co.com");
+        work.credential_source = Some(CredentialSource {
+            account: "personal".to_string(),
+            entry: "work login".to_string(),
+        });
+        c.accounts = vec![named("personal", "a@x.com"), work];
+
+        assert_eq!(
+            c.credential_source_chain("work").unwrap(),
+            vec!["work".to_string(), "personal".to_string()]
+        );
+    }
+
+    // An account whose `credential_source` names itself is rejected rather
+    // than looping forever.
+    #[test]
+    fn credential_source_chain_rejects_self_reference() {
+        let mut c = Config::new();
+        let mut work = named("work", "b@co.com");
+        work.credential_source = Some(CredentialSource {
+            account: "work".to_string(),
+            entry: "whoops".to_string(),
+        });
+        c.accounts = vec![work];
+
+        assert!(matches!(
+            c.credential_source_chain("work"),
+            Err(Error::CredentialSourceSelfReference { name }) if name == "work"
+        ));
+    }
+
+    // A cycle across several accounts (a -> b -> c -> a) is detected rather
+    // than recursing forever or overflowing the stack.
+    #[test]
+    fn credential_source_chain_rejects_cycle() {
+        let mut c = Config::new();
+        let mut a = named("a", "a@x.com");
+        a.credential_source = Some(CredentialSource {
+            account: "b".to_string(),
+            entry: "e".to_string(),
+        });
+        let mut b = named("b", "b@x.com");
+        b.credential_source = Some(CredentialSource {
+            account: "c".to_string(),
+            entry: "e".to_string(),
+        });
+        let mut cc = named("c", "c@x.com");
+        cc.credential_source = Some(CredentialSource {
+            account: "a".to_string(),
+            entry: "e".to_string(),
+        });
+        c.accounts = vec![a, b, cc];
+
+        assert!(matches!(
+            c.credential_source_chain("a"),
+            Err(Error::CredentialSourceCycle { name }) if name == "a"
+        ));
+    }
+
+    // A `credential_source` naming an account that doesn't exist fails
+    // clearly instead of panicking.
+    #[test]
+    fn credential_source_chain_rejects_unknown_account() {
+        let mut c = Config::new();
+        let mut work = named("work", "b@co.com");
+        work.credential_source = Some(CredentialSource {
+            account: "nonexistent".to_string(),
+            entry: "e".to_string(),
+        });
+        c.accounts = vec![work];
+
+        assert!(matches!(
+            c.credential_source_chain("work"),
+            Err(Error::UnknownAccount { name }) if name == "nonexistent"
+        ));
     }
 }

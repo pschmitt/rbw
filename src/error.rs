@@ -24,6 +24,18 @@ pub enum Error {
     #[error("failed to create sso callback server: {err}")]
     CreateSSOCallbackServer { err: std::io::Error },
 
+    #[error(
+        "credential_source for account {name:?} forms a cycle (an account's \
+        credentials can't ultimately depend on themselves)"
+    )]
+    CredentialSourceCycle { name: String },
+
+    #[error(
+        "credential_source for account {name:?} points at itself; it must \
+        name a different account"
+    )]
+    CredentialSourceSelfReference { name: String },
+
     #[error("failed to decrypt")]
     Decrypt { source: block_padding::UnpadError },
 
