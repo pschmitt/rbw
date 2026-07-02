@@ -36,6 +36,74 @@ struct FindArgs {
     exact: bool,
 }
 
+// Password-generation flags shared between `rbw gen` and `rbw create
+// --generate`, so the two can never drift apart. Layered at resolution time
+// (see `resolve_pwgen`) over the configured `password_gen` policy over
+// `rbw::pwgen`'s own hardcoded defaults.
+#[derive(Debug, Default, Clone, clap::Args)]
+#[command(group = clap::ArgGroup::new("password-type").args(&[
+    "no_symbols",
+    "only_numbers",
+    "nonconfusables",
+    "diceware",
+]))]
+struct PasswordGenArgs {
+    #[arg(
+        short = 'l',
+        long = "length",
+        help = "Length of the password to generate (or number of words \
+            for --diceware); defaults to the configured password-gen \
+            policy, else 20"
+    )]
+    length: Option<usize>,
+    #[arg(
+        long = "no-symbols",
+        help = "Generate a password with no special characters"
+    )]
+    no_symbols: bool,
+    #[arg(
+        long = "only-numbers",
+        help = "Generate a password consisting of only numbers"
+    )]
+    only_numbers: bool,
+    #[arg(
+        long,
+        help = "Generate a password without visually similar \
+            characters (useful for passwords intended to be \
+            written down)"
+    )]
+    nonconfusables: bool,
+    #[arg(
+        long,
+        help = "Generate a password of multiple dictionary \
+            words chosen from the EFF word list. The length \
+            parameter for this option will set the number \
+            of words to generate, rather than characters."
+    )]
+    diceware: bool,
+}
+
+impl From<&PasswordGenArgs> for rbw::pwgen::GenFlags {
+    fn from(args: &PasswordGenArgs) -> Self {
+        Self {
+            length: args.length,
+            no_symbols: args.no_symbols,
+            only_numbers: args.only_numbers,
+            nonconfusables: args.nonconfusables,
+            diceware: args.diceware,
+        }
+    }
+}
+
+// Explicit CLI flags > configured `password_gen` policy > `rbw::pwgen`'s own
+// hardcoded defaults.
+fn resolve_pwgen(cli: &PasswordGenArgs) -> (usize, rbw::pwgen::Type) {
+    let policy = rbw::config::Config::load()
+        .map(|c| c.password_gen)
+        .unwrap_or_default();
+    rbw::pwgen::resolve(cli.into(), (&policy).into())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 enum OutputArg {
     Name,
@@ -449,6 +517,16 @@ enum Opt {
         yaml: bool,
         #[arg(long, help = "Add via JSON editor (structured mode)")]
         json: bool,
+        #[arg(
+            short = 'g',
+            long = "generate",
+            help = "Generate a password instead of entering one, using \
+                the same flags as `rbw gen` (mutually exclusive with \
+                piping an explicit entry via stdin)"
+        )]
+        generate: bool,
+        #[command(flatten)]
+        pwgen: PasswordGenArgs,
     },
 
     #[command(
@@ -456,17 +534,11 @@ enum Opt {
         long_about = "Generate a new password\n\n\
             If given a password entry name, also save the generated \
             password to the database.",
-        visible_alias = "gen",
-        group = clap::ArgGroup::new("password-type").args(&[
-            "no_symbols",
-            "only_numbers",
-            "nonconfusables",
-            "diceware",
-        ])
+        visible_alias = "gen"
     )]
     Generate {
-        #[arg(help = "Length of the password to generate")]
-        len: usize,
+        #[command(flatten)]
+        pwgen: PasswordGenArgs,
         #[arg(help = "Name of the password entry")]
         name: Option<String>,
         #[arg(help = "Username for the password entry")]
@@ -479,31 +551,6 @@ enum Opt {
         uri: Vec<String>,
         #[arg(long, help = "Folder for the password entry")]
         folder: Option<String>,
-        #[arg(
-            long = "no-symbols",
-            help = "Generate a password with no special characters"
-        )]
-        no_symbols: bool,
-        #[arg(
-            long = "only-numbers",
-            help = "Generate a password consisting of only numbers"
-        )]
-        only_numbers: bool,
-        #[arg(
-            long,
-            help = "Generate a password without visually similar \
-                characters (useful for passwords intended to be \
-                written down)"
-        )]
-        nonconfusables: bool,
-        #[arg(
-            long,
-            help = "Generate a password of multiple dictionary \
-                words chosen from the EFF word list. The len \
-                parameter for this option will set the number \
-                of words to generate, rather than characters."
-        )]
-        diceware: bool,
     },
 
     #[command(
@@ -1182,40 +1229,42 @@ fn main() {
             folder,
             json,
             yaml,
-        } => commands::add(
-            name.as_deref(),
-            user.as_deref(),
-            &uri.iter()
-                // XXX not sure what the ui for specifying the match type
-                // should be
-                .map(|uri| (uri.clone(), None))
-                .collect::<Vec<_>>(),
-            folder.as_deref(),
-            json,
-            yaml,
-        ),
+            generate,
+            pwgen,
+        } => {
+            // Password-gen flags imply --generate, so `rbw create name -g
+            // -l 24` and `rbw create name -l 24` both work as expected.
+            let generate = generate
+                || pwgen.length.is_some()
+                || pwgen.no_symbols
+                || pwgen.only_numbers
+                || pwgen.nonconfusables
+                || pwgen.diceware;
+            let (len, ty) = resolve_pwgen(&pwgen);
+            commands::add(
+                name.as_deref(),
+                user.as_deref(),
+                &uri.iter()
+                    // XXX not sure what the ui for specifying the match type
+                    // should be
+                    .map(|uri| (uri.clone(), None))
+                    .collect::<Vec<_>>(),
+                folder.as_deref(),
+                json,
+                yaml,
+                generate,
+                len,
+                ty,
+            )
+        }
         Opt::Generate {
-            len,
+            pwgen,
             name,
             user,
             uri,
             folder,
-            no_symbols,
-            only_numbers,
-            nonconfusables,
-            diceware,
         } => {
-            let ty = if no_symbols {
-                rbw::pwgen::Type::NoSymbols
-            } else if only_numbers {
-                rbw::pwgen::Type::Numbers
-            } else if nonconfusables {
-                rbw::pwgen::Type::NonConfusables
-            } else if diceware {
-                rbw::pwgen::Type::Diceware
-            } else {
-                rbw::pwgen::Type::AllChars
-            };
+            let (len, ty) = resolve_pwgen(&pwgen);
             commands::generate(
                 name.as_deref(),
                 user.as_deref(),

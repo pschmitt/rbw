@@ -26,6 +26,7 @@ use crate::commands::{
 
 use super::app::{
     AccountsView, App, AttachmentView, EditForm, Level, Mode, Prompt,
+    SettingValue, SettingsView,
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -120,6 +121,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::Attachments(view) => render_attachments(f, view, main),
         Mode::Accounts(view) => render_accounts(f, view, main),
         Mode::Prompt(prompt) => render_prompt(f, prompt, main),
+        Mode::Settings(view) => render_settings(f, view, main),
         Mode::Help => render_help(f, main),
         Mode::Normal | Mode::Search => {}
     }
@@ -828,9 +830,12 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
             "⏎/u unlock · s sync · p primary · a add · ↑/↓ select · esc close"
         }
         Mode::Prompt(prompt) => prompt.hint,
+        Mode::Settings(_) => {
+            "⏎ save · esc cancel · ⇥ next field · space toggle"
+        }
         Mode::Help => "any key to close",
         Mode::Normal => {
-            "/ search · e edit · a add · d delete · p/u/t copy · o open · s attach · A accounts · ^S sync · r reveal · ? help · q quit"
+            "/ search · e edit · a add · d delete · p/u/t copy · o open · s attach · A accounts · S settings · ^S sync · r reveal · ? help · q quit"
         }
     };
     f.render_widget(
@@ -921,6 +926,78 @@ fn render_form(f: &mut Frame, form: &EditForm, area: Rect) {
             let x =
                 inner.x + 2 + 9 + 2 + field.input.cursor_display_col() as u16;
             let y = inner.y + form.focus as u16;
+            f.set_cursor_position((
+                x.min(inner.right().saturating_sub(1)),
+                y,
+            ));
+        }
+    }
+}
+
+fn render_settings(f: &mut Frame, view: &SettingsView, area: Rect) {
+    let label_w = view
+        .fields
+        .iter()
+        .map(|field| field.label.width())
+        .max()
+        .unwrap_or(0);
+    let width = 72u16.min(area.width.saturating_sub(4));
+    let height =
+        (view.fields.len() as u16 + 4).min(area.height.saturating_sub(2));
+    let rect = centered(width, height, area);
+
+    f.render_widget(Clear, rect);
+    let b = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(
+            " settings · password generation ",
+            Style::default().fg(ACCENT).bold(),
+        ));
+    let inner = b.inner(rect);
+    f.render_widget(b, rect);
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, field) in view.fields.iter().enumerate() {
+        let focused = i == view.focus;
+        let prefix = if focused { "❯ " } else { "  " };
+        let value = match &field.value {
+            SettingValue::Text(input) => input.value().to_string(),
+            SettingValue::Toggle(true) => "[x]".to_string(),
+            SettingValue::Toggle(false) => "[ ]".to_string(),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                prefix,
+                Style::default().fg(if focused { ACCENT } else { DIM }),
+            ),
+            Span::styled(
+                format!("{:<label_w$}", field.label),
+                Style::default().fg(if focused { Color::White } else { DIM }),
+            ),
+            Span::raw("  "),
+            Span::styled(value, Style::default().fg(Color::White)),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "⏎ save   esc cancel   ⇥ next   space toggle",
+        Style::default().fg(DIM),
+    )));
+
+    f.render_widget(Paragraph::new(lines), inner);
+
+    // Place the cursor in the focused field, only when it's editable text
+    // (a toggle has nothing for the cursor to sit in).
+    if let Some(field) = view.fields.get(view.focus) {
+        if let SettingValue::Text(input) = &field.value {
+            let x = inner.x
+                + 2
+                + label_w as u16
+                + 2
+                + input.cursor_display_col() as u16;
+            let y = inner.y + view.focus as u16;
             f.set_cursor_position((
                 x.min(inner.right().saturating_sub(1)),
                 y,
@@ -1180,6 +1257,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         ("^e · E", "edit entry in $EDITOR (any focus)"),
         ("a", "add a new login"),
         ("A", "accounts: unlock / sync / set primary"),
+        ("S", "settings: password-gen policy, etc."),
         ("d", "delete entry"),
         ("?", "this help"),
         ("q · esc", "quit"),
@@ -1276,6 +1354,12 @@ mod test {
 
         // Text prompt overlay (add-account fields).
         app.mode = Mode::Prompt(crate::tui::app::Prompt::add_account());
+        draw(&app);
+
+        // Settings panel overlay (password-gen policy fields).
+        app.mode = Mode::Settings(crate::tui::app::SettingsView::new(
+            &rbw::config::PasswordGenPolicy::default(),
+        ));
         draw(&app);
 
         // Accounts / settings panel overlay.

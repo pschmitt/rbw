@@ -3434,8 +3434,22 @@ pub fn add(
     folder: Option<&str>,
     json: bool,
     _yaml: bool,
+    generate: bool,
+    gen_len: usize,
+    gen_ty: rbw::pwgen::Type,
 ) -> anyhow::Result<()> {
-    add_structured(name, username, uris, folder, json)
+    if generate && !std::io::stdin().is_terminal() {
+        // The editor ignores its template entirely and reads the entry
+        // straight from stdin when it isn't a tty (see `rbw::edit::edit`),
+        // so a generated password would be silently discarded anyway --
+        // treat the combination as a user error rather than a silent no-op.
+        anyhow::bail!(
+            "--generate cannot be combined with a piped entry; provide the \
+             password via generation or stdin, not both"
+        );
+    }
+    let generated = generate.then(|| rbw::pwgen::pwgen(gen_ty, gen_len));
+    add_structured(name, username, uris, folder, json, generated.as_deref())
 }
 
 pub fn generate(
@@ -3733,6 +3747,7 @@ fn add_structured(
     uris: &[(String, Option<rbw::api::UriMatchType>)],
     folder: Option<&str>,
     json: bool,
+    generated_password: Option<&str>,
 ) -> anyhow::Result<()> {
     let editable_uris: Vec<EditableUri> = if uris.is_empty() {
         vec![EditableUri {
@@ -3754,7 +3769,9 @@ fn add_structured(
         notes: None,
         data: EditableData::Login {
             username: Some(username.unwrap_or("").to_string()),
-            password: Some(String::new()),
+            password: Some(
+                generated_password.unwrap_or_default().to_string(),
+            ),
             uris: editable_uris,
             totp: None,
         },
@@ -3789,7 +3806,14 @@ fn add_structured(
             s
         });
 
-    if contents_trimmed.trim() == serialized.trim() {
+    // With `--generate`, the template already has a real (generated)
+    // password filled in, so leaving the editor untouched means "accept the
+    // generated entry as shown", not "I opened this by accident" -- only
+    // treat an unmodified buffer as a no-op cancel when there's nothing
+    // pre-filled worth keeping.
+    if generated_password.is_none()
+        && contents_trimmed.trim() == serialized.trim()
+    {
         eprintln!("{}", paint_no_changes());
         return Ok(());
     }
@@ -7381,6 +7405,27 @@ pub fn tui_set_primary(name: &str) -> anyhow::Result<()> {
         anyhow::bail!("account '{name}' not found");
     }
     config.primary_account = Some(name.to_string());
+    config.save()?;
+    Ok(())
+}
+
+// The configured default password-generation policy, for the TUI's settings
+// view. Never fails: a missing/unreadable config just means "no overrides
+// yet" (mirrors `App::new`'s handling of the keymap config).
+pub fn tui_password_gen_policy() -> rbw::config::PasswordGenPolicy {
+    rbw::config::Config::load()
+        .map(|c| c.password_gen)
+        .unwrap_or_default()
+}
+
+// Persist an updated password-generation policy from the TUI's settings view.
+pub fn tui_save_password_gen_policy(
+    policy: rbw::config::PasswordGenPolicy,
+) -> anyhow::Result<()> {
+    let mut config = rbw::config::Config::load()
+        .unwrap_or_else(|_| rbw::config::Config::new());
+    config.migrate_legacy();
+    config.password_gen = policy;
     config.save()?;
     Ok(())
 }

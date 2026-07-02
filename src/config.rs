@@ -33,6 +33,43 @@ pub enum UnlockPolicy {
     OnDemand,
 }
 
+// Default password-generation policy: the fallback used by `rbw gen` and
+// `rbw create --generate` whenever a given flag isn't passed explicitly on
+// the command line (see `rbw::pwgen::resolve`). Mirrors `rbw gen`'s flag set
+// field-for-field; `length` is `None` (rather than 0) so "unset" is
+// distinguishable from "explicitly zero" for future flags that might want
+// that. Kept `Copy`/`Eq` so `Config` can cheaply skip serializing it when
+// it's still the all-defaults value a freshly-written config.json shouldn't
+// be cluttered with.
+#[derive(
+    serde::Serialize,
+    serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+)]
+pub struct PasswordGenPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<usize>,
+    #[serde(default)]
+    pub no_symbols: bool,
+    #[serde(default)]
+    pub only_numbers: bool,
+    #[serde(default)]
+    pub nonconfusables: bool,
+    #[serde(default)]
+    pub diceware: bool,
+}
+
+impl PasswordGenPolicy {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 // A single Bitwarden/Vaultwarden account. The per-server connection details
 // live here so that several accounts (with different servers) can coexist in
 // one config; global preferences (lock timeout, pinentry, …) stay on `Config`.
@@ -105,6 +142,11 @@ pub struct Config {
         skip_serializing_if = "std::collections::HashMap::is_empty"
     )]
     pub tui_keybindings: std::collections::HashMap<String, Vec<String>>,
+    // Default password-generation policy for `rbw gen` and `rbw create
+    // --generate`; see `PasswordGenPolicy`. Editable from the TUI's settings
+    // view.
+    #[serde(default, skip_serializing_if = "PasswordGenPolicy::is_default")]
+    pub password_gen: PasswordGenPolicy,
     // backcompat, no longer generated in new configs
     #[serde(skip_serializing)]
     pub device_id: Option<String>,
@@ -126,6 +168,7 @@ impl Default for Config {
             sync_interval: default_sync_interval(),
             pinentry: default_pinentry(),
             tui_keybindings: std::collections::HashMap::new(),
+            password_gen: PasswordGenPolicy::default(),
             device_id: None,
         }
     }
