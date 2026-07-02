@@ -43,6 +43,10 @@ skip = [
     { name = "rand_chacha", version = "0.9.0" },
     { name = "getrandom", version = "0.2.16" },
     { name = "getrandom", version = "0.3.4" },
+    # ratatui's dependency tree pulls these older/extra versions in addition to
+    # the ones the rest of the vault code already uses
+    { name = "syn", version = "1.0.109" },
+    { name = "hashbrown", version = "0.17.1" },
 ]
 
 [licenses]

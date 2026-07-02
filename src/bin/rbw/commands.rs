@@ -202,17 +202,17 @@ struct DecryptedListCipher {
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-struct DecryptedSearchCipher {
-    id: String,
+pub struct DecryptedSearchCipher {
+    pub id: String,
     #[serde(rename = "type")]
-    entry_type: String,
-    folder: Option<String>,
-    name: String,
-    user: Option<String>,
-    uris: Vec<(String, Option<rbw::api::UriMatchType>)>,
-    fields: Vec<String>,
-    notes: Option<String>,
-    attachment_count: usize,
+    pub entry_type: String,
+    pub folder: Option<String>,
+    pub name: String,
+    pub user: Option<String>,
+    pub uris: Vec<(String, Option<rbw::api::UriMatchType>)>,
+    pub fields: Vec<String>,
+    pub notes: Option<String>,
+    pub attachment_count: usize,
     #[serde(skip)]
     sensitive_fields: Vec<String>,
     #[serde(skip)]
@@ -234,7 +234,7 @@ const SCORE_SENSITIVE: u32 = 10;
 const SCORE_FULL_NAME_BONUS: u32 = 5_000;
 
 impl DecryptedSearchCipher {
-    fn display_name(&self) -> String {
+    pub fn display_name(&self) -> String {
         self.user.as_ref().map_or_else(
             || self.name.clone(),
             |user| format!("{user}@{}", self.name),
@@ -389,7 +389,7 @@ impl DecryptedSearchCipher {
         ) && self.match_score(needle, ignore_case, exact).is_some()
     }
 
-    fn search_match(
+    pub fn search_match(
         &self,
         term: &str,
         folder: Option<&str>,
@@ -446,18 +446,18 @@ impl From<DecryptedSearchCipher> for DecryptedListCipher {
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-struct DecryptedAttachment {
-    id: String,
-    file_name: Option<String>,
-    size: Option<String>,
-    size_name: Option<String>,
+pub struct DecryptedAttachment {
+    pub id: String,
+    pub file_name: Option<String>,
+    pub size: Option<String>,
+    pub size_name: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-struct AttachmentMetadata {
+pub struct AttachmentMetadata {
     #[serde(skip_serializing_if = "is_zero")]
-    attachment_count: usize,
+    pub attachment_count: usize,
 }
 
 impl AttachmentMetadata {
@@ -472,17 +472,17 @@ impl AttachmentMetadata {
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-struct DecryptedCipher {
-    id: String,
-    folder: Option<String>,
-    name: String,
-    data: DecryptedData,
-    fields: Vec<DecryptedField>,
-    notes: Option<String>,
-    history: Vec<DecryptedHistoryEntry>,
-    attachments: Vec<DecryptedAttachment>,
+pub struct DecryptedCipher {
+    pub id: String,
+    pub folder: Option<String>,
+    pub name: String,
+    pub data: DecryptedData,
+    pub fields: Vec<DecryptedField>,
+    pub notes: Option<String>,
+    pub history: Vec<DecryptedHistoryEntry>,
+    pub attachments: Vec<DecryptedAttachment>,
     #[serde(flatten)]
-    attachment_metadata: AttachmentMetadata,
+    pub attachment_metadata: AttachmentMetadata,
 }
 
 // Where a plain `rbw get` value was resolved from — surfaced by --verbose.
@@ -1761,7 +1761,7 @@ fn val_display_or_store(clipboard: bool, password: &str) -> bool {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type")]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-enum DecryptedData {
+pub enum DecryptedData {
     Login {
         username: Option<String>,
         password: Option<String>,
@@ -1805,11 +1805,11 @@ enum DecryptedData {
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-struct DecryptedField {
-    name: Option<String>,
-    value: Option<String>,
+pub struct DecryptedField {
+    pub name: Option<String>,
+    pub value: Option<String>,
     #[serde(serialize_with = "serialize_field_type", rename = "type")]
-    ty: Option<rbw::api::FieldType>,
+    pub ty: Option<rbw::api::FieldType>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref, clippy::ref_option)]
@@ -1836,33 +1836,33 @@ where
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-struct DecryptedHistoryEntry {
-    last_used_date: String,
-    password: String,
+pub struct DecryptedHistoryEntry {
+    pub last_used_date: String,
+    pub password: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-struct DecryptedUri {
-    uri: String,
-    match_type: Option<rbw::api::UriMatchType>,
+pub struct DecryptedUri {
+    pub uri: String,
+    pub match_type: Option<rbw::api::UriMatchType>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct EditableCipher {
-    name: String,
+pub struct EditableCipher {
+    pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    folder: Option<String>,
+    pub folder: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    notes: Option<String>,
-    data: EditableData,
+    pub notes: Option<String>,
+    pub data: EditableData,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    fields: Vec<EditableCustomField>,
+    pub fields: Vec<EditableCustomField>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum EditableData {
+pub enum EditableData {
     Login {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         username: Option<String>,
@@ -1935,20 +1935,20 @@ enum EditableData {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct EditableUri {
-    uri: String,
+pub struct EditableUri {
+    pub uri: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    match_type: Option<String>,
+    pub match_type: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct EditableCustomField {
+pub struct EditableCustomField {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
+    pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    value: Option<String>,
+    pub value: Option<String>,
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    ty: Option<String>,
+    pub ty: Option<String>,
 }
 
 fn matches_url(
@@ -5509,7 +5509,9 @@ fn decrypt_search_cipher(
     })
 }
 
-fn decrypt_cipher(entry: &rbw::db::Entry) -> anyhow::Result<DecryptedCipher> {
+pub fn decrypt_cipher(
+    entry: &rbw::db::Entry,
+) -> anyhow::Result<DecryptedCipher> {
     // folder name should always be decrypted with the local key because
     // folders are local to a specific user's vault, not the organization
     let folder = entry
@@ -5905,7 +5907,9 @@ fn parse_field_type(s: &str) -> anyhow::Result<rbw::api::FieldType> {
     }
 }
 
-fn decrypted_to_editable(decrypted: &DecryptedCipher) -> EditableCipher {
+pub fn decrypted_to_editable(
+    decrypted: &DecryptedCipher,
+) -> EditableCipher {
     let data = match &decrypted.data {
         DecryptedData::Login {
             username,
@@ -6192,7 +6196,301 @@ fn editable_to_encrypted(
     Ok((data, fields, notes))
 }
 
-fn load_db() -> anyhow::Result<rbw::db::Db> {
+// ===========================================================================
+// TUI support
+//
+// Thin orchestration helpers used by the interactive `rbw tui` front-end. They
+// deliberately live here so the encryption / API / save / sync logic stays in
+// one place (shared with `edit`, `add`, and `remove`) instead of being
+// re-implemented in the UI layer.
+// ===========================================================================
+
+// Unlock the vault and return the local db together with a lightweight,
+// batch-decrypted search index (one agent round-trip for the whole vault). The
+// index is parallel to `db.entries` and drives list rendering and filtering;
+// full per-entry detail is decrypted lazily via `decrypt_cipher`.
+pub fn tui_open(
+) -> anyhow::Result<(rbw::db::Db, Vec<DecryptedSearchCipher>)> {
+    unlock(None)?;
+    tui_reload()
+}
+
+// Re-read the (already unlocked) vault from disk and rebuild the search index.
+// Used after an edit/add/remove has synced changes back to the local db.
+pub fn tui_reload(
+) -> anyhow::Result<(rbw::db::Db, Vec<DecryptedSearchCipher>)> {
+    let db = load_db()?;
+    let mut requests = BatchRequests::new();
+    let plans: Vec<SearchCipherPlan> = db
+        .entries
+        .iter()
+        .map(|entry| SearchCipherPlan::build(entry, &mut requests))
+        .collect();
+    let results = if requests.is_empty() {
+        Vec::new()
+    } else {
+        crate::actions::decrypt_batch(requests.into_vec())?
+    };
+    let search = plans
+        .into_iter()
+        .map(|plan| plan.resolve(&results))
+        .collect::<anyhow::Result<_>>()?;
+    Ok((db, search))
+}
+
+// Blank empty/whitespace-only folder names to `None` so clearing the folder
+// field doesn't create a folder literally named "".
+fn folder_arg(folder: Option<&str>) -> Option<&str> {
+    folder.map(str::trim).filter(|s| !s.is_empty())
+}
+
+// Persist an edited entry: encrypt the changed fields, preserve password
+// history, resolve/create the folder, push to the server, and sync.
+pub fn tui_save_edit(
+    db: &mut rbw::db::Db,
+    entry: &rbw::db::Entry,
+    updated: &EditableCipher,
+) -> anyhow::Result<()> {
+    let access_token = db
+        .access_token
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
+    let refresh_token = db
+        .refresh_token
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
+
+    let (data, fields, notes) =
+        editable_to_encrypted(updated, entry.org_id.as_deref())?;
+    let encrypted_name =
+        crate::actions::encrypt(&updated.name, entry.org_id.as_deref())?;
+    let encrypted_notes = notes
+        .as_deref()
+        .map(|n| crate::actions::encrypt(n, entry.org_id.as_deref()))
+        .transpose()?;
+
+    let mut history = entry.history.clone();
+    if let (
+        rbw::db::EntryData::Login {
+            password: Some(old_pw),
+            ..
+        },
+        rbw::db::EntryData::Login {
+            password: new_pw, ..
+        },
+    ) = (&entry.data, &data)
+    {
+        if Some(old_pw) != new_pw.as_ref() {
+            history.insert(
+                0,
+                rbw::db::HistoryEntry {
+                    last_used_date: format!(
+                        "{}",
+                        humantime::format_rfc3339(
+                            std::time::SystemTime::now()
+                        )
+                    ),
+                    password: old_pw.clone(),
+                },
+            );
+        }
+    }
+
+    let folder_id =
+        if let Some(folder_name) = folder_arg(updated.folder.as_deref()) {
+            resolve_folder_id(db, &access_token, &refresh_token, folder_name)?
+        } else {
+            entry.folder_id.clone()
+        };
+
+    if let (Some(new_token), ()) = rbw::actions::edit(
+        &access_token,
+        &refresh_token,
+        &entry.id,
+        entry.org_id.as_deref(),
+        &encrypted_name,
+        &data,
+        &fields,
+        encrypted_notes.as_deref(),
+        folder_id.as_deref(),
+        &history,
+    )? {
+        db.access_token = Some(new_token);
+        save_db(db)?;
+    }
+
+    crate::actions::sync()?;
+    Ok(())
+}
+
+// Create a new entry from a filled-in template (custom fields are not sent by
+// the add API, matching `rbw add`).
+pub fn tui_save_add(
+    db: &mut rbw::db::Db,
+    cipher: &EditableCipher,
+) -> anyhow::Result<()> {
+    if cipher.name.trim().is_empty() {
+        anyhow::bail!("name cannot be empty");
+    }
+
+    let access_token = db
+        .access_token
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
+    let refresh_token = db
+        .refresh_token
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
+
+    let (data, _fields, notes) = editable_to_encrypted(cipher, None)?;
+    let encrypted_name = crate::actions::encrypt(&cipher.name, None)?;
+    let encrypted_notes = notes
+        .as_deref()
+        .map(|n| crate::actions::encrypt(n, None))
+        .transpose()?;
+
+    let folder_id =
+        if let Some(folder_name) = folder_arg(cipher.folder.as_deref()) {
+            resolve_folder_id(db, &access_token, &refresh_token, folder_name)?
+        } else {
+            None
+        };
+
+    if let (Some(new_token), ()) = rbw::actions::add(
+        &access_token,
+        &refresh_token,
+        &encrypted_name,
+        &data,
+        encrypted_notes.as_deref(),
+        folder_id.as_deref(),
+    )? {
+        db.access_token = Some(new_token);
+        save_db(db)?;
+    }
+
+    crate::actions::sync()?;
+    Ok(())
+}
+
+// Delete an entry and sync.
+pub fn tui_delete(
+    db: &mut rbw::db::Db,
+    entry: &rbw::db::Entry,
+) -> anyhow::Result<()> {
+    let access_token = db
+        .access_token
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
+    let refresh_token = db
+        .refresh_token
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
+
+    if let (Some(new_token), ()) =
+        rbw::actions::remove(&access_token, &refresh_token, &entry.id)?
+    {
+        db.access_token = Some(new_token);
+        save_db(db)?;
+    }
+
+    crate::actions::sync()?;
+    Ok(())
+}
+
+// Open the full entry as YAML in `$EDITOR` for structured editing of every
+// field (including entry-type-specific fields the inline form omits). Returns
+// `true` if the entry was changed and saved. The caller is responsible for
+// suspending/restoring the terminal around this call.
+pub fn tui_edit_in_editor(
+    db: &mut rbw::db::Db,
+    entry: &rbw::db::Entry,
+    decrypted: &DecryptedCipher,
+) -> anyhow::Result<bool> {
+    let editable = decrypted_to_editable(decrypted);
+    let serialized = serde_yaml::to_string(&editable)?;
+    let help = "# Edit the YAML below. Lines starting with # are ignored.";
+
+    let contents = rbw::edit::edit(&serialized, help, "yaml")?;
+    let contents_trimmed = contents
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .fold(String::new(), |mut s, l| {
+            s.push_str(l);
+            s.push('\n');
+            s
+        });
+
+    if contents_trimmed.trim() == serialized.trim() {
+        return Ok(false);
+    }
+
+    let updated: EditableCipher = serde_yaml::from_str(&contents_trimmed)
+        .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?;
+    tui_save_edit(db, entry, &updated)?;
+    Ok(true)
+}
+
+// Download and decrypt a single attachment (identified by id) into `dest_dir`,
+// returning the path written. Mirrors `attachment_get` but operates on an
+// already-loaded, already-unlocked db so the TUI can call it inline.
+pub fn tui_attachment_get(
+    db: &mut rbw::db::Db,
+    entry: &rbw::db::Entry,
+    decrypted: &DecryptedCipher,
+    attachment_id: &str,
+    dest_dir: &std::path::Path,
+) -> anyhow::Result<std::path::PathBuf> {
+    let (attachment, decrypted_attachment) =
+        find_attachment(entry, decrypted, attachment_id)?;
+
+    let access_token = db
+        .access_token
+        .as_ref()
+        .context("failed to find access token in db")?
+        .clone();
+    let refresh_token = db
+        .refresh_token
+        .as_ref()
+        .context("failed to find refresh token in db")?
+        .clone();
+    let url = match rbw::actions::attachment_url(
+        &access_token,
+        &refresh_token,
+        &entry.id,
+        &attachment.id,
+    ) {
+        Ok((new_access_token, url)) => {
+            if let Some(new_access_token) = new_access_token {
+                db.access_token = Some(new_access_token);
+                save_db(db)?;
+            }
+            url
+        }
+        Err(e) => attachment.url.clone().ok_or(e)?,
+    };
+    let encrypted = rbw::actions::download_attachment(&url)
+        .context("failed to download attachment")?;
+    let bytes = crate::actions::decrypt_attachment(
+        encrypted,
+        attachment.key.as_deref(),
+        entry.key.as_deref(),
+        entry.org_id.as_deref(),
+    )?;
+
+    let file_name = decrypted_attachment
+        .file_name
+        .as_deref()
+        .and_then(|name| std::path::Path::new(name).file_name())
+        .and_then(std::ffi::OsStr::to_str)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("BitwardenAttachment");
+    let path = dest_dir.join(file_name);
+    std::fs::write(&path, bytes)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(path)
+}
+
+pub fn load_db() -> anyhow::Result<rbw::db::Db> {
     let config = rbw::config::Config::load()?;
     config.email.as_ref().map_or_else(
         || Err(anyhow::anyhow!("failed to find email address in config")),
@@ -7149,7 +7447,7 @@ fn generate_totp_algorithm_type(
     }
 }
 
-fn generate_totp(secret: &str) -> anyhow::Result<String> {
+pub fn generate_totp(secret: &str) -> anyhow::Result<String> {
     let totp_params = parse_totp_secret(secret)?;
     let alg = totp_params.algorithm.as_str();
 

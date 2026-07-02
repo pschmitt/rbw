@@ -12,6 +12,7 @@ use clap::{CommandFactory as _, Parser as _};
 mod actions;
 mod commands;
 mod sock;
+mod tui;
 
 #[derive(Debug, clap::Args)]
 struct FindArgs {
@@ -119,6 +120,20 @@ enum Opt {
 
     #[command(about = "Update the local copy of the Bitwarden database")]
     Sync,
+
+    #[command(
+        about = "Browse, search, and edit entries in an interactive terminal UI",
+        long_about = "Browse, search, and edit entries in an interactive \
+            terminal UI\n\n\
+            Launches a full-screen interface for fuzzy-searching the vault, \
+            viewing entry details (with reveal/copy for secrets), and editing \
+            entries inline or in your $EDITOR.",
+        visible_alias = "ui"
+    )]
+    Tui {
+        #[arg(help = "Optional initial search term")]
+        term: Option<String>,
+    },
 
     #[command(
         about = "Export the entire vault as decrypted JSON",
@@ -527,6 +542,7 @@ impl Opt {
             Self::Unlock { .. } => "unlock".to_string(),
             Self::Unlocked => "unlocked".to_string(),
             Self::Sync => "sync".to_string(),
+            Self::Tui { .. } => "tui".to_string(),
             Self::Export => "export".to_string(),
             Self::List { .. } => "list".to_string(),
             Self::Get { .. } => "get".to_string(),
@@ -723,6 +739,7 @@ fn main() {
         }
         Opt::Unlocked => commands::unlocked(),
         Opt::Sync => commands::sync(),
+        Opt::Tui { term } => tui::run(term.as_deref()),
         Opt::Export => commands::export(),
         Opt::List {
             fields,
