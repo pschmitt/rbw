@@ -29,8 +29,6 @@
 
 ## Known gaps
 
-- The TUI's status-bar hints and Help screen show default keybindings even
-  when `tui_keybindings` overrides them.
 - SSH key entries can't be created through the API (`rbw::api::Client::add`/
   `edit` both hit `unreachable!()` for `EntryData::SshKey`), so `rbw import`
   skips them with a warning instead of creating them. Fixing that upstream

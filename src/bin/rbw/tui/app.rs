@@ -228,7 +228,10 @@ pub struct App {
     // scroll the preview instead of moving the list selection; Left/Esc (or
     // a list-pane click) moves it back. Only meaningful in `Mode::Normal`.
     pub detail_focused: bool,
-    keymap: Keymap,
+    // Resolved once at startup from `tui_keybindings` (config.json) merged
+    // over the built-in defaults (see `keymap::Keymap::resolve`). `super::ui`
+    // reads it to render live keybinding hints instead of hardcoded text.
+    pub keymap: Keymap,
 }
 
 impl App {
@@ -240,10 +243,10 @@ impl App {
         Self::with_keymap(open, initial_term, keymap)
     }
 
-    // Split out from `new` so tests can supply a deterministic keymap
-    // instead of picking up whatever the machine running them happens to
-    // have in `~/.config/rbw/config.json`.
-    fn with_keymap(
+    // Split out from `new` so tests (including `super::ui`'s) can supply a
+    // deterministic keymap instead of picking up whatever the machine
+    // running them happens to have in `~/.config/rbw/config.json`.
+    pub(crate) fn with_keymap(
         open: commands::TuiOpen,
         initial_term: Option<&str>,
         keymap: Keymap,

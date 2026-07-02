@@ -27,6 +27,7 @@ use crate::commands::{
 use super::app::{
     AccountsView, App, AttachmentView, EditForm, Level, Mode, Prompt,
 };
+use super::keymap::TuiAction;
 
 const ACCENT: Color = Color::Cyan;
 const SELECT_BG: Color = Color::Rgb(38, 44, 66);
@@ -120,7 +121,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::Attachments(view) => render_attachments(f, view, main),
         Mode::Accounts(view) => render_accounts(f, view, main),
         Mode::Prompt(prompt) => render_prompt(f, prompt, main),
-        Mode::Help => render_help(f, main),
+        Mode::Help => render_help(f, app, main),
         Mode::Normal | Mode::Search => {}
     }
 }
@@ -797,6 +798,75 @@ fn type_name(data: &DecryptedData) -> &'static str {
     }
 }
 
+// The status-bar keybinding hint for the current mode, built from the
+// actual resolved `Keymap` (post `tui_keybindings` override) rather than a
+// hardcoded default chord — pulled out of `render_status` so it can be unit
+// tested without a terminal. `Mode::Edit`/`ConfirmDelete`/`Prompt`/`Help`
+// stay literal: their keys are fixed widget semantics (field navigation,
+// y/n confirm, "any key closes") that `Keymap` deliberately doesn't cover
+// (see the doc comment at the top of `keymap.rs`), and the "esc"/"⇥ actions"
+// mentions below are the same — Search's Esc-to-clear and Tab-to-list
+// handoff are hardcoded in `App::handle_search`, not resolved through the
+// keymap either.
+fn status_hint(app: &App) -> String {
+    let km = &app.keymap;
+    match &app.mode {
+        Mode::Search => format!(
+            "type to filter · {}/{} select · ⇥ actions · {}/{}/{}/{} copy · {} editor · esc clear",
+            km.primary_chord_while_typing(TuiAction::MoveUp),
+            km.primary_chord_while_typing(TuiAction::MoveDown),
+            km.primary_chord_while_typing(TuiAction::CopyPassword),
+            km.primary_chord_while_typing(TuiAction::CopyUsername),
+            km.primary_chord_while_typing(TuiAction::CopyTotp),
+            km.primary_chord_while_typing(TuiAction::OpenUri),
+            km.primary_chord_while_typing(TuiAction::OpenEditor),
+        ),
+        Mode::Edit(_) => {
+            "⏎ save · esc cancel · ⇥ next field · ^R reveal · ^E editor"
+                .to_string()
+        }
+        Mode::ConfirmDelete => "y confirm · n/esc cancel".to_string(),
+        Mode::Attachments(_) => format!(
+            "{} download · {} upload · {} delete · {}/{} select · {} cancel",
+            km.primary_chord(TuiAction::AttachmentDownload),
+            km.primary_chord(TuiAction::AttachmentUpload),
+            km.primary_chord(TuiAction::AttachmentDelete),
+            km.primary_chord(TuiAction::AttachmentMoveUp),
+            km.primary_chord(TuiAction::AttachmentMoveDown),
+            km.primary_chord(TuiAction::AttachmentClose),
+        ),
+        Mode::Accounts(_) => format!(
+            "{} unlock · {} sync · {} primary · {} add · {}/{} select · {} close",
+            km.display_chords(TuiAction::AccountUnlock).join("/"),
+            km.primary_chord(TuiAction::AccountSync),
+            km.primary_chord(TuiAction::AccountSetPrimary),
+            km.primary_chord(TuiAction::AccountAdd),
+            km.primary_chord(TuiAction::AccountMoveUp),
+            km.primary_chord(TuiAction::AccountMoveDown),
+            km.primary_chord(TuiAction::AccountClose),
+        ),
+        Mode::Prompt(prompt) => prompt.hint.to_string(),
+        Mode::Help => "any key to close".to_string(),
+        Mode::Normal => format!(
+            "{} search · {} edit · {} add · {} delete · {}/{}/{} copy · {} open · {} attach · {} accounts · {} sync · {} reveal · {} help · {} quit",
+            km.primary_chord(TuiAction::ToggleSearch),
+            km.primary_chord(TuiAction::StartEdit),
+            km.primary_chord(TuiAction::StartAdd),
+            km.primary_chord(TuiAction::DeleteEntry),
+            km.primary_chord(TuiAction::CopyPassword),
+            km.primary_chord(TuiAction::CopyUsername),
+            km.primary_chord(TuiAction::CopyTotp),
+            km.primary_chord(TuiAction::OpenUri),
+            km.primary_chord(TuiAction::OpenAttachments),
+            km.primary_chord(TuiAction::OpenAccounts),
+            km.primary_chord(TuiAction::Sync),
+            km.primary_chord(TuiAction::ToggleReveal),
+            km.primary_chord(TuiAction::Help),
+            km.primary_chord(TuiAction::Quit),
+        ),
+    }
+}
+
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
     if let Some(status) = &app.status {
         let color = match status.level {
@@ -815,24 +885,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let hint = match &app.mode {
-        Mode::Search => {
-            "type to filter · ↑/↓ select · ⇥ actions · ⌥p/u/t/o copy · ^E editor · esc clear"
-        }
-        Mode::Edit(_) => "⏎ save · esc cancel · ⇥ next field · ^R reveal · ^E editor",
-        Mode::ConfirmDelete => "y confirm · n/esc cancel",
-        Mode::Attachments(_) => {
-            "⏎ download · a upload · d delete · ↑/↓ select · esc cancel"
-        }
-        Mode::Accounts(_) => {
-            "⏎/u unlock · s sync · p primary · a add · ↑/↓ select · esc close"
-        }
-        Mode::Prompt(prompt) => prompt.hint,
-        Mode::Help => "any key to close",
-        Mode::Normal => {
-            "/ search · e edit · a add · d delete · p/u/t copy · o open · s attach · A accounts · ^S sync · r reveal · ? help · q quit"
-        }
-    };
+    let hint = status_hint(app);
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
             format!(" {hint}"),
@@ -1144,7 +1197,7 @@ fn render_accounts(f: &mut Frame, view: &AccountsView, area: Rect) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn render_help(f: &mut Frame, area: Rect) {
+fn render_help(f: &mut Frame, app: &App, area: Rect) {
     let rect = centered(
         56.min(area.width.saturating_sub(2)),
         22.min(area.height.saturating_sub(2)),
@@ -1162,27 +1215,72 @@ fn render_help(f: &mut Frame, area: Rect) {
     let inner = b.inner(rect);
     f.render_widget(b, rect);
 
-    let entries = [
-        ("type", "filter the list (search is always live)"),
-        ("  u:/uri:/n:/f:", "scope a word to user/uri/name/folder"),
-        ("↑/↓ · ^p/^n", "move selection (works while searching)"),
-        ("⇥ · /", "toggle search bar ↔ list"),
-        ("g / G", "jump to top / bottom"),
-        ("⌥j / ⌥k · J/K", "scroll details"),
-        ("r · ^r", "reveal / hide secrets"),
-        ("p·y · ⌥p", "copy password"),
-        ("u · ⌥u", "copy username"),
-        ("t · ⌥t", "copy TOTP code"),
-        ("o · ⌥o", "open URL in browser"),
-        ("s · ⌥s", "browse / download attachments"),
-        ("^s", "sync with the server (any focus)"),
-        ("e · ⏎", "edit entry (inline form)"),
-        ("^e · E", "edit entry in $EDITOR (any focus)"),
-        ("a", "add a new login"),
-        ("A", "accounts: unlock / sync / set primary"),
-        ("d", "delete entry"),
-        ("?", "this help"),
-        ("q · esc", "quit"),
+    // Every currently-bound chord for `action`, joined for display — the
+    // real resolved keymap (post `tui_keybindings` override), not the
+    // hand-picked subset of built-in defaults the old hardcoded list here
+    // showed. "type"/"u:/uri:/n:/f:" stay literal (search syntax, not a
+    // keybinding), and "quit"'s trailing "esc" is the hardcoded fallback in
+    // `App::handle_normal`, not a `Keymap`-resolved chord.
+    let km = &app.keymap;
+    let dc = |action: TuiAction| km.display_chords(action).join(" · ");
+
+    let entries: [(String, &str); 20] = [
+        (
+            "type".to_string(),
+            "filter the list (search is always live)",
+        ),
+        (
+            "  u:/uri:/n:/f:".to_string(),
+            "scope a word to user/uri/name/folder",
+        ),
+        (
+            format!(
+                "{} · {}",
+                dc(TuiAction::MoveDown),
+                dc(TuiAction::MoveUp)
+            ),
+            "move selection (works while searching)",
+        ),
+        (dc(TuiAction::ToggleSearch), "toggle search bar ↔ list"),
+        (
+            format!(
+                "{} · {}",
+                dc(TuiAction::JumpFirst),
+                dc(TuiAction::JumpLast)
+            ),
+            "jump to top / bottom",
+        ),
+        (
+            format!(
+                "{} · {}",
+                dc(TuiAction::ScrollDetailDown),
+                dc(TuiAction::ScrollDetailUp)
+            ),
+            "scroll details",
+        ),
+        (dc(TuiAction::ToggleReveal), "reveal / hide secrets"),
+        (dc(TuiAction::CopyPassword), "copy password"),
+        (dc(TuiAction::CopyUsername), "copy username"),
+        (dc(TuiAction::CopyTotp), "copy TOTP code"),
+        (dc(TuiAction::OpenUri), "open URL in browser"),
+        (
+            dc(TuiAction::OpenAttachments),
+            "browse / download attachments",
+        ),
+        (dc(TuiAction::Sync), "sync with the server (any focus)"),
+        (dc(TuiAction::StartEdit), "edit entry (inline form)"),
+        (
+            dc(TuiAction::OpenEditor),
+            "edit entry in $EDITOR (any focus)",
+        ),
+        (dc(TuiAction::StartAdd), "add a new login"),
+        (
+            dc(TuiAction::OpenAccounts),
+            "accounts: unlock / sync / set primary",
+        ),
+        (dc(TuiAction::DeleteEntry), "delete entry"),
+        (dc(TuiAction::Help), "this help"),
+        (format!("{} · esc", dc(TuiAction::Quit)), "quit"),
     ];
     let lines: Vec<Line> = entries
         .into_iter()
@@ -1201,7 +1299,9 @@ fn render_help(f: &mut Frame, area: Rect) {
 
 #[cfg(test)]
 mod test {
-    use super::{detail_lines, pane_at, render, totp_line, Pane, MATCH};
+    use super::{
+        detail_lines, pane_at, render, status_hint, totp_line, Pane, MATCH,
+    };
     use crate::commands::{
         AttachmentMetadata, DecryptedCipher, DecryptedData, DecryptedField,
         DecryptedUri,
@@ -1515,5 +1615,62 @@ mod test {
     fn pane_at_is_none_below_the_main_area() {
         let full = Rect::new(0, 0, 100, 30);
         assert_eq!(pane_at(full, 5, 29), None);
+    }
+
+    // Builds an otherwise-trivial App (empty vault) around a given keymap,
+    // so `status_hint` can be checked against a `tui_keybindings` override
+    // without touching the real `~/.config/rbw/config.json`.
+    fn app_with_keymap(keymap: crate::tui::keymap::Keymap) -> App {
+        App::with_keymap(
+            crate::commands::TuiOpen {
+                vaults: vec![crate::commands::TuiVault {
+                    account: "default".to_string(),
+                    db: rbw::db::Db::new(),
+                    search: Vec::new(),
+                }],
+                locked: Vec::new(),
+                multi: false,
+            },
+            None,
+            keymap,
+        )
+    }
+
+    #[test]
+    fn status_hint_normal_mode_reflects_an_overridden_binding() {
+        use crate::tui::app::Mode;
+        use crate::tui::keymap::Keymap;
+
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("quit".to_string(), vec!["ctrl-q".to_string()]);
+        let mut app = app_with_keymap(Keymap::resolve(&overrides));
+        app.mode = Mode::Normal;
+
+        let hint = status_hint(&app);
+        assert!(
+            hint.ends_with("^q quit"),
+            "hint didn't show the overridden quit chord: {hint}"
+        );
+        // An action nobody overrode still shows its built-in default.
+        assert!(
+            hint.contains("e edit"),
+            "hint lost an unrelated default: {hint}"
+        );
+    }
+
+    #[test]
+    fn status_hint_search_mode_skips_a_plain_char_override() {
+        use crate::tui::keymap::Keymap;
+
+        // `open_uri` overridden to a plain, unmodified "l" — a text-input
+        // context (the search filter, which this hint is for) swallows
+        // that before it ever reaches `action_for`, so the hint must not
+        // claim it works there.
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("open_uri".to_string(), vec!["l".to_string()]);
+        let app = app_with_keymap(Keymap::resolve(&overrides)); // starts in Mode::Search
+
+        let hint = status_hint(&app);
+        assert!(hint.contains("⌥p/⌥u/⌥t/? copy"), "hint was: {hint}");
     }
 }
