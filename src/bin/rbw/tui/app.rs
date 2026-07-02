@@ -349,27 +349,44 @@ impl App {
     // ---- mutations ------------------------------------------------------
 
     fn reload(&mut self) {
-        // Preserve the selection across the reload where possible.
-        let keep_id = self.current_search().map(|s| s.id.clone());
         match commands::tui_reload() {
+            Ok((db, search)) => self.replace_vault(db, search),
+            Err(e) => self.set_status(Level::Error, format!("{e:#}")),
+        }
+    }
+
+    // Pull remote changes from the server, then reload the local view. Runs
+    // synchronously (like save/delete), so the UI briefly blocks on the network.
+    fn sync(&mut self) {
+        match commands::tui_sync() {
             Ok((db, search)) => {
-                self.db = db;
-                self.search = search;
-                self.detail_cache.clear();
-                self.recompute_filter();
-                if let Some(id) = keep_id {
-                    if let Some(pos) = self
-                        .filtered
-                        .iter()
-                        .position(|&i| self.search[i].id == id)
-                    {
-                        self.selected = pos;
-                    }
-                }
-                self.ensure_detail();
+                self.replace_vault(db, search);
+                self.set_status(Level::Success, "synced");
             }
             Err(e) => self.set_status(Level::Error, format!("{e:#}")),
         }
+    }
+
+    // Swap in a freshly loaded db/search index, preserving the selection by
+    // entry id where possible.
+    fn replace_vault(
+        &mut self,
+        db: rbw::db::Db,
+        search: Vec<DecryptedSearchCipher>,
+    ) {
+        let keep_id = self.current_search().map(|s| s.id.clone());
+        self.db = db;
+        self.search = search;
+        self.detail_cache.clear();
+        self.recompute_filter();
+        if let Some(id) = keep_id {
+            if let Some(pos) =
+                self.filtered.iter().position(|&i| self.search[i].id == id)
+            {
+                self.selected = pos;
+            }
+        }
+        self.ensure_detail();
     }
 
     fn start_edit(&mut self) {
@@ -528,6 +545,7 @@ impl App {
             KeyCode::Char('n') if ctrl => self.move_by(1),
             KeyCode::Char('c') if ctrl => return Some(Action::Quit),
             KeyCode::Char('e') if ctrl => return Some(Action::OpenEditor),
+            KeyCode::Char('s') if ctrl => self.sync(),
             KeyCode::Char('r') if ctrl => self.reveal = !self.reveal,
             KeyCode::Char('p') if alt => self.copy_password(),
             KeyCode::Char('u') if alt => self.copy_username(),

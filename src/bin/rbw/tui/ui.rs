@@ -494,7 +494,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         Mode::Attachments(_) => "⏎ download · ↑/↓ select · esc cancel",
         Mode::Help => "any key to close",
         Mode::Normal => {
-            "/ search · e edit · a add · d delete · p/u/t copy · o open · s attach · r reveal · ? help · q quit"
+            "/ search · e edit · a add · d delete · p/u/t copy · o open · s attach · ^S sync · r reveal · ? help · q quit"
         }
     };
     f.render_widget(
@@ -679,7 +679,11 @@ fn render_attachments(f: &mut Frame, view: &AttachmentView, area: Rect) {
 }
 
 fn render_help(f: &mut Frame, area: Rect) {
-    let rect = centered(56, 20, area);
+    let rect = centered(
+        56.min(area.width.saturating_sub(2)),
+        22.min(area.height.saturating_sub(2)),
+        area,
+    );
     f.render_widget(Clear, rect);
     let b = Block::default()
         .borders(Borders::ALL)
@@ -704,6 +708,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         ("t · ⌥t", "copy TOTP code"),
         ("o · ⌥o", "open URL in browser"),
         ("s · ⌥s", "browse / download attachments"),
+        ("^s", "sync with the server (any focus)"),
         ("e · ⏎", "edit entry (inline form)"),
         ("^e · E", "edit entry in $EDITOR (any focus)"),
         ("a", "add a new login"),

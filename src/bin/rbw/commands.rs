@@ -6238,6 +6238,14 @@ pub fn tui_reload(
     Ok((db, search))
 }
 
+// Pull remote changes from the server (via the agent), then rebuild the local
+// view. Used by the TUI's manual sync shortcut.
+pub fn tui_sync(
+) -> anyhow::Result<(rbw::db::Db, Vec<DecryptedSearchCipher>)> {
+    crate::actions::sync()?;
+    tui_reload()
+}
+
 // Blank empty/whitespace-only folder names to `None` so clearing the folder
 // field doesn't create a folder literally named "".
 fn folder_arg(folder: Option<&str>) -> Option<&str> {
