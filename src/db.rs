@@ -218,6 +218,20 @@ pub struct Db {
     pub collections: Vec<Collection>,
 }
 
+// A unique sibling path (same directory, so `rename` stays atomic) for staging
+// an atomic db write. Uniqueness across concurrent writers (e.g. agent + a CLI
+// invocation) comes from the pid plus a nanosecond timestamp.
+fn tmp_path(file: &std::path::Path) -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let mut name = file
+        .file_name()
+        .map_or_else(std::ffi::OsString::new, std::ffi::OsStr::to_os_string);
+    name.push(format!(".tmp.{}.{nanos}", std::process::id()));
+    file.with_file_name(name)
+}
+
 impl Db {
     pub fn new() -> Self {
         Self::default()
@@ -263,6 +277,9 @@ impl Db {
     }
 
     // XXX need to make this atomic
+    // Write atomically: serialize to a sibling temp file, then rename over the
+    // target. rename(2) is atomic on POSIX, so a concurrent reader always sees
+    // either the old or the new complete db, never a truncated one.
     pub fn save(&self, server: &str, email: &str) -> Result<()> {
         let file = crate::dirs::db_file(server, email);
         // unwrap is safe here because Self::filename is explicitly
@@ -273,24 +290,29 @@ impl Db {
                 file: file.clone(),
             },
         )?;
-        let mut fh =
-            std::fs::File::create(&file).map_err(|source| Error::SaveDb {
+        let json = serde_json::to_string(self).map_err(|source| {
+            Error::SaveDbJson {
                 source,
                 file: file.clone(),
-            })?;
-        fh.write_all(
-            serde_json::to_string(self)
-                .map_err(|source| Error::SaveDbJson {
-                    source,
-                    file: file.clone(),
-                })?
-                .as_bytes(),
-        )
-        .map_err(|source| Error::SaveDb { source, file })?;
-        Ok(())
+            }
+        })?;
+        let tmp = tmp_path(&file);
+        let write = || -> std::io::Result<()> {
+            let mut fh = std::fs::File::create(&tmp)?;
+            fh.write_all(json.as_bytes())?;
+            fh.sync_all()?;
+            drop(fh);
+            std::fs::rename(&tmp, &file)
+        };
+        write().map_err(|source| {
+            let _ = std::fs::remove_file(&tmp);
+            Error::SaveDb {
+                source,
+                file: file.clone(),
+            }
+        })
     }
 
-    // XXX need to make this atomic
     pub async fn save_async(&self, server: &str, email: &str) -> Result<()> {
         let file = crate::dirs::db_file(server, email);
         // unwrap is safe here because Self::filename is explicitly
@@ -301,24 +323,31 @@ impl Db {
                 source,
                 file: file.clone(),
             })?;
-        let mut fh =
-            tokio::fs::File::create(&file).await.map_err(|source| {
-                Error::SaveDbAsync {
+        let json = serde_json::to_string(self).map_err(|source| {
+            Error::SaveDbJson {
+                source,
+                file: file.clone(),
+            }
+        })?;
+        // See `save`: write to a sibling temp file, then atomically rename.
+        let tmp = tmp_path(&file);
+        let write = || async {
+            let mut fh = tokio::fs::File::create(&tmp).await?;
+            fh.write_all(json.as_bytes()).await?;
+            fh.sync_all().await?;
+            drop(fh);
+            tokio::fs::rename(&tmp, &file).await
+        };
+        match write().await {
+            Ok(()) => Ok(()),
+            Err(source) => {
+                let _ = tokio::fs::remove_file(&tmp).await;
+                Err(Error::SaveDbAsync {
                     source,
                     file: file.clone(),
-                }
-            })?;
-        fh.write_all(
-            serde_json::to_string(self)
-                .map_err(|source| Error::SaveDbJson {
-                    source,
-                    file: file.clone(),
-                })?
-                .as_bytes(),
-        )
-        .await
-        .map_err(|source| Error::SaveDbAsync { source, file })?;
-        Ok(())
+                })
+            }
+        }
     }
 
     pub fn remove(server: &str, email: &str) -> Result<()> {
