@@ -4,7 +4,7 @@
       the export, not just entry data.
 - [x] `rbw export --encrypt PASSPHRASE`: produce a gpg-encrypted tar.gz
       archive instead of raw JSON to stdout.
-- [ ] `rbw import`: import data produced by `rbw export`, including
+- [x] `rbw import`: import data produced by `rbw export`, including
       attachments. Reference implementation:
       `/home/pschmitt/devel/private/pschmitt/bw-backup.git`.
 - [ ] `rbw create --generate`/`-g`: generate a password with the same flags
@@ -31,3 +31,7 @@
 
 - The TUI's status-bar hints and Help screen show default keybindings even
   when `tui_keybindings` overrides them.
+- SSH key entries can't be created through the API (`rbw::api::Client::add`/
+  `edit` both hit `unreachable!()` for `EntryData::SshKey`), so `rbw import`
+  skips them with a warning instead of creating them. Fixing that upstream
+  would let `rbw import` restore them too.

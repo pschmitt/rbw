@@ -244,6 +244,44 @@ run `rbw register` to register each device using `rbw` with the Bitwarden
 server. This will prompt you for your personal API key which you can find using
 the instructions [here](https://bitwarden.com/help/article/personal-api-key/).
 
+### Backup and restore (`rbw export`/`rbw import`)
+
+`rbw export` writes the entire active vault (all entries, fully decrypted,
+plus collections) as JSON to stdout:
+
+```sh
+rbw export > backup.json
+```
+
+`rbw import` reads that JSON back and recreates the entries and collections
+in the target account's vault (use the global `--account`/`-a` flag to pick
+a different account than the primary one):
+
+```sh
+rbw import backup.json
+# or, piped:
+rbw export | rbw import
+```
+
+If no file is given, `rbw import` reads from stdin. Entries that already
+exist (matched by name, and by username for logins) are left untouched and
+reported as skipped; pass `--overwrite` to update them in place instead.
+Entries that belonged to an organization the target account isn't a member
+of are imported into the personal vault instead of failing. SSH key entries
+are skipped, since this fork doesn't yet support creating them via the API.
+
+If the export was produced with `rbw export --encrypt PASSPHRASE` (a
+gpg-encrypted tar.gz instead of raw JSON), pass the same passphrase back on
+import:
+
+```sh
+rbw import --decrypt-passphrase PASSPHRASE backup.tar.gz.gpg
+```
+
+`rbw import` prints a summary when it's done (entries created/updated/
+skipped, attachments restored, collections created) and exits non-zero if
+any entry failed to import.
+
 ### SSH Agent
 
 `rbw-agent` includes a built-in SSH agent for signing SSH authentication

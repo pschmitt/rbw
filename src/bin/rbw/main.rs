@@ -226,6 +226,38 @@ enum Opt {
     },
 
     #[command(
+        about = "Import data produced by `rbw export`",
+        long_about = "Import data produced by `rbw export`\n\n\
+            Reads a JSON export (or a gpg-encrypted tar.gz produced by \
+            `rbw export --encrypt`, given --decrypt-passphrase) and \
+            recreates its entries and collections in the target account's \
+            vault (see the global --account/-a flag). Reads from stdin if \
+            no file is given.\n\n\
+            Entries that already exist (matched by name, and username for \
+            logins) are left untouched and reported as skipped; pass \
+            --overwrite to update them in place instead. Entries belonging \
+            to an organization this account isn't a member of are imported \
+            into the personal vault instead. SSH key entries are skipped: \
+            this fork doesn't yet support creating them via the API."
+    )]
+    Import {
+        #[arg(help = "Export file to import (defaults to stdin if omitted)")]
+        file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            help = "Passphrase to decrypt a gpg-encrypted export archive \
+                (produced by `rbw export --encrypt`)"
+        )]
+        decrypt_passphrase: Option<String>,
+        #[arg(
+            long,
+            help = "Overwrite entries that already exist (matched by \
+                name/username) instead of skipping them"
+        )]
+        overwrite: bool,
+    },
+
+    #[command(
         about = "List all entries in the local Bitwarden database",
         visible_alias = "ls"
     )]
@@ -679,6 +711,7 @@ impl Opt {
             Self::Sync { .. } => "sync".to_string(),
             Self::Tui { .. } => "tui".to_string(),
             Self::Export { .. } => "export".to_string(),
+            Self::Import { .. } => "import".to_string(),
             Self::List { .. } => "list".to_string(),
             Self::Get { .. } => "get".to_string(),
             Self::Show { .. } => "show".to_string(),
@@ -1002,6 +1035,15 @@ fn main() {
             attachments,
             encrypt,
         } => commands::export(attachments, encrypt.as_deref()),
+        Opt::Import {
+            file,
+            decrypt_passphrase,
+            overwrite,
+        } => commands::import(
+            file.as_deref(),
+            decrypt_passphrase.as_deref(),
+            overwrite,
+        ),
         Opt::List {
             fields,
             term,
