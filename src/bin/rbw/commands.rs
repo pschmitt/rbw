@@ -224,6 +224,48 @@ pub struct DecryptedSearchCipher {
     password: Option<String>,
 }
 
+// One AND-ed word of a `search`/`list`/TUI-filter query: either a bare word
+// matched against every field (the historical plain-substring behavior), or
+// one scoped to a single field via a "prefix:value" word, e.g. "u:alice" or
+// "uri:google.com". An unrecognized prefix (or a bare trailing colon) falls
+// back to matching the whole word literally, so a search for something that
+// happens to contain a colon doesn't break.
+enum QueryToken {
+    Any(String),
+    Name(String),
+    User(String),
+    Uri(String),
+    Folder(String),
+    Notes(String),
+    Field(String),
+}
+
+impl QueryToken {
+    fn parse(word: &str) -> Self {
+        let Some((prefix, value)) = word.split_once(':') else {
+            return Self::Any(word.to_string());
+        };
+        if value.is_empty() {
+            return Self::Any(word.to_string());
+        }
+        match prefix.to_ascii_lowercase().as_str() {
+            "n" | "name" => Self::Name(value.to_string()),
+            "u" | "user" | "username" => Self::User(value.to_string()),
+            "uri" | "url" => Self::Uri(value.to_string()),
+            "f" | "folder" => Self::Folder(value.to_string()),
+            "note" | "notes" => Self::Notes(value.to_string()),
+            "field" => Self::Field(value.to_string()),
+            _ => Self::Any(word.to_string()),
+        }
+    }
+}
+
+// Parse a full query string (e.g. "u:alice uri:google admin") into its
+// AND-ed tokens, splitting on whitespace.
+fn parse_query(input: &str) -> Vec<QueryToken> {
+    input.split_whitespace().map(QueryToken::parse).collect()
+}
+
 // Relevance weights for entry lookup. A match's location decides how strongly
 // it counts, so a name hit always outranks a hit inside a hidden field, and an
 // exact (case-insensitive) name match wins decisively. Per-needle scores are
@@ -394,6 +436,10 @@ impl DecryptedSearchCipher {
         ) && self.match_score(needle, ignore_case, exact).is_some()
     }
 
+    // `term` is a space-separated query: each word either matches any field
+    // (today's plain substring behavior) or, prefixed like "u:alice" or
+    // "uri:google", scopes that word to one field. Every word must match
+    // (AND) for the entry as a whole to match. See `QueryToken`.
     pub fn search_match(
         &self,
         term: &str,
@@ -410,24 +456,43 @@ impl DecryptedSearchCipher {
             return false;
         }
 
-        let mut fields = vec![self.name.clone()];
-        if let Some(notes) = &self.notes {
-            fields.push(notes.clone());
+        if term.trim().is_empty() {
+            return true;
         }
-        if let Some(user) = &self.user {
-            fields.push(user.clone());
-        }
-        fields.extend(self.uris.iter().map(|(uri, _)| uri).cloned());
-        fields.extend(self.fields.iter().cloned());
-        fields.extend(self.sensitive_fields.iter().cloned());
 
-        for field in fields {
-            if field.to_lowercase().contains(&term.to_lowercase()) {
-                return true;
+        parse_query(term).iter().all(|token| self.token_match(token))
+    }
+
+    fn token_match(&self, token: &QueryToken) -> bool {
+        let contains =
+            |field: &str, needle: &str| field.to_lowercase().contains(&needle.to_lowercase());
+        match token {
+            QueryToken::Any(term) => {
+                contains(&self.name, term)
+                    || self.folder.as_deref().is_some_and(|f| contains(f, term))
+                    || self.user.as_deref().is_some_and(|u| contains(u, term))
+                    || self.notes.as_deref().is_some_and(|n| contains(n, term))
+                    || self.uris.iter().any(|(u, _)| contains(u, term))
+                    || self.fields.iter().any(|f| contains(f, term))
+                    || self.sensitive_fields.iter().any(|f| contains(f, term))
+            }
+            QueryToken::Name(term) => contains(&self.name, term),
+            QueryToken::User(term) => {
+                self.user.as_deref().is_some_and(|u| contains(u, term))
+            }
+            QueryToken::Uri(term) => {
+                self.uris.iter().any(|(u, _)| contains(u, term))
+            }
+            QueryToken::Folder(term) => {
+                self.folder.as_deref().is_some_and(|f| contains(f, term))
+            }
+            QueryToken::Notes(term) => {
+                self.notes.as_deref().is_some_and(|n| contains(n, term))
+            }
+            QueryToken::Field(term) => {
+                self.fields.iter().any(|f| contains(f, term))
             }
         }
-
-        false
     }
 }
 
@@ -8248,6 +8313,42 @@ mod test {
 
         assert!(entry.search_match("exa", None, false));
         assert!(!entry.search_match("exa", None, true));
+    }
+
+    #[test]
+    fn test_search_match_supports_field_scoped_query_syntax() {
+        let entry = DecryptedSearchCipher {
+            id: "cipher-id".to_string(),
+            entry_type: "Login".to_string(),
+            folder: Some("Work".to_string()),
+            name: "Google".to_string(),
+            user: Some("alice".to_string()),
+            uris: vec![("https://google.com".to_string(), None)],
+            fields: vec!["custom-value".to_string()],
+            notes: Some("some notes here".to_string()),
+            attachment_count: 0,
+            sensitive_fields: vec![],
+            password: None,
+        };
+
+        // A scoped term only matches its own field.
+        assert!(entry.search_match("u:alice", None, false));
+        assert!(!entry.search_match("u:google", None, false));
+        assert!(entry.search_match("uri:google", None, false));
+        assert!(!entry.search_match("uri:alice", None, false));
+        assert!(entry.search_match("n:goog", None, false));
+        assert!(entry.search_match("f:work", None, false));
+        assert!(entry.search_match("notes:here", None, false));
+        assert!(entry.search_match("field:custom", None, false));
+
+        // Multiple words AND together, mixing scoped and bare terms.
+        assert!(entry.search_match("u:alice uri:google", None, false));
+        assert!(!entry.search_match("u:alice uri:bing", None, false));
+        assert!(entry.search_match("Google u:alice", None, false));
+
+        // An unrecognized prefix falls back to a literal substring match
+        // instead of erroring or matching nothing.
+        assert!(!entry.search_match("bogus:alice", None, false));
     }
 
     #[test]

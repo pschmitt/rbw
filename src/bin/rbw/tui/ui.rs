@@ -853,6 +853,7 @@ fn render_help(f: &mut Frame, area: Rect) {
 
     let entries = [
         ("type", "filter the list (search is always live)"),
+        ("  u:/uri:/n:/f:", "scope a word to user/uri/name/folder"),
         ("↑/↓ · ^p/^n", "move selection (works while searching)"),
         ("⇥ · /", "toggle search bar ↔ list"),
         ("g / G", "jump to top / bottom"),
