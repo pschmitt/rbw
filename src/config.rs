@@ -165,14 +165,19 @@ impl Config {
             }
         })?;
         fh.write_all(
-            serde_json::to_string(self)
+            serde_json::to_string_pretty(self)
                 .map_err(|source| Error::SaveConfigJson {
                     source,
                     file: file.clone(),
                 })?
                 .as_bytes(),
         )
-        .map_err(|source| Error::SaveConfig { source, file })?;
+        .map_err(|source| Error::SaveConfig {
+            source,
+            file: file.clone(),
+        })?;
+        fh.write_all(b"\n")
+            .map_err(|source| Error::SaveConfig { source, file })?;
         Ok(())
     }
 
