@@ -619,6 +619,7 @@ impl App {
         let keep = self.current_key();
         let names: Vec<String> =
             self.vaults.iter().map(|v| v.name.clone()).collect();
+        let mut synced = Vec::new();
         let mut errors = Vec::new();
         for name in names {
             match commands::tui_account_sync(&name) {
@@ -629,6 +630,7 @@ impl App {
                         slot.db = v.db;
                         slot.search = v.search;
                     }
+                    synced.push(name);
                 }
                 Err(e) => errors.push(format!("{name}: {e:#}")),
             }
@@ -639,9 +641,21 @@ impl App {
         self.restore_selection(keep);
         self.ensure_detail();
         if errors.is_empty() {
-            self.set_status(Level::Success, "synced");
-        } else {
+            self.set_status(
+                Level::Success,
+                format!("synced {}", synced.join(", ")),
+            );
+        } else if synced.is_empty() {
             self.set_status(Level::Error, errors.join("; "));
+        } else {
+            self.set_status(
+                Level::Error,
+                format!(
+                    "synced {}; failed: {}",
+                    synced.join(", "),
+                    errors.join("; ")
+                ),
+            );
         }
     }
 
@@ -1123,6 +1137,7 @@ impl App {
             KeyCode::Char('e') if ctrl => return Some(Action::OpenEditor),
             KeyCode::Char('s') if ctrl => self.sync(),
             KeyCode::Char('r') if ctrl => self.reveal = !self.reveal,
+            KeyCode::Char('y') if ctrl => self.copy_password(),
             KeyCode::Char('p') if alt => self.copy_password(),
             KeyCode::Char('u') if alt => self.copy_username(),
             KeyCode::Char('t') if alt => self.copy_totp(),
