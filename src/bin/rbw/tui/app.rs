@@ -112,6 +112,8 @@ pub enum PickerKind {
     },
 }
 
+const CREDENTIAL_SOURCE_AUTO_ITEM: &str = "(auto by URI)";
+
 // A filterable, single-select list overlay: a typed filter narrows `items`
 // down to `filtered`, arrow keys move the highlight within it, and Enter
 // confirms. If nothing in `items` matches the typed text (most commonly
@@ -1099,7 +1101,7 @@ impl App {
     // if any.
     fn selected_account_credential_source(
         &self,
-    ) -> Option<(String, Option<(String, String)>)> {
+    ) -> Option<(String, Option<(String, Option<String>)>)> {
         if let Mode::Accounts(view) = &self.mode {
             view.accounts
                 .get(view.selected)
@@ -1417,13 +1419,17 @@ impl App {
             .iter()
             .find(|v| v.name == source_account)
             .map(|v| {
-                v.search
-                    .iter()
-                    .filter(|s| s.entry_type == "Login")
-                    .map(|s| s.name.clone())
-                    .collect()
+                let mut items = vec![CREDENTIAL_SOURCE_AUTO_ITEM.to_string()];
+                items.extend(
+                    v.search
+                        .iter()
+                        .filter(|s| s.entry_type == "Login")
+                        .map(|s| s.name.clone())
+                        .collect::<Vec<_>>(),
+                );
+                items
             })
-            .unwrap_or_default()
+            .unwrap_or_else(|| vec![CREDENTIAL_SOURCE_AUTO_ITEM.to_string()])
     }
 
     fn handle_picker(&mut self, key: KeyEvent) -> Action {
@@ -1452,20 +1458,17 @@ impl App {
         let Mode::Picker(view) = &self.mode else {
             return;
         };
-        let value = view.current_value();
-        if value.trim().is_empty() {
-            self.set_status(Level::Warn, "nothing selected");
-            return;
-        }
         match &view.kind {
             PickerKind::CredentialSourceAccount { name } => {
+                let value = view.current_value();
+                if value.trim().is_empty() {
+                    self.set_status(Level::Warn, "nothing selected");
+                    return;
+                }
                 let name = name.clone();
                 let items = self.credential_source_item_candidates(&value);
-                let hint = if items.is_empty() {
-                    "no unlocked vault to pick from · type the item name · ⏎ save · esc cancel"
-                } else {
-                    "type to filter · ↑/↓ select · ⏎ save · esc cancel"
-                };
+                let hint =
+                    "type to filter · ↑/↓ select · blank/(auto by URI) = auto-detect · ⏎ save · esc cancel";
                 self.mode = Mode::Picker(PickerView::new(
                     format!("Link '{name}' → item in '{value}'"),
                     hint,
@@ -1481,19 +1484,27 @@ impl App {
                 name,
                 source_account,
             } => {
+                let value = view.current_value();
                 let name = name.clone();
                 let source_account = source_account.clone();
+                let source_item = match value.trim() {
+                    "" => None,
+                    CREDENTIAL_SOURCE_AUTO_ITEM => None,
+                    item => Some(item),
+                };
                 match commands::tui_account_set_credential_source(
                     &name,
                     &source_account,
-                    &value,
+                    source_item,
                 ) {
                     Ok(()) => {
+                        let link = source_item.map_or_else(
+                            || format!("{source_account}/(auto by URI)"),
+                            |item| format!("{source_account}/{item}"),
+                        );
                         self.set_status(
                             Level::Success,
-                            format!(
-                                "linked '{name}' → {source_account}/{value}"
-                            ),
+                            format!("linked '{name}' → {link}"),
                         );
                         // Back to the (refreshed) accounts panel.
                         self.open_accounts();
@@ -2991,7 +3002,7 @@ mod test {
     // the real config file) since only the accounts-panel keybinding logic
     // is under test here, not the account listing itself.
     fn app_on_accounts_panel(
-        credential_source: Option<(String, String)>,
+        credential_source: Option<(String, Option<String>)>,
     ) -> App {
         let mut a = app();
         a.mode = Mode::Accounts(AccountsView {
@@ -3033,7 +3044,7 @@ mod test {
     fn accounts_s_on_a_linked_locked_account_uses_auto_unlock_path() {
         let mut a = app_on_accounts_panel(Some((
             "personal".to_string(),
-            "vault".to_string(),
+            Some("vault".to_string()),
         )));
         assert!(matches!(
             a.handle_key(key(KeyCode::Char('s'))),
@@ -3163,7 +3174,7 @@ mod test {
     fn accounts_l_opens_account_picker_prefilled_with_current_source() {
         let mut a = app_on_accounts_panel(Some((
             "personal".to_string(),
-            "Work master password".to_string(),
+            Some("Work master password".to_string()),
         )));
         a.handle_key(key(KeyCode::Char('l')));
 
@@ -3193,7 +3204,7 @@ mod test {
     fn accounts_l_then_enter_advances_to_item_picker() {
         let mut a = app_on_accounts_panel(Some((
             "personal".to_string(),
-            "Work master password".to_string(),
+            Some("Work master password".to_string()),
         )));
         a.handle_key(key(KeyCode::Char('l')));
         a.handle_key(key(KeyCode::Enter));
@@ -3208,8 +3219,12 @@ mod test {
             PickerKind::CredentialSourceItem { name, source_account }
                 if name == "work" && source_account == "personal"
         ));
-        // No vault loaded for "personal" in this fixture, so nothing to list.
-        assert_eq!(picker.rows().count(), 0);
+        // No vault loaded for "personal" in this fixture, so only the
+        // synthetic auto-discovery choice is listed.
+        assert_eq!(
+            picker.rows().map(|(_, s)| s).collect::<Vec<_>>(),
+            vec![super::CREDENTIAL_SOURCE_AUTO_ITEM]
+        );
     }
 
     // Ctrl+C cancels the credential_source picker (either step) same as Esc.
@@ -3294,7 +3309,7 @@ mod test {
     fn accounts_shift_l_with_credential_source_opens_confirm() {
         let mut a = app_on_accounts_panel(Some((
             "personal".to_string(),
-            "entry".to_string(),
+            Some("item".to_string()),
         )));
         a.handle_key(key(KeyCode::Char('L')));
 

@@ -2634,36 +2634,29 @@ pub fn account_set(
     unlock: Option<rbw::config::UnlockPolicy>,
     exclude_from_list: Option<bool>,
     credential_source_account: Option<String>,
-    credential_source_entry: Option<String>,
+    credential_source_item: Option<String>,
     clear_credential_source: bool,
 ) -> anyhow::Result<()> {
     if unlock.is_none()
         && exclude_from_list.is_none()
         && credential_source_account.is_none()
-        && credential_source_entry.is_none()
+        && credential_source_item.is_none()
         && !clear_credential_source
     {
         anyhow::bail!(
             "nothing to change: pass --unlock, --exclude-from-list, \
-            --credential-source-account and --credential-source-entry, or \
+            --credential-source-account and optionally \
+            --credential-source-item, or \
             --clear-credential-source"
         );
     }
     if clear_credential_source
         && (credential_source_account.is_some()
-            || credential_source_entry.is_some())
+            || credential_source_item.is_some())
     {
         anyhow::bail!(
             "--clear-credential-source can't be combined with \
-            --credential-source-account/--credential-source-entry"
-        );
-    }
-    if credential_source_account.is_some()
-        != credential_source_entry.is_some()
-    {
-        anyhow::bail!(
-            "--credential-source-account and --credential-source-entry must \
-            be given together"
+            --credential-source-account/--credential-source-item"
         );
     }
 
@@ -2682,12 +2675,11 @@ pub fn account_set(
     }
     if clear_credential_source {
         account.credential_source = None;
-    } else if let (Some(source_account), Some(entry)) =
-        (credential_source_account, credential_source_entry)
-    {
+    } else if let Some(source_account) = credential_source_account {
         account.credential_source = Some(rbw::config::CredentialSource {
             account: source_account,
-            entry,
+            item: credential_source_item
+                .filter(|item| !item.trim().is_empty()),
         });
     }
 
@@ -2772,9 +2764,9 @@ fn unlock_impl(
 // If the currently-active account has a `credential_source` configured,
 // resolve its master password (and, if the linked entry has one, its TOTP
 // secret -- for auto-answering a 2FA challenge during login) from the
-// linked entry in the source account's vault instead of prompting via
+// linked item in the source account's vault instead of prompting via
 // pinentry: unlock the source account (recursively following its own
-// `credential_source`, if it has one), find the linked entry in its
+// `credential_source`, if it has one), find the linked item in its
 // already-unlocked vault, and pull both fields from it. Non-Login entry
 // types aren't handled specially -- resolution just fails for those.
 //
@@ -2814,7 +2806,8 @@ fn resolve_credential_source(
     let source = account.credential_source.as_ref()?;
 
     visited.push(target.clone());
-    let result = resolve_from_credential_source(source, visited);
+    let result =
+        resolve_from_credential_source(&target, &account, source, visited);
     visited.pop();
 
     // Whatever happened, route subsequent api calls back at the account we
@@ -2836,9 +2829,11 @@ fn resolve_credential_source(
 }
 
 // Unlocks `source.account` (recursing into its own `credential_source` if it
-// has one) and looks up `source.entry` in its vault, matched the same way as
-// an `rbw get NAME` name lookup.
+// has one) and resolves either the explicitly-configured source item or a
+// unique URI match for `target_account`'s server in its vault.
 fn resolve_from_credential_source(
+    target_name: &str,
+    target_account: &rbw::config::Account,
     source: &rbw::config::CredentialSource,
     visited: &mut Vec<String>,
 ) -> anyhow::Result<(String, Option<String>)> {
@@ -2849,29 +2844,44 @@ fn resolve_from_credential_source(
     }
 
     let db = load_db()?;
-    // parse_needle is Infallible -- it always returns Ok.
-    let needle = parse_needle(&source.entry).unwrap();
-    let (_, decrypted) =
-        find_entry(&db, vec![needle], None, None, false, false)
-            .with_context(|| {
-                format!(
-                    "entry '{}' not found in account '{}'",
-                    source.entry, source.account
-                )
-            })?;
+    let (decrypted, item_desc) = if let Some(item) = source.item.as_deref() {
+        // parse_needle is Infallible -- it always returns Ok.
+        let needle = parse_needle(item).unwrap();
+        let (_, decrypted) =
+            find_entry(&db, vec![needle], None, None, false, false)
+                .with_context(|| {
+                    format!(
+                        "item '{item}' not found in account '{}'",
+                        source.account
+                    )
+                })?;
+        (decrypted, item.to_string())
+    } else {
+        let target_uri = target_account.ui_url();
+        let needle = parse_needle(&target_uri).unwrap();
+        let (_, decrypted) =
+            find_entry(&db, vec![needle], None, None, false, false)
+                .with_context(|| {
+                    format!(
+                        "no unique item in account '{}' matched '{target_name}' by URI ({target_uri})",
+                        source.account
+                    )
+                })?;
+        (decrypted, format!("URI match for {target_uri}"))
+    };
 
-    credential_source_login_fields(&decrypted, &source.entry, &source.account)
+    credential_source_login_fields(&decrypted, &item_desc, &source.account)
 }
 
 // Pulls the master password (and TOTP secret, if set) out of a decrypted
-// credential_source entry: a plain Login entry's `password`/`totp` fields.
+// credential_source item: a plain Login item's `password`/`totp` fields.
 // Non-Login entry types aren't handled specially -- resolution just fails
 // (falling back to pinentry) for anything else. An entry with no TOTP
 // secret is fine (`totp: None`); only a missing password is fatal, since
 // that's the one field every use of `credential_source` actually needs.
 fn credential_source_login_fields(
     decrypted: &DecryptedCipher,
-    entry: &str,
+    item: &str,
     account: &str,
 ) -> anyhow::Result<(String, Option<String>)> {
     match &decrypted.data {
@@ -2881,10 +2891,10 @@ fn credential_source_login_fields(
             ..
         } => Ok((password.clone(), totp.clone())),
         DecryptedData::Login { password: None, .. } => Err(anyhow::anyhow!(
-            "entry '{entry}' in account '{account}' has no password set"
+            "item '{item}' in account '{account}' has no password set"
         )),
         _ => Err(anyhow::anyhow!(
-            "entry '{entry}' in account '{account}' is not a login entry"
+            "item '{item}' in account '{account}' is not a login item"
         )),
     }
 }
@@ -8443,10 +8453,10 @@ pub struct TuiAccount {
     pub server: String,
     pub unlocked: bool,
     pub primary: bool,
-    // `(source account, source entry)` from `Account::credential_source`,
-    // if this account's master password is linked to another account's
-    // vault entry.
-    pub credential_source: Option<(String, String)>,
+    // `(source account, optional source item)` from
+    // `Account::credential_source`, if this account's master password is
+    // linked to another account's vault.
+    pub credential_source: Option<(String, Option<String>)>,
 }
 
 // True if the currently-active account is unlocked in the agent.
@@ -8637,7 +8647,7 @@ pub fn tui_accounts() -> anyhow::Result<Vec<TuiAccount>> {
             credential_source: account
                 .credential_source
                 .as_ref()
-                .map(|cs| (cs.account.clone(), cs.entry.clone())),
+                .map(|cs| (cs.account.clone(), cs.item.clone())),
             name: account.name,
         });
     }
@@ -8800,10 +8810,10 @@ pub fn tui_save_password_gen_policy(
 pub fn tui_account_set_credential_source(
     name: &str,
     source_account: &str,
-    source_entry: &str,
+    source_item: Option<&str>,
 ) -> anyhow::Result<()> {
-    if source_account.trim().is_empty() || source_entry.trim().is_empty() {
-        anyhow::bail!("source account and source entry are both required");
+    if source_account.trim().is_empty() {
+        anyhow::bail!("source account is required");
     }
 
     let mut config = rbw::config::Config::load()
@@ -8815,7 +8825,10 @@ pub fn tui_account_set_credential_source(
     };
     account.credential_source = Some(rbw::config::CredentialSource {
         account: source_account.to_string(),
-        entry: source_entry.to_string(),
+        item: source_item
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToString::to_string),
     });
 
     // Reject a self-reference or a cycle before persisting, same guard as

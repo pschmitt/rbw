@@ -70,15 +70,15 @@ impl PasswordGenPolicy {
     }
 }
 
-// Points at a Login entry, in another configured account's vault, that holds
+// Points at a Login item, in another configured account's vault, that holds
 // this account's master password. Used by the agent's unlock flow to skip
 // the pinentry prompt: the source account is unlocked (recursively, if it
-// itself has a `credential_source`), the named entry is looked up in its
-// vault, and the entry's `password` field is used as this account's master
-// password. Only that field is used -- TOTP-protected accounts and non-Login
-// entry types aren't handled specially. If resolution fails for any reason
-// (source account can't unlock, entry not found, wrong entry type), the
-// normal pinentry prompt is used instead.
+// itself has a `credential_source`), the named item is looked up in its
+// vault, and the item's `password` field is used as this account's master
+// password. If `item` is unset, rbw instead tries to find a unique Login
+// item in the source account whose URI matches this account's server URL.
+// Only the password/TOTP fields are used; if resolution fails for any
+// reason, the normal pinentry prompt is used instead.
 #[derive(
     serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq,
 )]
@@ -87,9 +87,15 @@ pub struct CredentialSource {
     // account's credentials. Must not be this account's own name, and must
     // not form a cycle with other accounts' `credential_source`s.
     pub account: String,
-    // Which entry in that account's vault holds the credentials, matched the
-    // same way as an `rbw get NAME` name lookup.
-    pub entry: String,
+    // Which item in that account's vault holds the credentials, matched the
+    // same way as an `rbw get NAME` name lookup. If unset, rbw falls back to
+    // finding a unique URI match for the child account's UI URL.
+    #[serde(
+        alias = "entry",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub item: Option<String>,
 }
 
 // A single Bitwarden/Vaultwarden account. The per-server connection details
@@ -686,7 +692,7 @@ mod test {
         let mut work = named("work", "b@co.com");
         work.credential_source = Some(CredentialSource {
             account: "personal".to_string(),
-            entry: "work login".to_string(),
+            item: Some("work login".to_string()),
         });
         c.accounts = vec![named("personal", "a@x.com"), work];
 
@@ -704,7 +710,7 @@ mod test {
         let mut work = named("work", "b@co.com");
         work.credential_source = Some(CredentialSource {
             account: "work".to_string(),
-            entry: "whoops".to_string(),
+            item: Some("whoops".to_string()),
         });
         c.accounts = vec![work];
 
@@ -722,17 +728,17 @@ mod test {
         let mut a = named("a", "a@x.com");
         a.credential_source = Some(CredentialSource {
             account: "b".to_string(),
-            entry: "e".to_string(),
+            item: Some("e".to_string()),
         });
         let mut b = named("b", "b@x.com");
         b.credential_source = Some(CredentialSource {
             account: "c".to_string(),
-            entry: "e".to_string(),
+            item: Some("e".to_string()),
         });
         let mut cc = named("c", "c@x.com");
         cc.credential_source = Some(CredentialSource {
             account: "a".to_string(),
-            entry: "e".to_string(),
+            item: Some("e".to_string()),
         });
         c.accounts = vec![a, b, cc];
 
@@ -750,7 +756,7 @@ mod test {
         let mut work = named("work", "b@co.com");
         work.credential_source = Some(CredentialSource {
             account: "nonexistent".to_string(),
-            entry: "e".to_string(),
+            item: Some("e".to_string()),
         });
         c.accounts = vec![work];
 
@@ -758,5 +764,15 @@ mod test {
             c.credential_source_chain("work"),
             Err(Error::UnknownAccount { name }) if name == "nonexistent"
         ));
+    }
+
+    #[test]
+    fn credential_source_deserializes_legacy_entry_key_as_item() {
+        let source: CredentialSource = serde_json::from_str(
+            r#"{"account":"personal","entry":"work login"}"#,
+        )
+        .unwrap();
+        assert_eq!(source.account, "personal");
+        assert_eq!(source.item.as_deref(), Some("work login"));
     }
 }

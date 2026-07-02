@@ -239,7 +239,7 @@ pub enum TuiAction {
     AccountSetPrimary,
     AccountAdd,
     // Link (or edit) the highlighted account's `credential_source` to a
-    // Login entry in another account's vault.
+    // Login item in another account's vault.
     AccountSetCredentialSource,
     // Clear the highlighted account's `credential_source` link.
     AccountClearCredentialSource,

@@ -886,26 +886,27 @@ enum AccountCmd {
         exclude_from_list: Option<bool>,
         #[arg(
             long,
-            requires = "credential_source_entry",
+            requires = "credential_source_account",
             help = "Name of another configured account whose vault holds \
-                this account's master password; use with \
-                --credential-source-entry so this account can be \
-                auto-unlocked instead of prompting via pinentry"
+                this account's master password; optionally combine with \
+                --credential-source-item to name the Login item explicitly, \
+                otherwise rbw will try to find a unique URI match"
         )]
         credential_source_account: Option<String>,
         #[arg(
             long,
+            alias = "credential-source-entry",
             requires = "credential_source_account",
-            help = "Name of the Login entry, in the \
+            help = "Name of the Login item, in the \
                 --credential-source-account vault, whose password field \
                 holds this account's master password"
         )]
-        credential_source_entry: Option<String>,
+        credential_source_item: Option<String>,
         #[arg(
             long,
             conflicts_with_all = [
                 "credential_source_account",
-                "credential_source_entry"
+                "credential_source_item"
             ],
             help = "Remove this account's credential_source, going back to \
                 a normal pinentry prompt to unlock it"
@@ -1093,14 +1094,14 @@ fn main() {
                 unlock,
                 exclude_from_list,
                 credential_source_account,
-                credential_source_entry,
+                credential_source_item,
                 clear_credential_source,
             } => commands::account_set(
                 &name,
                 unlock.map(std::convert::Into::into),
                 exclude_from_list,
                 credential_source_account,
-                credential_source_entry,
+                credential_source_item,
                 clear_credential_source,
             ),
         },

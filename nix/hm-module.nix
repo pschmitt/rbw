@@ -51,6 +51,14 @@ let
     else
       v;
 
+  isDefaultPasswordGen =
+    pg:
+    pg.length == null
+    && !pg.no_symbols
+    && !pg.only_numbers
+    && !pg.nonconfusables
+    && !pg.diceware;
+
   mkNullOrStr =
     description:
     mkOption {
@@ -141,12 +149,15 @@ let
                     accounts' `credential_source`s.
                   '';
                 };
-                entry = mkOption {
-                  type = types.str;
+                item = mkOption {
+                  type = types.nullOr types.str;
+                  default = null;
                   description = ''
-                    Name of the Login entry in that account's vault holding
-                    this account's master password (matched the same way as
-                    an `rbw get NAME` lookup); its `password` field is used.
+                    Optional name of the Login item in that account's vault
+                    holding this account's master password (matched the same
+                    way as an `rbw get NAME` lookup). When unset, rbw tries
+                    to find a unique Login item whose URI matches this
+                    account's server URL instead.
                   '';
                 };
               };
@@ -154,17 +165,18 @@ let
           );
           default = null;
           description = ''
-            Points at a Login entry, in another configured account's vault,
+            Points at a Login item, in another configured account's vault,
             that holds this account's master password. Used by the agent's
             unlock flow to skip the pinentry prompt: the source account is
             unlocked (recursively, if it itself has a `credential_source`),
-            the named entry is looked up in its vault, and the entry's
-            `password` field is used as this account's master password.
-            Mirrors `Option<CredentialSource>` in `src/config.rs`. Unset
-            (`null`, the default) means this account is unlocked normally
-            via pinentry. See `rbw account set --credential-source-account/
-            --credential-source-entry`, or the equivalent TUI accounts-panel
-            action.
+            the named item is looked up in its vault and its `password`
+            field is used as this account's master password. If `item` is
+            unset, rbw tries to find a unique URI match for this account's
+            server URL instead. Mirrors `Option<CredentialSource>` in
+            `src/config.rs`. Unset (`null`, the default) means this account
+            is unlocked normally via pinentry. See `rbw account set
+            --credential-source-account/--credential-source-item`, or the
+            equivalent TUI accounts-panel action.
           '';
         };
       };
@@ -326,6 +338,11 @@ in
       let
         rendered = cfg.settings // {
           accounts = lib.attrValues cfg.settings.accounts;
+          password_gen =
+            if isDefaultPasswordGen cfg.settings.password_gen then
+              null
+            else
+              cfg.settings.password_gen;
         };
       in
       builtins.toJSON (filterNulls rendered) + "\n";

@@ -1435,10 +1435,13 @@ fn render_accounts(f: &mut Frame, view: &AccountsView, area: Rect) {
             Style::default().fg(Color::Blue),
         ));
         lines.push(Line::from(spans));
-        if let Some((source_account, source_entry)) = &acct.credential_source
-        {
+        if let Some((source_account, source_item)) = &acct.credential_source {
+            let linked = source_item.as_ref().map_or_else(
+                || format!("{source_account}/(auto by URI)"),
+                |item| format!("{source_account}/{item}"),
+            );
             lines.push(Line::from(Span::styled(
-                format!("      → linked to {source_account}/{source_entry}"),
+                format!("      → linked to {linked}"),
                 Style::default().fg(Color::Magenta).italic(),
             )));
         }
@@ -1662,7 +1665,7 @@ mod test {
                     primary: false,
                     credential_source: Some((
                         "personal".to_string(),
-                        "Work VPN master password".to_string(),
+                        Some("Work VPN master password".to_string()),
                     )),
                 },
             ],
@@ -1674,8 +1677,12 @@ mod test {
         // items (the latter is the free-text-fallback state).
         app.mode = Mode::Picker(crate::tui::app::PickerView::new(
             "Link 'work' → item in 'personal'".to_string(),
-            "type to filter · ↑/↓ select · ⏎ save · esc cancel",
-            vec!["GitHub".to_string(), "Work VPN".to_string()],
+            "type to filter · ↑/↓ select · blank/(auto by URI) = auto-detect · ⏎ save · esc cancel",
+            vec![
+                "(auto by URI)".to_string(),
+                "GitHub".to_string(),
+                "Work VPN".to_string(),
+            ],
             Some("Work".to_string()),
             crate::tui::app::PickerKind::CredentialSourceItem {
                 name: "work".to_string(),
