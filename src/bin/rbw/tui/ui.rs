@@ -31,8 +31,9 @@ const ACCENT: Color = Color::Cyan;
 const SELECT_BG: Color = Color::Rgb(38, 44, 66);
 const DIM: Color = Color::Rgb(128, 132, 148);
 // Foreground (not background) so it stays legible layered under the list's
-// own row-selection highlight.
-const MATCH: Color = Color::Yellow;
+// own row-selection highlight. Same red the CLI's `list`/`search` use for
+// grep-style match highlighting (ANSI "1;31").
+const MATCH: Color = Color::Red;
 const MASK: &str = "••••••••";
 const SEARCH_PROMPT: &str = "❯ ";
 const LABEL_W: usize = 12;
@@ -343,19 +344,40 @@ fn highlighted_row(
     Line::from(spans)
 }
 
-fn secret_row(label: &str, value: &str, reveal: bool) -> Line<'static> {
-    let shown = if reveal {
-        value.to_string()
+// Like `highlighted_row`, but for a value that's masked until `reveal`:
+// revealed, it highlights matches the same as any other field; masked, the
+// value itself stays hidden but a red " *" after the mask still tells you
+// it's *why* this entry matched (mirrors `search_match`'s own scan of
+// hidden/sensitive fields, which already counts them — this just makes that
+// visible).
+fn secret_row(
+    label: &str,
+    value: &str,
+    reveal: bool,
+    query: &str,
+    field: commands::SearchField,
+) -> Line<'static> {
+    let ranges = commands::highlight_ranges(query, field, value);
+    let mut spans = vec![Span::styled(
+        format!("{label:>LABEL_W$}  "),
+        Style::default().fg(DIM),
+    )];
+    if reveal {
+        spans.extend(highlighted_spans(
+            value,
+            &ranges,
+            Style::default().fg(Color::Yellow),
+        ));
     } else {
-        MASK.to_string()
-    };
-    Line::from(vec![
-        Span::styled(
-            format!("{label:>LABEL_W$}  "),
-            Style::default().fg(DIM),
-        ),
-        Span::styled(shown, Style::default().fg(Color::Yellow)),
-    ])
+        spans.push(Span::styled(
+            MASK.to_string(),
+            Style::default().fg(Color::Yellow),
+        ));
+        if !ranges.is_empty() {
+            spans.push(Span::styled(" *", Style::default().fg(MATCH).bold()));
+        }
+    }
+    Line::from(spans)
 }
 
 #[allow(clippy::ref_option)]
@@ -417,7 +439,13 @@ fn detail_lines(
                 ));
             }
             if let Some(pw) = password {
-                lines.push(secret_row("password", pw, reveal));
+                lines.push(secret_row(
+                    "password",
+                    pw,
+                    reveal,
+                    query,
+                    commands::SearchField::Secret,
+                ));
             }
             if let Some(totp) = totp {
                 lines.push(totp_line(totp, reveal));
@@ -444,7 +472,13 @@ fn detail_lines(
         } => {
             opt_row(&mut lines, "cardholder", cardholder_name);
             if let Some(number) = number {
-                lines.push(secret_row("number", number, reveal));
+                lines.push(secret_row(
+                    "number",
+                    number,
+                    reveal,
+                    query,
+                    commands::SearchField::Secret,
+                ));
             }
             opt_row(&mut lines, "brand", brand);
             if exp_month.is_some() || exp_year.is_some() {
@@ -453,7 +487,13 @@ fn detail_lines(
                 lines.push(row("expires", format!("{m}/{y}")));
             }
             if let Some(code) = code {
-                lines.push(secret_row("cvv", code, reveal));
+                lines.push(secret_row(
+                    "cvv",
+                    code,
+                    reveal,
+                    query,
+                    commands::SearchField::Secret,
+                ));
             }
         }
         DecryptedData::Identity {
@@ -503,7 +543,13 @@ fn detail_lines(
             opt_row(&mut lines, "fingerprint", fingerprint);
             opt_row(&mut lines, "public key", public_key);
             if let Some(pk) = private_key {
-                lines.push(secret_row("private key", pk, reveal));
+                lines.push(secret_row(
+                    "private key",
+                    pk,
+                    reveal,
+                    query,
+                    commands::SearchField::Secret,
+                ));
             }
         }
     }
@@ -517,7 +563,13 @@ fn detail_lines(
             let hidden =
                 matches!(field.ty, Some(rbw::api::FieldType::Hidden));
             if hidden {
-                lines.push(secret_row(&label, &value, reveal));
+                lines.push(secret_row(
+                    &label,
+                    &value,
+                    reveal,
+                    query,
+                    commands::SearchField::Field,
+                ));
             } else {
                 lines.push(highlighted_row(
                     &label,
@@ -1196,22 +1248,13 @@ mod test {
             })
         };
 
-        assert!(has_highlight(
-            &detail_lines(&cipher, false, "n:git"),
-            "Git"
-        ));
-        assert!(has_highlight(
-            &detail_lines(&cipher, false, "u:cat"),
-            "cat"
-        ));
+        assert!(has_highlight(&detail_lines(&cipher, false, "n:git"), "Git"));
+        assert!(has_highlight(&detail_lines(&cipher, false, "u:cat"), "cat"));
         assert!(has_highlight(
             &detail_lines(&cipher, false, "uri:github"),
             "github"
         ));
-        assert!(has_highlight(
-            &detail_lines(&cipher, false, "f:dev"),
-            "Dev"
-        ));
+        assert!(has_highlight(&detail_lines(&cipher, false, "f:dev"), "Dev"));
         assert!(has_highlight(
             &detail_lines(&cipher, false, "field:admin"),
             "admin"
@@ -1226,5 +1269,60 @@ mod test {
             &detail_lines(&cipher, false, "u:git"),
             "Git"
         ));
+    }
+
+    #[test]
+    fn detail_lines_mark_a_matching_secret_without_revealing_it() {
+        let cipher = DecryptedCipher {
+            id: "id".to_string(),
+            folder: None,
+            name: "GitHub".to_string(),
+            data: DecryptedData::Login {
+                username: None,
+                password: Some("correct-horse-battery".to_string()),
+                totp: None,
+                uris: None,
+            },
+            fields: vec![],
+            notes: None,
+            history: Vec::new(),
+            attachments: Vec::new(),
+            attachment_metadata: AttachmentMetadata {
+                attachment_count: 0,
+            },
+            account: None,
+        };
+
+        let text_of = |lines: &[super::Line<'_>]| -> String {
+            lines
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .map(|s| s.content.as_ref())
+                .collect()
+        };
+
+        // Masked + matching: the mask stays, but a red " *" marker is
+        // appended — the actual value is never in the rendered text.
+        let masked_match = detail_lines(&cipher, false, "battery");
+        let masked_match_text = text_of(&masked_match);
+        assert!(!masked_match_text.contains("correct-horse-battery"));
+        assert!(masked_match.iter().flat_map(|l| l.spans.iter()).any(|s| {
+            s.content.as_ref() == " *" && s.style.fg == Some(MATCH)
+        }));
+
+        // Masked, no match: no marker.
+        let masked_no_match = detail_lines(&cipher, false, "nope");
+        assert!(!masked_no_match
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .any(|s| s.content.as_ref() == " *"));
+
+        // Revealed + matching: the real value shows, highlighted like any
+        // other field, no separate marker needed.
+        let revealed = detail_lines(&cipher, true, "battery");
+        assert!(text_of(&revealed).contains("correct-horse-battery"));
+        assert!(revealed.iter().flat_map(|l| l.spans.iter()).any(|s| {
+            s.content.as_ref() == "battery" && s.style.fg == Some(MATCH)
+        }));
     }
 }

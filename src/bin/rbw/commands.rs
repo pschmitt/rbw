@@ -277,6 +277,11 @@ pub enum SearchField {
     Uri,
     Notes,
     Field,
+    // A hidden/sensitive value with no scoping prefix of its own (password,
+    // card number, ssh private key, …) — only ever reached by a bare word
+    // (`QueryToken::Any`), matching `search_match`'s own `sensitive_fields`
+    // scan.
+    Secret,
 }
 
 // Byte ranges within `text` (a `field`-typed piece of an entry, e.g. its
@@ -301,8 +306,7 @@ pub fn highlight_ranges(
         | (QueryToken::Folder(term), SearchField::Folder)
         | (QueryToken::Uri(term), SearchField::Uri)
         | (QueryToken::Notes(term), SearchField::Notes)
-        | (QueryToken::Field(term), SearchField::Field)) =
-            (token, field)
+        | (QueryToken::Field(term), SearchField::Field)) = (token, field)
         else {
             continue;
         };
@@ -519,18 +523,27 @@ impl DecryptedSearchCipher {
             return true;
         }
 
-        parse_query(term).iter().all(|token| self.token_match(token))
+        parse_query(term)
+            .iter()
+            .all(|token| self.token_match(token))
     }
 
     fn token_match(&self, token: &QueryToken) -> bool {
-        let contains =
-            |field: &str, needle: &str| field.to_lowercase().contains(&needle.to_lowercase());
+        let contains = |field: &str, needle: &str| {
+            field.to_lowercase().contains(&needle.to_lowercase())
+        };
         match token {
             QueryToken::Any(term) => {
                 contains(&self.name, term)
-                    || self.folder.as_deref().is_some_and(|f| contains(f, term))
+                    || self
+                        .folder
+                        .as_deref()
+                        .is_some_and(|f| contains(f, term))
                     || self.user.as_deref().is_some_and(|u| contains(u, term))
-                    || self.notes.as_deref().is_some_and(|n| contains(n, term))
+                    || self
+                        .notes
+                        .as_deref()
+                        .is_some_and(|n| contains(n, term))
                     || self.uris.iter().any(|(u, _)| contains(u, term))
                     || self.fields.iter().any(|f| contains(f, term))
                     || self.sensitive_fields.iter().any(|f| contains(f, term))
@@ -1840,7 +1853,8 @@ fn colorize_table_cell(
         TableColumnStyle::Password => "33",
         TableColumnStyle::Folder => "34",
         TableColumnStyle::EntryType => "35",
-        TableColumnStyle::Collections | TableColumnStyle::Size
+        TableColumnStyle::Collections
+        | TableColumnStyle::Size
         | TableColumnStyle::Account => "2",
         TableColumnStyle::Attachments => "36",
         TableColumnStyle::Default => "",
@@ -2510,13 +2524,14 @@ pub fn account_set(
     exclude_from_list: Option<bool>,
 ) -> anyhow::Result<()> {
     if unlock.is_none() && exclude_from_list.is_none() {
-        anyhow::bail!("nothing to change: pass --unlock and/or --exclude-from-list");
+        anyhow::bail!(
+            "nothing to change: pass --unlock and/or --exclude-from-list"
+        );
     }
     let mut config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());
     config.migrate_legacy();
-    let Some(account) =
-        config.accounts.iter_mut().find(|a| a.name == name)
+    let Some(account) = config.accounts.iter_mut().find(|a| a.name == name)
     else {
         anyhow::bail!("account '{name}' not found");
     };
