@@ -13,8 +13,8 @@ pub const VERSION: u32 = {
     let patch = env!("CARGO_PKG_VERSION_PATCH");
 
     unwrap(&u32::from_str_radix(major, 10)) * 1_000_000
-        + unwrap(&u32::from_str_radix(minor, 10)) * 1_000_000
-        + unwrap(&u32::from_str_radix(patch, 10)) * 1_000_000
+        + unwrap(&u32::from_str_radix(minor, 10)) * 1_000
+        + unwrap(&u32::from_str_radix(patch, 10))
 };
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -286,4 +286,15 @@ pub struct DecryptRequest {
 pub enum DecryptResult {
     Success { plaintext: String },
     Failure { error: String },
+}
+
+#[test]
+fn test_version_encoding() {
+    let major: u32 = env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap();
+    let minor: u32 = env!("CARGO_PKG_VERSION_MINOR").parse().unwrap();
+    let patch: u32 = env!("CARGO_PKG_VERSION_PATCH").parse().unwrap();
+
+    assert_eq!(VERSION / 1_000_000, major);
+    assert_eq!(VERSION / 1_000 % 1_000, minor);
+    assert_eq!(VERSION % 1_000, patch);
 }

@@ -106,8 +106,7 @@ async fn subscribe_to_notifications(
         .send(tokio_tungstenite::tungstenite::Message::Text(
             "{\"protocol\":\"messagepack\",\"version\":1}\x1e".into(),
         ))
-        .await
-        .unwrap();
+        .await?;
 
     let read_future = async move {
         let sending_channels = &sending_channels;
@@ -118,7 +117,10 @@ async fn subscribe_to_notifications(
                         let sending_channels = sending_channels.read().await;
                         let sending_channels = sending_channels.as_slice();
                         for channel in sending_channels {
-                            channel.send(message).unwrap();
+                            // a dropped receiver shouldn't kill the read
+                            // task; dead channels are pruned on the next
+                            // disconnect/clear
+                            let _ = channel.send(message);
                         }
                     }
                 }

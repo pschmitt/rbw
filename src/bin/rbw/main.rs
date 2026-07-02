@@ -1359,6 +1359,20 @@ fn main() {
             uri,
             folder,
         } => {
+            // upstream rbw muscle memory: `rbw gen 24` parses `24` as the
+            // entry name, not the length
+            if let Some(name) = &name {
+                if pwgen.length.is_none()
+                    && !name.is_empty()
+                    && name.bytes().all(|b| b.is_ascii_digit())
+                {
+                    eprintln!(
+                        "note: creating an entry named \"{name}\"; if you \
+                        meant a {name}-character password, use rbw gen -l \
+                        {name}"
+                    );
+                }
+            }
             let (len, ty) = resolve_pwgen(&pwgen);
             commands::generate(
                 name.as_deref(),

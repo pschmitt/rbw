@@ -37,7 +37,11 @@ impl CipherString {
             });
         }
 
-        let ty = ty[0] - b'0';
+        let Some(ty) = ty[0].checked_sub(b'0') else {
+            return Err(Error::UnimplementedCipherStringType {
+                ty: parts[0].to_string(),
+            });
+        };
         let contents = parts[1];
 
         match ty {
@@ -412,4 +416,16 @@ fn test_decrypt_file_data() {
     data.extend(ciphertext);
 
     assert_eq!(decrypt_file_data(&data, &keys).unwrap(), plaintext);
+}
+
+#[test]
+fn test_parse_malformed_type() {
+    // type characters below b'0' used to underflow the `ty - b'0'`
+    // subtraction and panic in debug builds
+    for input in ["+.abc", "/.abc", " .abc", "a.abc", "9.abc"] {
+        assert!(matches!(
+            CipherString::new(input),
+            Err(Error::UnimplementedCipherStringType { .. })
+        ));
+    }
 }
