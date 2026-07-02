@@ -4555,41 +4555,133 @@ fn print_entry_diff(changes: &[(&str, String, String)]) {
     }
 }
 
-pub fn export() -> anyhow::Result<()> {
-    #[derive(serde::Serialize)]
-    struct ExportedEntry {
-        id: String,
-        org_id: Option<String>,
-        folder: Option<String>,
-        name: String,
-        #[serde(flatten)]
-        data: DecryptedData,
-        fields: Vec<DecryptedField>,
-        notes: Option<String>,
-        history: Vec<DecryptedHistoryEntry>,
-        collection_ids: Vec<String>,
-    }
+#[derive(serde::Serialize, Debug, PartialEq, Eq)]
+struct ExportedAttachment {
+    id: String,
+    file_name: String,
+    // decrypted attachment contents, base64-encoded so the export
+    // round-trips cleanly through JSON
+    data_base64: String,
+}
 
-    #[derive(serde::Serialize)]
-    struct ExportedCollection {
-        id: String,
-        org_id: String,
-        name: String,
-    }
+#[derive(serde::Serialize)]
+struct ExportedEntry {
+    id: String,
+    org_id: Option<String>,
+    folder: Option<String>,
+    name: String,
+    #[serde(flatten)]
+    data: DecryptedData,
+    fields: Vec<DecryptedField>,
+    notes: Option<String>,
+    history: Vec<DecryptedHistoryEntry>,
+    collection_ids: Vec<String>,
+    // empty unless `--attachments` was passed, so exports produced
+    // without that flag are byte-for-byte identical to before it
+    // existed
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<ExportedAttachment>,
+}
 
-    #[derive(serde::Serialize)]
-    struct ExportedVault {
-        entries: Vec<ExportedEntry>,
-        collections: Vec<ExportedCollection>,
-    }
+#[derive(serde::Serialize)]
+struct ExportedCollection {
+    id: String,
+    org_id: String,
+    name: String,
+}
 
+#[derive(serde::Serialize)]
+struct ExportedVault {
+    entries: Vec<ExportedEntry>,
+    collections: Vec<ExportedCollection>,
+}
+
+// Downloads and decrypts every attachment on `entry`, using the
+// already-decrypted `decrypted_attachments` (from `decrypt_cipher`)
+// for filenames. This mirrors `attachment_get`'s handling of the
+// legacy quirk where an attachment's filename may still be
+// entry-key-encrypted even though its data is attachment-key-encrypted:
+// `decrypt_cipher` already resolved that via
+// `decrypt_field_with_attachment_key`, so we just reuse its result
+// here rather than re-deriving it.
+fn export_attachments(
+    db: &mut rbw::db::Db,
+    entry: &rbw::db::Entry,
+    decrypted_attachments: &[DecryptedAttachment],
+) -> anyhow::Result<Vec<ExportedAttachment>> {
+    let access_token = db
+        .access_token
+        .as_ref()
+        .context("failed to find access token in db")?
+        .clone();
+    let refresh_token = db
+        .refresh_token
+        .as_ref()
+        .context("failed to find refresh token in db")?
+        .clone();
+
+    let mut out = Vec::with_capacity(entry.attachments.len());
+    for (attachment, decrypted_attachment) in
+        entry.attachments.iter().zip(decrypted_attachments)
+    {
+        let url = match rbw::actions::attachment_url(
+            &access_token,
+            &refresh_token,
+            &entry.id,
+            &attachment.id,
+        ) {
+            Ok((new_access_token, url)) => {
+                if let Some(new_access_token) = new_access_token {
+                    db.access_token = Some(new_access_token);
+                    save_db(db)?;
+                }
+                url
+            }
+            Err(e) => attachment.url.clone().ok_or(e)?,
+        };
+        let encrypted = rbw::actions::download_attachment(&url)
+            .with_context(|| {
+                format!("failed to download attachment {}", attachment.id)
+            })?;
+        let decrypted_bytes = crate::actions::decrypt_attachment(
+            encrypted,
+            attachment.key.as_deref(),
+            entry.key.as_deref(),
+            entry.org_id.as_deref(),
+        )?;
+        let file_name = decrypted_attachment
+            .file_name
+            .clone()
+            .unwrap_or_else(|| attachment.id.clone());
+        out.push(ExportedAttachment {
+            id: attachment.id.clone(),
+            file_name,
+            data_base64: rbw::base64::encode(&decrypted_bytes),
+        });
+    }
+    Ok(out)
+}
+
+pub fn export(
+    attachments: bool,
+    encrypt: Option<&str>,
+) -> anyhow::Result<()> {
     unlock(None)?;
 
-    let db = load_db()?;
+    let mut db = load_db()?;
+    let entries_snapshot = db.entries.clone();
 
     let mut entries: Vec<ExportedEntry> = Vec::new();
-    for entry in &db.entries {
+    for entry in &entries_snapshot {
         let decrypted = decrypt_cipher(entry)?;
+
+        let exported_attachments =
+            if attachments && !entry.attachments.is_empty() {
+                export_attachments(&mut db, entry, &decrypted.attachments)?
+            } else {
+                Vec::new()
+            };
+
         entries.push(ExportedEntry {
             id: decrypted.id,
             org_id: entry.org_id.clone(),
@@ -4600,6 +4692,7 @@ pub fn export() -> anyhow::Result<()> {
             notes: decrypted.notes,
             history: decrypted.history,
             collection_ids: entry.collection_ids.clone(),
+            attachments: exported_attachments,
         });
     }
 
@@ -4623,7 +4716,112 @@ pub fn export() -> anyhow::Result<()> {
         collections,
     };
 
-    write_json_pretty(&vault, "failed to write export to stdout")
+    if let Some(passphrase) = encrypt {
+        let archive = build_export_tar_gz(&vault)?;
+        let encrypted = gpg_symmetric_encrypt(passphrase, &archive)?;
+        std::io::stdout()
+            .write_all(&encrypted)
+            .context("failed to write encrypted export to stdout")?;
+        Ok(())
+    } else {
+        write_json_pretty(&vault, "failed to write export to stdout")
+    }
+}
+
+// Packages `value` as pretty-printed JSON named `vault.json` inside an
+// in-memory tar.gz archive, returning the compressed bytes.
+fn build_export_tar_gz<T: serde::Serialize>(
+    value: &T,
+) -> anyhow::Result<Vec<u8>> {
+    let json = serde_json::to_vec_pretty(value)
+        .context("failed to serialize export to JSON")?;
+
+    let mut header = tar::Header::new_gnu();
+    header.set_size(u64::try_from(json.len()).unwrap_or(u64::MAX));
+    header.set_mode(0o644);
+    header.set_mtime(0);
+    header.set_cksum();
+
+    let encoder = flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::default(),
+    );
+    let mut builder = tar::Builder::new(encoder);
+    builder
+        .append_data(&mut header, "vault.json", json.as_slice())
+        .context("failed to write vault.json into tar archive")?;
+    let encoder = builder
+        .into_inner()
+        .context("failed to finalize tar archive")?;
+    encoder.finish().context("failed to finalize gzip stream")
+}
+
+// Symmetrically encrypts `plaintext` with `gpg`, using `passphrase` piped
+// in via stdin (fd 0) rather than argv, so it doesn't leak into `ps` or
+// shell history. The plaintext itself is written to a temporary file and
+// passed as a positional argument, since `--passphrase-fd 0` already
+// claims stdin.
+fn gpg_symmetric_encrypt(
+    passphrase: &str,
+    plaintext: &[u8],
+) -> anyhow::Result<Vec<u8>> {
+    let mut tmp = tempfile::NamedTempFile::new()
+        .context("failed to create temporary file for export archive")?;
+    tmp.write_all(plaintext)
+        .context("failed to write export archive to temporary file")?;
+    tmp.flush()
+        .context("failed to flush export archive to temporary file")?;
+
+    let mut child = std::process::Command::new("gpg")
+        .args([
+            "--batch",
+            "--yes",
+            "--passphrase-fd",
+            "0",
+            "--symmetric",
+            "--cipher-algo",
+            "AES256",
+            "-o",
+            "-",
+        ])
+        .arg(tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|source| {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                anyhow::anyhow!(
+                    "gpg not found on PATH; install GnuPG to use \
+                     `rbw export --encrypt`"
+                )
+            } else {
+                anyhow::Error::from(source).context("failed to spawn gpg")
+            }
+        })?;
+
+    // unwrap is safe because we specified stdin as piped above
+    let mut stdin = child.stdin.take().unwrap();
+    stdin
+        .write_all(passphrase.as_bytes())
+        .context("failed to write passphrase to gpg")?;
+    stdin
+        .write_all(b"\n")
+        .context("failed to write passphrase to gpg")?;
+    drop(stdin);
+
+    let output = child
+        .wait_with_output()
+        .context("failed to wait for gpg to finish")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "gpg failed to encrypt export: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    Ok(output.stdout)
 }
 
 pub fn list_collections(output: OutputMode) -> anyhow::Result<()> {
@@ -11141,5 +11339,153 @@ mod test {
         } else {
             panic!("expected Login variant");
         }
+    }
+
+    fn sample_exported_entry(
+        attachments: Vec<ExportedAttachment>,
+    ) -> ExportedEntry {
+        ExportedEntry {
+            id: "entry-id".to_string(),
+            org_id: None,
+            folder: None,
+            name: "example.com".to_string(),
+            data: DecryptedData::Login {
+                username: Some("alice@example.com".to_string()),
+                password: Some("hunter2".to_string()),
+                totp: None,
+                uris: None,
+            },
+            fields: vec![],
+            notes: None,
+            history: vec![],
+            collection_ids: vec![],
+            attachments,
+        }
+    }
+
+    #[test]
+    fn test_export_omits_attachments_field_when_flag_not_set() {
+        // Without `--attachments`, `attachments` stays empty, and
+        // `skip_serializing_if` means the field should not appear in the
+        // serialized output at all -- i.e. old exports produced before
+        // this flag existed remain byte-for-byte identical.
+        let entry = sample_exported_entry(vec![]);
+
+        let value = serde_json::to_value(&entry).unwrap();
+        assert!(
+            value.get("attachments").is_none(),
+            "attachments field should be omitted when empty, got: {value}"
+        );
+    }
+
+    #[test]
+    fn test_export_attachments_round_trip_through_base64() {
+        // With `--attachments`, decrypted attachment bytes are
+        // base64-encoded so they can travel through JSON; verify the
+        // round trip and that the field is present and populated.
+        let original_bytes = b"totally secret attachment contents";
+        let exported_attachment = ExportedAttachment {
+            id: "attachment-id".to_string(),
+            file_name: "secret.txt".to_string(),
+            data_base64: rbw::base64::encode(original_bytes),
+        };
+        let entry = sample_exported_entry(vec![exported_attachment]);
+
+        let value = serde_json::to_value(&entry).unwrap();
+        let attachments = value
+            .get("attachments")
+            .expect("attachments field should be present")
+            .as_array()
+            .expect("attachments should serialize as an array");
+        assert_eq!(attachments.len(), 1);
+
+        let data_base64 = attachments[0]["data_base64"]
+            .as_str()
+            .expect("data_base64 should be a string");
+        let decoded = rbw::base64::decode(data_base64)
+            .expect("data_base64 should decode as valid base64");
+        assert_eq!(decoded, original_bytes);
+        assert_eq!(attachments[0]["file_name"], "secret.txt");
+        assert_eq!(attachments[0]["id"], "attachment-id");
+    }
+
+    // Exercises the actual `--encrypt` code path (tar.gz packaging +
+    // shelling out to `gpg --symmetric`) end to end. Requires a real `gpg`
+    // binary on PATH, so it's `#[ignore]`d by default -- run explicitly
+    // with `cargo test -- --ignored test_gpg_symmetric_encrypt_round_trip`
+    // on a host that has GnuPG installed.
+    #[test]
+    #[ignore = "requires a real `gpg` binary on PATH"]
+    fn test_gpg_symmetric_encrypt_round_trip() {
+        let entry = sample_exported_entry(vec![ExportedAttachment {
+            id: "attachment-id".to_string(),
+            file_name: "secret.txt".to_string(),
+            data_base64: rbw::base64::encode(b"attachment bytes"),
+        }]);
+        let vault = ExportedVault {
+            entries: vec![entry],
+            collections: vec![],
+        };
+
+        let archive = build_export_tar_gz(&vault).unwrap();
+        let encrypted =
+            gpg_symmetric_encrypt("correct horse battery staple", &archive)
+                .unwrap();
+
+        // Decrypt with a fresh `gpg` invocation (mirroring how a user
+        // would do it: `rbw export --encrypt PASSPHRASE | gpg --batch
+        // --yes --passphrase PASSPHRASE --decrypt | tar tz`) and confirm
+        // the tar.gz round-trips to the original vault JSON.
+        let mut tmp_encrypted = tempfile::NamedTempFile::new().unwrap();
+        tmp_encrypted.write_all(&encrypted).unwrap();
+        tmp_encrypted.flush().unwrap();
+
+        let output = std::process::Command::new("gpg")
+            .args([
+                "--batch",
+                "--yes",
+                "--passphrase",
+                "correct horse battery staple",
+                "--decrypt",
+            ])
+            .arg(tmp_encrypted.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "gpg --decrypt failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let mut archive_reader =
+            flate2::read::GzDecoder::new(std::io::Cursor::new(output.stdout));
+        let mut tar_bytes = Vec::new();
+        archive_reader.read_to_end(&mut tar_bytes).unwrap();
+        let mut tar_archive =
+            tar::Archive::new(std::io::Cursor::new(tar_bytes));
+        let mut entries = tar_archive.entries().unwrap();
+        let mut vault_entry = entries.next().unwrap().unwrap();
+        assert_eq!(
+            vault_entry.path().unwrap().to_str().unwrap(),
+            "vault.json"
+        );
+        let mut vault_json = String::new();
+        vault_entry.read_to_string(&mut vault_json).unwrap();
+        assert!(entries.next().is_none());
+
+        let decoded: serde_json::Value =
+            serde_json::from_str(&vault_json).unwrap();
+        assert_eq!(
+            decoded["entries"][0]["attachments"][0]["file_name"],
+            "secret.txt"
+        );
+        let decoded_base64 = decoded["entries"][0]["attachments"][0]
+            ["data_base64"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            rbw::base64::decode(decoded_base64).unwrap(),
+            b"attachment bytes"
+        );
     }
 }

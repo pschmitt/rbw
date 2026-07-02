@@ -205,7 +205,25 @@ enum Opt {
             to stdout. Suitable for piping to a file for backup or \
             migration to another instance via `rbw import`."
     )]
-    Export,
+    Export {
+        #[arg(
+            long,
+            help = "Also download and embed decrypted attachment \
+                contents (base64-encoded) in the export. This makes \
+                the export considerably larger and slower to produce."
+        )]
+        attachments: bool,
+
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            help = "Symmetrically gpg-encrypt the export as a tar.gz \
+                archive using the given passphrase, and write the \
+                encrypted archive to stdout instead of raw JSON. \
+                Requires `gpg` to be available on PATH."
+        )]
+        encrypt: Option<String>,
+    },
 
     #[command(
         about = "List all entries in the local Bitwarden database",
@@ -660,7 +678,7 @@ impl Opt {
             Self::Unlocked => "unlocked".to_string(),
             Self::Sync { .. } => "sync".to_string(),
             Self::Tui { .. } => "tui".to_string(),
-            Self::Export => "export".to_string(),
+            Self::Export { .. } => "export".to_string(),
             Self::List { .. } => "list".to_string(),
             Self::Get { .. } => "get".to_string(),
             Self::Show { .. } => "show".to_string(),
@@ -980,7 +998,10 @@ fn main() {
         Opt::Unlocked => commands::unlocked(),
         Opt::Sync { all } => commands::sync(all),
         Opt::Tui { term, all } => tui::run(term.as_deref(), all),
-        Opt::Export => commands::export(),
+        Opt::Export {
+            attachments,
+            encrypt,
+        } => commands::export(attachments, encrypt.as_deref()),
         Opt::List {
             fields,
             term,
