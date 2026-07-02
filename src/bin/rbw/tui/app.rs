@@ -54,6 +54,9 @@ pub enum Mode {
     // `Mode::Accounts` (and its cursor/list) while the dialog is up.
     ConfirmClearCredentialSource(String),
     Prompt(Prompt),
+    // A filterable single-select list overlay -- currently only the
+    // two-step credential_source account/item picker (see `PickerKind`).
+    Picker(PickerView),
     Settings(SettingsView),
     Help,
     // The agent locked the named account out from under us (another process
@@ -77,14 +80,127 @@ pub enum PromptKind {
     AttachmentUpload { owner: usize, id: String },
     // Add a new account from the entered name / email / server-url fields.
     AddAccount,
-    // Link (or edit) the named account's `credential_source` from the
-    // entered source-account / source-entry fields.
-    SetCredentialSource { name: String },
 }
 
 pub struct PromptField {
     pub label: &'static str,
     pub input: Input,
+}
+
+// Which step of a multi-step `Mode::Picker` flow is showing, and what to do
+// once its selection is confirmed. Currently only the credential_source
+// account/item picker (opened from the accounts panel's `l`), but the shape
+// generalizes to any other "pick one of these strings" flow later.
+pub enum PickerKind {
+    // Step 1: choose which *other* configured account holds `name`'s master
+    // password. Confirming advances to a `CredentialSourceItem` picker
+    // scoped to the chosen account rather than submitting anything yet.
+    CredentialSourceAccount {
+        name: String,
+    },
+    // Step 2: choose which Login item, in `source_account`'s vault, holds
+    // it. Confirming calls `commands::tui_account_set_credential_source`.
+    CredentialSourceItem {
+        name: String,
+        source_account: String,
+    },
+}
+
+// A filterable, single-select list overlay: a typed filter narrows `items`
+// down to `filtered`, arrow keys move the highlight within it, and Enter
+// confirms. If nothing in `items` matches the typed text (most commonly
+// because `items` is empty to begin with -- see `PickerKind`'s doc comment
+// on why a locked source account has no candidates to list), Enter instead
+// confirms the raw typed text, so the flow degrades to plain free-text entry
+// rather than getting stuck.
+pub struct PickerView {
+    pub title: String,
+    pub hint: &'static str,
+    items: Vec<String>,
+    pub filter: Input,
+    filtered: Vec<usize>,
+    pub selected: usize,
+    kind: PickerKind,
+}
+
+impl PickerView {
+    pub fn new(
+        title: String,
+        hint: &'static str,
+        items: Vec<String>,
+        prefill: Option<String>,
+        kind: PickerKind,
+    ) -> Self {
+        let mut view = Self {
+            title,
+            hint,
+            items,
+            filter: Input::new(prefill.unwrap_or_default()),
+            filtered: Vec::new(),
+            selected: 0,
+            kind,
+        };
+        view.recompute_filter();
+        view
+    }
+
+    fn recompute_filter(&mut self) {
+        let needle = self.filter.value().to_ascii_lowercase();
+        self.filtered = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                needle.is_empty()
+                    || item.to_ascii_lowercase().contains(&needle)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        self.selected =
+            self.selected.min(self.filtered.len().saturating_sub(1));
+    }
+
+    fn move_selected(&mut self, delta: isize) {
+        if self.filtered.is_empty() {
+            return;
+        }
+        let cur = isize::try_from(self.selected).unwrap_or(0);
+        let last = isize::try_from(self.filtered.len() - 1).unwrap_or(0);
+        self.selected =
+            usize::try_from((cur + delta).clamp(0, last)).unwrap_or(0);
+    }
+
+    // The highlighted item's string, keyed through `filtered`/`items` so
+    // callers never see a stale index. Empty only once `items` itself is
+    // (an empty `filtered` with a non-empty `items` can't happen: a filter
+    // that matches nothing still keeps the previous selection clamped into
+    // range by `recompute_filter`, but an all-items-excluded state isn't
+    // reachable since an empty needle always matches everything).
+    fn highlighted(&self) -> Option<&str> {
+        self.filtered
+            .get(self.selected)
+            .and_then(|&i| self.items.get(i))
+            .map(String::as_str)
+    }
+
+    // The value Enter should confirm: the highlighted item if the filter
+    // matched anything in `items`, else the raw typed text -- see the
+    // struct's doc comment for why that fallback matters.
+    fn current_value(&self) -> String {
+        self.highlighted().map_or_else(
+            || self.filter.value().to_string(),
+            ToString::to_string,
+        )
+    }
+
+    // Rows to render: every filtered item's display string, paired with
+    // whether it's the highlighted one.
+    pub fn rows(&self) -> impl Iterator<Item = (bool, &str)> {
+        self.filtered
+            .iter()
+            .enumerate()
+            .map(|(row, &i)| (row == self.selected, self.items[i].as_str()))
+    }
 }
 
 // A small labelled multi-field text prompt shown as an overlay (file path for
@@ -135,34 +251,6 @@ impl Prompt {
         }
     }
 
-    // `current`, if the account already has a `credential_source`, prefills
-    // the fields so the prompt doubles as an editor rather than only being
-    // usable to set the link the first time.
-    pub fn set_credential_source(
-        name: &str,
-        current: Option<(String, String)>,
-    ) -> Self {
-        let (source_account, source_entry) = current.unwrap_or_default();
-        Self {
-            title: format!("Link credential source → {name}"),
-            hint: "⏎ save · ⇥ next · esc cancel",
-            fields: vec![
-                PromptField {
-                    label: "Source acct",
-                    input: Input::new(source_account),
-                },
-                PromptField {
-                    label: "Source entry",
-                    input: Input::new(source_entry),
-                },
-            ],
-            focus: 0,
-            kind: PromptKind::SetCredentialSource {
-                name: name.to_string(),
-            },
-        }
-    }
-
     fn focus_next(&mut self) {
         if !self.fields.is_empty() {
             self.focus = (self.focus + 1) % self.fields.len();
@@ -196,11 +284,17 @@ enum PromptSubmit {
         email: Option<String>,
         base_url: Option<String>,
     },
-    SetCredentialSource {
-        name: String,
-        source_account: String,
-        source_entry: String,
-    },
+}
+
+// Ctrl+C dismisses any modal overlay the same way Esc does. Raw mode means
+// the terminal's usual SIGINT-on-Ctrl+C mapping never fires here -- it
+// arrives as a plain keypress like any other -- but users instinctively
+// reach for it to back out of a dialog, so every overlay handler treats it
+// as an alias for its own Esc/close behavior rather than leaving it a
+// silent no-op.
+fn is_ctrl_c(key: KeyEvent) -> bool {
+    key.code == KeyCode::Char('c')
+        && key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
 fn expand_tilde(p: &str) -> std::path::PathBuf {
@@ -1181,7 +1275,12 @@ impl App {
     }
 
     fn handle_accounts(&mut self, key: KeyEvent) -> Action {
-        match self.keymap.action_in(key, true, TuiAction::ACCOUNT) {
+        let action = if is_ctrl_c(key) {
+            Some(TuiAction::AccountClose)
+        } else {
+            self.keymap.action_in(key, true, TuiAction::ACCOUNT)
+        };
+        match action {
             Some(TuiAction::AccountClose) => self.mode = Mode::Normal,
             Some(TuiAction::AccountMoveDown) => self.accounts_move(1),
             Some(TuiAction::AccountMoveUp) => self.accounts_move(-1),
@@ -1235,15 +1334,135 @@ impl App {
         self.mode = Mode::Prompt(Prompt::add_account());
     }
 
-    // Open the link/edit prompt for the highlighted account's
-    // `credential_source`, prefilled if it already has one.
+    // Open the account picker (step 1 of linking `credential_source`) for
+    // the highlighted account, with the current source account (if any)
+    // prefilled into the filter so re-confirming it is a no-op edit. Reads
+    // the candidate account list from the already-open accounts panel
+    // rather than re-querying `commands::tui_accounts` (which would hit the
+    // real config file -- see `app_on_accounts_panel`'s doc comment).
     fn start_set_credential_source(&mut self) {
         let Some((name, current)) = self.selected_account_credential_source()
         else {
             return;
         };
-        self.mode =
-            Mode::Prompt(Prompt::set_credential_source(&name, current));
+        let Mode::Accounts(view) = &self.mode else {
+            return;
+        };
+        let accounts = view
+            .accounts
+            .iter()
+            .map(|a| a.name.clone())
+            .filter(|n| n != &name)
+            .collect();
+        let prefill_account = current.map(|(account, _)| account);
+        self.mode = Mode::Picker(PickerView::new(
+            format!("Link '{name}' → account"),
+            "type to filter · ↑/↓ select · ⏎ next · esc cancel",
+            accounts,
+            prefill_account,
+            PickerKind::CredentialSourceAccount { name },
+        ));
+    }
+
+    // Login-item names available to link `name`'s master password to, in
+    // `source_account`'s vault -- from that account's already-loaded search
+    // index if it's currently unlocked (one of `self.vaults`), else empty.
+    // An empty list isn't an error: `PickerView`'s filter degrades to plain
+    // free-text entry in that case, since a locked vault's contents can't be
+    // enumerated without unlocking it first.
+    fn credential_source_item_candidates(
+        &self,
+        source_account: &str,
+    ) -> Vec<String> {
+        self.vaults
+            .iter()
+            .find(|v| v.name == source_account)
+            .map(|v| {
+                v.search
+                    .iter()
+                    .filter(|s| s.entry_type == "Login")
+                    .map(|s| s.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn handle_picker(&mut self, key: KeyEvent) -> Action {
+        let Mode::Picker(view) = &mut self.mode else {
+            return Action::None;
+        };
+        if is_ctrl_c(key) {
+            self.mode = Mode::Normal;
+            return Action::None;
+        }
+        match key.code {
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => self.submit_picker(),
+            KeyCode::Up => view.move_selected(-1),
+            KeyCode::Down => view.move_selected(1),
+            _ => {
+                if view.filter.handle_key(key) {
+                    view.recompute_filter();
+                }
+            }
+        }
+        Action::None
+    }
+
+    fn submit_picker(&mut self) {
+        let Mode::Picker(view) = &self.mode else {
+            return;
+        };
+        let value = view.current_value();
+        if value.trim().is_empty() {
+            self.set_status(Level::Warn, "nothing selected");
+            return;
+        }
+        match &view.kind {
+            PickerKind::CredentialSourceAccount { name } => {
+                let name = name.clone();
+                let items = self.credential_source_item_candidates(&value);
+                let hint = if items.is_empty() {
+                    "no unlocked vault to pick from · type the item name · ⏎ save · esc cancel"
+                } else {
+                    "type to filter · ↑/↓ select · ⏎ save · esc cancel"
+                };
+                self.mode = Mode::Picker(PickerView::new(
+                    format!("Link '{name}' → item in '{value}'"),
+                    hint,
+                    items,
+                    None,
+                    PickerKind::CredentialSourceItem {
+                        name,
+                        source_account: value,
+                    },
+                ));
+            }
+            PickerKind::CredentialSourceItem {
+                name,
+                source_account,
+            } => {
+                let name = name.clone();
+                let source_account = source_account.clone();
+                match commands::tui_account_set_credential_source(
+                    &name,
+                    &source_account,
+                    &value,
+                ) {
+                    Ok(()) => {
+                        self.set_status(
+                            Level::Success,
+                            format!(
+                                "linked '{name}' → {source_account}/{value}"
+                            ),
+                        );
+                        // Back to the (refreshed) accounts panel.
+                        self.open_accounts();
+                    }
+                    Err(e) => self.set_status(Level::Error, format!("{e:#}")),
+                }
+            }
+        }
     }
 
     // Ask for confirmation before clearing the highlighted account's
@@ -1268,6 +1487,10 @@ impl App {
         let Mode::Prompt(prompt) = &mut self.mode else {
             return Action::None;
         };
+        if is_ctrl_c(key) {
+            self.mode = Mode::Normal;
+            return Action::None;
+        }
         match key.code {
             KeyCode::Esc => self.mode = Mode::Normal,
             KeyCode::Enter => self.submit_prompt(),
@@ -1302,13 +1525,6 @@ impl App {
                     email: non_empty(p.value(1).trim().to_string()),
                     base_url: non_empty(p.value(2).trim().to_string()),
                 },
-                PromptKind::SetCredentialSource { name } => {
-                    PromptSubmit::SetCredentialSource {
-                        name: name.clone(),
-                        source_account: p.value(0).trim().to_string(),
-                        source_entry: p.value(1).trim().to_string(),
-                    }
-                }
             }
         };
         match submit {
@@ -1365,36 +1581,6 @@ impl App {
                 }
                 Err(e) => self.set_status(Level::Error, format!("{e:#}")),
             },
-            PromptSubmit::SetCredentialSource {
-                name,
-                source_account,
-                source_entry,
-            } => {
-                if source_account.is_empty() || source_entry.is_empty() {
-                    self.set_status(
-                        Level::Warn,
-                        "source account and source entry are both required",
-                    );
-                    return;
-                }
-                match commands::tui_account_set_credential_source(
-                    &name,
-                    &source_account,
-                    &source_entry,
-                ) {
-                    Ok(()) => {
-                        self.set_status(
-                            Level::Success,
-                            format!(
-                                "linked '{name}' → {source_account}/{source_entry}"
-                            ),
-                        );
-                        // Back to the (refreshed) accounts panel.
-                        self.open_accounts();
-                    }
-                    Err(e) => self.set_status(Level::Error, format!("{e:#}")),
-                }
-            }
         }
     }
 
@@ -1409,6 +1595,10 @@ impl App {
         let Mode::Settings(view) = &mut self.mode else {
             return Action::None;
         };
+        if is_ctrl_c(key) {
+            self.mode = Mode::Normal;
+            return Action::None;
+        }
         match key.code {
             KeyCode::Esc => self.mode = Mode::Normal,
             KeyCode::Enter => self.submit_settings(),
@@ -1481,6 +1671,15 @@ impl App {
     // ---- key handling ---------------------------------------------------
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
+        // Checked before any per-mode dispatch (and so before any dialog
+        // gets a chance to treat it as its own "close" key instead) so a
+        // configured `force_quit` chord exits the whole TUI from any mode.
+        // No default chord (see `TuiAction::ForceQuit`), so this is a no-op
+        // for anyone who hasn't opted in via `tui_keybindings`.
+        if self.keymap.action_for(key, true) == Some(TuiAction::ForceQuit) {
+            return Action::Quit;
+        }
+
         // Any interaction clears the transient status line.
         self.status = None;
         match &mut self.mode {
@@ -1501,6 +1700,7 @@ impl App {
                 Action::None
             }
             Mode::Prompt(_) => self.handle_prompt(key),
+            Mode::Picker(_) => self.handle_picker(key),
             Mode::Settings(_) => self.handle_settings(key),
             Mode::Help => {
                 self.mode = Mode::Normal;
@@ -1614,7 +1814,11 @@ impl App {
     }
 
     fn handle_attachments(&mut self, key: KeyEvent) {
-        let action = self.keymap.action_in(key, true, TuiAction::ATTACHMENT);
+        let action = if is_ctrl_c(key) {
+            Some(TuiAction::AttachmentClose)
+        } else {
+            self.keymap.action_in(key, true, TuiAction::ATTACHMENT)
+        };
         // Any key other than a repeated delete cancels a pending confirm.
         if action != Some(TuiAction::AttachmentDelete) {
             if let Mode::Attachments(v) = &mut self.mode {
@@ -1690,6 +1894,11 @@ impl App {
                     return Action::OpenEditor;
                 }
             }
+            return Action::None;
+        }
+
+        if ctrl && matches!(key.code, KeyCode::Char('c')) {
+            self.mode = Mode::Normal;
             return Action::None;
         }
 
@@ -2276,7 +2485,7 @@ fn detail_first_uri(detail: &DecryptedCipher) -> Option<String> {
 mod test {
     use super::{
         AccountsView, Action, App, AttachmentItem, AttachmentView, Keymap,
-        Mode, PromptKind, SettingValue,
+        Mode, PickerKind, Prompt, SettingValue,
     };
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -2293,6 +2502,26 @@ mod test {
             },
             None,
             Keymap::resolve(&std::collections::HashMap::new()),
+        )
+    }
+
+    // Like `app()`, but with `force_quit` bound -- for the one test that
+    // needs it configured, since it has no default chord.
+    fn app_with_force_quit_bound() -> App {
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("force_quit".to_string(), vec!["alt-Q".to_string()]);
+        App::with_keymap(
+            crate::commands::TuiOpen {
+                vaults: vec![crate::commands::TuiVault {
+                    account: "default".to_string(),
+                    db: rbw::db::Db::new(),
+                    search: Vec::new(),
+                }],
+                locked: Vec::new(),
+                multi: false,
+            },
+            None,
+            Keymap::resolve(&overrides),
         )
     }
 
@@ -2506,6 +2735,28 @@ mod test {
         assert!(matches!(a.mode, Mode::Normal));
     }
 
+    // Ctrl+C dismisses the settings panel exactly like Esc -- raw mode means
+    // it never becomes a real SIGINT, so every modal overlay must treat it
+    // as an explicit "close" key instead of leaving it a silent no-op.
+    #[test]
+    fn s_opens_settings_and_ctrl_c_closes_it() {
+        let mut a = app_with_entries(1);
+        a.handle_key(key(KeyCode::Char('S')));
+        assert!(matches!(a.mode, Mode::Settings(_)));
+        a.handle_key(ctrl('c'));
+        assert!(matches!(a.mode, Mode::Normal));
+    }
+
+    // Same regression, for the add/edit entry form.
+    #[test]
+    fn edit_form_ctrl_c_cancels() {
+        let mut a = app_with_entries(1);
+        a.handle_key(key(KeyCode::Char('a'))); // start_add -> Mode::Edit
+        assert!(matches!(a.mode, Mode::Edit(_)));
+        a.handle_key(ctrl('c'));
+        assert!(matches!(a.mode, Mode::Normal));
+    }
+
     // Tab moves focus to the next field, and Space toggles a focused boolean
     // field in place -- doesn't touch the (unfocused) length field.
     #[test]
@@ -2694,7 +2945,9 @@ mod test {
         );
     }
 
-    // Builds an `App` already sitting on `Mode::Accounts` with one account,
+    // Builds an `App` already sitting on `Mode::Accounts` with the
+    // highlighted "work" account plus one other ("personal", needed as a
+    // pickable candidate by the credential_source account-picker tests),
     // bypassing `open_accounts`/`commands::tui_accounts` (which would hit
     // the real config file) since only the accounts-panel keybinding logic
     // is under test here, not the account listing itself.
@@ -2703,14 +2956,24 @@ mod test {
     ) -> App {
         let mut a = app();
         a.mode = Mode::Accounts(AccountsView {
-            accounts: vec![crate::commands::TuiAccount {
-                name: "work".to_string(),
-                email: None,
-                server: "bitwarden.com".to_string(),
-                unlocked: false,
-                primary: false,
-                credential_source,
-            }],
+            accounts: vec![
+                crate::commands::TuiAccount {
+                    name: "work".to_string(),
+                    email: None,
+                    server: "bitwarden.com".to_string(),
+                    unlocked: false,
+                    primary: false,
+                    credential_source,
+                },
+                crate::commands::TuiAccount {
+                    name: "personal".to_string(),
+                    email: None,
+                    server: "bitwarden.com".to_string(),
+                    unlocked: false,
+                    primary: true,
+                    credential_source: None,
+                },
+            ],
             selected: 0,
         });
         a
@@ -2756,6 +3019,30 @@ mod test {
         assert!(matches!(a.mode, Mode::Normal));
     }
 
+    // Ctrl+C closes the accounts panel too, same as `q`/Esc -- it's not
+    // bound to `AccountClose` (or any account action) by default, so
+    // without `handle_accounts` special-casing it explicitly it would
+    // otherwise be a silent no-op (there's no global `Quit` for it to
+    // accidentally resolve to here, unlike the `q`/arrow-key regression
+    // above -- this is a distinct gap, not the same bug).
+    #[test]
+    fn accounts_ctrl_c_closes_panel() {
+        let mut a = app();
+        a.mode = Mode::Accounts(AccountsView {
+            accounts: vec![crate::commands::TuiAccount {
+                name: "first".to_string(),
+                email: None,
+                server: "bitwarden.com".to_string(),
+                unlocked: false,
+                primary: true,
+                credential_source: None,
+            }],
+            selected: 0,
+        });
+        a.handle_key(ctrl('c'));
+        assert!(matches!(a.mode, Mode::Normal));
+    }
+
     // Same regression as `accounts_q_and_down_arrow_are_not_swallowed_by_global_defaults`,
     // for the attachments panel: `AttachmentClose`/`AttachmentMoveDown`
     // share default chords with `Quit`/`MoveDown` too.
@@ -2789,40 +3076,141 @@ mod test {
         assert!(matches!(a.mode, Mode::Normal));
     }
 
-    // `l` on a highlighted account opens the link/edit prompt, prefilled
-    // with its current `credential_source` (if any) so the prompt doubles
-    // as an editor.
+    // Ctrl+C closes the attachments panel too, same as `q`/Esc.
     #[test]
-    fn accounts_l_opens_prefilled_credential_source_prompt() {
+    fn attachments_ctrl_c_closes_panel() {
+        let mut a = app();
+        a.mode = Mode::Attachments(AttachmentView {
+            items: vec![AttachmentItem {
+                id: "1".to_string(),
+                name: "first".to_string(),
+                size: None,
+            }],
+            selected: 0,
+            pending_delete: false,
+        });
+        a.handle_key(ctrl('c'));
+        assert!(matches!(a.mode, Mode::Normal));
+    }
+
+    // `l` on a highlighted account opens the account picker (step 1 of
+    // linking `credential_source`), prefilled with its current source
+    // account (if any) so re-confirming it is a no-op edit, and listing
+    // every *other* configured account as a candidate.
+    #[test]
+    fn accounts_l_opens_account_picker_prefilled_with_current_source() {
         let mut a = app_on_accounts_panel(Some((
             "personal".to_string(),
             "Work master password".to_string(),
         )));
         a.handle_key(key(KeyCode::Char('l')));
 
-        let Mode::Prompt(prompt) = &a.mode else {
-            panic!("expected Mode::Prompt after 'l'");
+        let Mode::Picker(picker) = &a.mode else {
+            panic!("expected Mode::Picker after 'l'");
         };
         assert!(matches!(
-            &prompt.kind,
-            PromptKind::SetCredentialSource { name } if name == "work"
+            &picker.kind,
+            PickerKind::CredentialSourceAccount { name } if name == "work"
         ));
-        assert_eq!(prompt.fields[0].input.value(), "personal");
-        assert_eq!(prompt.fields[1].input.value(), "Work master password");
+        assert_eq!(picker.filter.value(), "personal");
+        assert_eq!(
+            picker.rows().map(|(_, s)| s).collect::<Vec<_>>(),
+            vec!["personal"]
+        );
     }
 
-    // `l` with no existing `credential_source` opens the same prompt with
-    // both fields blank.
+    // Confirming the account picker advances to the item picker, scoped to
+    // the chosen account and prefilled with the current item (if any).
+    // Neither account has a loaded vault in this fixture, so the item list
+    // is empty and the filter doubles as free-text entry -- confirming it
+    // directly (without picking anything from a list) must still call
+    // through to `tui_account_set_credential_source`, which fails here
+    // (no real config file) but that's fine: only the transition and status
+    // side effect are under test, not the config write.
     #[test]
-    fn accounts_l_with_no_credential_source_opens_blank_prompt() {
+    fn accounts_l_then_enter_advances_to_item_picker() {
+        let mut a = app_on_accounts_panel(Some((
+            "personal".to_string(),
+            "Work master password".to_string(),
+        )));
+        a.handle_key(key(KeyCode::Char('l')));
+        a.handle_key(key(KeyCode::Enter));
+
+        let Mode::Picker(picker) = &a.mode else {
+            panic!(
+                "expected still Mode::Picker after confirming the account"
+            );
+        };
+        assert!(matches!(
+            &picker.kind,
+            PickerKind::CredentialSourceItem { name, source_account }
+                if name == "work" && source_account == "personal"
+        ));
+        // No vault loaded for "personal" in this fixture, so nothing to list.
+        assert_eq!(picker.rows().count(), 0);
+    }
+
+    // Ctrl+C cancels the credential_source picker (either step) same as Esc.
+    #[test]
+    fn picker_ctrl_c_cancels() {
+        let mut a = app_on_accounts_panel(None);
+        a.handle_key(key(KeyCode::Char('l')));
+        assert!(matches!(a.mode, Mode::Picker(_)));
+        a.handle_key(ctrl('c'));
+        assert!(matches!(a.mode, Mode::Normal));
+    }
+
+    // Ctrl+C cancels the add-account prompt too.
+    #[test]
+    fn add_account_prompt_ctrl_c_cancels() {
+        let mut a = app_on_accounts_panel(None);
+        a.handle_key(key(KeyCode::Char('a')));
+        assert!(matches!(a.mode, Mode::Prompt(_)));
+        a.handle_key(ctrl('c'));
+        assert!(matches!(a.mode, Mode::Normal));
+    }
+
+    // A configured `force_quit` chord exits the whole TUI immediately even
+    // from inside a dialog -- unlike every other close/cancel key, which
+    // only backs out of the current overlay (see the various `_ctrl_c_`
+    // tests above). Checked here from `Mode::Prompt`, but the check lives
+    // in `handle_key` before any mode dispatch, so it applies uniformly.
+    #[test]
+    fn force_quit_exits_immediately_even_from_a_dialog() {
+        let mut a = app_with_force_quit_bound();
+        a.mode = Mode::Prompt(Prompt::add_account());
+        let alt_shift_q = KeyEvent::new(
+            KeyCode::Char('Q'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        );
+        assert!(matches!(a.handle_key(alt_shift_q), Action::Quit));
+    }
+
+    // Unconfigured (no default chord), the same keypress does nothing
+    // dialog-specific -- it's not secretly bound to anything else either.
+    #[test]
+    fn force_quit_is_a_noop_when_unconfigured() {
+        let mut a = app();
+        a.mode = Mode::Prompt(Prompt::add_account());
+        let alt_shift_q = KeyEvent::new(
+            KeyCode::Char('Q'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        );
+        assert!(matches!(a.handle_key(alt_shift_q), Action::None));
+        assert!(matches!(a.mode, Mode::Prompt(_)));
+    }
+
+    // `l` with no existing `credential_source` opens the same picker with a
+    // blank filter (nothing prefilled).
+    #[test]
+    fn accounts_l_with_no_credential_source_opens_blank_picker() {
         let mut a = app_on_accounts_panel(None);
         a.handle_key(key(KeyCode::Char('l')));
 
-        let Mode::Prompt(prompt) = &a.mode else {
-            panic!("expected Mode::Prompt after 'l'");
+        let Mode::Picker(picker) = &a.mode else {
+            panic!("expected Mode::Picker after 'l'");
         };
-        assert_eq!(prompt.fields[0].input.value(), "");
-        assert_eq!(prompt.fields[1].input.value(), "");
+        assert_eq!(picker.filter.value(), "");
     }
 
     // `L` (shift-l) with no `credential_source` to clear is a no-op that

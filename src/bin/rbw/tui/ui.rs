@@ -25,8 +25,8 @@ use crate::commands::{
 };
 
 use super::app::{
-    AccountsView, App, AttachmentView, EditForm, Level, Mode, Prompt,
-    SettingValue, SettingsView,
+    AccountsView, App, AttachmentView, EditForm, Level, Mode, PickerView,
+    Prompt, SettingValue, SettingsView,
 };
 use super::keymap::TuiAction;
 
@@ -125,6 +125,7 @@ pub fn render(f: &mut Frame, app: &App) {
             render_confirm_clear_credential_source(f, name, main);
         }
         Mode::Prompt(prompt) => render_prompt(f, prompt, main),
+        Mode::Picker(picker) => render_picker(f, picker, main),
         Mode::Settings(view) => render_settings(f, view, main),
         Mode::Help => render_help(f, app, main),
         Mode::LockedPrompt(name) => render_locked_prompt(f, name, main),
@@ -856,6 +857,7 @@ fn status_hint(app: &App) -> String {
             km.primary_chord(TuiAction::AccountClose),
         ),
         Mode::Prompt(prompt) => prompt.hint.to_string(),
+        Mode::Picker(picker) => picker.hint.to_string(),
         Mode::Settings(_) => {
             "⏎ save · esc cancel · ⇥ next field · space toggle".to_string()
         }
@@ -1134,6 +1136,82 @@ fn render_prompt(f: &mut Frame, prompt: &Prompt, area: Rect) {
         let y = inner.y + prompt.focus as u16;
         f.set_cursor_position((x.min(inner.right().saturating_sub(1)), y));
     }
+}
+
+// A filterable single-select list overlay -- currently the two-step
+// credential_source account/item picker (see `app::PickerKind`). The filter
+// text sits on its own line (with the hardware cursor placed in it, same as
+// a `Prompt` field) above the scrollable list of matching rows.
+fn render_picker(f: &mut Frame, picker: &PickerView, area: Rect) {
+    let width = 60u16.min(area.width.saturating_sub(4));
+    let rows: Vec<_> = picker.rows().collect();
+    // filter line + blank + hint + 2 border rows, plus up to 10 visible rows.
+    let height = (rows.len().min(10) as u16 + 5)
+        .clamp(6, area.height.saturating_sub(2));
+    let rect = centered(width, height, area);
+
+    f.render_widget(Clear, rect);
+    let b = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(
+            format!(" {} ", picker.title),
+            Style::default().fg(ACCENT).bold(),
+        ));
+    let inner = b.inner(rect);
+    f.render_widget(b, rect);
+
+    let list_height = inner.height.saturating_sub(3) as usize;
+    // Keep the highlighted row in view by scrolling the window once the
+    // list is taller than what fits.
+    let scroll = picker
+        .selected
+        .saturating_sub(list_height.saturating_sub(1));
+
+    let mut lines: Vec<Line> = vec![Line::from(vec![
+        Span::styled("❯ ", Style::default().fg(ACCENT)),
+        Span::raw(picker.filter.value().to_string()),
+    ])];
+    if rows.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (no matches)",
+            Style::default().fg(DIM),
+        )));
+    } else {
+        for (highlighted, item) in rows.iter().skip(scroll).take(list_height)
+        {
+            let prefix = if *highlighted { "❯ " } else { "  " };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    prefix,
+                    Style::default().fg(if *highlighted {
+                        ACCENT
+                    } else {
+                        DIM
+                    }),
+                ),
+                Span::styled(
+                    (*item).to_string(),
+                    Style::default().fg(if *highlighted {
+                        Color::White
+                    } else {
+                        DIM
+                    }),
+                ),
+            ]));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        picker.hint,
+        Style::default().fg(DIM),
+    )));
+
+    f.render_widget(Paragraph::new(lines), inner);
+
+    let x = inner.x + 2 + picker.filter.cursor_display_col() as u16;
+    f.set_cursor_position((x.min(inner.right().saturating_sub(1)), inner.y));
 }
 
 fn render_confirm(f: &mut Frame, app: &App, area: Rect) {
@@ -1585,6 +1663,30 @@ mod test {
             ],
             selected: 0,
         });
+        draw(&app);
+
+        // Credential-source picker overlay, both with and without matching
+        // items (the latter is the free-text-fallback state).
+        app.mode = Mode::Picker(crate::tui::app::PickerView::new(
+            "Link 'work' → item in 'personal'".to_string(),
+            "type to filter · ↑/↓ select · ⏎ save · esc cancel",
+            vec!["GitHub".to_string(), "Work VPN".to_string()],
+            Some("Work".to_string()),
+            crate::tui::app::PickerKind::CredentialSourceItem {
+                name: "work".to_string(),
+                source_account: "personal".to_string(),
+            },
+        ));
+        draw(&app);
+        app.mode = Mode::Picker(crate::tui::app::PickerView::new(
+            "Link 'work' → account".to_string(),
+            "type to filter · ↑/↓ select · ⏎ next · esc cancel",
+            vec![],
+            None,
+            crate::tui::app::PickerKind::CredentialSourceAccount {
+                name: "work".to_string(),
+            },
+        ));
         draw(&app);
 
         // Agent lock-detection modal.

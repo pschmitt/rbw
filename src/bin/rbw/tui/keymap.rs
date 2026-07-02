@@ -191,6 +191,14 @@ impl KeyChord {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TuiAction {
+    // Exit the whole TUI immediately from *any* mode, including from inside
+    // a dialog/prompt/picker -- unlike `Quit`, which `App::handle_key`
+    // checks per-mode and which most overlay handlers intercept as their
+    // own "close this dialog" key instead of letting it propagate. Opt-in
+    // only (no default chord, see `defaults`): there's no universally
+    // sensible one-key-quits-everything binding, since it'd otherwise be
+    // too easy to lose an in-progress edit by fat-fingering it.
+    ForceQuit,
     Quit,
     MoveDown,
     MoveUp,
@@ -242,6 +250,7 @@ impl TuiAction {
     // user's config gives two actions the same chord, whichever comes first
     // here wins.
     const ALL: &'static [Self] = &[
+        Self::ForceQuit,
         Self::Quit,
         Self::MoveDown,
         Self::MoveUp,
@@ -316,6 +325,7 @@ impl TuiAction {
     // The config.json key used to override this action's chords.
     fn config_key(self) -> &'static str {
         match self {
+            Self::ForceQuit => "force_quit",
             Self::Quit => "quit",
             Self::MoveDown => "move_down",
             Self::MoveUp => "move_up",
@@ -367,6 +377,8 @@ impl TuiAction {
     // Default chord strings for this action.
     fn defaults(self) -> &'static [&'static str] {
         match self {
+            // Opt-in only -- see the doc comment on the variant.
+            Self::ForceQuit => &[],
             Self::Quit => &["q", "ctrl-c"],
             Self::MoveDown => &["j", "down", "ctrl-n"],
             Self::MoveUp => &["k", "up", "ctrl-p"],
@@ -617,6 +629,39 @@ mod test {
         let keymap = Keymap::resolve(&std::collections::HashMap::new());
         let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
         assert_eq!(keymap.action_for(j, true), Some(TuiAction::MoveDown));
+    }
+
+    // `ForceQuit` has no default chord (opt-in only) -- unconfigured, it
+    // must never resolve, not even to a chord that happens to include Alt.
+    #[test]
+    fn force_quit_has_no_default_chord() {
+        let keymap = Keymap::resolve(&std::collections::HashMap::new());
+        let alt_shift_q =
+            KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::ALT);
+        assert_ne!(
+            keymap.action_for(alt_shift_q, true),
+            Some(TuiAction::ForceQuit)
+        );
+    }
+
+    // Once configured, `force_quit` resolves like any other action --
+    // including a real terminal's redundant `SHIFT` bit alongside the
+    // already-uppercase `Char('Q')` (see
+    // `uppercase_letter_defaults_match_a_real_shift_reported_keypress`).
+    #[test]
+    fn force_quit_resolves_once_configured() {
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("force_quit".to_string(), vec!["alt-Q".to_string()]);
+        let keymap = Keymap::resolve(&overrides);
+
+        let alt_shift_q = KeyEvent::new(
+            KeyCode::Char('Q'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        );
+        assert_eq!(
+            keymap.action_for(alt_shift_q, true),
+            Some(TuiAction::ForceQuit)
+        );
     }
 
     // Regression test: real terminals (crossterm included) report
