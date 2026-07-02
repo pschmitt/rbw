@@ -131,9 +131,7 @@ impl Input {
 #[cfg(test)]
 mod test {
     use super::Input;
-    use ratatui::crossterm::event::{
-        KeyCode, KeyEvent, KeyModifiers,
-    };
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn press(input: &mut Input, code: KeyCode) {
         input.handle_key(KeyEvent::new(code, KeyModifiers::NONE));

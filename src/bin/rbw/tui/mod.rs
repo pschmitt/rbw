@@ -21,8 +21,8 @@ use app::{Action, App};
 const TICK: Duration = Duration::from_millis(500);
 
 pub fn run(initial_term: Option<&str>) -> anyhow::Result<()> {
-    let (db, search) = crate::commands::tui_open()?;
-    let mut app = App::new(db, search, initial_term);
+    let open = crate::commands::tui_open()?;
+    let mut app = App::new(open, initial_term);
 
     let mut terminal = ratatui::init();
     let res = run_loop(&mut terminal, &mut app);
@@ -51,6 +51,9 @@ fn run_loop(
                 Action::None => {}
                 Action::Quit => return Ok(()),
                 Action::OpenEditor => open_editor(terminal, app),
+                Action::UnlockAccount(name) => {
+                    unlock_account(terminal, app, &name);
+                }
             }
         }
     }
@@ -66,4 +69,21 @@ fn open_editor(terminal: &mut ratatui::DefaultTerminal, app: &mut App) {
     }
     *terminal = ratatui::init();
     let _ = terminal.clear();
+}
+
+// Unlocking an account runs pinentry, which needs the real terminal, so drop
+// out of the alternate screen for it (like the editor) and rebuild afterwards.
+fn unlock_account(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    name: &str,
+) {
+    ratatui::restore();
+    let res = app.unlock_account(name);
+    *terminal = ratatui::init();
+    let _ = terminal.clear();
+    match res {
+        Ok(()) => app.set_unlocked_status(name),
+        Err(e) => app.set_error(format!("{e:#}")),
+    }
 }

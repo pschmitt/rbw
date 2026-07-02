@@ -16,7 +16,9 @@ pub async fn register(
     environment: &rbw::protocol::Environment,
     account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
-    let db = load_db(account).await.unwrap_or_else(|_| rbw::db::Db::new());
+    let db = load_db(account)
+        .await
+        .unwrap_or_else(|_| rbw::db::Db::new());
 
     if db.needs_login() {
         let url_str = account.base_url();
@@ -94,7 +96,9 @@ pub async fn login(
     environment: &rbw::protocol::Environment,
     account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
-    let db = load_db(account).await.unwrap_or_else(|_| rbw::db::Db::new());
+    let db = load_db(account)
+        .await
+        .unwrap_or_else(|_| rbw::db::Db::new());
 
     if db.needs_login() {
         let url_str = account.base_url();
@@ -400,7 +404,10 @@ async fn login_success(
 
     match res {
         Ok((keys, org_keys)) => {
-            state.lock().await.set_unlocked(&account.name, keys, org_keys);
+            state
+                .lock()
+                .await
+                .set_unlocked(&account.name, keys, org_keys);
         }
         Err(e) => return Err(e).context("failed to unlock database"),
     }
@@ -558,7 +565,10 @@ async fn unlock_success(
     org_keys: std::collections::HashMap<String, rbw::locked::Keys>,
     account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
-    state.lock().await.set_unlocked(&account.name, keys, org_keys);
+    state
+        .lock()
+        .await
+        .set_unlocked(&account.name, keys, org_keys);
     Ok(())
 }
 
@@ -630,9 +640,7 @@ pub async fn sync(
     db.collections = collections;
     save_db(account, &db).await?;
 
-    if let Err(e) =
-        subscribe_to_notifications(state.clone(), account).await
-    {
+    if let Err(e) = subscribe_to_notifications(state.clone(), account).await {
         eprintln!("failed to subscribe to notifications: {e}");
     }
 
@@ -1133,9 +1141,8 @@ pub async fn subscribe_to_notifications(
     }
 
     let email = account_email(account)?;
-    let db =
-        rbw::db::Db::load_async(account.server_name().as_str(), &email)
-            .await?;
+    let db = rbw::db::Db::load_async(account.server_name().as_str(), &email)
+        .await?;
     let access_token =
         db.access_token.context("Error getting access token")?;
 

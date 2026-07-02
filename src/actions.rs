@@ -594,13 +594,19 @@ tokio::task_local! {
     pub static AGENT_ACCOUNT: crate::config::Account;
 }
 
-// Set once by the CLI (from --account / RBW_ACCOUNT) so that the synchronous api
-// calls it makes target the right account's server.
-static CLIENT_ACCOUNT: std::sync::OnceLock<crate::config::Account> =
-    std::sync::OnceLock::new();
+// Set by the CLI (from --account / RBW_ACCOUNT, or per-operation by the
+// multi-account TUI) so that the synchronous api calls it makes target the
+// right account's server. `None` falls back to the primary account.
+static CLIENT_ACCOUNT: std::sync::RwLock<Option<crate::config::Account>> =
+    std::sync::RwLock::new(None);
 
 pub fn set_client_account(account: crate::config::Account) {
-    let _ = CLIENT_ACCOUNT.set(account);
+    *CLIENT_ACCOUNT.write().unwrap() = Some(account);
+}
+
+// Clear the CLI-selected account, reverting api calls to the primary account.
+pub fn clear_client_account() {
+    *CLIENT_ACCOUNT.write().unwrap() = None;
 }
 
 // Which account the current api call targets: the agent's per-request account,
@@ -609,8 +615,8 @@ fn resolve_account(config: &crate::config::Config) -> crate::config::Account {
     if let Ok(account) = AGENT_ACCOUNT.try_with(Clone::clone) {
         return account;
     }
-    if let Some(account) = CLIENT_ACCOUNT.get() {
-        return account.clone();
+    if let Some(account) = CLIENT_ACCOUNT.read().unwrap().clone() {
+        return account;
     }
     config.primary()
 }

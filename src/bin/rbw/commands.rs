@@ -548,15 +548,13 @@ impl DecryptedCipher {
 
     fn display_short(&self, desc: &str, clipboard: bool) -> bool {
         match &self.data {
-            DecryptedData::Login { .. } => {
-                self.default_secret().map_or_else(
-                    || {
-                        eprintln!("entry for '{desc}' had no password");
-                        false
-                    },
-                    |(password, _)| val_display_or_store(clipboard, &password),
-                )
-            }
+            DecryptedData::Login { .. } => self.default_secret().map_or_else(
+                || {
+                    eprintln!("entry for '{desc}' had no password");
+                    false
+                },
+                |(password, _)| val_display_or_store(clipboard, &password),
+            ),
             DecryptedData::Card { number, .. } => {
                 number.as_ref().map_or_else(
                     || {
@@ -1316,9 +1314,8 @@ impl DecryptedCipher {
                 if !full_name.is_empty() {
                     println!("{} {full_name}", lbl("Name"));
                 }
-                for addr in [address1, address2, address3]
-                    .into_iter()
-                    .flatten()
+                for addr in
+                    [address1, address2, address3].into_iter().flatten()
                 {
                     println!("{} {addr}", lbl("Address"));
                 }
@@ -1377,10 +1374,8 @@ impl DecryptedCipher {
             for field in &self.fields {
                 let name = field.name.as_deref().unwrap_or("(unnamed)");
                 let value = field.value.as_deref().unwrap_or("");
-                let is_hidden = matches!(
-                    field.ty,
-                    Some(rbw::api::FieldType::Hidden)
-                );
+                let is_hidden =
+                    matches!(field.ty, Some(rbw::api::FieldType::Hidden));
                 if is_hidden {
                     println!("{} {}", lbl(name), secret(value));
                 } else {
@@ -1401,10 +1396,7 @@ impl DecryptedCipher {
         if !self.attachments.is_empty() {
             println!("\n{}", section("ATTACHMENTS"));
             for att in &self.attachments {
-                let fname = att
-                    .file_name
-                    .as_deref()
-                    .unwrap_or(&att.id);
+                let fname = att.file_name.as_deref().unwrap_or(&att.id);
                 let size = att
                     .size_name
                     .as_deref()
@@ -1446,43 +1438,81 @@ mod style {
 
     // Semantic roles → ANSI style
     // uid     dim cyan       — long, secondary, but distinctive
-    pub fn uid(s: &str, c: bool) -> String { paint(s, "2;36", c) }
+    pub fn uid(s: &str, c: bool) -> String {
+        paint(s, "2;36", c)
+    }
     // name    bold           — most prominent field
-    pub fn name(s: &str, c: bool) -> String { paint(s, "1", c) }
+    pub fn name(s: &str, c: bool) -> String {
+        paint(s, "1", c)
+    }
     // user    green          — "who" (accounts)
-    pub fn user(s: &str, c: bool) -> String { paint(s, "32", c) }
+    pub fn user(s: &str, c: bool) -> String {
+        paint(s, "32", c)
+    }
     // secret  yellow         — sensitive / caution
-    pub fn secret(s: &str, c: bool) -> String { paint(s, "33", c) }
+    pub fn secret(s: &str, c: bool) -> String {
+        paint(s, "33", c)
+    }
     // folder  blue           — organisation / location
-    pub fn folder(s: &str, c: bool) -> String { paint(s, "34", c) }
+    pub fn folder(s: &str, c: bool) -> String {
+        paint(s, "34", c)
+    }
     // uri     cyan           — links / references
-    pub fn uri(s: &str, c: bool) -> String { paint(s, "36", c) }
+    pub fn uri(s: &str, c: bool) -> String {
+        paint(s, "36", c)
+    }
     // entry_type  magenta    — category label
-    pub fn entry_type(s: &str, c: bool) -> String { paint(s, "35", c) }
+    pub fn entry_type(s: &str, c: bool) -> String {
+        paint(s, "35", c)
+    }
     // label   bold cyan      — field-name label in aligned display
-    pub fn label(s: &str, c: bool) -> String { paint(s, "1;36", c) }
+    pub fn label(s: &str, c: bool) -> String {
+        paint(s, "1;36", c)
+    }
     // section bold white     — section headers (FIELDS / NOTES / …)
-    pub fn section(s: &str, c: bool) -> String { paint(s, "1", c) }
+    pub fn section(s: &str, c: bool) -> String {
+        paint(s, "1", c)
+    }
     // dim     dim            — secondary / decorative text
-    pub fn dim(s: &str, c: bool) -> String { paint(s, "2", c) }
+    pub fn dim(s: &str, c: bool) -> String {
+        paint(s, "2", c)
+    }
     // empty   dim italic     — "none" / "N/A" placeholder values
-    pub fn empty(s: &str, c: bool) -> String { paint(s, "2;3", c) }
+    pub fn empty(s: &str, c: bool) -> String {
+        paint(s, "2;3", c)
+    }
     // success bold green     — action verbs ("Created", "Attached", …)
-    pub fn success(s: &str, c: bool) -> String { paint(s, "1;32", c) }
+    pub fn success(s: &str, c: bool) -> String {
+        paint(s, "1;32", c)
+    }
     // old_val dim red        — value about to be replaced
-    pub fn old_val(s: &str, c: bool) -> String { paint(s, "2;31", c) }
+    pub fn old_val(s: &str, c: bool) -> String {
+        paint(s, "2;31", c)
+    }
     // new_val green          — replacement / updated value
-    pub fn new_val(s: &str, c: bool) -> String { paint(s, "32", c) }
+    pub fn new_val(s: &str, c: bool) -> String {
+        paint(s, "32", c)
+    }
     // warning bold yellow    — warnings / notices
-    pub fn warning(s: &str, c: bool) -> String { paint(s, "1;33", c) }
+    pub fn warning(s: &str, c: bool) -> String {
+        paint(s, "1;33", c)
+    }
     // size    dim            — file sizes (same weight as dim)
-    pub fn size(s: &str, c: bool) -> String { paint(s, "2", c) }
+    pub fn size(s: &str, c: bool) -> String {
+        paint(s, "2", c)
+    }
     // collections dim        — metadata that rarely matters
-    pub fn collections(s: &str, c: bool) -> String { paint(s, "2", c) }
+    pub fn collections(s: &str, c: bool) -> String {
+        paint(s, "2", c)
+    }
     // header  bold white     — table column headers
-    pub fn header(s: &str, c: bool) -> String { paint(s, "1;37", c) }
+    pub fn header(s: &str, c: bool) -> String {
+        paint(s, "1;37", c)
+    }
     // raw escape for the rare case where a specific code is needed
-    pub fn paint_raw(s: &str, code: &str, c: bool) -> String { paint(s, code, c) }
+    pub fn paint_raw(s: &str, code: &str, c: bool) -> String {
+        paint(s, code, c)
+    }
 }
 
 fn write_yaml_pretty<T>(
@@ -1596,7 +1626,11 @@ fn format_ambiguous_entry(entry: &DecryptedSearchCipher, c: bool) -> String {
         details.push(format!("attachments: {}", entry.attachment_count));
     }
 
-    format!("  - {} ({})", style::name(&entry.name, c), details.join(" | "))
+    format!(
+        "  - {} ({})",
+        style::name(&entry.name, c),
+        details.join(" | ")
+    )
 }
 
 fn colorize_table_cell(
@@ -1947,7 +1981,11 @@ pub struct EditableCustomField {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
-    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "type",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub ty: Option<String>,
 }
 
@@ -2216,7 +2254,11 @@ pub fn account_add(
         // account; drop them (mirrors `config set email`).
         stop_agent()?;
     }
-    let suffix = if now_primary == name { " (primary)" } else { "" };
+    let suffix = if now_primary == name {
+        " (primary)"
+    } else {
+        ""
+    };
     println!("added account '{name}'{suffix}");
     Ok(())
 }
@@ -2496,7 +2538,8 @@ pub fn attachment_list(
 ) -> anyhow::Result<()> {
     unlock(None)?;
     let db = load_db()?;
-    let (_, decrypted) = find_entry(&db, needles, user, folder, ignore_case, force_exact)?;
+    let (_, decrypted) =
+        find_entry(&db, needles, user, folder, ignore_case, force_exact)?;
 
     if output_is_structured(output) {
         write_serialized_pretty(
@@ -2758,8 +2801,9 @@ fn print_entry_list(
                 },
             })
             .collect::<Vec<_>>();
-        let show_attachments =
-            entries.iter().any(|e| e.attachment_metadata.has_attachments());
+        let show_attachments = entries
+            .iter()
+            .any(|e| e.attachment_metadata.has_attachments());
         if show_attachments {
             columns.push(TableColumn {
                 header: "attachments",
@@ -2799,10 +2843,12 @@ fn print_entry_list(
                             .collection_ids
                             .as_ref()
                             .map_or_else(String::new, |ids| ids.join(",")),
-                        ListField::Password => entry
-                            .password
-                            .as_ref()
-                            .map_or_else(String::new, std::string::ToString::to_string),
+                        ListField::Password => {
+                            entry.password.as_ref().map_or_else(
+                                String::new,
+                                std::string::ToString::to_string,
+                            )
+                        }
                     })
                     .collect::<Vec<_>>();
                 if show_attachments {
@@ -2975,7 +3021,6 @@ pub fn add(
     add_structured(name, username, uris, folder, json)
 }
 
-
 pub fn generate(
     name: Option<&str>,
     username: Option<&str>,
@@ -3108,8 +3153,9 @@ pub fn remove(
         needle_str
     );
 
-    let (entry, _) = find_entry(&db, needles, username, folder, ignore_case, force_exact)
-        .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    let (entry, _) =
+        find_entry(&db, needles, username, folder, ignore_case, force_exact)
+            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     if let (Some(access_token), ()) =
         rbw::actions::remove(access_token, refresh_token, &entry.id)?
@@ -3416,7 +3462,8 @@ pub fn set(
         let mut pending: Vec<BulkPending> = Vec::new();
 
         for needle in &needles {
-            match find_entries_all(&db, needle, username, folder, ignore_case) {
+            match find_entries_all(&db, needle, username, folder, ignore_case)
+            {
                 Err(e) => {
                     eprintln!("{needle}: {e:#}");
                     any_err = true;
@@ -3463,15 +3510,15 @@ pub fn set(
 
         if !pending.is_empty() && !yes {
             let c = stdout_supports_color();
-            let lbl =
-                |s: &str| style::label(&format!("{s:<12}"), c);
+            let lbl = |s: &str| style::label(&format!("{s:<12}"), c);
             eprintln!(
                 "About to update {} {}:",
-                style::name(
-                    &format!("{}", pending.len()),
-                    c
-                ),
-                if pending.len() == 1 { "entry" } else { "entries" }
+                style::name(&format!("{}", pending.len()), c),
+                if pending.len() == 1 {
+                    "entry"
+                } else {
+                    "entries"
+                }
             );
             for pu in &pending {
                 eprintln!();
@@ -3490,10 +3537,7 @@ pub fn set(
                 }
             }
             eprintln!();
-            eprint!(
-                "Apply all ({})? [y/N] ",
-                pending.len()
-            );
+            eprint!("Apply all ({})? [y/N] ", pending.len());
             use std::io::Write as _;
             let _ = std::io::stderr().flush();
             let mut answer = String::new();
@@ -3590,7 +3634,15 @@ fn find_entries_all(
     let matches: Vec<_> = ciphers
         .iter()
         .filter(|(_, d)| {
-            d.matches(needle, username, folder, ignore_case, false, false, false)
+            d.matches(
+                needle,
+                username,
+                folder,
+                ignore_case,
+                false,
+                false,
+                false,
+            )
         })
         .collect();
 
@@ -3741,7 +3793,11 @@ fn compute_entry_changes(
                     [u] => (*u).to_string(),
                     _ => format!("[{} uris]", v.len()),
                 };
-                changes.push(("uri", fmt_uris(&cur_strs), fmt_uris(&new_strs)));
+                changes.push((
+                    "uri",
+                    fmt_uris(&cur_strs),
+                    fmt_uris(&new_strs),
+                ));
             }
         }
         if let Some(t) = new_totp {
@@ -4061,7 +4117,11 @@ fn paint_no_changes() -> String {
 
 fn print_created(entry_name: &str) {
     let c = stdout_supports_color();
-    eprintln!("{} {}", style::success("Created", c), style::name(entry_name, c));
+    eprintln!(
+        "{} {}",
+        style::success("Created", c),
+        style::name(entry_name, c)
+    );
 }
 
 fn print_entry_diff(changes: &[(&str, String, String)]) {
@@ -4836,8 +4896,14 @@ fn find_entry(
                 .map(|decrypted| (entry.clone(), decrypted))
         })
         .collect::<anyhow::Result<_>>()?;
-    let (entry, _) =
-        find_entry_raw(&ciphers, &needles, username, folder, ignore_case, force_exact)?;
+    let (entry, _) = find_entry_raw(
+        &ciphers,
+        &needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )?;
     let decrypted_entry = decrypt_cipher(&entry)?;
     Ok((entry, decrypted_entry))
 }
@@ -5362,7 +5428,13 @@ impl SearchCipherPlan {
             .collect();
 
         let push_opt = |v: Option<&String>, requests: &mut BatchRequests| {
-            v.map(|s| requests.push(s, entry.key.as_deref(), entry.org_id.as_deref()))
+            v.map(|s| {
+                requests.push(
+                    s,
+                    entry.key.as_deref(),
+                    entry.org_id.as_deref(),
+                )
+            })
         };
         let mut sensitive_fields: Vec<usize> = Vec::new();
         let mut password_idx: Option<usize> = None;
@@ -5451,12 +5523,14 @@ impl SearchCipherPlan {
         let sensitive_fields = self
             .sensitive_fields
             .iter()
-            .filter_map(|&index| lenient_result(&results[index], Field::Password))
+            .filter_map(|&index| {
+                lenient_result(&results[index], Field::Password)
+            })
             .collect();
 
-        let password = self
-            .password
-            .and_then(|index| lenient_result(&results[index], Field::Password));
+        let password = self.password.and_then(|index| {
+            lenient_result(&results[index], Field::Password)
+        });
 
         Ok(DecryptedSearchCipher {
             id: self.id,
@@ -5976,17 +6050,13 @@ fn uri_match_type_str(mt: rbw::api::UriMatchType) -> &'static str {
     }
 }
 
-fn parse_uri_match_type(
-    s: &str,
-) -> anyhow::Result<rbw::api::UriMatchType> {
+fn parse_uri_match_type(s: &str) -> anyhow::Result<rbw::api::UriMatchType> {
     match s {
         "domain" => Ok(rbw::api::UriMatchType::Domain),
         "host" => Ok(rbw::api::UriMatchType::Host),
         "starts_with" => Ok(rbw::api::UriMatchType::StartsWith),
         "exact" => Ok(rbw::api::UriMatchType::Exact),
-        "regular_expression" => {
-            Ok(rbw::api::UriMatchType::RegularExpression)
-        }
+        "regular_expression" => Ok(rbw::api::UriMatchType::RegularExpression),
         "never" => Ok(rbw::api::UriMatchType::Never),
         other => Err(anyhow::anyhow!("unknown uri match type: '{other}'")),
     }
@@ -6011,9 +6081,7 @@ fn parse_field_type(s: &str) -> anyhow::Result<rbw::api::FieldType> {
     }
 }
 
-pub fn decrypted_to_editable(
-    decrypted: &DecryptedCipher,
-) -> EditableCipher {
+pub fn decrypted_to_editable(decrypted: &DecryptedCipher) -> EditableCipher {
     let data = match &decrypted.data {
         DecryptedData::Login {
             username,
@@ -6124,11 +6192,8 @@ pub fn decrypted_to_editable(
 fn editable_to_encrypted(
     editable: &EditableCipher,
     org_id: Option<&str>,
-) -> anyhow::Result<(
-    rbw::db::EntryData,
-    Vec<rbw::db::Field>,
-    Option<String>,
-)> {
+) -> anyhow::Result<(rbw::db::EntryData, Vec<rbw::db::Field>, Option<String>)>
+{
     let data = match &editable.data {
         EditableData::Login {
             username,
@@ -6265,11 +6330,7 @@ fn editable_to_encrypted(
         .fields
         .iter()
         .map(|f| {
-            let ty = f
-                .ty
-                .as_deref()
-                .map(parse_field_type)
-                .transpose()?;
+            let ty = f.ty.as_deref().map(parse_field_type).transpose()?;
             let name = f
                 .name
                 .as_deref()
@@ -6313,10 +6374,131 @@ fn editable_to_encrypted(
 // batch-decrypted search index (one agent round-trip for the whole vault). The
 // index is parallel to `db.entries` and drives list rendering and filtering;
 // full per-entry detail is decrypted lazily via `decrypt_cipher`.
-pub fn tui_open(
-) -> anyhow::Result<(rbw::db::Db, Vec<DecryptedSearchCipher>)> {
+// A single unlocked account's loaded vault for the TUI.
+pub struct TuiVault {
+    pub account: String,
+    pub db: rbw::db::Db,
+    pub search: Vec<DecryptedSearchCipher>,
+}
+
+// The initial state handed to the TUI: the vaults of every currently-unlocked
+// account, the names of configured-but-locked accounts (offered for lazy
+// unlock in the accounts panel), and whether more than one account exists (so
+// the UI can hide account badges in the common single-account case).
+pub struct TuiOpen {
+    pub vaults: Vec<TuiVault>,
+    pub locked: Vec<String>,
+    pub multi: bool,
+}
+
+// Status of one configured account, for the accounts panel.
+pub struct TuiAccount {
+    pub name: String,
+    pub email: Option<String>,
+    pub server: String,
+    pub unlocked: bool,
+    pub primary: bool,
+}
+
+// True if the currently-active account is unlocked in the agent.
+fn active_account_unlocked() -> bool {
+    crate::actions::unlocked().is_ok()
+}
+
+// Open the multi-account TUI. Unlocks the target account (--account /
+// RBW_ACCOUNT, else primary) up front — pinentry runs here, on the real
+// terminal, before the UI takes over the screen — then loads every account
+// that is currently unlocked and reports the rest as locked.
+pub fn tui_open() -> anyhow::Result<TuiOpen> {
+    let config = rbw::config::Config::load()?;
+    let accounts = config.accounts();
+
+    let target = crate::actions::current_account()
+        .unwrap_or_else(|| config.primary_account_name());
+    crate::actions::set_active_account(Some(target))?;
     unlock(None)?;
-    tui_reload()
+
+    let mut vaults = Vec::new();
+    let mut locked = Vec::new();
+    for account in &accounts {
+        crate::actions::set_active_account(Some(account.name.clone()))?;
+        if active_account_unlocked() {
+            let (db, search) = tui_reload()?;
+            vaults.push(TuiVault {
+                account: account.name.clone(),
+                db,
+                search,
+            });
+        } else {
+            locked.push(account.name.clone());
+        }
+    }
+
+    Ok(TuiOpen {
+        multi: accounts.len() > 1,
+        vaults,
+        locked,
+    })
+}
+
+// Lazily unlock one account and load its vault. pinentry runs here, so the
+// caller must have restored the real terminal first (like the $EDITOR path).
+pub fn tui_unlock_account(name: &str) -> anyhow::Result<TuiVault> {
+    crate::actions::set_active_account(Some(name.to_string()))?;
+    unlock(None)?;
+    let (db, search) = tui_reload()?;
+    Ok(TuiVault {
+        account: name.to_string(),
+        db,
+        search,
+    })
+}
+
+// Sync one account from the server and reload its vault.
+pub fn tui_account_sync(name: &str) -> anyhow::Result<TuiVault> {
+    crate::actions::set_active_account(Some(name.to_string()))?;
+    let (db, search) = tui_sync()?;
+    Ok(TuiVault {
+        account: name.to_string(),
+        db,
+        search,
+    })
+}
+
+// The status of every configured account, for the accounts panel.
+pub fn tui_accounts() -> anyhow::Result<Vec<TuiAccount>> {
+    let config = rbw::config::Config::load()?;
+    let primary = config.primary_account_name();
+    let accounts = config.accounts();
+    let mut out = Vec::with_capacity(accounts.len());
+    for account in accounts {
+        crate::actions::set_active_account(Some(account.name.clone()))?;
+        out.push(TuiAccount {
+            unlocked: active_account_unlocked(),
+            primary: account.name == primary,
+            server: account
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "bitwarden.com".to_string()),
+            email: account.email.clone(),
+            name: account.name,
+        });
+    }
+    Ok(out)
+}
+
+// Set the primary account without tearing down the agent: under per-account
+// keysets (see the agent's State) the other accounts' keys stay valid, so
+// there is no need to lock everything the way the CLI `account primary` does.
+pub fn tui_set_primary(name: &str) -> anyhow::Result<()> {
+    let mut config = rbw::config::Config::load()?;
+    config.migrate_legacy();
+    if !config.accounts.iter().any(|a| a.name == name) {
+        anyhow::bail!("account '{name}' not found");
+    }
+    config.primary_account = Some(name.to_string());
+    config.save()?;
+    Ok(())
 }
 
 // Re-read the (already unlocked) vault from disk and rebuild the search index.
@@ -6344,8 +6526,8 @@ pub fn tui_reload(
 
 // Pull remote changes from the server (via the agent), then rebuild the local
 // view. Used by the TUI's manual sync shortcut.
-pub fn tui_sync(
-) -> anyhow::Result<(rbw::db::Db, Vec<DecryptedSearchCipher>)> {
+pub fn tui_sync() -> anyhow::Result<(rbw::db::Db, Vec<DecryptedSearchCipher>)>
+{
     crate::actions::sync()?;
     tui_reload()
 }
@@ -6602,37 +6784,39 @@ pub fn tui_attachment_get(
     Ok(path)
 }
 
-pub fn load_db() -> anyhow::Result<rbw::db::Db> {
+// The account the current operation targets: the one selected via
+// --account / RBW_ACCOUNT (or, in the TUI, set per-entry via
+// `set_active_account`), else the primary account. Keeps the local db path
+// (server + email) aligned with whichever account the agent request targeted.
+fn active_account() -> anyhow::Result<rbw::config::Account> {
     let config = rbw::config::Config::load()?;
-    config.email.as_ref().map_or_else(
-        || Err(anyhow::anyhow!("failed to find email address in config")),
-        |email| {
-            rbw::db::Db::load(&config.server_name(), email)
-                .map_err(anyhow::Error::new)
-        },
-    )
+    config
+        .account(crate::actions::current_account().as_deref())
+        .map_err(anyhow::Error::new)
+}
+
+fn account_email(account: &rbw::config::Account) -> anyhow::Result<&str> {
+    account.email.as_deref().ok_or_else(|| {
+        anyhow::anyhow!("failed to find email address in config")
+    })
+}
+
+pub fn load_db() -> anyhow::Result<rbw::db::Db> {
+    let account = active_account()?;
+    rbw::db::Db::load(&account.server_name(), account_email(&account)?)
+        .map_err(anyhow::Error::new)
 }
 
 fn save_db(db: &rbw::db::Db) -> anyhow::Result<()> {
-    let config = rbw::config::Config::load()?;
-    config.email.as_ref().map_or_else(
-        || Err(anyhow::anyhow!("failed to find email address in config")),
-        |email| {
-            db.save(&config.server_name(), email)
-                .map_err(anyhow::Error::new)
-        },
-    )
+    let account = active_account()?;
+    db.save(&account.server_name(), account_email(&account)?)
+        .map_err(anyhow::Error::new)
 }
 
 fn remove_db() -> anyhow::Result<()> {
-    let config = rbw::config::Config::load()?;
-    config.email.as_ref().map_or_else(
-        || Err(anyhow::anyhow!("failed to find email address in config")),
-        |email| {
-            rbw::db::Db::remove(&config.server_name(), email)
-                .map_err(anyhow::Error::new)
-        },
-    )
+    let account = active_account()?;
+    rbw::db::Db::remove(&account.server_name(), account_email(&account)?)
+        .map_err(anyhow::Error::new)
 }
 
 struct TotpParams {
@@ -7903,12 +8087,14 @@ mod test {
             e
         };
 
-        let gpg = entry_with_secret("Private GPG Key", Some("passphrase value"));
+        let gpg =
+            entry_with_secret("Private GPG Key", Some("passphrase value"));
         let github = entry_with_secret(
             "GPG Key for github",
             Some("-----BEGIN PGP PRIVATE KEY-----"),
         );
-        let smappee = entry_with_secret("smappee.com", Some("note mentions gpg"));
+        let smappee =
+            entry_with_secret("smappee.com", Some("note mentions gpg"));
         let entries = &[gpg.clone(), github.clone(), smappee.clone()];
 
         let find = |needles: &[&str]| {
@@ -7948,27 +8134,31 @@ mod test {
                 rbw::api::FieldType::Text
             }),
         };
-        let cipher = |data: DecryptedData,
-                      fields: Vec<DecryptedField>,
-                      notes: Option<&str>| DecryptedCipher {
-            id: "id".to_string(),
-            folder: None,
-            name: "name".to_string(),
-            data,
-            fields,
-            notes: notes.map(std::string::ToString::to_string),
-            history: vec![],
-            attachments: vec![],
-            attachment_metadata: AttachmentMetadata { attachment_count: 0 },
-        };
+        let cipher =
+            |data: DecryptedData,
+             fields: Vec<DecryptedField>,
+             notes: Option<&str>| DecryptedCipher {
+                id: "id".to_string(),
+                folder: None,
+                name: "name".to_string(),
+                data,
+                fields,
+                notes: notes.map(std::string::ToString::to_string),
+                history: vec![],
+                attachments: vec![],
+                attachment_metadata: AttachmentMetadata {
+                    attachment_count: 0,
+                },
+            };
         let login = |password: Option<&str>| DecryptedData::Login {
             username: None,
             password: password.map(std::string::ToString::to_string),
             totp: None,
             uris: None,
         };
-        let resolved =
-            |c: &DecryptedCipher| c.default_secret().map(|(v, s)| (v, s.label()));
+        let resolved = |c: &DecryptedCipher| {
+            c.default_secret().map(|(v, s)| (v, s.label()))
+        };
 
         // login password wins, even over a password-named custom field
         assert_eq!(

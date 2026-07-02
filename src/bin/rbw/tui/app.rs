@@ -23,6 +23,9 @@ pub enum Action {
     None,
     Quit,
     OpenEditor,
+    // Unlock the named account; bounced to the event loop because pinentry
+    // needs the real terminal (like OpenEditor).
+    UnlockAccount(String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -44,7 +47,15 @@ pub enum Mode {
     Edit(EditForm),
     ConfirmDelete,
     Attachments(AttachmentView),
+    Accounts(AccountsView),
     Help,
+}
+
+// The accounts/settings panel: every configured account with its lock state
+// and primary marker, plus a cursor.
+pub struct AccountsView {
+    pub accounts: Vec<commands::TuiAccount>,
+    pub selected: usize,
 }
 
 // A single row in the attachment picker.
@@ -60,15 +71,36 @@ pub struct AttachmentView {
     pub selected: usize,
 }
 
-pub struct App {
+// One unlocked account and its local db plus decrypted search index. The
+// index is parallel to `db.entries`; the flattened `App::search` (built by
+// `rebuild_flat`) concatenates these across all vaults.
+struct AccountVault {
+    name: String,
     db: rbw::db::Db,
-    // Parallel to `db.entries`: lightweight decrypted fields for list/search.
+    search: Vec<DecryptedSearchCipher>,
+}
+
+pub struct App {
+    // Every currently-unlocked account.
+    vaults: Vec<AccountVault>,
+    // Configured accounts that are still locked, offered for lazy unlock from
+    // the accounts panel.
+    locked: Vec<String>,
+    // More than one account is configured: controls account badges and the
+    // add-target picker.
+    multi: bool,
+
+    // Flattened, index-aligned view across all vaults. `search[i]` describes
+    // the entry at `vaults[owner[i]].db.entries[slot[i]]`.
     pub search: Vec<DecryptedSearchCipher>,
-    // Full per-entry detail, decrypted lazily on selection, keyed by entry id.
-    detail_cache: HashMap<String, DecryptedCipher>,
+    owner: Vec<usize>,
+    slot: Vec<usize>,
+
+    // Full per-entry detail, decrypted lazily, keyed by (owning vault, id).
+    detail_cache: HashMap<(usize, String), DecryptedCipher>,
     pub filter: Input,
-    // Indices into `db.entries`/`search`, filtered by the search term and
-    // sorted by (folder, name).
+    // Indices into the flattened view, filtered by the search term and sorted
+    // by (folder, name, user).
     pub filtered: Vec<usize>,
     pub selected: usize,
     pub mode: Mode,
@@ -78,14 +110,23 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(
-        db: rbw::db::Db,
-        search: Vec<DecryptedSearchCipher>,
-        initial_term: Option<&str>,
-    ) -> Self {
+    pub fn new(open: commands::TuiOpen, initial_term: Option<&str>) -> Self {
+        let vaults = open
+            .vaults
+            .into_iter()
+            .map(|v| AccountVault {
+                name: v.account,
+                db: v.db,
+                search: v.search,
+            })
+            .collect();
         let mut app = Self {
-            db,
-            search,
+            vaults,
+            locked: open.locked,
+            multi: open.multi,
+            search: Vec::new(),
+            owner: Vec::new(),
+            slot: Vec::new(),
             detail_cache: HashMap::new(),
             filter: initial_term.map_or_else(Input::default, Input::new),
             filtered: Vec::new(),
@@ -97,9 +138,53 @@ impl App {
             status: None,
             detail_scroll: 0,
         };
+        app.rebuild_flat();
         app.recompute_filter();
         app.ensure_detail();
         app
+    }
+
+    // ---- multi-account view ---------------------------------------------
+
+    // Rebuild the flattened search index (and its owner/slot maps) from the
+    // per-vault indices. Called after any vault is loaded or reloaded.
+    fn rebuild_flat(&mut self) {
+        self.search.clear();
+        self.owner.clear();
+        self.slot.clear();
+        for (vi, vault) in self.vaults.iter().enumerate() {
+            for (si, cipher) in vault.search.iter().enumerate() {
+                self.search.push(cipher.clone());
+                self.owner.push(vi);
+                self.slot.push(si);
+            }
+        }
+    }
+
+    // The vault owning the current selection.
+    fn current_owner(&self) -> Option<usize> {
+        self.current_index()
+            .and_then(|i| self.owner.get(i).copied())
+    }
+
+    // The account name owning the current selection.
+    fn current_account_name(&self) -> Option<String> {
+        self.current_owner().map(|o| self.vaults[o].name.clone())
+    }
+
+    // The account badge to show for flattened row `i`, or `None` when only one
+    // account is configured (so single-account users see no badge column).
+    pub fn badge(&self, i: usize) -> Option<&str> {
+        if !self.multi {
+            return None;
+        }
+        self.owner.get(i).map(|&o| self.vaults[o].name.as_str())
+    }
+
+    // Point the agent + lib api calls at the account owning the current
+    // selection before an operation on it.
+    fn activate_current(&self) -> anyhow::Result<()> {
+        crate::actions::set_active_account(self.current_account_name())
     }
 
     // ---- selection / filtering ------------------------------------------
@@ -145,12 +230,17 @@ impl App {
     }
 
     fn current_entry(&self) -> Option<rbw::db::Entry> {
-        self.current_index().map(|i| self.db.entries[i].clone())
+        let i = self.current_index()?;
+        let o = *self.owner.get(i)?;
+        let s = *self.slot.get(i)?;
+        self.vaults.get(o)?.db.entries.get(s).cloned()
     }
 
     pub fn current_detail(&self) -> Option<&DecryptedCipher> {
-        let id = &self.current_search()?.id;
-        self.detail_cache.get(id)
+        let i = self.current_index()?;
+        let o = *self.owner.get(i)?;
+        let id = self.search[i].id.clone();
+        self.detail_cache.get(&(o, id))
     }
 
     fn select(&mut self, pos: usize) {
@@ -179,18 +269,26 @@ impl App {
     }
 
     // Decrypt full detail for the current selection if not already cached.
+    // Routes the decrypt to the owning account.
     fn ensure_detail(&mut self) {
-        let Some(idx) = self.current_index() else {
+        let Some(i) = self.current_index() else {
             return;
         };
-        let id = self.db.entries[idx].id.clone();
-        if self.detail_cache.contains_key(&id) {
+        let o = self.owner[i];
+        let id = self.search[i].id.clone();
+        if self.detail_cache.contains_key(&(o, id.clone())) {
             return;
         }
-        let entry = self.db.entries[idx].clone();
+        let entry = self.vaults[o].db.entries[self.slot[i]].clone();
+        if let Err(e) = crate::actions::set_active_account(Some(
+            self.vaults[o].name.clone(),
+        )) {
+            self.set_status(Level::Error, format!("{e:#}"));
+            return;
+        }
         match commands::decrypt_cipher(&entry) {
             Ok(detail) => {
-                self.detail_cache.insert(id, detail);
+                self.detail_cache.insert((o, id), detail);
             }
             Err(e) => self.set_status(Level::Error, format!("{e:#}")),
         }
@@ -317,18 +415,27 @@ impl App {
         let Some(att_id) = att_id else {
             return;
         };
+        let Some(o) = self.current_owner() else {
+            return;
+        };
         let Some(entry) = self.current_entry() else {
             return;
         };
         self.ensure_detail();
-        let Some(detail) = self.detail_cache.get(&entry.id).cloned() else {
+        let Some(detail) =
+            self.detail_cache.get(&(o, entry.id.clone())).cloned()
+        else {
             self.set_status(Level::Error, "could not decrypt entry");
             return;
         };
+        if let Err(e) = self.activate_current() {
+            self.set_status(Level::Error, format!("{e:#}"));
+            return;
+        }
         let dest = std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("."));
         match commands::tui_attachment_get(
-            &mut self.db,
+            &mut self.vaults[o].db,
             &entry,
             &detail,
             &att_id,
@@ -348,59 +455,114 @@ impl App {
 
     // ---- mutations ------------------------------------------------------
 
-    fn reload(&mut self) {
-        match commands::tui_reload() {
-            Ok((db, search)) => self.replace_vault(db, search),
-            Err(e) => self.set_status(Level::Error, format!("{e:#}")),
-        }
+    // (owning vault, id) of the current selection, for restoring it after the
+    // flattened view is rebuilt.
+    fn current_key(&self) -> Option<(usize, String)> {
+        let i = self.current_index()?;
+        Some((self.owner[i], self.search[i].id.clone()))
     }
 
-    // Pull remote changes from the server, then reload the local view. Runs
-    // synchronously (like save/delete), so the UI briefly blocks on the network.
-    fn sync(&mut self) {
-        match commands::tui_sync() {
-            Ok((db, search)) => {
-                self.replace_vault(db, search);
-                self.set_status(Level::Success, "synced");
-            }
-            Err(e) => self.set_status(Level::Error, format!("{e:#}")),
-        }
-    }
-
-    // Swap in a freshly loaded db/search index, preserving the selection by
-    // entry id where possible.
-    fn replace_vault(
-        &mut self,
-        db: rbw::db::Db,
-        search: Vec<DecryptedSearchCipher>,
-    ) {
-        let keep_id = self.current_search().map(|s| s.id.clone());
-        self.db = db;
-        self.search = search;
-        self.detail_cache.clear();
-        self.recompute_filter();
-        if let Some(id) = keep_id {
-            if let Some(pos) =
-                self.filtered.iter().position(|&i| self.search[i].id == id)
+    fn restore_selection(&mut self, keep: Option<(usize, String)>) {
+        if let Some((o, id)) = keep {
+            if let Some(pos) = self
+                .filtered
+                .iter()
+                .position(|&i| self.owner[i] == o && self.search[i].id == id)
             {
                 self.selected = pos;
             }
         }
+    }
+
+    // Reload a single vault from its local db and rebuild the flattened view.
+    fn reload_vault(&mut self, owner: usize) {
+        if let Err(e) = crate::actions::set_active_account(Some(
+            self.vaults[owner].name.clone(),
+        )) {
+            self.set_status(Level::Error, format!("{e:#}"));
+            return;
+        }
+        match commands::tui_reload() {
+            Ok((db, search)) => {
+                let keep = self.current_key();
+                self.vaults[owner].db = db;
+                self.vaults[owner].search = search;
+                self.detail_cache.retain(|(o, _), _| *o != owner);
+                self.rebuild_flat();
+                self.recompute_filter();
+                self.restore_selection(keep);
+                self.ensure_detail();
+            }
+            Err(e) => self.set_status(Level::Error, format!("{e:#}")),
+        }
+    }
+
+    // Ctrl-S: pull remote changes for every unlocked account, then rebuild.
+    fn sync(&mut self) {
+        let keep = self.current_key();
+        let names: Vec<String> =
+            self.vaults.iter().map(|v| v.name.clone()).collect();
+        let mut errors = Vec::new();
+        for name in names {
+            match commands::tui_account_sync(&name) {
+                Ok(v) => {
+                    if let Some(slot) =
+                        self.vaults.iter_mut().find(|x| x.name == name)
+                    {
+                        slot.db = v.db;
+                        slot.search = v.search;
+                    }
+                }
+                Err(e) => errors.push(format!("{name}: {e:#}")),
+            }
+        }
+        self.detail_cache.clear();
+        self.rebuild_flat();
+        self.recompute_filter();
+        self.restore_selection(keep);
         self.ensure_detail();
+        if errors.is_empty() {
+            self.set_status(Level::Success, "synced");
+        } else {
+            self.set_status(Level::Error, errors.join("; "));
+        }
     }
 
     fn start_edit(&mut self) {
+        let Some(owner) = self.current_owner() else {
+            self.set_status(Level::Warn, "nothing selected");
+            return;
+        };
         let Some(detail) = self.current_detail() else {
             self.set_status(Level::Warn, "nothing selected");
             return;
         };
         let base = commands::decrypted_to_editable(detail);
         let title = format!("Edit · {}", base.name);
-        self.mode =
-            Mode::Edit(EditForm::new(title, Some(detail.id.clone()), base));
+        self.mode = Mode::Edit(EditForm::new(
+            title,
+            Some(detail.id.clone()),
+            owner,
+            base,
+        ));
+    }
+
+    // New entries land in the account owning the current selection, else the
+    // first unlocked account. With more than one account the target is shown
+    // in the form title.
+    fn add_target_owner(&self) -> Option<usize> {
+        self.current_owner().or(if self.vaults.is_empty() {
+            None
+        } else {
+            Some(0)
+        })
     }
 
     fn start_add(&mut self) {
+        let Some(owner) = self.add_target_owner() else {
+            self.set_status(Level::Warn, "no unlocked account to add to");
+            return;
+        };
         let base = EditableCipher {
             name: String::new(),
             folder: None,
@@ -413,8 +575,12 @@ impl App {
             },
             fields: Vec::new(),
         };
-        self.mode =
-            Mode::Edit(EditForm::new("New login".to_string(), None, base));
+        let title = if self.multi {
+            format!("New login → {}", self.vaults[owner].name)
+        } else {
+            "New login".to_string()
+        };
+        self.mode = Mode::Edit(EditForm::new(title, None, owner, base));
     }
 
     fn submit_form(&mut self) {
@@ -424,11 +590,19 @@ impl App {
         let mut base = form.rebuild_editable();
         let is_new = form.entry_id.is_none();
         let entry_id = form.entry_id.clone();
+        let owner = form.owner;
 
+        if let Err(e) = crate::actions::set_active_account(Some(
+            self.vaults[owner].name.clone(),
+        )) {
+            self.set_status(Level::Error, format!("{e:#}"));
+            return;
+        }
         let result = if is_new {
-            commands::tui_save_add(&mut self.db, &base)
+            commands::tui_save_add(&mut self.vaults[owner].db, &base)
         } else if let Some(id) = &entry_id {
-            self.db
+            self.vaults[owner]
+                .db
                 .entries
                 .iter()
                 .find(|e| &e.id == id)
@@ -436,7 +610,11 @@ impl App {
                 .map_or_else(
                     || Err(anyhow::anyhow!("entry no longer exists")),
                     |entry| {
-                        commands::tui_save_edit(&mut self.db, &entry, &base)
+                        commands::tui_save_edit(
+                            &mut self.vaults[owner].db,
+                            &entry,
+                            &base,
+                        )
                     },
                 )
         } else {
@@ -448,7 +626,7 @@ impl App {
         match result {
             Ok(()) => {
                 self.mode = Mode::Normal;
-                self.reload();
+                self.reload_vault(owner);
                 self.set_status(
                     Level::Success,
                     if is_new {
@@ -464,6 +642,10 @@ impl App {
     }
 
     fn confirm_delete(&mut self) {
+        let Some(owner) = self.current_owner() else {
+            self.mode = Mode::Normal;
+            return;
+        };
         let Some(entry) = self.current_entry() else {
             self.mode = Mode::Normal;
             return;
@@ -471,10 +653,15 @@ impl App {
         let name = self
             .current_search()
             .map_or_else(String::new, |s| s.name.clone());
-        match commands::tui_delete(&mut self.db, &entry) {
+        if let Err(e) = self.activate_current() {
+            self.mode = Mode::Normal;
+            self.set_status(Level::Error, format!("{e:#}"));
+            return;
+        }
+        match commands::tui_delete(&mut self.vaults[owner].db, &entry) {
             Ok(()) => {
                 self.mode = Mode::Normal;
-                self.reload();
+                self.reload_vault(owner);
                 self.set_status(Level::Success, format!("deleted '{name}'"));
             }
             Err(e) => {
@@ -486,23 +673,175 @@ impl App {
 
     // Called by the event loop once the real terminal has been restored.
     pub fn edit_in_editor(&mut self) -> anyhow::Result<()> {
+        let Some(owner) = self.current_owner() else {
+            return Ok(());
+        };
         let Some(entry) = self.current_entry() else {
             return Ok(());
         };
         self.ensure_detail();
-        let Some(detail) = self.detail_cache.get(&entry.id).cloned() else {
+        let Some(detail) =
+            self.detail_cache.get(&(owner, entry.id.clone())).cloned()
+        else {
             anyhow::bail!("could not decrypt entry");
         };
-        let changed =
-            commands::tui_edit_in_editor(&mut self.db, &entry, &detail)?;
+        self.activate_current()?;
+        let changed = commands::tui_edit_in_editor(
+            &mut self.vaults[owner].db,
+            &entry,
+            &detail,
+        )?;
         self.mode = Mode::Normal;
         if changed {
-            self.reload();
+            self.reload_vault(owner);
             self.set_status(Level::Success, "saved changes from editor");
         } else {
             self.set_status(Level::Info, "no changes");
         }
         Ok(())
+    }
+
+    // ---- accounts panel -------------------------------------------------
+
+    fn open_accounts(&mut self) {
+        match commands::tui_accounts() {
+            Ok(accounts) => {
+                self.mode = Mode::Accounts(AccountsView {
+                    accounts,
+                    selected: 0,
+                });
+            }
+            Err(e) => self.set_status(Level::Error, format!("{e:#}")),
+        }
+    }
+
+    // Rebuild the panel contents in place after a lock-state or primary change,
+    // keeping the cursor position.
+    fn refresh_accounts_view(&mut self) {
+        if let Mode::Accounts(view) = &self.mode {
+            let selected = view.selected;
+            if let Ok(accounts) = commands::tui_accounts() {
+                let selected = selected.min(accounts.len().saturating_sub(1));
+                self.mode =
+                    Mode::Accounts(AccountsView { accounts, selected });
+            }
+        }
+    }
+
+    fn accounts_move(&mut self, delta: isize) {
+        if let Mode::Accounts(view) = &mut self.mode {
+            let len = view.accounts.len();
+            if len == 0 {
+                return;
+            }
+            let cur = isize::try_from(view.selected).unwrap_or(0);
+            let last = isize::try_from(len - 1).unwrap_or(0);
+            view.selected =
+                usize::try_from((cur + delta).clamp(0, last)).unwrap_or(0);
+        }
+    }
+
+    fn selected_account(&self) -> Option<(String, bool)> {
+        if let Mode::Accounts(view) = &self.mode {
+            view.accounts
+                .get(view.selected)
+                .map(|a| (a.name.clone(), a.unlocked))
+        } else {
+            None
+        }
+    }
+
+    // Sync the highlighted account (must be unlocked) and refresh its entries.
+    fn sync_selected_account(&mut self) {
+        let Some((name, unlocked)) = self.selected_account() else {
+            return;
+        };
+        if !unlocked {
+            self.set_status(Level::Warn, format!("{name} is locked"));
+            return;
+        }
+        match commands::tui_account_sync(&name) {
+            Ok(v) => {
+                if let Some(slot) =
+                    self.vaults.iter_mut().find(|x| x.name == name)
+                {
+                    slot.db = v.db;
+                    slot.search = v.search;
+                }
+                self.detail_cache.clear();
+                self.rebuild_flat();
+                self.recompute_filter();
+                self.ensure_detail();
+                self.set_status(Level::Success, format!("synced {name}"));
+            }
+            Err(e) => self.set_status(Level::Error, format!("{e:#}")),
+        }
+        self.refresh_accounts_view();
+    }
+
+    fn set_primary_selected_account(&mut self) {
+        let Some((name, _)) = self.selected_account() else {
+            return;
+        };
+        match commands::tui_set_primary(&name) {
+            Ok(()) => {
+                self.set_status(Level::Success, format!("primary → {name}"));
+            }
+            Err(e) => self.set_status(Level::Error, format!("{e:#}")),
+        }
+        self.refresh_accounts_view();
+    }
+
+    // Called by the event loop (terminal restored) to lazily unlock an account
+    // and fold its entries into the merged list.
+    pub fn unlock_account(&mut self, name: &str) -> anyhow::Result<()> {
+        let vault = commands::tui_unlock_account(name)?;
+        let keep = self.current_key();
+        self.vaults.push(AccountVault {
+            name: vault.account,
+            db: vault.db,
+            search: vault.search,
+        });
+        self.locked.retain(|n| n != name);
+        self.rebuild_flat();
+        self.recompute_filter();
+        self.restore_selection(keep);
+        self.ensure_detail();
+        self.refresh_accounts_view();
+        Ok(())
+    }
+
+    pub fn set_unlocked_status(&mut self, name: &str) {
+        self.set_status(Level::Success, format!("unlocked {name}"));
+    }
+
+    fn handle_accounts(&mut self, key: KeyEvent) -> Action {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Char('n') if ctrl => self.accounts_move(1),
+            KeyCode::Char('p') if ctrl => self.accounts_move(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.accounts_move(1),
+            KeyCode::Up | KeyCode::Char('k') => self.accounts_move(-1),
+            KeyCode::Enter | KeyCode::Char('u') => {
+                // Unlock the highlighted account if it is locked; the loop
+                // handles it (pinentry needs the terminal).
+                if let Some((name, unlocked)) = self.selected_account() {
+                    if unlocked {
+                        self.set_status(
+                            Level::Info,
+                            format!("{name} already unlocked"),
+                        );
+                    } else {
+                        return Action::UnlockAccount(name);
+                    }
+                }
+            }
+            KeyCode::Char('s') => self.sync_selected_account(),
+            KeyCode::Char('p') => self.set_primary_selected_account(),
+            _ => {}
+        }
+        Action::None
     }
 
     // ---- key handling ---------------------------------------------------
@@ -522,6 +861,7 @@ impl App {
                 self.handle_attachments(key);
                 Action::None
             }
+            Mode::Accounts(_) => self.handle_accounts(key),
             Mode::Help => {
                 self.mode = Mode::Normal;
                 Action::None
@@ -593,6 +933,7 @@ impl App {
             KeyCode::Char('e') | KeyCode::Enter => self.start_edit(),
             KeyCode::Char('E') => return Action::OpenEditor,
             KeyCode::Char('a') => self.start_add(),
+            KeyCode::Char('A') => self.open_accounts(),
             KeyCode::Char('d') => {
                 if self.current_search().is_some() {
                     self.mode = Mode::ConfirmDelete;
@@ -739,6 +1080,9 @@ impl FormField {
 pub struct EditForm {
     pub title: String,
     entry_id: Option<String>,
+    // Which vault the entry belongs to (for an edit) or will be created in (for
+    // an add). Used to route the save to the right account.
+    owner: usize,
     // The original editable, preserved so fields the inline form doesn't expose
     // (extra URIs, custom fields, full identity/ssh data) survive a save.
     base: EditableCipher,
@@ -751,12 +1095,14 @@ impl EditForm {
     fn new(
         title: String,
         entry_id: Option<String>,
+        owner: usize,
         base: EditableCipher,
     ) -> Self {
         let fields = build_fields(&base);
         Self {
             title,
             entry_id,
+            owner,
             base,
             fields,
             focus: 0,
@@ -1060,7 +1406,18 @@ mod test {
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn app() -> App {
-        App::new(rbw::db::Db::new(), Vec::new(), None)
+        App::new(
+            crate::commands::TuiOpen {
+                vaults: vec![crate::commands::TuiVault {
+                    account: "default".to_string(),
+                    db: rbw::db::Db::new(),
+                    search: Vec::new(),
+                }],
+                locked: Vec::new(),
+                multi: false,
+            },
+            None,
+        )
     }
 
     fn key(code: KeyCode) -> KeyEvent {

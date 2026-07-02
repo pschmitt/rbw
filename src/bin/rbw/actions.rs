@@ -2,18 +2,33 @@ use std::{io::Read as _, os::unix::ffi::OsStringExt as _};
 
 use anyhow::Context as _;
 
-// The account every request targets, set once from --account / RBW_ACCOUNT in
-// main. `None` means the primary account (also the default for older agents
-// that ignore the field).
-static ACCOUNT: std::sync::OnceLock<Option<String>> =
-    std::sync::OnceLock::new();
+// The account every request targets, set from --account / RBW_ACCOUNT in main,
+// and re-set per operation by the multi-account TUI. `None` means the primary
+// account (also the default for older agents that ignore the field).
+static ACCOUNT: std::sync::RwLock<Option<String>> =
+    std::sync::RwLock::new(None);
 
 pub fn set_account(account: Option<String>) {
-    let _ = ACCOUNT.set(account);
+    *ACCOUNT.write().unwrap() = account;
 }
 
-fn current_account() -> Option<String> {
-    ACCOUNT.get().cloned().flatten()
+pub fn current_account() -> Option<String> {
+    ACCOUNT.read().unwrap().clone()
+}
+
+// Point both the agent requests (this module) and the direct lib api calls at
+// `account` (by name), or the primary account when `None`. Used by the
+// multi-account TUI to route each operation to the account that owns the entry.
+pub fn set_active_account(account: Option<String>) -> anyhow::Result<()> {
+    set_account(account.clone());
+    match account {
+        Some(name) => {
+            let config = rbw::config::Config::load()?;
+            rbw::actions::set_client_account(config.account(Some(&name))?);
+        }
+        None => rbw::actions::clear_client_account(),
+    }
+    Ok(())
 }
 
 pub fn register() -> anyhow::Result<()> {

@@ -194,7 +194,12 @@ enum Opt {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[arg(short = 'j', long, visible_alias = "json", help = "Display output as JSON")]
+        #[arg(
+            short = 'j',
+            long,
+            visible_alias = "json",
+            help = "Display output as JSON"
+        )]
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
@@ -218,7 +223,12 @@ enum Opt {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[arg(short = 'j', long, visible_alias = "json", help = "Display output as JSON")]
+        #[arg(
+            short = 'j',
+            long,
+            visible_alias = "json",
+            help = "Display output as JSON"
+        )]
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
@@ -235,7 +245,12 @@ enum Opt {
     Show {
         #[command(flatten)]
         find_args: FindArgs,
-        #[arg(short = 'j', long, visible_alias = "json", help = "Display output as JSON")]
+        #[arg(
+            short = 'j',
+            long,
+            visible_alias = "json",
+            help = "Display output as JSON"
+        )]
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
@@ -269,7 +284,12 @@ enum Opt {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[arg(short = 'j', long, visible_alias = "json", help = "Display output as JSON")]
+        #[arg(
+            short = 'j',
+            long,
+            visible_alias = "json",
+            help = "Display output as JSON"
+        )]
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
@@ -434,7 +454,11 @@ enum Opt {
         username: Option<String>,
         #[arg(long, help = "New password (Login entries only)")]
         password: Option<String>,
-        #[arg(long, alias = "note", help = "New notes (empty string to clear)")]
+        #[arg(
+            long,
+            alias = "note",
+            help = "New notes (empty string to clear)"
+        )]
         notes: Option<String>,
         #[arg(
             long,
@@ -475,7 +499,12 @@ enum Opt {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[arg(short = 'j', long, visible_alias = "json", help = "Display output as JSON")]
+        #[arg(
+            short = 'j',
+            long,
+            visible_alias = "json",
+            help = "Display output as JSON"
+        )]
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
@@ -672,7 +701,12 @@ enum Attachment {
             help = "Output mode: name, json, yaml"
         )]
         output: Option<OutputArg>,
-        #[arg(short = 'j', long, visible_alias = "json", help = "Display output as JSON")]
+        #[arg(
+            short = 'j',
+            long,
+            visible_alias = "json",
+            help = "Display output as JSON"
+        )]
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
@@ -710,7 +744,10 @@ enum Attachment {
         )]
         raw: bool,
     },
-    #[command(about = "Upload a file as an attachment", visible_alias = "add")]
+    #[command(
+        about = "Upload a file as an attachment",
+        visible_alias = "add"
+    )]
     Create {
         #[arg(
             help = "Name, URI, UUID (or multiple terms, all required to match)",
@@ -762,20 +799,24 @@ fn main() {
         std::env::var("RBW_ACCOUNT").ok().filter(|s| !s.is_empty())
     });
     actions::set_account(account.clone());
-    if let Some(name) = &account {
-        match rbw::config::Config::load() {
-            Ok(config) => match config.account(Some(name)) {
-                Ok(account) => rbw::actions::set_client_account(account),
-                Err(e) => {
-                    eprintln!("{}", commands::style_error(&format!("{e:#}"),
+    // If the config can't be loaded here, downstream commands surface a clearer
+    // error; there is nothing to point the api client at in that case.
+    if let (Some(name), Ok(config)) =
+        (&account, rbw::config::Config::load())
+    {
+        match config.account(Some(name)) {
+            Ok(account) => rbw::actions::set_client_account(account),
+            Err(e) => {
+                eprintln!(
+                    "{}",
+                    commands::style_error(
+                        &format!("{e:#}"),
                         std::io::stderr().is_terminal()
-                            && std::env::var_os("NO_COLOR").is_none()));
-                    std::process::exit(1);
-                }
-            },
-            // If the config can't be loaded, downstream commands surface a
-            // clearer error; nothing to point the api client at here.
-            Err(_) => {}
+                            && std::env::var_os("NO_COLOR").is_none()
+                    )
+                );
+                std::process::exit(1);
+            }
         }
     }
 
@@ -809,9 +850,9 @@ fn main() {
                 base_url,
                 sso_id,
                 primary,
-            } => commands::account_add(
-                &name, email, base_url, sso_id, primary,
-            ),
+            } => {
+                commands::account_add(&name, email, base_url, sso_id, primary)
+            }
             AccountCmd::Remove { name } => commands::account_remove(&name),
             AccountCmd::Primary { name } => {
                 commands::account_set_primary(&name)
@@ -847,7 +888,14 @@ fn main() {
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             if let Some(term) = term {
-                commands::search(&term, &fields, None, with_attachments, insecure, output)
+                commands::search(
+                    &term,
+                    &fields,
+                    None,
+                    with_attachments,
+                    insecure,
+                    output,
+                )
             } else {
                 commands::list(&fields, with_attachments, insecure, output)
             }
@@ -928,7 +976,11 @@ fn main() {
                 find_args.exact,
             )
         })(),
-        Opt::Show { find_args, raw, yaml } => (|| -> anyhow::Result<()> {
+        Opt::Show {
+            find_args,
+            raw,
+            yaml,
+        } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(None, raw, yaml)?;
             commands::show(
                 find_args.needles,
@@ -1040,7 +1092,11 @@ fn main() {
                 ty,
             )
         }
-        Opt::Edit { find_args, json, yaml } => commands::edit(
+        Opt::Edit {
+            find_args,
+            json,
+            yaml,
+        } => commands::edit(
             find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
@@ -1085,14 +1141,12 @@ fn main() {
             find_args.ignorecase,
             find_args.exact,
         ),
-        Opt::ListCollections {
-            output,
-            raw,
-            yaml,
-        } => (|| -> anyhow::Result<()> {
-            let output = resolve_output_mode(output, raw, yaml)?;
-            commands::list_collections(output)
-        })(),
+        Opt::ListCollections { output, raw, yaml } => {
+            (|| -> anyhow::Result<()> {
+                let output = resolve_output_mode(output, raw, yaml)?;
+                commands::list_collections(output)
+            })()
+        }
         Opt::CreateCollection { name, org_id } => {
             commands::create_collection(&name, &org_id)
         }

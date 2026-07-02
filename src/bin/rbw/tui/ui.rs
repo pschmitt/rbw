@@ -23,7 +23,7 @@ use crate::commands::{
     DecryptedCipher, DecryptedData, DecryptedSearchCipher,
 };
 
-use super::app::{App, AttachmentView, EditForm, Level, Mode};
+use super::app::{AccountsView, App, AttachmentView, EditForm, Level, Mode};
 
 const ACCENT: Color = Color::Cyan;
 const SELECT_BG: Color = Color::Rgb(38, 44, 66);
@@ -71,6 +71,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::Edit(form) => render_form(f, form, main),
         Mode::ConfirmDelete => render_confirm(f, app, main),
         Mode::Attachments(view) => render_attachments(f, view, main),
+        Mode::Accounts(view) => render_accounts(f, view, main),
         Mode::Help => render_help(f, main),
         Mode::Normal | Mode::Search => {}
     }
@@ -159,7 +160,7 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
     let items: Vec<ListItem> = app
         .filtered
         .iter()
-        .map(|&i| list_item(&app.search[i], width))
+        .map(|&i| list_item(&app.search[i], app.badge(i), width))
         .collect();
 
     let list = List::new(items)
@@ -175,13 +176,27 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
 
 fn list_item(
     entry: &DecryptedSearchCipher,
+    badge: Option<&str>,
     width: usize,
 ) -> ListItem<'static> {
     let marker = type_marker(&entry.entry_type);
     let name = entry.name.clone();
     let user = entry.user.clone();
 
-    let mut left = vec![marker, Span::raw(name.clone())];
+    // Account badge (only present when more than one account is configured).
+    let badge_text = badge.map(|b| format!("{b} "));
+    let badge_w = badge_text
+        .as_deref()
+        .map_or(0, unicode_width::UnicodeWidthStr::width);
+
+    let mut left = vec![marker];
+    if let Some(badge_text) = &badge_text {
+        left.push(Span::styled(
+            badge_text.clone(),
+            Style::default().fg(Color::Magenta),
+        ));
+    }
+    left.push(Span::raw(name.clone()));
     if let Some(user) = &user {
         left.push(Span::styled(
             format!("  {user}"),
@@ -192,6 +207,7 @@ fn list_item(
 
     // Right-align the folder tag within the row when there's room.
     let left_w: usize = 2 // marker
+        + badge_w
         + name.width()
         + user.as_deref().map_or(0, |u| u.width() + 2);
     if let Some(folder) = folder {
@@ -492,9 +508,12 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         Mode::Edit(_) => "⏎ save · esc cancel · ⇥ next field · ^R reveal · ^E editor",
         Mode::ConfirmDelete => "y confirm · n/esc cancel",
         Mode::Attachments(_) => "⏎ download · ↑/↓ select · esc cancel",
+        Mode::Accounts(_) => {
+            "⏎/u unlock · s sync · p set primary · ↑/↓ select · esc close"
+        }
         Mode::Help => "any key to close",
         Mode::Normal => {
-            "/ search · e edit · a add · d delete · p/u/t copy · o open · s attach · ^S sync · r reveal · ? help · q quit"
+            "/ search · e edit · a add · d delete · p/u/t copy · o open · s attach · A accounts · ^S sync · r reveal · ? help · q quit"
         }
     };
     f.render_widget(
@@ -678,6 +697,63 @@ fn render_attachments(f: &mut Frame, view: &AttachmentView, area: Rect) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+fn render_accounts(f: &mut Frame, view: &AccountsView, area: Rect) {
+    let height = (view.accounts.len() as u16 + 5)
+        .clamp(6, area.height.saturating_sub(2));
+    let rect = centered(70.min(area.width.saturating_sub(4)), height, area);
+    f.render_widget(Clear, rect);
+    let b = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(
+            " accounts ",
+            Style::default().fg(ACCENT).bold(),
+        ));
+    let inner = b.inner(rect);
+    f.render_widget(b, rect);
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, acct) in view.accounts.iter().enumerate() {
+        let selected = i == view.selected;
+        let prefix = if selected { "❯ " } else { "  " };
+        let lock = if acct.unlocked { "🔓" } else { "🔒" };
+        let primary = if acct.primary { " ⭐" } else { "" };
+        let mut spans = vec![
+            Span::styled(
+                prefix,
+                Style::default().fg(if selected { ACCENT } else { DIM }),
+            ),
+            Span::raw(format!("{lock} ")),
+            Span::styled(
+                acct.name.clone(),
+                Style::default()
+                    .fg(if selected { Color::White } else { DIM })
+                    .bold(),
+            ),
+            Span::styled(primary, Style::default().fg(Color::Yellow)),
+        ];
+        if let Some(email) = &acct.email {
+            spans.push(Span::styled(
+                format!("  {email}"),
+                Style::default().fg(DIM),
+            ));
+        }
+        spans.push(Span::styled(
+            format!("  ({})", acct.server),
+            Style::default().fg(Color::Blue),
+        ));
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "⏎/u unlock · s sync · p set primary · esc close",
+        Style::default().fg(DIM),
+    )));
+
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
 fn render_help(f: &mut Frame, area: Rect) {
     let rect = centered(
         56.min(area.width.saturating_sub(2)),
@@ -712,6 +788,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         ("e · ⏎", "edit entry (inline form)"),
         ("^e · E", "edit entry in $EDITOR (any focus)"),
         ("a", "add a new login"),
+        ("A", "accounts: unlock / sync / set primary"),
         ("d", "delete entry"),
         ("?", "this help"),
         ("q · esc", "quit"),
@@ -764,7 +841,18 @@ mod test {
 
         // Empty vault keeps the fixture trivial while still exercising the
         // full chrome, popups, and cursor placement.
-        let mut app = App::new(rbw::db::Db::new(), Vec::new(), None);
+        let mut app = App::new(
+            crate::commands::TuiOpen {
+                vaults: vec![crate::commands::TuiVault {
+                    account: "default".to_string(),
+                    db: rbw::db::Db::new(),
+                    search: Vec::new(),
+                }],
+                locked: Vec::new(),
+                multi: false,
+            },
+            None,
+        );
         draw(&app); // opens focused on the live search bar
 
         press(&mut app, KeyCode::Char('x')); // type into the filter
@@ -789,6 +877,28 @@ mod test {
                 name: "invoice.pdf".to_string(),
                 size: Some("12.3 KB".to_string()),
             }],
+            selected: 0,
+        });
+        draw(&app);
+
+        // Accounts / settings panel overlay.
+        app.mode = Mode::Accounts(crate::tui::app::AccountsView {
+            accounts: vec![
+                crate::commands::TuiAccount {
+                    name: "personal".to_string(),
+                    email: Some("me@example.com".to_string()),
+                    server: "bitwarden.com".to_string(),
+                    unlocked: true,
+                    primary: true,
+                },
+                crate::commands::TuiAccount {
+                    name: "work".to_string(),
+                    email: Some("me@corp.com".to_string()),
+                    server: "https://vault.corp.com".to_string(),
+                    unlocked: false,
+                    primary: false,
+                },
+            ],
             selected: 0,
         });
         draw(&app);

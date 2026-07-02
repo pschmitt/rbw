@@ -230,17 +230,29 @@ pub enum Action {
 #[serde(tag = "type")]
 pub enum Response {
     Ack,
-    Error { error: String },
-    Decrypt { plaintext: String },
-    DecryptBatch { results: Vec<DecryptResult> },
-    DecryptAttachment { data: Vec<u8> },
+    Error {
+        error: String,
+    },
+    Decrypt {
+        plaintext: String,
+    },
+    DecryptBatch {
+        results: Vec<DecryptResult>,
+    },
+    DecryptAttachment {
+        data: Vec<u8>,
+    },
     EncryptAttachment {
         encrypted_data: Vec<u8>,
         encrypted_key: String,
         encrypted_filename: String,
     },
-    Encrypt { cipherstring: String },
-    Version { version: u32 },
+    Encrypt {
+        cipherstring: String,
+    },
+    Version {
+        version: u32,
+    },
 }
 
 // A single cipherstring to decrypt as part of an `Action::DecryptBatch`. Each

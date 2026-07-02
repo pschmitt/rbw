@@ -445,7 +445,8 @@ mod test {
     #[test]
     fn primary_defaults_to_first_account() {
         let mut c = Config::new();
-        c.accounts = vec![named("personal", "a@x.com"), named("work", "b@co.com")];
+        c.accounts =
+            vec![named("personal", "a@x.com"), named("work", "b@co.com")];
 
         assert_eq!(c.primary_account_name(), "personal");
         assert_eq!(
@@ -460,7 +461,8 @@ mod test {
     #[test]
     fn explicit_primary_account_wins() {
         let mut c = Config::new();
-        c.accounts = vec![named("personal", "a@x.com"), named("work", "b@co.com")];
+        c.accounts =
+            vec![named("personal", "a@x.com"), named("work", "b@co.com")];
         c.primary_account = Some("work".to_string());
         assert_eq!(c.primary().name, "work");
     }
