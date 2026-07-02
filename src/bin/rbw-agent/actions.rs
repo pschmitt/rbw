@@ -686,19 +686,22 @@ async fn decrypt_cipher(
         None
     };
     // An attachment key is itself wrapped in the entry's effective key, same
-    // as the entry key is wrapped in the account keys.
-    let entry_key = if let Some(attachment_key) = attachment_key {
-        let key_cipherstring =
-            rbw::cipherstring::CipherString::new(attachment_key)
-                .context("failed to parse attachment encryption key")?;
-        Some(
+    // as the entry key is wrapped in the account keys. Kept separate from
+    // `entry_key` (rather than shadowing it) because some older Bitwarden
+    // attachments — migrated to a dedicated attachment key for their data at
+    // some point in Bitwarden's history — still have their file name
+    // encrypted with the entry's key from before that migration; decrypting
+    // below falls back to `entry_key` if the attachment key doesn't work.
+    let attachment_key = attachment_key
+        .map(|attachment_key| {
+            let key_cipherstring =
+                rbw::cipherstring::CipherString::new(attachment_key)
+                    .context("failed to parse attachment encryption key")?;
             key_cipherstring
                 .decrypt_attachment_key(keys, entry_key.as_ref())
-                .context("failed to decrypt attachment encryption key")?,
-        )
-    } else {
-        entry_key
-    };
+                .context("failed to decrypt attachment encryption key")
+        })
+        .transpose()?;
 
     let mut sha256 = sha2::Sha256::new();
     sha256.update(cipherstring);
@@ -803,12 +806,17 @@ async fn decrypt_cipher(
 
     let cipherstring = rbw::cipherstring::CipherString::new(cipherstring)
         .context("failed to parse encrypted secret")?;
-    let plaintext = String::from_utf8(
-        cipherstring
-            .decrypt_symmetric(keys, entry_key.as_ref())
-            .context("failed to decrypt encrypted secret")?,
-    )
-    .context("failed to parse decrypted secret")?;
+    let decrypted = match attachment_key.as_ref() {
+        Some(attachment_key) => {
+            cipherstring.decrypt_symmetric(keys, Some(attachment_key)).or_else(
+                |_| cipherstring.decrypt_symmetric(keys, entry_key.as_ref()),
+            )
+        }
+        None => cipherstring.decrypt_symmetric(keys, entry_key.as_ref()),
+    }
+    .context("failed to decrypt encrypted secret")?;
+    let plaintext = String::from_utf8(decrypted)
+        .context("failed to parse decrypted secret")?;
 
     Ok(plaintext)
 }
