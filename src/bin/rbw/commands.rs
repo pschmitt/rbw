@@ -2397,6 +2397,47 @@ pub fn config_show() -> anyhow::Result<()> {
     write_json_pretty(&config, "failed to write config to stdout")
 }
 
+// Open the whole config.json as pretty JSON in $EDITOR, the same
+// serialize/edit/strip-comments/reparse shape as entry editing (see
+// `edit`/`edit_full`). Mirrors `config_set`'s post-save `stop_agent` call --
+// any field could plausibly affect already-cached agent state (accounts,
+// urls, timeouts), so this always stops it rather than trying to detect
+// exactly which fields changed.
+pub fn config_edit() -> anyhow::Result<()> {
+    let config = rbw::config::Config::load()
+        .unwrap_or_else(|_| rbw::config::Config::new());
+    let serialized = serde_json::to_string_pretty(&config)?;
+
+    let help = "# Edit the JSON below. Lines starting with # are ignored.";
+    let contents = rbw::edit::edit(&serialized, help, "json")?;
+    let contents_trimmed = contents
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .fold(String::new(), |mut s, l| {
+            s.push_str(l);
+            s.push('\n');
+            s
+        });
+
+    if contents_trimmed.trim() == serialized.trim() {
+        eprintln!("{}", paint_no_changes());
+        return Ok(());
+    }
+
+    let updated: rbw::config::Config =
+        serde_json::from_str(&contents_trimmed)
+            .map_err(|e| anyhow::anyhow!("failed to parse JSON: {e}"))?;
+    updated.save()?;
+
+    // See `config_set`'s comment: not using lock() because we don't want to
+    // require the agent to be running, and stop_agent() already handles
+    // that gracefully.
+    stop_agent()?;
+
+    println!("updated config");
+    Ok(())
+}
+
 pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
     let mut config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());

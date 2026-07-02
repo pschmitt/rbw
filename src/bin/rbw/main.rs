@@ -818,6 +818,15 @@ enum Config {
         #[arg(help = "Configuration key to unset")]
         key: String,
     },
+    #[command(
+        about = "Edit the full config.json in $EDITOR",
+        long_about = "Edit the full config.json in $EDITOR\n\n\
+            Opens the whole configuration (every account, all global \
+            settings) as pretty-printed JSON in the editor named by the \
+            $VISUAL or $EDITOR environment variables. Saved on exit if the \
+            content changed and still parses as valid config."
+    )]
+    Edit,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -1000,6 +1009,7 @@ impl Config {
             Self::Show => "show",
             Self::Set { .. } => "set",
             Self::Unset { .. } => "unset",
+            Self::Edit => "edit",
         }
         .to_string()
     }
@@ -1057,6 +1067,7 @@ fn main() {
             Config::Show => commands::config_show(),
             Config::Set { key, value } => commands::config_set(&key, &value),
             Config::Unset { key } => commands::config_unset(&key),
+            Config::Edit => commands::config_edit(),
         },
         Opt::Account { account } => match account {
             AccountCmd::List => commands::account_list(),
