@@ -31,7 +31,9 @@
 
 - The TUI's status-bar hints and Help screen show default keybindings even
   when `tui_keybindings` overrides them.
-- SSH key entries can't be created through the API (`rbw::api::Client::add`/
-  `edit` both hit `unreachable!()` for `EntryData::SshKey`), so `rbw import`
-  skips them with a warning instead of creating them. Fixing that upstream
-  would let `rbw import` restore them too.
+- SSH key creation via the API (`rbw::api::Client::add`/`edit`) and `rbw
+  import` restoring SSH key entries were both fixed by wiring up
+  `CiphersPostReq`/`CiphersPutReq`'s `sshKey` field and cipher type `5`.
+  This has only been verified via `cargo test`'s serialization-shape
+  tests, not against a live Bitwarden/Vaultwarden server — worth a sanity
+  check against a real (non-production) vault before relying on it.

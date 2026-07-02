@@ -5750,22 +5750,11 @@ pub fn import(
     let mut entries_created = 0usize;
     let mut entries_updated = 0usize;
     let mut entries_skipped = 0usize;
-    let mut entries_unsupported = 0usize;
     let mut entries_failed = 0usize;
     let mut attachments_restored = 0usize;
     let mut attachments_failed = 0usize;
 
     for imported in &vault.entries {
-        if matches!(imported.data, ImportedData::SshKey { .. }) {
-            eprintln!(
-                "{} '{}' (SSH key entries can't be created via the API yet)",
-                style::warning("Skipped", c),
-                imported.name,
-            );
-            entries_unsupported += 1;
-            continue;
-        }
-
         let username = match &imported.data {
             ImportedData::Login { username, .. } => username.clone(),
             _ => None,
@@ -5846,12 +5835,6 @@ pub fn import(
         eprintln!(
             "  entries skipped:      {}",
             style::warning(&entries_skipped.to_string(), c)
-        );
-    }
-    if entries_unsupported > 0 {
-        eprintln!(
-            "  entries unsupported:  {}",
-            style::warning(&entries_unsupported.to_string(), c)
         );
     }
     if entries_failed > 0 {
@@ -12775,7 +12758,37 @@ mod test {
     }
 
     #[test]
-    fn test_ssh_key_entries_are_detected_for_skip() {
+    fn test_imported_data_to_editable_ssh_key() {
+        let data = ImportedData::SshKey {
+            private_key: Some(
+                "-----BEGIN OPENSSH PRIVATE KEY-----".to_string(),
+            ),
+            public_key: Some("ssh-ed25519 AAAA...".to_string()),
+            fingerprint: Some("SHA256:abc".to_string()),
+        };
+
+        match imported_data_to_editable(&data) {
+            EditableData::SshKey {
+                private_key,
+                public_key,
+                fingerprint,
+            } => {
+                assert_eq!(
+                    private_key.as_deref(),
+                    Some("-----BEGIN OPENSSH PRIVATE KEY-----")
+                );
+                assert_eq!(
+                    public_key.as_deref(),
+                    Some("ssh-ed25519 AAAA...")
+                );
+                assert_eq!(fingerprint.as_deref(), Some("SHA256:abc"));
+            }
+            other => panic!("expected SshKey variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ssh_key_entries_parse_from_import_json() {
         let json = r#"{
             "entries": [
                 {

@@ -639,6 +639,67 @@ mod tests {
 
         assert!(cipher.attachments.is_empty());
     }
+
+    fn test_ssh_key() -> CipherSshKey {
+        CipherSshKey {
+            private_key: Some("private".to_string()),
+            public_key: Some("public".to_string()),
+            fingerprint: Some("fingerprint".to_string()),
+        }
+    }
+
+    #[test]
+    fn ciphers_post_req_serializes_ssh_key() {
+        let req = CiphersPostReq {
+            ty: 5,
+            folder_id: None,
+            name: "server key".to_string(),
+            notes: None,
+            login: None,
+            card: None,
+            identity: None,
+            secure_note: None,
+            ssh_key: Some(test_ssh_key()),
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["type"], 5);
+        assert!(json["login"].is_null());
+        assert!(json["card"].is_null());
+        assert!(json["identity"].is_null());
+        assert!(json["secureNote"].is_null());
+        assert_eq!(json["sshKey"]["PrivateKey"], "private");
+        assert_eq!(json["sshKey"]["PublicKey"], "public");
+        assert_eq!(json["sshKey"]["Fingerprint"], "fingerprint");
+    }
+
+    #[test]
+    fn ciphers_put_req_serializes_ssh_key() {
+        let req = CiphersPutReq {
+            ty: 5,
+            folder_id: None,
+            organization_id: None,
+            name: "server key".to_string(),
+            notes: None,
+            login: None,
+            card: None,
+            identity: None,
+            secure_note: None,
+            ssh_key: Some(test_ssh_key()),
+            fields: Vec::new(),
+            password_history: Vec::new(),
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["type"], 5);
+        assert!(json["login"].is_null());
+        assert!(json["card"].is_null());
+        assert!(json["identity"].is_null());
+        assert!(json["secureNote"].is_null());
+        assert_eq!(json["sshKey"]["PrivateKey"], "private");
+        assert_eq!(json["sshKey"]["PublicKey"], "public");
+        assert_eq!(json["sshKey"]["Fingerprint"], "fingerprint");
+    }
 }
 
 fn deserialize_optional_string<'de, D>(
@@ -869,6 +930,8 @@ struct CiphersPostReq {
     identity: Option<CipherIdentity>,
     #[serde(rename = "secureNote")]
     secure_note: Option<CipherSecureNote>,
+    #[serde(rename = "sshKey")]
+    ssh_key: Option<CipherSshKey>,
 }
 
 #[derive(serde::Serialize, Debug)]
@@ -887,6 +950,8 @@ struct CiphersPutReq {
     fields: Vec<CipherField>,
     #[serde(rename = "secureNote")]
     secure_note: Option<CipherSecureNote>,
+    #[serde(rename = "sshKey")]
+    ssh_key: Option<CipherSshKey>,
     #[serde(rename = "passwordHistory")]
     password_history: Vec<CiphersPutReqHistory>,
 }
@@ -1462,7 +1527,13 @@ impl Client {
         folder_id: Option<&str>,
     ) -> Result<()> {
         let mut req = CiphersPostReq {
-            ty: 1,
+            ty: match data {
+                crate::db::EntryData::Login { .. } => 1,
+                crate::db::EntryData::SecureNote => 2,
+                crate::db::EntryData::Card { .. } => 3,
+                crate::db::EntryData::Identity { .. } => 4,
+                crate::db::EntryData::SshKey { .. } => 5,
+            },
             folder_id: folder_id.map(std::string::ToString::to_string),
             name: name.to_string(),
             notes: notes.map(std::string::ToString::to_string),
@@ -1470,6 +1541,7 @@ impl Client {
             card: None,
             identity: None,
             secure_note: None,
+            ssh_key: None,
         };
         match data {
             crate::db::EntryData::Login {
@@ -1556,7 +1628,17 @@ impl Client {
             crate::db::EntryData::SecureNote => {
                 req.secure_note = Some(CipherSecureNote {});
             }
-            crate::db::EntryData::SshKey { .. } => unreachable!(),
+            crate::db::EntryData::SshKey {
+                private_key,
+                public_key,
+                fingerprint,
+            } => {
+                req.ssh_key = Some(CipherSshKey {
+                    private_key: private_key.clone(),
+                    public_key: public_key.clone(),
+                    fingerprint: fingerprint.clone(),
+                });
+            }
         }
         let client = reqwest::blocking::Client::new();
         let res = client
@@ -1601,7 +1683,7 @@ impl Client {
                 crate::db::EntryData::SecureNote => 2,
                 crate::db::EntryData::Card { .. } => 3,
                 crate::db::EntryData::Identity { .. } => 4,
-                crate::db::EntryData::SshKey { .. } => unreachable!(),
+                crate::db::EntryData::SshKey { .. } => 5,
             },
             folder_id: folder_uuid.map(std::string::ToString::to_string),
             organization_id: org_id.map(std::string::ToString::to_string),
@@ -1611,6 +1693,7 @@ impl Client {
             card: None,
             identity: None,
             secure_note: None,
+            ssh_key: None,
             fields: fields
                 .iter()
                 .map(|field| CipherField {
@@ -1713,7 +1796,17 @@ impl Client {
             crate::db::EntryData::SecureNote => {
                 req.secure_note = Some(CipherSecureNote {});
             }
-            crate::db::EntryData::SshKey { .. } => unreachable!(),
+            crate::db::EntryData::SshKey {
+                private_key,
+                public_key,
+                fingerprint,
+            } => {
+                req.ssh_key = Some(CipherSshKey {
+                    private_key: private_key.clone(),
+                    public_key: public_key.clone(),
+                    fingerprint: fingerprint.clone(),
+                });
+            }
         }
         let client = reqwest::blocking::Client::new();
         let res = client
