@@ -20,7 +20,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::commands::{
-    DecryptedCipher, DecryptedData, DecryptedSearchCipher,
+    self, DecryptedCipher, DecryptedData, DecryptedSearchCipher,
 };
 
 use super::app::{
@@ -30,6 +30,9 @@ use super::app::{
 const ACCENT: Color = Color::Cyan;
 const SELECT_BG: Color = Color::Rgb(38, 44, 66);
 const DIM: Color = Color::Rgb(128, 132, 148);
+// Foreground (not background) so it stays legible layered under the list's
+// own row-selection highlight.
+const MATCH: Color = Color::Yellow;
 const MASK: &str = "••••••••";
 const SEARCH_PROMPT: &str = "❯ ";
 const LABEL_W: usize = 12;
@@ -160,10 +163,11 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let width = inner.width as usize;
+    let query = app.filter.value();
     let items: Vec<ListItem> = app
         .filtered
         .iter()
-        .map(|&i| list_item(&app.search[i], app.badge(i), width))
+        .map(|&i| list_item(&app.search[i], app.badge(i), width, query))
         .collect();
 
     let list = List::new(items)
@@ -177,10 +181,42 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(list, inner, &mut state);
 }
 
+// Splits `text` into styled spans, painting the byte ranges in `ranges`
+// (already merged/sorted, from `commands::highlight_ranges`) with
+// `base_style` patched to `MATCH` foreground + bold, and everything else
+// with `base_style` plain. Known limitation: on the currently-selected row,
+// `List`'s own highlight style wins outright and this doesn't show through —
+// acceptable since that row is already visually distinct (background +
+// marker) and its full detail is in the side pane.
+fn highlighted_spans(
+    text: &str,
+    ranges: &[(usize, usize)],
+    base_style: Style,
+) -> Vec<Span<'static>> {
+    if ranges.is_empty() {
+        return vec![Span::styled(text.to_string(), base_style)];
+    }
+    let match_style = base_style.fg(MATCH).bold();
+    let mut spans = Vec::new();
+    let mut pos = 0;
+    for &(s, e) in ranges {
+        if s > pos {
+            spans.push(Span::styled(text[pos..s].to_string(), base_style));
+        }
+        spans.push(Span::styled(text[s..e].to_string(), match_style));
+        pos = e;
+    }
+    if pos < text.len() {
+        spans.push(Span::styled(text[pos..].to_string(), base_style));
+    }
+    spans
+}
+
 fn list_item(
     entry: &DecryptedSearchCipher,
     badge: Option<&str>,
     width: usize,
+    query: &str,
 ) -> ListItem<'static> {
     let marker = type_marker(&entry.entry_type);
     let name = entry.name.clone();
@@ -199,10 +235,24 @@ fn list_item(
             Style::default().fg(Color::Magenta),
         ));
     }
-    left.push(Span::raw(name.clone()));
+    left.extend(highlighted_spans(
+        &name,
+        &commands::highlight_ranges(
+            query,
+            commands::SearchField::Name,
+            &name,
+        ),
+        Style::default(),
+    ));
     if let Some(user) = &user {
-        left.push(Span::styled(
-            format!("  {user}"),
+        left.push(Span::raw("  "));
+        left.extend(highlighted_spans(
+            user,
+            &commands::highlight_ranges(
+                query,
+                commands::SearchField::User,
+                user,
+            ),
             Style::default().fg(DIM),
         ));
     }
@@ -220,7 +270,15 @@ fn list_item(
         if left_w + tag_w + 2 < width {
             let pad = width - left_w - tag_w - 1;
             left.push(Span::raw(" ".repeat(pad)));
-            left.push(Span::styled(tag, Style::default().fg(Color::Blue)));
+            left.extend(highlighted_spans(
+                &tag,
+                &commands::highlight_ranges(
+                    query,
+                    commands::SearchField::Folder,
+                    &tag,
+                ),
+                Style::default().fg(Color::Blue),
+            ));
         }
     }
 

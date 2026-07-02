@@ -266,6 +266,57 @@ fn parse_query(input: &str) -> Vec<QueryToken> {
     input.split_whitespace().map(QueryToken::parse).collect()
 }
 
+// Which displayed field a piece of text in the TUI's list row is showing —
+// used to decide which query words apply to it for `highlight_ranges`.
+#[derive(Clone, Copy)]
+pub enum SearchField {
+    Name,
+    User,
+    Folder,
+}
+
+// Byte ranges within `text` (a `field`-typed piece of an entry, e.g. its
+// name) that any word of `query` matches — a bare word always applies to
+// every field, a scoped word like "u:alice" only applies to its own field.
+// Used by the TUI to highlight *why* a row matched the current filter.
+pub fn highlight_ranges(
+    query: &str,
+    field: SearchField,
+    text: &str,
+) -> Vec<(usize, usize)> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let lower_text = text.to_lowercase();
+    let mut ranges = Vec::new();
+    for token in parse_query(query) {
+        let ((QueryToken::Any(term), _)
+        | (QueryToken::Name(term), SearchField::Name)
+        | (QueryToken::User(term), SearchField::User)
+        | (QueryToken::Folder(term), SearchField::Folder)) =
+            (token, field)
+        else {
+            continue;
+        };
+        let needle = term.to_lowercase();
+        if needle.is_empty() {
+            continue;
+        }
+        let mut start = 0;
+        while let Some(pos) = lower_text[start..].find(&needle) {
+            let s = start + pos;
+            let e = s + needle.len();
+            ranges.push((s, e));
+            start = e.max(s + 1);
+            if start >= lower_text.len() {
+                break;
+            }
+        }
+    }
+    ranges.sort_unstable();
+    ranges
+}
+
 // Relevance weights for entry lookup. A match's location decides how strongly
 // it counts, so a name hit always outranks a hit inside a hidden field, and an
 // exact (case-insensitive) name match wins decisively. Per-needle scores are
@@ -8349,6 +8400,45 @@ mod test {
         // An unrecognized prefix falls back to a literal substring match
         // instead of erroring or matching nothing.
         assert!(!entry.search_match("bogus:alice", None, false));
+    }
+
+    #[test]
+    fn test_highlight_ranges_scopes_to_the_matching_field() {
+        // A bare word highlights in every field it appears in.
+        assert_eq!(
+            highlight_ranges("goog", SearchField::Name, "Google"),
+            vec![(0, 4)]
+        );
+        assert_eq!(
+            highlight_ranges("goog", SearchField::User, "googler"),
+            vec![(0, 4)]
+        );
+
+        // A scoped word only highlights its own field.
+        assert_eq!(
+            highlight_ranges("u:ali", SearchField::User, "alice"),
+            vec![(0, 3)]
+        );
+        assert_eq!(
+            highlight_ranges("u:ali", SearchField::Name, "alice corp"),
+            Vec::new()
+        );
+
+        // Multiple non-overlapping occurrences all highlight.
+        assert_eq!(
+            highlight_ranges("a", SearchField::Name, "banana"),
+            vec![(1, 2), (3, 4), (5, 6)]
+        );
+
+        // No match, or an empty query, highlights nothing.
+        assert_eq!(
+            highlight_ranges("zzz", SearchField::Name, "Google"),
+            Vec::new()
+        );
+        assert_eq!(
+            highlight_ranges("", SearchField::Name, "Google"),
+            Vec::new()
+        );
     }
 
     #[test]
