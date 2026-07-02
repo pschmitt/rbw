@@ -187,7 +187,16 @@ impl Environment {
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(tag = "type")]
 pub enum Action {
-    Login,
+    // `password`/`totp` let the client supply a `credential_source`-resolved
+    // master password (and, if the linked entry has one, a fresh TOTP code
+    // for the 2FA challenge) instead of the agent prompting via pinentry.
+    // Both `None` (the common case, no `credential_source` configured or
+    // the target account doesn't need 2FA) preserves the fully-interactive
+    // flow exactly as before.
+    Login {
+        password: Option<String>,
+        totp: Option<String>,
+    },
     Register,
     Unlock {
         password: Option<String>,

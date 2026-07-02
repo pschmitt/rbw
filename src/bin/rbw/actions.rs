@@ -35,8 +35,11 @@ pub fn register() -> anyhow::Result<()> {
     simple_action(rbw::protocol::Action::Register)
 }
 
-pub fn login() -> anyhow::Result<()> {
-    simple_action(rbw::protocol::Action::Login)
+pub fn login(
+    password: Option<String>,
+    totp: Option<String>,
+) -> anyhow::Result<()> {
+    simple_action(rbw::protocol::Action::Login { password, totp })
 }
 
 pub fn unlock(password: Option<String>) -> anyhow::Result<()> {

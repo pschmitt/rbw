@@ -157,9 +157,26 @@ async fn dispatch(
             crate::actions::register(sock, environment, account).await?;
             true
         }
-        rbw::protocol::Action::Login => {
-            crate::actions::login(sock, state.clone(), environment, account)
-                .await?;
+        rbw::protocol::Action::Login { mut password, totp } => {
+            // Same locked-memory + zeroize treatment as `Unlock`'s password.
+            let locked_password = password.as_deref().map(|p| {
+                let mut v = rbw::locked::Vec::new();
+                v.extend(p.as_bytes().iter().copied());
+                rbw::locked::Password::new(v)
+            });
+            if let Some(ref mut p) = password {
+                zeroize::Zeroize::zeroize(p);
+            }
+
+            crate::actions::login(
+                sock,
+                state.clone(),
+                environment,
+                locked_password.as_ref(),
+                totp.as_deref(),
+                account,
+            )
+            .await?;
             true
         }
         rbw::protocol::Action::Unlock { mut password } => {

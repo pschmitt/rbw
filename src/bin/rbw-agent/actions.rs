@@ -94,6 +94,8 @@ pub async fn login(
     sock: &mut crate::sock::Sock,
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     environment: &rbw::protocol::Environment,
+    password: Option<&rbw::locked::Password>,
+    totp: Option<&str>,
     account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
     let db = load_db(account)
@@ -101,59 +103,207 @@ pub async fn login(
         .unwrap_or_else(|_| rbw::db::Db::new());
 
     if db.needs_login() {
-        let url_str = account.base_url();
-        let url = reqwest::Url::parse(&url_str)
-            .context("failed to parse base url")?;
-        let Some(host) = url.host_str() else {
-            return Err(anyhow::anyhow!(
-                "couldn't find host in rbw base url {url_str}"
-            ));
-        };
-
         let email = account_email(account)?;
 
-        let mut err_msg = None;
-        let mut env_password_tried = false;
-        'attempts: for i in 1_u8..=3 {
-            let password = if i == 1 {
-                if let Some(pw) = password_from_env() {
-                    env_password_tried = true;
-                    pw
-                } else {
-                    rbw::pinentry::getpin(
-                        &config_pinentry().await?,
-                        "Master Password",
-                        &format!("Log in to {host}"),
-                        None,
-                        environment,
-                        true,
-                        Some(sock.inner()),
-                    )
-                    .await
-                    .context("failed to read password from pinentry")?
-                }
+        if let Some(password) = password {
+            login_with_resolved_password(
+                state.clone(),
+                password.clone(),
+                totp,
+                db,
+                email,
+                account,
+            )
+            .await?;
+        } else {
+            login_interactively(sock, state, environment, db, account)
+                .await?;
+        }
+    }
+
+    respond_ack(sock).await?;
+
+    Ok(())
+}
+
+// Single-shot login using a password resolved via the client's
+// `credential_source` (see `commands::resolve_credential_source` on the
+// client side) instead of prompting via pinentry. Doesn't retry on
+// `IncorrectPassword` like the interactive path does -- a resolved password
+// that turns out to be wrong is a misconfiguration (a stale entry, most
+// likely), not a typo worth prompting the user to fix by hand.
+async fn login_with_resolved_password(
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    password: rbw::locked::Password,
+    totp: Option<&str>,
+    db: rbw::db::Db,
+    email: String,
+    account: &rbw::config::Account,
+) -> anyhow::Result<()> {
+    match rbw::actions::login(&email, password.clone(), None, None).await {
+        Ok((
+            access_token,
+            refresh_token,
+            kdf,
+            iterations,
+            memory,
+            parallelism,
+            protected_key,
+        )) => {
+            login_success(
+                state,
+                access_token,
+                refresh_token,
+                kdf,
+                iterations,
+                memory,
+                parallelism,
+                protected_key,
+                password,
+                db,
+                email,
+                account,
+            )
+            .await
+        }
+        Err(rbw::error::Error::TwoFactorRequired { providers, .. }) => {
+            // Only the authenticator (TOTP) method can be satisfied with a
+            // pre-computed code; anything else has no way to proceed
+            // without an interactive prompt, so surface a clear error
+            // instead of silently hanging (there's no pinentry available on
+            // this path -- see the caller's doc comment).
+            let Some(totp) = totp else {
+                anyhow::bail!(
+                    "account requires two-factor authentication ({providers:?}) \
+                    but no TOTP secret was resolved from credential_source"
+                );
+            };
+            if !providers
+                .contains(&rbw::api::TwoFactorProviderType::Authenticator)
+            {
+                anyhow::bail!(
+                    "account requires two-factor authentication via \
+                    {providers:?}, which credential_source can't automate \
+                    (only TOTP/authenticator codes can be)"
+                );
+            }
+            let (
+                access_token,
+                refresh_token,
+                kdf,
+                iterations,
+                memory,
+                parallelism,
+                protected_key,
+            ) = rbw::actions::login(
+                &email,
+                password.clone(),
+                Some(totp),
+                Some(rbw::api::TwoFactorProviderType::Authenticator),
+            )
+            .await
+            .context(
+                "credential_source-resolved TOTP code was rejected by the \
+                server",
+            )?;
+            login_success(
+                state,
+                access_token,
+                refresh_token,
+                kdf,
+                iterations,
+                memory,
+                parallelism,
+                protected_key,
+                password,
+                db,
+                email,
+                account,
+            )
+            .await
+        }
+        Err(rbw::error::Error::IncorrectPassword { message }) => {
+            Err(rbw::error::Error::IncorrectPassword { message }).context(
+                "credential_source-resolved password was rejected by the \
+                server",
+            )
+        }
+        Err(e) => Err(e).context("failed to log in to bitwarden instance"),
+    }
+}
+
+// The normal, fully-interactive login flow (pinentry for the password, and
+// for a 2FA code if one is required) -- unchanged from before
+// `credential_source` existed.
+async fn login_interactively(
+    sock: &mut crate::sock::Sock,
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    environment: &rbw::protocol::Environment,
+    db: rbw::db::Db,
+    account: &rbw::config::Account,
+) -> anyhow::Result<()> {
+    let url_str = account.base_url();
+    let url =
+        reqwest::Url::parse(&url_str).context("failed to parse base url")?;
+    let Some(host) = url.host_str() else {
+        return Err(anyhow::anyhow!(
+            "couldn't find host in rbw base url {url_str}"
+        ));
+    };
+
+    let email = account_email(account)?;
+
+    let mut err_msg = None;
+    let mut env_password_tried = false;
+    'attempts: for i in 1_u8..=3 {
+        let password = if i == 1 {
+            if let Some(pw) = password_from_env() {
+                env_password_tried = true;
+                pw
             } else {
-                let err = Some(format!(
-                    "{} (attempt {}/3)",
-                    err_msg.as_ref().unwrap(),
-                    if env_password_tried { i - 1 } else { i }
-                ));
                 rbw::pinentry::getpin(
                     &config_pinentry().await?,
                     "Master Password",
                     &format!("Log in to {host}"),
-                    err.as_deref(),
+                    None,
                     environment,
                     true,
                     Some(sock.inner()),
                 )
                 .await
                 .context("failed to read password from pinentry")?
-            };
-            match rbw::actions::login(&email, password.clone(), None, None)
-                .await
-            {
-                Ok((
+            }
+        } else {
+            let err = Some(format!(
+                "{} (attempt {}/3)",
+                err_msg.as_ref().unwrap(),
+                if env_password_tried { i - 1 } else { i }
+            ));
+            rbw::pinentry::getpin(
+                &config_pinentry().await?,
+                "Master Password",
+                &format!("Log in to {host}"),
+                err.as_deref(),
+                environment,
+                true,
+                Some(sock.inner()),
+            )
+            .await
+            .context("failed to read password from pinentry")?
+        };
+        match rbw::actions::login(&email, password.clone(), None, None).await
+        {
+            Ok((
+                access_token,
+                refresh_token,
+                kdf,
+                iterations,
+                memory,
+                parallelism,
+                protected_key,
+            )) => {
+                login_success(
+                    state.clone(),
                     access_token,
                     refresh_token,
                     kdf,
@@ -161,105 +311,91 @@ pub async fn login(
                     memory,
                     parallelism,
                     protected_key,
-                )) => {
-                    login_success(
-                        state.clone(),
-                        access_token,
-                        refresh_token,
-                        kdf,
-                        iterations,
-                        memory,
-                        parallelism,
-                        protected_key,
-                        password,
-                        db,
-                        email,
-                        account,
-                    )
-                    .await?;
-                    break 'attempts;
-                }
-                Err(rbw::error::Error::TwoFactorRequired {
-                    providers,
-                    sso_email_2fa_session_token,
-                }) => {
-                    let supported_types = vec![
-                        rbw::api::TwoFactorProviderType::Authenticator,
-                        rbw::api::TwoFactorProviderType::Yubikey,
-                        rbw::api::TwoFactorProviderType::Email,
-                    ];
+                    password,
+                    db,
+                    email,
+                    account,
+                )
+                .await?;
+                break 'attempts;
+            }
+            Err(rbw::error::Error::TwoFactorRequired {
+                providers,
+                sso_email_2fa_session_token,
+            }) => {
+                let supported_types = vec![
+                    rbw::api::TwoFactorProviderType::Authenticator,
+                    rbw::api::TwoFactorProviderType::Yubikey,
+                    rbw::api::TwoFactorProviderType::Email,
+                ];
 
-                    for provider in supported_types {
-                        if providers.contains(&provider) {
-                            if provider
-                                == rbw::api::TwoFactorProviderType::Email
+                for provider in supported_types {
+                    if providers.contains(&provider) {
+                        if provider == rbw::api::TwoFactorProviderType::Email
+                        {
+                            if let Some(sso_email_2fa_session_token) =
+                                sso_email_2fa_session_token
                             {
-                                if let Some(sso_email_2fa_session_token) =
-                                    sso_email_2fa_session_token
-                                {
-                                    rbw::actions::send_two_factor_email(
-                                        &email,
-                                        &sso_email_2fa_session_token,
-                                    )
-                                    .await?;
-                                }
+                                rbw::actions::send_two_factor_email(
+                                    &email,
+                                    &sso_email_2fa_session_token,
+                                )
+                                .await?;
                             }
-                            let (
-                                access_token,
-                                refresh_token,
-                                kdf,
-                                iterations,
-                                memory,
-                                parallelism,
-                                protected_key,
-                            ) = two_factor(
-                                sock,
-                                environment,
-                                &email,
-                                password.clone(),
-                                provider,
-                            )
-                            .await?;
-                            login_success(
-                                state.clone(),
-                                access_token,
-                                refresh_token,
-                                kdf,
-                                iterations,
-                                memory,
-                                parallelism,
-                                protected_key,
-                                password,
-                                db,
-                                email,
-                                account,
-                            )
-                            .await?;
-                            break 'attempts;
                         }
+                        let (
+                            access_token,
+                            refresh_token,
+                            kdf,
+                            iterations,
+                            memory,
+                            parallelism,
+                            protected_key,
+                        ) = two_factor(
+                            sock,
+                            environment,
+                            &email,
+                            password.clone(),
+                            provider,
+                        )
+                        .await?;
+                        login_success(
+                            state.clone(),
+                            access_token,
+                            refresh_token,
+                            kdf,
+                            iterations,
+                            memory,
+                            parallelism,
+                            protected_key,
+                            password,
+                            db,
+                            email,
+                            account,
+                        )
+                        .await?;
+                        break 'attempts;
                     }
-                    return Err(anyhow::anyhow!(
-                        "unsupported two factor methods: {providers:?}"
-                    ));
                 }
-                Err(rbw::error::Error::IncorrectPassword { message }) => {
-                    if i == 3 {
-                        return Err(rbw::error::Error::IncorrectPassword {
-                            message,
-                        })
-                        .context("failed to log in to bitwarden instance");
-                    }
-                    err_msg = Some(message);
+                return Err(anyhow::anyhow!(
+                    "unsupported two factor methods: {providers:?}"
+                ));
+            }
+            Err(rbw::error::Error::IncorrectPassword { message }) => {
+                if i == 3 {
+                    return Err(rbw::error::Error::IncorrectPassword {
+                        message,
+                    })
+                    .context("failed to log in to bitwarden instance");
                 }
-                Err(e) => {
-                    return Err(e)
-                        .context("failed to log in to bitwarden instance")
-                }
+                err_msg = Some(message);
+            }
+            Err(e) => {
+                return Err(e)
+                    .context("failed to log in to bitwarden instance")
             }
         }
     }
-
-    respond_ack(sock).await?;
 
     Ok(())
 }

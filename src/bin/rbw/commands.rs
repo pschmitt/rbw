@@ -2717,7 +2717,7 @@ pub fn register() -> anyhow::Result<()> {
 
 pub fn login() -> anyhow::Result<()> {
     ensure_agent()?;
-    crate::actions::login()?;
+    login_resolving_credential_source(&mut Vec::new())?;
 
     Ok(())
 }
@@ -2728,9 +2728,23 @@ pub fn unlock(password: Option<String>) -> anyhow::Result<()> {
 
 // Max hops to follow through `credential_source` chains before giving up.
 // `Config::credential_source_chain` already rejects self-references and
-// cycles up front (see `resolve_credential_source_password`), so this is
-// only a defense-in-depth backstop against ever recursing unboundedly.
+// cycles up front (see `resolve_credential_source`), so this is only a
+// defense-in-depth backstop against ever recursing unboundedly.
 const MAX_CREDENTIAL_SOURCE_DEPTH: usize = 16;
+
+// Logs the current active account in, auto-supplying the password (and a
+// fresh TOTP code for the 2FA challenge, if the linked entry has one) from
+// `credential_source` when configured; falls back to the normal interactive
+// pinentry flow otherwise. Shared by `login`, `unlock_impl`, and `sync`'s
+// per-account login step, so every path that logs an account in benefits
+// equally.
+fn login_resolving_credential_source(
+    visited: &mut Vec<String>,
+) -> anyhow::Result<()> {
+    let (password, totp) = resolve_credential_source(visited)
+        .map_or((None, None), |(password, totp)| (Some(password), totp));
+    crate::actions::login(password, totp)
+}
 
 // `visited` accumulates the chain of account names already being unlocked
 // on the current call stack, so a `credential_source` chain can't recurse
@@ -2740,30 +2754,37 @@ fn unlock_impl(
     visited: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     ensure_agent()?;
-    crate::actions::login()?;
-    let password =
-        password.or_else(|| resolve_credential_source_password(visited));
+    let (password, totp) = password.map_or_else(
+        || {
+            resolve_credential_source(visited)
+                .map_or((None, None), |(password, totp)| {
+                    (Some(password), totp)
+                })
+        },
+        |password| (Some(password), None),
+    );
+    crate::actions::login(password.clone(), totp)?;
     crate::actions::unlock(password)?;
 
     Ok(())
 }
 
 // If the currently-active account has a `credential_source` configured,
-// resolve its master password from the linked entry in the source
-// account's vault instead of prompting via pinentry: unlock the source
-// account (recursively following its own `credential_source`, if it has
-// one), find the linked entry in its already-unlocked vault, and pull the
-// master password from its Login `password` field. TOTP-protected accounts
-// and non-Login entry types aren't handled specially -- only the plain
-// password field is used.
+// resolve its master password (and, if the linked entry has one, its TOTP
+// secret -- for auto-answering a 2FA challenge during login) from the
+// linked entry in the source account's vault instead of prompting via
+// pinentry: unlock the source account (recursively following its own
+// `credential_source`, if it has one), find the linked entry in its
+// already-unlocked vault, and pull both fields from it. Non-Login entry
+// types aren't handled specially -- resolution just fails for those.
 //
 // Returns `None` (falling back to the normal pinentry prompt) if there's no
 // `credential_source` configured, or if resolution fails for any reason: a
 // misconfigured link should never brick the account's ability to unlock at
 // all.
-fn resolve_credential_source_password(
+fn resolve_credential_source(
     visited: &mut Vec<String>,
-) -> Option<String> {
+) -> Option<(String, Option<String>)> {
     let target = crate::actions::current_account().or_else(|| {
         rbw::config::Config::load()
             .ok()
@@ -2797,12 +2818,12 @@ fn resolve_credential_source_password(
     visited.pop();
 
     // Whatever happened, route subsequent api calls back at the account we
-    // were actually asked to unlock -- `unlock_impl`'s caller still needs to
-    // send the Unlock request to it, not to (some ancestor of) the source.
+    // were actually asked to unlock -- the caller still needs to send the
+    // Login/Unlock request to it, not to (some ancestor of) the source.
     let _ = crate::actions::set_active_account(Some(target.clone()));
 
     match result {
-        Ok(password) => Some(password),
+        Ok(fields) => Some(fields),
         Err(e) => {
             log::warn!(
                 "failed to resolve credential_source for account '{target}' \
@@ -2820,7 +2841,7 @@ fn resolve_credential_source_password(
 fn resolve_from_credential_source(
     source: &rbw::config::CredentialSource,
     visited: &mut Vec<String>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<(String, Option<String>)> {
     crate::actions::set_active_account(Some(source.account.clone()))?;
     unlock_impl(None, visited)?;
     if !active_account_unlocked() {
@@ -2839,23 +2860,26 @@ fn resolve_from_credential_source(
                 )
             })?;
 
-    credential_source_password(&decrypted, &source.entry, &source.account)
+    credential_source_login_fields(&decrypted, &source.entry, &source.account)
 }
 
-// Pulls the master password out of a decrypted credential_source entry: a
-// plain Login entry's `password` field. TOTP-protected accounts and non-
-// Login entry types aren't handled specially -- resolution just fails
-// (falling back to pinentry) for anything else.
-fn credential_source_password(
+// Pulls the master password (and TOTP secret, if set) out of a decrypted
+// credential_source entry: a plain Login entry's `password`/`totp` fields.
+// Non-Login entry types aren't handled specially -- resolution just fails
+// (falling back to pinentry) for anything else. An entry with no TOTP
+// secret is fine (`totp: None`); only a missing password is fatal, since
+// that's the one field every use of `credential_source` actually needs.
+fn credential_source_login_fields(
     decrypted: &DecryptedCipher,
     entry: &str,
     account: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<(String, Option<String>)> {
     match &decrypted.data {
         DecryptedData::Login {
             password: Some(password),
+            totp,
             ..
-        } => Ok(password.clone()),
+        } => Ok((password.clone(), totp.clone())),
         DecryptedData::Login { password: None, .. } => Err(anyhow::anyhow!(
             "entry '{entry}' in account '{account}' has no password set"
         )),
@@ -2898,7 +2922,9 @@ pub fn sync(all: bool) -> anyhow::Result<()> {
     let mut failed = Vec::new();
     for account in &target_accounts {
         crate::actions::set_active_account(Some(account.clone()))?;
-        match crate::actions::login().and_then(|()| crate::actions::sync()) {
+        match login_resolving_credential_source(&mut Vec::new())
+            .and_then(|()| crate::actions::sync())
+        {
             Ok(()) => {
                 eprintln!(
                     "{} '{}'",
@@ -8553,6 +8579,22 @@ pub fn tui_account_sync(name: &str) -> anyhow::Result<TuiVault> {
     })
 }
 
+// A `base_url` for display in the accounts panel: the bare hostname (no
+// `https://`/`http://` scheme or trailing slash), or "bitwarden.com" for the
+// official server (an unset `base_url`).
+fn tui_account_server(base_url: Option<&str>) -> String {
+    base_url.map_or_else(
+        || "bitwarden.com".to_string(),
+        |url| {
+            url.strip_prefix("https://")
+                .or_else(|| url.strip_prefix("http://"))
+                .unwrap_or(url)
+                .trim_end_matches('/')
+                .to_string()
+        },
+    )
+}
+
 // The status of every configured account, for the accounts panel.
 pub fn tui_accounts() -> anyhow::Result<Vec<TuiAccount>> {
     let config = rbw::config::Config::load()?;
@@ -8564,10 +8606,7 @@ pub fn tui_accounts() -> anyhow::Result<Vec<TuiAccount>> {
         out.push(TuiAccount {
             unlocked: active_account_unlocked(),
             primary: account.name == primary,
-            server: account
-                .base_url
-                .clone()
-                .unwrap_or_else(|| "bitwarden.com".to_string()),
+            server: tui_account_server(account.base_url.as_deref()),
             email: account.email.clone(),
             credential_source: account
                 .credential_source
@@ -10053,6 +10092,24 @@ fn display_field(name: &str, field: Option<&str>, clipboard: bool) -> bool {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_tui_account_server_strips_scheme_and_trailing_slash() {
+        assert_eq!(tui_account_server(None), "bitwarden.com");
+        assert_eq!(
+            tui_account_server(Some("https://vault.wiit.one")),
+            "vault.wiit.one"
+        );
+        assert_eq!(
+            tui_account_server(Some("http://vault.example.com/")),
+            "vault.example.com"
+        );
+        // A bare hostname (no scheme) is passed through unchanged.
+        assert_eq!(
+            tui_account_server(Some("vault.example.com")),
+            "vault.example.com"
+        );
+    }
 
     #[test]
     fn test_attachment_metadata_serializes_attachment_count() {
@@ -11689,6 +11746,80 @@ mod test {
         let decoded = decode_totp_secret("NBSW Y3DP EB3W 64TM MQQQ").unwrap();
         let want = b"hello world!".to_vec();
         assert!(decoded == want, "strips spaces");
+    }
+
+    fn login_cipher(
+        password: Option<&str>,
+        totp: Option<&str>,
+    ) -> DecryptedCipher {
+        DecryptedCipher {
+            id: "id".to_string(),
+            folder: None,
+            name: "name".to_string(),
+            data: DecryptedData::Login {
+                username: None,
+                password: password.map(std::string::ToString::to_string),
+                totp: totp.map(std::string::ToString::to_string),
+                uris: None,
+            },
+            fields: vec![],
+            notes: None,
+            history: vec![],
+            attachments: vec![],
+            attachment_metadata: AttachmentMetadata {
+                attachment_count: 0,
+            },
+            account: None,
+        }
+    }
+
+    #[test]
+    fn test_credential_source_login_fields_extracts_password_and_totp() {
+        let cipher = login_cipher(Some("hunter2"), Some("JBSWY3DPEHPK3PXP"));
+        let (password, totp) =
+            credential_source_login_fields(&cipher, "entry", "account")
+                .unwrap();
+        assert_eq!(password, "hunter2");
+        assert_eq!(totp.as_deref(), Some("JBSWY3DPEHPK3PXP"));
+    }
+
+    // No TOTP secret on the entry is fine -- only a missing password should
+    // fail resolution (the account might not have 2FA enabled at all).
+    #[test]
+    fn test_credential_source_login_fields_totp_is_optional() {
+        let cipher = login_cipher(Some("hunter2"), None);
+        let (password, totp) =
+            credential_source_login_fields(&cipher, "entry", "account")
+                .unwrap();
+        assert_eq!(password, "hunter2");
+        assert_eq!(totp, None);
+    }
+
+    #[test]
+    fn test_credential_source_login_fields_requires_a_password() {
+        let cipher = login_cipher(None, None);
+        assert!(credential_source_login_fields(&cipher, "entry", "account")
+            .is_err());
+    }
+
+    #[test]
+    fn test_credential_source_login_fields_rejects_non_login_entries() {
+        let cipher = DecryptedCipher {
+            id: "id".to_string(),
+            folder: None,
+            name: "name".to_string(),
+            data: DecryptedData::SecureNote,
+            fields: vec![],
+            notes: None,
+            history: vec![],
+            attachments: vec![],
+            attachment_metadata: AttachmentMetadata {
+                attachment_count: 0,
+            },
+            account: None,
+        };
+        assert!(credential_source_login_fields(&cipher, "entry", "account")
+            .is_err());
     }
 
     #[track_caller]
