@@ -121,6 +121,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::Accounts(view) => render_accounts(f, view, main),
         Mode::Prompt(prompt) => render_prompt(f, prompt, main),
         Mode::Help => render_help(f, main),
+        Mode::LockedPrompt(name) => render_locked_prompt(f, name, main),
         Mode::Normal | Mode::Search => {}
     }
 }
@@ -829,6 +830,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         }
         Mode::Prompt(prompt) => prompt.hint,
         Mode::Help => "any key to close",
+        Mode::LockedPrompt(_) => "⏎/y unlock · any other key dismiss",
         Mode::Normal => {
             "/ search · e edit · a add · d delete · p/u/t copy · o open · s attach · A accounts · ^S sync · r reveal · ? help · q quit"
         }
@@ -1022,6 +1024,41 @@ fn render_confirm(f: &mut Frame, app: &App, area: Rect) {
         Line::raw(""),
         Line::from(Span::styled(
             "y confirm · n/esc cancel",
+            Style::default().fg(DIM),
+        )),
+    ]);
+    f.render_widget(Paragraph::new(text).alignment(Alignment::Center), inner);
+}
+
+// The agent locked `name` out from under us (`rbw lock`/`stop-agent` run
+// elsewhere, or `lock_timeout` firing) — see `App::poll_agent_lock`. Mirrors
+// `render_confirm`'s layout; yellow rather than red since this isn't a
+// destructive confirm, just a "reauthenticate to continue" notice.
+fn render_locked_prompt(f: &mut Frame, name: &str, area: Rect) {
+    let rect = centered(56, 6, area);
+    f.render_widget(Clear, rect);
+    let b = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(Span::styled(
+            " account locked ",
+            Style::default().fg(Color::Yellow).bold(),
+        ));
+    let inner = b.inner(rect);
+    f.render_widget(b, rect);
+    let text = Text::from(vec![
+        Line::from(vec![
+            Span::styled(
+                format!("'{name}'"),
+                Style::default().fg(Color::White).bold(),
+            ),
+            Span::raw(" was locked by the agent."),
+        ]),
+        Line::raw("Cached secrets were cleared."),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "⏎/y unlock · any other key dismiss",
             Style::default().fg(DIM),
         )),
     ]);
@@ -1298,6 +1335,10 @@ mod test {
             ],
             selected: 0,
         });
+        draw(&app);
+
+        // Agent lock-detection modal.
+        app.mode = Mode::LockedPrompt("personal".to_string());
         draw(&app);
     }
 

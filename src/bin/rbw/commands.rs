@@ -8195,6 +8195,19 @@ fn active_account_unlocked() -> bool {
     crate::actions::unlocked().is_ok()
 }
 
+// True if the named configured account is currently unlocked in the agent.
+// Used by the TUI's periodic lock-detection poll (`App::poll_agent_lock`) to
+// notice when an account it already loaded gets locked out from under it —
+// by another process running `rbw lock`/`rbw stop-agent`, or a `lock_timeout`
+// expiry — independently of the TUI's own lifetime. Like every other
+// per-account tui_* helper, this leaves `crate::actions`' active-account
+// pointer set to `name`; that's harmless for a passive check since the next
+// real operation always re-points it before doing anything.
+pub fn tui_account_unlocked(name: &str) -> anyhow::Result<bool> {
+    crate::actions::set_active_account(Some(name.to_string()))?;
+    Ok(active_account_unlocked())
+}
+
 // Which accounts `list`/`search`/`get` should query. An explicit --account/
 // RBW_ACCOUNT always wins and scopes to just that one account, unchanged from
 // single-account behavior. Otherwise every configured account is a candidate,

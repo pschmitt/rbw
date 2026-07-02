@@ -51,6 +51,11 @@ pub enum Mode {
     Accounts(AccountsView),
     Prompt(Prompt),
     Help,
+    // The agent locked the named account out from under us (another process
+    // ran `rbw lock`/`rbw stop-agent`, or `lock_timeout` fired) — see
+    // `App::poll_agent_lock`. Blocks normal interaction until the user
+    // re-unlocks (or quits), same as the other modal overlays.
+    LockedPrompt(String),
 }
 
 // The accounts/settings panel: every configured account with its lock state
@@ -229,7 +234,17 @@ pub struct App {
     // a list-pane click) moves it back. Only meaningful in `Mode::Normal`.
     pub detail_focused: bool,
     keymap: Keymap,
+    // Throttle for `poll_agent_lock`: the IPC round trip to the agent is
+    // cheap, but there's no need to make it on every ~500ms UI tick, so we
+    // only actually check once `LOCK_CHECK_INTERVAL` has elapsed.
+    last_lock_check: std::time::Instant,
 }
+
+// How often `poll_agent_lock` actually round-trips to the agent, throttled
+// against the UI's ~500ms redraw tick (see `tui::TICK`) so an idle session
+// isn't hammering the agent with redundant "are you still unlocked" checks.
+const LOCK_CHECK_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(3);
 
 impl App {
     pub fn new(open: commands::TuiOpen, initial_term: Option<&str>) -> Self {
@@ -277,6 +292,9 @@ impl App {
             detail_max_scroll: std::cell::Cell::new(0),
             detail_focused: false,
             keymap,
+            // The account(s) handed to us were just unlocked by `tui_open`
+            // moments ago, so there's no point re-checking immediately.
+            last_lock_check: std::time::Instant::now(),
         };
         app.rebuild_flat();
         app.recompute_filter();
@@ -974,27 +992,133 @@ impl App {
         self.refresh_accounts_view();
     }
 
-    // Called by the event loop (terminal restored) to lazily unlock an account
-    // and fold its entries into the merged list.
+    // Called by the event loop (terminal restored) to unlock an account and
+    // fold its entries into the merged list. Doubles as the accept action for
+    // both the accounts panel's lazy unlock (account not loaded yet: pushed
+    // as a new vault) and the agent lock-detection modal's re-unlock (account
+    // already loaded, just locked out from under us: replaced in place, like
+    // `reload_vault`, rather than pushed as a duplicate).
     pub fn unlock_account(&mut self, name: &str) -> anyhow::Result<()> {
         let vault = commands::tui_unlock_account(name)?;
         let keep = self.current_key();
-        self.vaults.push(AccountVault {
-            name: vault.account,
-            db: vault.db,
-            search: vault.search,
-        });
+        if let Some(pos) = self.vaults.iter().position(|v| v.name == name) {
+            self.vaults[pos].db = vault.db;
+            self.vaults[pos].search = vault.search;
+            self.detail_cache.retain(|(o, _), _| *o != pos);
+        } else {
+            self.vaults.push(AccountVault {
+                name: vault.account,
+                db: vault.db,
+                search: vault.search,
+            });
+        }
         self.locked.retain(|n| n != name);
         self.rebuild_flat();
         self.recompute_filter();
         self.restore_selection(keep);
         self.ensure_detail();
         self.refresh_accounts_view();
+        // Resolves the lock-detection modal, if that's what triggered this
+        // unlock.
+        if matches!(&self.mode, Mode::LockedPrompt(locked) if locked == name)
+        {
+            self.mode = Mode::Normal;
+        }
         Ok(())
     }
 
     pub fn set_unlocked_status(&mut self, name: &str) {
         self.set_status(Level::Success, format!("unlocked {name}"));
+    }
+
+    // ---- agent lock detection --------------------------------------------
+
+    // Called once per iteration of the event loop's ~500ms tick (see
+    // `tui::TICK`/`run_loop`); throttles itself to `LOCK_CHECK_INTERVAL` so
+    // it isn't round-tripping to the agent on every redraw.
+    //
+    // Only the account owning the current selection is checked (falling back
+    // to the first loaded vault if nothing is selected, e.g. an empty search
+    // result). That's simpler than polling every loaded account and is
+    // enough to catch the common case (this account's `lock_timeout` firing,
+    // or the user running `rbw lock` themselves in another terminal), but it
+    // does mean a *different*, currently-unselected account getting locked
+    // out from under a multi-account session won't be noticed until the user
+    // selects one of its entries. A more thorough version would loop over
+    // every `self.vaults` entry here; left as-is since the IPC round trip,
+    // while cheap, still isn't free, and this covers the common single- and
+    // active-account cases.
+    pub fn poll_agent_lock(&mut self) {
+        let now = std::time::Instant::now();
+        if now.duration_since(self.last_lock_check) < LOCK_CHECK_INTERVAL {
+            return;
+        }
+        self.last_lock_check = now;
+
+        // Already showing the prompt for a lock we detected on an earlier
+        // tick; nothing new to do until the user resolves it.
+        if matches!(self.mode, Mode::LockedPrompt(_)) {
+            return;
+        }
+
+        let Some(name) = self
+            .current_account_name()
+            .or_else(|| self.vaults.first().map(|v| v.name.clone()))
+        else {
+            // Nothing unlocked yet (e.g. every configured account uses the
+            // `never` unlock policy and is still sitting in `self.locked`).
+            return;
+        };
+
+        // Anything other than a confirmed `Ok(true)` (including an IPC
+        // error, e.g. the agent process died) is treated as "can no longer
+        // be trusted as unlocked" and triggers the same recovery flow.
+        let unlocked = matches!(commands::tui_account_unlocked(&name), Ok(true));
+        if !unlocked {
+            self.handle_agent_locked(name);
+        }
+    }
+
+    // The transition made when a lock is detected: drop cached secrets and
+    // switch to the re-unlock modal. Split out from `poll_agent_lock` so it's
+    // directly unit-testable without a real agent/IPC round trip.
+    fn handle_agent_locked(&mut self, name: String) {
+        // Full per-entry detail (passwords, TOTP secrets, notes, attachment
+        // contents) — always drop it. The lightweight search index
+        // (`AccountVault::search`/`DecryptedSearchCipher`: names, usernames,
+        // folder) is left alone; it's not secret material and keeping it
+        // lets the list stay populated (read-only) while the modal is up.
+        self.detail_cache.clear();
+        // Force anything currently displayed unmasked back to hidden.
+        self.reveal = false;
+        self.mode = Mode::LockedPrompt(name);
+    }
+
+    // y/Y/Enter accepts (bounced to the event loop, same as `AccountUnlock`,
+    // since pinentry needs the real terminal); anything else dismisses back
+    // to `Normal`, mirroring `ConfirmDelete`'s y/n convention. Deliberately
+    // not routed through the keymap: like `ConfirmDelete`'s y/n and Help's
+    // "any key closes", this is a small binary confirm tied to the widget's
+    // own semantics rather than a freely rebindable action (see the doc
+    // comment at the top of `keymap.rs`).
+    //
+    // Dismissing doesn't leave the session silently half-locked: the agent
+    // is still locked, so `poll_agent_lock` pops the prompt right back up on
+    // its next tick (at most `LOCK_CHECK_INTERVAL` later) for as long as that
+    // remains true.
+    fn handle_locked_prompt(&mut self, key: KeyEvent) -> Action {
+        let Mode::LockedPrompt(name) = &self.mode else {
+            return Action::None;
+        };
+        match key.code {
+            KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+                Action::UnlockAccount(name.clone())
+            }
+            _ => {
+                self.mode = Mode::Normal;
+                Action::None
+            }
+        }
     }
 
     fn handle_accounts(&mut self, key: KeyEvent) -> Action {
@@ -1198,6 +1322,7 @@ impl App {
                 self.mode = Mode::Normal;
                 Action::None
             }
+            Mode::LockedPrompt(_) => self.handle_locked_prompt(key),
         }
     }
 
@@ -2004,5 +2129,109 @@ mod test {
         a.mouse_scroll_detail(1);
         assert_eq!(a.detail_scroll, 1);
         assert_eq!(a.selected, 0);
+    }
+
+    // ---- agent lock detection --------------------------------------------
+
+    // The transition triggered when a lock is detected: cached detail and
+    // the reveal flag are dropped (nothing secret stays on screen), and the
+    // modal takes over. This is the directly-testable half of lock
+    // detection; `poll_agent_lock` itself needs a real agent round trip and
+    // isn't exercised here (see its doc comment).
+    #[test]
+    fn detecting_a_lock_clears_secrets_and_shows_the_prompt() {
+        let mut a = app_with_entries(1);
+        a.detail_cache.insert(
+            (0, "entry-0".to_string()),
+            crate::commands::DecryptedCipher {
+                id: "entry-0".to_string(),
+                folder: None,
+                name: "entry-0".to_string(),
+                data: crate::commands::DecryptedData::Login {
+                    username: None,
+                    password: Some("hunter2".to_string()),
+                    totp: None,
+                    uris: None,
+                },
+                fields: Vec::new(),
+                notes: None,
+                history: Vec::new(),
+                attachments: Vec::new(),
+                attachment_metadata: crate::commands::AttachmentMetadata {
+                    attachment_count: 0,
+                },
+                account: None,
+            },
+        );
+        a.reveal = true;
+
+        a.handle_agent_locked("default".to_string());
+
+        assert!(a.detail_cache.is_empty());
+        assert!(!a.reveal);
+        assert!(
+            matches!(&a.mode, Mode::LockedPrompt(name) if name == "default")
+        );
+        // The search index (names/usernames, not secrets) is deliberately
+        // left alone so the list stays populated while the modal is up.
+        assert_eq!(a.search.len(), 1);
+    }
+
+    // Enter/y/Y accepts and bounces to the event loop (pinentry needs the
+    // real terminal), same as `AccountUnlock` in the accounts panel.
+    #[test]
+    fn locked_prompt_accept_keys_request_unlock() {
+        let mut a = app_with_entries(1);
+        a.handle_agent_locked("default".to_string());
+
+        for k in [key(KeyCode::Enter), key(KeyCode::Char('y')), key(KeyCode::Char('Y'))]
+        {
+            a.mode = Mode::LockedPrompt("default".to_string());
+            match a.handle_key(k) {
+                Action::UnlockAccount(name) => assert_eq!(name, "default"),
+                _ => panic!("expected Action::UnlockAccount"),
+            }
+        }
+    }
+
+    // Any other key (Esc/n/anything) dismisses back to Normal, mirroring
+    // `ConfirmDelete`'s y/n convention; the periodic poll re-triggers the
+    // prompt on its next tick as long as the agent is still locked, so this
+    // isn't a way to silently keep working half-locked.
+    #[test]
+    fn locked_prompt_other_keys_dismiss_to_normal() {
+        let mut a = app_with_entries(1);
+        a.handle_agent_locked("default".to_string());
+        assert!(matches!(
+            a.handle_key(key(KeyCode::Esc)),
+            Action::None
+        ));
+        assert!(matches!(a.mode, Mode::Normal));
+    }
+
+    // A poll that hasn't reached `LOCK_CHECK_INTERVAL` yet is a pure no-op —
+    // in particular it never reaches the IPC call, so this is safe to assert
+    // deterministically without a running agent.
+    #[test]
+    fn poll_agent_lock_is_throttled() {
+        let mut a = app_with_entries(1);
+        // `with_keymap` just set `last_lock_check` to "now".
+        a.poll_agent_lock();
+        assert!(matches!(a.mode, Mode::Normal));
+    }
+
+    // Once the modal is already up, further polls leave it alone (no need to
+    // re-detect a lock we're already surfacing) instead of re-running the
+    // check.
+    #[test]
+    fn poll_agent_lock_skips_while_prompt_already_showing() {
+        let mut a = app_with_entries(1);
+        a.mode = Mode::LockedPrompt("default".to_string());
+        a.last_lock_check =
+            std::time::Instant::now() - super::LOCK_CHECK_INTERVAL * 2;
+        a.poll_agent_lock();
+        assert!(
+            matches!(&a.mode, Mode::LockedPrompt(name) if name == "default")
+        );
     }
 }
