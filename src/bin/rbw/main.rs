@@ -284,20 +284,32 @@ enum Opt {
 
         #[arg(
             long,
+            num_args = 0..=1,
+            default_missing_value = "",
             value_name = "PASSPHRASE",
             help = "Symmetrically gpg-encrypt the export as a tar.gz \
-                archive using the given passphrase, and write the \
-                encrypted archive to stdout instead of raw JSON. \
+                archive. If PASSPHRASE is omitted, rbw reads it from \
+                RBW_EXPORT_PASSPHRASE or prompts on the controlling tty. \
                 Requires `gpg` to be available on PATH."
         )]
         encrypt: Option<String>,
+
+        #[arg(
+            short,
+            long,
+            value_name = "FILE",
+            help = "Write the export to FILE instead of stdout. The file \
+                is created with mode 0600."
+        )]
+        output: Option<std::path::PathBuf>,
     },
 
     #[command(
         about = "Import data produced by `rbw export`",
         long_about = "Import data produced by `rbw export`\n\n\
             Reads a JSON export (or a gpg-encrypted tar.gz produced by \
-            `rbw export --encrypt`, given --decrypt-passphrase) and \
+            `rbw export --encrypt`, given --decrypt or \
+            --decrypt-passphrase) and \
             recreates its entries and collections in the target account's \
             vault (see the global --account/-a flag). Reads from stdin if \
             no file is given.\n\n\
@@ -305,12 +317,18 @@ enum Opt {
             logins) are left untouched and reported as skipped; pass \
             --overwrite to update them in place instead. Entries belonging \
             to an organization this account isn't a member of are imported \
-            into the personal vault instead. SSH key entries are skipped: \
-            this fork doesn't yet support creating them via the API."
+            into the personal vault instead."
     )]
     Import {
         #[arg(help = "Export file to import (defaults to stdin if omitted)")]
         file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            conflicts_with = "decrypt_passphrase",
+            help = "Decrypt a gpg-encrypted export archive using \
+                RBW_EXPORT_PASSPHRASE or a tty prompt"
+        )]
+        decrypt: bool,
         #[arg(
             long,
             help = "Passphrase to decrypt a gpg-encrypted export archive \
@@ -1267,13 +1285,20 @@ fn main() {
         Opt::Export {
             attachments,
             encrypt,
-        } => commands::export(attachments, encrypt.as_deref()),
+            output,
+        } => commands::export(
+            attachments,
+            encrypt.as_deref(),
+            output.as_deref(),
+        ),
         Opt::Import {
             file,
+            decrypt,
             decrypt_passphrase,
             overwrite,
         } => commands::import(
             file.as_deref(),
+            decrypt,
             decrypt_passphrase.as_deref(),
             overwrite,
         ),

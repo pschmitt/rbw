@@ -271,6 +271,12 @@ plus collections) as JSON to stdout:
 rbw export > backup.json
 ```
 
+You can also write directly to a file without shell redirection:
+
+```sh
+rbw export --output backup.json
+```
+
 `rbw import` reads that JSON back and recreates the entries and collections
 in the target account's vault (use the global `--account`/`-a` flag to pick
 a different account than the primary one):
@@ -285,15 +291,24 @@ If no file is given, `rbw import` reads from stdin. Entries that already
 exist (matched by name, and by username for logins) are left untouched and
 reported as skipped; pass `--overwrite` to update them in place instead.
 Entries that belonged to an organization the target account isn't a member
-of are imported into the personal vault instead of failing. SSH key entries
-are skipped, since this fork doesn't yet support creating them via the API.
+of are imported into the personal vault instead of failing.
 
-If the export was produced with `rbw export --encrypt PASSPHRASE` (a
-gpg-encrypted tar.gz instead of raw JSON), pass the same passphrase back on
-import:
+If the export was produced with `rbw export --encrypt` (a gpg-encrypted
+tar.gz instead of raw JSON), pass the same passphrase back on import:
 
 ```sh
-rbw import --decrypt-passphrase PASSPHRASE backup.tar.gz.gpg
+rbw export --encrypt --output backup.tar.gz.gpg
+rbw import --decrypt backup.tar.gz.gpg
+```
+
+For non-interactive use, you can still pass the passphrase explicitly or set
+`RBW_EXPORT_PASSPHRASE` for both export and import:
+
+```sh
+RBW_EXPORT_PASSPHRASE='correct horse battery staple' rbw export --encrypt --output backup.tar.gz.gpg
+RBW_EXPORT_PASSPHRASE='correct horse battery staple' rbw import --decrypt backup.tar.gz.gpg
+# legacy explicit form still works:
+rbw import --decrypt-passphrase 'correct horse battery staple' backup.tar.gz.gpg
 ```
 
 `rbw import` prints a summary when it's done (entries created/updated/
