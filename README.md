@@ -147,6 +147,17 @@ nothing, and similarly for `rbw unlock`. If necessary, you can explicitly log
 out by running `rbw purge`, and you can explicitly lock the database by running
 `rbw lock` or `rbw stop-agent`.
 
+Locking is account-aware: with multiple accounts configured, `rbw lock` with
+no account selected locks every account, while `rbw -a <name> lock` (or
+`RBW_ACCOUNT=<name> rbw lock`) locks only that account. `rbw lock --all`
+always locks every configured account, even when an account is selected.
+
+Destructive commands (`rbw remove`, `rbw attachment rm`, `rbw collection
+delete`, and `rbw purge`) ask for confirmation before making changes when
+stdin is a terminal; pass `-y`/`--yes` to skip the prompt. When stdin is not a
+tty (scripts and pipelines), no prompt is shown and the historical no-prompt
+behavior is kept.
+
 `rbw help` can be used to get more information about the available
 functionality.
 
@@ -185,6 +196,40 @@ implies `--generate`. Omitted flags fall back to the `password_gen` config
 policy, then to a 20-character password from the full character set. This
 is mutually exclusive with piping a fully-formed entry into `rbw create` via
 stdin.
+
+### Organization collections (`rbw collection`)
+
+Collections belonging to your organizations are managed with the `rbw
+collection` command group:
+
+* `rbw collection list` (alias: `ls`): list all collections in the
+  organization. Supports the usual output flags (`-o name|json|yaml`,
+  `--raw`/`--json`, `--yaml`).
+* `rbw collection create <name>` (alias: `add`): create a new collection.
+* `rbw collection delete <collection>` (aliases: `rm`, `remove`, `del`):
+  delete a collection, given by name or ID (asks for confirmation on a
+  terminal; `-y`/`--yes` skips it).
+* `rbw collection rename <collection> <new-name>`: rename a collection,
+  given by name or ID.
+* `rbw collection assign <entry> <collection>...`: replace the entry's
+  current collection list with the given collections. The entry is matched
+  the same way as `rbw get` (name, URI, or UUID, refined with `--user`,
+  `--folder`, `--ignorecase`, and `--exact`), and each collection can be
+  given by name or ID; names are resolved against the entry's organization.
+* `rbw collection propagate-permissions`: grant members access to nested
+  collections (the topmost collection they hold gets edit permissions, its
+  descendants get manage). This is a dry-run by default; pass `--apply` to
+  execute the changes, and `-v`/`--verbose` for per-run counts.
+
+`create`, `delete`, `rename`, and `propagate-permissions` accept an optional
+`--org-id`; when the vault contains exactly one organization, it is
+auto-detected and the flag can be omitted.
+
+The old flat commands (`list-collections`/`lsc`, `create-collection`,
+`delete-collection`, `edit-collections`, `rename-collection`, and
+`propagate-collection-permissions`) still work as hidden compatibility shims
+for existing scripts, but the `rbw collection` subcommands are the documented
+interface going forward.
 
 ### Template and command injection
 

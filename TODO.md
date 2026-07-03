@@ -36,19 +36,13 @@
       `password_gen`/`PasswordGenPolicy`, per-account `credential_source`,
       etc.) — keep this in sync whenever a new config option is added.
 
-## Known gaps
-
-- `README.md` still needs first-class docs for the newer collection workflow
-  (`rbw collection ...`), destructive confirmations (`--yes`, `purge -y`),
-  and per-account locking (`rbw lock --all` plus account-scoped lock state).
-
 ## Pending ship work
 
 - [ ] Deploy the current `main` tip (`8474745`) through `nixos-config`:
       `nix flake lock --update-input rbw`, `just hm fnuc`, then restart the
       deployed `rbw-agent` so it picks up the new Nix store path.
 
-- [ ] Extend the user-facing docs/help for the shipped UX work:
+- [x] Extend the user-facing docs/help for the shipped UX work:
       document `rbw collection list/create/delete/rename/assign/
       propagate-permissions`, note the hidden compatibility shims for the old
       flat commands, and cover destructive confirmations plus account-scoped
