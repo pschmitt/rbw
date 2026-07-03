@@ -63,6 +63,36 @@ jobs:
       - name: Build
         if: matrix.target != 'x86_64-unknown-linux-musl' && matrix.target != 'aarch64-linux-android'
         run: cargo build --release --target ${{ matrix.target }}
+      # The android binary can't run directly on this (x86_64) runner. Give
+      # it a real bionic linker/libc (an actual Android system image; the
+      # NDK only ships link-time stub .so's and no linker64 at all) and run
+      # it through qemu-user, purely so it can generate its own completions
+      # below. Only the ~2MB of extracted files are cached -- the ~1GB
+      # image download only happens once, on a cache miss.
+      - name: Restore Android bionic runtime cache
+        if: matrix.target == 'aarch64-linux-android'
+        id: android-bionic-cache
+        uses: actions/cache@v4
+        with:
+          path: android-bionic-sysroot
+          key: android-bionic-sysroot-api24-arm64-v1
+      - name: Extract Android bionic runtime from a system image
+        if: matrix.target == 'aarch64-linux-android' && steps.android-bionic-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o /tmp/sysimg.zip \
+            "https://dl.google.com/android/repository/sys-img/google_apis/arm64-v8a-24_r27.zip"
+          unzip -q -o /tmp/sysimg.zip arm64-v8a/system.img -d /tmp
+          mkdir -p android-bionic-sysroot/system/bin android-bionic-sysroot/system/lib64
+          debugfs -R "dump /bin/linker64 android-bionic-sysroot/system/bin/linker64" /tmp/arm64-v8a/system.img
+          for lib in libc.so libdl.so libm.so liblog.so libc++.so
+          do
+            debugfs -R "dump /lib64/$lib android-bionic-sysroot/system/lib64/$lib" /tmp/arm64-v8a/system.img
+          done
+          chmod +x android-bionic-sysroot/system/bin/linker64
+          rm -f /tmp/sysimg.zip /tmp/arm64-v8a/system.img
+      - name: Install qemu-user-static
+        if: matrix.target == 'aarch64-linux-android'
+        run: sudo apt-get update && sudo apt-get install -y qemu-user-static
       - name: Package
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
@@ -72,16 +102,19 @@ jobs:
           cp "$bin" \
             "target/${{ matrix.target }}/release/rbw-agent" \
             LICENSE README.md "$pkg/"
-          # The android binary can't run on this (x86_64) runner, so it has
-          # no way to generate its own completions here.
-          if [[ "${{ matrix.target }}" != "aarch64-linux-android" ]]
+          if [[ "${{ matrix.target }}" == "aarch64-linux-android" ]]
           then
-            mkdir "$pkg/completions"
-            for shell in bash zsh fish
-            do
-              "./$bin" completions "$shell" > "$pkg/completions/rbw.$shell"
-            done
+            run_bin() {
+              qemu-aarch64-static -L "$PWD/android-bionic-sysroot" "$bin" "$@"
+            }
+          else
+            run_bin() { "./$bin" "$@"; }
           fi
+          mkdir "$pkg/completions"
+          for shell in bash zsh fish
+          do
+            run_bin completions "$shell" > "$pkg/completions/rbw.$shell"
+          done
           tar czf "$pkg.tar.gz" "$pkg"
       - uses: actions/upload-artifact@v4
         with:
