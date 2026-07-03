@@ -67,10 +67,21 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
           pkg="rbw-${version}-${{ matrix.target }}"
+          bin="target/${{ matrix.target }}/release/rbw"
           mkdir "$pkg"
-          cp "target/${{ matrix.target }}/release/rbw" \
+          cp "$bin" \
             "target/${{ matrix.target }}/release/rbw-agent" \
             LICENSE README.md "$pkg/"
+          # The android binary can't run on this (x86_64) runner, so it has
+          # no way to generate its own completions here.
+          if [[ "${{ matrix.target }}" != "aarch64-linux-android" ]]
+          then
+            mkdir "$pkg/completions"
+            for shell in bash zsh fish
+            do
+              "./$bin" completions "$shell" > "$pkg/completions/rbw.$shell"
+            done
+          fi
           tar czf "$pkg.tar.gz" "$pkg"
       - uses: actions/upload-artifact@v4
         with:
