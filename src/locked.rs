@@ -6,8 +6,13 @@ static REGION_LOCK_WORKS: std::sync::OnceLock<bool> =
     std::sync::OnceLock::new();
 
 pub struct Vec {
-    data: Box<arrayvec::ArrayVec<u8, LEN>>,
+    // Field order matters: struct fields are dropped in declaration order,
+    // and the lock guard must be dropped (munlock) while `data` is still
+    // allocated. With the reverse order, the allocator may return the freed
+    // pages to the OS before munlock runs (musl's mallocng does), munlock
+    // then fails with ENOMEM, and region's LockGuard::drop panics.
     _lock: Option<region::LockGuard>,
+    data: Box<arrayvec::ArrayVec<u8, LEN>>,
 }
 
 impl Default for Vec {
