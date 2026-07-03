@@ -300,7 +300,11 @@ fn test_read_password() {
 #[tokio::test]
 async fn test_getpin_cancelled_when_client_disconnects() {
     use std::io::Write as _;
+    use std::os::unix::ffi::OsStrExt as _;
     use std::os::unix::fs::PermissionsExt as _;
+
+    let ready_dir = tempfile::tempdir().unwrap();
+    let ready_path = ready_dir.path().join("pinentry-ready");
 
     // Stand-in for pinentry: acknowledges the greeting and the three SET*
     // commands with OK, then goes silent (simulating pinentry blocked waiting
@@ -321,6 +325,13 @@ async fn test_getpin_cancelled_when_client_disconnects() {
               \t\tbreak\n\
               \tfi\n\
               done\n\
+              : > ",
+        )
+        .unwrap();
+    script.write_all(ready_path.as_os_str().as_bytes()).unwrap();
+    script
+        .write_all(
+            b"\n\
               exec sleep 30\n",
         )
         .unwrap();
@@ -344,10 +355,17 @@ async fn test_getpin_cancelled_when_client_disconnects() {
             Some(&mut agent_side),
         ),
         async {
-            // Give getpin time to spawn the fake pinentry and block reading
-            // its (never-arriving) GETPIN response, then simulate the client
-            // being interrupted with Ctrl+C by dropping its end of the socket.
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            // Wait until the fake pinentry has acknowledged the setup
+            // commands and is blocked waiting for GETPIN, then simulate the
+            // client being interrupted with Ctrl+C by dropping its end of the
+            // socket.
+            loop {
+                if tokio::fs::try_exists(&ready_path).await.unwrap() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10))
+                    .await;
+            }
             drop(client_side);
         }
     );

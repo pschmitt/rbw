@@ -13,9 +13,16 @@ ignore = [
     # this is a timing attack against using the rsa crate for encryption, but
     # we only use rsa decryption here
     "RUSTSEC-2023-0071",
-    # this is only a warning about being unmaintained, the only known
-    # undefined behavior is in a function we don't use
-    "RUSTSEC-2025-0069",
+    # (2026-07-03) quick-xml DoS via crafted untrusted XML (quadratic
+    # duplicate-attribute check / unbounded namespace allocations), fixed
+    # only in quick-xml >= 0.41.0. Our sole quick-xml consumer is
+    # wayland-scanner (via wl-clipboard-rs -> wayland-protocols*), a
+    # build-time code generator that parses the trusted protocol XML bundled
+    # with the wayland crates -- never attacker-controlled input -- so
+    # neither advisory is reachable. wayland-scanner still requires
+    # quick-xml ^0.39; drop these once it moves to >= 0.41.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
 ]
 
 [bans]
@@ -43,9 +50,8 @@ skip = [
     { name = "rand_chacha", version = "0.9.0" },
     { name = "getrandom", version = "0.2.16" },
     { name = "getrandom", version = "0.3.4" },
-    # ratatui's dependency tree pulls these older/extra versions in addition to
-    # the ones the rest of the vault code already uses
-    { name = "syn", version = "1.0.109" },
+    # ratatui's dependency tree pulls this older/extra version in addition to
+    # the one the rest of the vault code already uses
     { name = "hashbrown", version = "0.17.1" },
 ]
 
@@ -62,7 +68,11 @@ allow = [
     "Zlib",
 ]
 exceptions = [
-    { name = "ring", allow = ["OpenSSL", "MIT", "ISC"] }
+    { name = "ring", allow = ["OpenSSL", "MIT", "ISC"] },
+    # EPL-2.0 is OSI-approved weak copyleft; colored_json is consumed
+    # unmodified as a regular dependency of the rbw binaries, which EPL-2.0
+    # permits without imposing obligations on the rest of the code
+    { name = "colored_json", allow = ["EPL-2.0"] },
 ]
 
 [[licenses.clarify]]
