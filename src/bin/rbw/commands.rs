@@ -3002,9 +3002,10 @@ pub fn show(
     ignore_case: bool,
     output: OutputMode,
     force_exact: bool,
+    all: bool,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
-    let db = load_db()?;
+    let target_accounts = list_target_accounts(all)?;
+
     let needle_str = needles
         .iter()
         .map(std::string::ToString::to_string)
@@ -3015,11 +3016,19 @@ pub fn show(
         user.map_or_else(String::new, |s| format!("{s}@")),
         needle_str
     );
-    let (_, decrypted) =
-        find_entry(&db, needles, user, folder, ignore_case, force_exact)
-            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    let (_, _, decrypted) = find_entry_multi(
+        &target_accounts,
+        needles,
+        user,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
     if output_is_structured(output) {
         decrypted.display_structured(&desc, output)?;
+    } else if output == OutputMode::Name {
+        println!("{}", decrypted.name);
     } else {
         decrypted.display_show();
     }
@@ -3094,6 +3103,7 @@ pub fn attachment_list(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn attachment_get(
     needles: Vec<Needle>,
     user: Option<&str>,
@@ -3102,11 +3112,12 @@ pub fn attachment_get(
     attachment: Option<&str>,
     output: Option<&std::path::Path>,
     raw: bool,
+    force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
     let mut db = load_db()?;
     let (entry, decrypted) =
-        find_entry(&db, needles, user, folder, ignore_case, false)?;
+        find_entry(&db, needles, user, folder, ignore_case, force_exact)?;
     let (attachment, decrypted_attachment) =
         resolve_attachment(&entry, &decrypted, attachment)?;
 
@@ -3184,6 +3195,7 @@ pub fn attachment_create(
     folder: Option<&str>,
     ignore_case: bool,
     file: &std::path::Path,
+    force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
     let mut db = load_db()?;
@@ -3191,7 +3203,7 @@ pub fn attachment_create(
     let refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
     let (entry, decrypted) =
-        find_entry(&db, needles, username, folder, ignore_case, false)?;
+        find_entry(&db, needles, username, folder, ignore_case, force_exact)?;
 
     let filename = file
         .file_name()
@@ -3243,11 +3255,12 @@ pub fn attachment_rm(
     folder: Option<&str>,
     ignore_case: bool,
     attachment: Option<&str>,
+    force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
     let mut db = load_db()?;
     let (entry, decrypted) =
-        find_entry(&db, needles, user, folder, ignore_case, false)?;
+        find_entry(&db, needles, user, folder, ignore_case, force_exact)?;
     let (attachment, decrypted_attachment) =
         resolve_attachment(&entry, &decrypted, attachment)?;
 
@@ -3543,6 +3556,7 @@ pub fn search(
     Ok(())
 }
 
+#[allow(clippy::fn_params_excessive_bools)]
 pub fn code(
     needles: Vec<Needle>,
     user: Option<&str>,
@@ -3550,10 +3564,9 @@ pub fn code(
     clipboard: bool,
     ignore_case: bool,
     force_exact: bool,
+    all: bool,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
-
-    let db = load_db()?;
+    let target_accounts = list_target_accounts(all)?;
 
     let needle_str = needles
         .iter()
@@ -3566,9 +3579,15 @@ pub fn code(
         needle_str
     );
 
-    let (_, decrypted) =
-        find_entry(&db, needles, user, folder, ignore_case, force_exact)
-            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    let (_, _, decrypted) = find_entry_multi(
+        &target_accounts,
+        needles,
+        user,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     if let DecryptedData::Login { totp, .. } = decrypted.data {
         if let Some(totp) = totp {
@@ -6573,6 +6592,7 @@ pub fn history(
     username: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
+    output: OutputMode,
     force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
@@ -6593,8 +6613,22 @@ pub fn history(
     let (_, decrypted) =
         find_entry(&db, needles, username, folder, ignore_case, force_exact)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
-    for history in decrypted.history {
-        println!("{}: {}", history.last_used_date, history.password);
+    if output_is_structured(output) {
+        write_serialized_pretty(
+            &decrypted.history,
+            output,
+            "failed to write history to stdout",
+        )?;
+    } else if output == OutputMode::Name {
+        // There is no "name" for a history item; print just the previous
+        // passwords (the primary value), one per line.
+        for history in decrypted.history {
+            println!("{}", history.password);
+        }
+    } else {
+        for history in decrypted.history {
+            println!("{}: {}", history.last_used_date, history.password);
+        }
     }
 
     Ok(())
@@ -10089,6 +10123,22 @@ mod test {
         assert_eq!(
             serde_json::to_value(&metadata).unwrap(),
             serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn test_history_entry_serializes_expected_fields() {
+        let entry = DecryptedHistoryEntry {
+            last_used_date: "2026-01-01T00:00:00Z".to_string(),
+            password: "hunter2".to_string(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&entry).unwrap(),
+            serde_json::json!({
+                "last_used_date": "2026-01-01T00:00:00Z",
+                "password": "hunter2",
+            })
         );
     }
 
