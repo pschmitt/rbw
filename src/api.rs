@@ -558,6 +558,12 @@ impl SyncResCipher {
                 fingerprint: ssh_key.fingerprint.clone(),
             }
         } else {
+            // e.g. an SshKey cipher whose type-specific data the server
+            // stored as null; warn instead of hiding it entirely
+            log::warn!(
+                "ignoring cipher {} with no type-specific data",
+                self.id
+            );
             return None;
         };
         let fields = self.fields.as_ref().map_or_else(Vec::new, |fields| {
@@ -668,9 +674,11 @@ mod tests {
         assert!(json["card"].is_null());
         assert!(json["identity"].is_null());
         assert!(json["secureNote"].is_null());
-        assert_eq!(json["sshKey"]["PrivateKey"], "private");
-        assert_eq!(json["sshKey"]["PublicKey"], "public");
-        assert_eq!(json["sshKey"]["Fingerprint"], "fingerprint");
+        // must be camelCase (with fingerprint as keyFingerprint):
+        // Vaultwarden silently stores `"sshKey": null` otherwise
+        assert_eq!(json["sshKey"]["privateKey"], "private");
+        assert_eq!(json["sshKey"]["publicKey"], "public");
+        assert_eq!(json["sshKey"]["keyFingerprint"], "fingerprint");
     }
 
     #[test]
@@ -696,9 +704,46 @@ mod tests {
         assert!(json["card"].is_null());
         assert!(json["identity"].is_null());
         assert!(json["secureNote"].is_null());
-        assert_eq!(json["sshKey"]["PrivateKey"], "private");
-        assert_eq!(json["sshKey"]["PublicKey"], "public");
-        assert_eq!(json["sshKey"]["Fingerprint"], "fingerprint");
+        // must be camelCase (with fingerprint as keyFingerprint):
+        // Vaultwarden silently stores `"sshKey": null` otherwise
+        assert_eq!(json["sshKey"]["privateKey"], "private");
+        assert_eq!(json["sshKey"]["publicKey"], "public");
+        assert_eq!(json["sshKey"]["keyFingerprint"], "fingerprint");
+    }
+
+    #[test]
+    fn cipher_ssh_key_deserializes_all_fingerprint_spellings() {
+        // camelCase `keyFingerprint` is what servers send today;
+        // `Fingerprint` is what old rbw versions serialized; the
+        // remaining spellings guard against first-char case
+        // normalization of stored data.
+        for json in [
+            serde_json::json!({
+                "privateKey": "private",
+                "publicKey": "public",
+                "keyFingerprint": "fingerprint",
+            }),
+            serde_json::json!({
+                "PrivateKey": "private",
+                "PublicKey": "public",
+                "KeyFingerprint": "fingerprint",
+            }),
+            serde_json::json!({
+                "PrivateKey": "private",
+                "PublicKey": "public",
+                "Fingerprint": "fingerprint",
+            }),
+            serde_json::json!({
+                "privateKey": "private",
+                "publicKey": "public",
+                "fingerprint": "fingerprint",
+            }),
+        ] {
+            let ssh_key: CipherSshKey = serde_json::from_value(json).unwrap();
+            assert_eq!(ssh_key.private_key.as_deref(), Some("private"));
+            assert_eq!(ssh_key.public_key.as_deref(), Some("public"));
+            assert_eq!(ssh_key.fingerprint.as_deref(), Some("fingerprint"));
+        }
     }
 }
 
@@ -825,13 +870,26 @@ struct CipherIdentity {
     username: Option<String>,
 }
 
+// Unlike the other Cipher* structs, this one serializes to camelCase:
+// SshKey ciphers postdate the era where the server sent PascalCase, and
+// both Bitwarden and Vaultwarden require exactly `privateKey`/`publicKey`/
+// `keyFingerprint` when storing. Vaultwarden in particular responds with
+// HTTP 200 but silently stores `"sshKey": null` if any of those keys is
+// missing, so sending PascalCase destroys the key material. The PascalCase
+// (and old-rbw `Fingerprint`) spellings are kept as deserialization
+// aliases for compatibility with data already in the wild.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 struct CipherSshKey {
-    #[serde(rename = "PrivateKey", alias = "privateKey")]
+    #[serde(rename = "privateKey", alias = "PrivateKey")]
     private_key: Option<String>,
-    #[serde(rename = "PublicKey", alias = "publicKey")]
+    #[serde(rename = "publicKey", alias = "PublicKey")]
     public_key: Option<String>,
-    #[serde(rename = "Fingerprint", alias = "keyFingerprint")]
+    #[serde(
+        rename = "keyFingerprint",
+        alias = "KeyFingerprint",
+        alias = "Fingerprint",
+        alias = "fingerprint"
+    )]
     fingerprint: Option<String>,
 }
 
