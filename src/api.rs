@@ -2404,7 +2404,11 @@ impl Client {
                 let code = s.as_u16();
                 let body = res.text().unwrap_or_default();
                 log::warn!("refresh token exchange failed ({code}): {body}");
-                Err(Error::RequestFailed { status: code })
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
             }
         }
     }
@@ -2438,7 +2442,11 @@ impl Client {
                 let code = s.as_u16();
                 let body = res.text().await.unwrap_or_default();
                 log::warn!("refresh token exchange failed ({code}): {body}");
-                Err(Error::RequestFailed { status: code })
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
             }
         }
     }
