@@ -769,9 +769,24 @@ pub async fn sync(
             entries,
             collections,
         ),
-    ) = rbw::actions::sync(&access_token, &refresh_token)
-        .await
-        .context("failed to sync database from server")?;
+    ) = match rbw::actions::sync(&access_token, &refresh_token).await {
+        Ok(v) => v,
+        Err(rbw::error::Error::SessionExpired) => {
+            // The refresh token is dead and can't be recovered from, unlike
+            // a merely-expired access token -- clear both so needs_login()
+            // is true again and the next Login action actually
+            // re-authenticates instead of silently no-opping (see
+            // `login`, above).
+            db.access_token = None;
+            db.refresh_token = None;
+            save_db(account, &db).await?;
+            return Err(rbw::error::Error::SessionExpired.into());
+        }
+        Err(e) => {
+            return Err(anyhow::Error::from(e)
+                .context("failed to sync database from server"));
+        }
+    };
     state
         .lock()
         .await

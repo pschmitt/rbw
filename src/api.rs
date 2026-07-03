@@ -2404,6 +2404,13 @@ impl Client {
                 let code = s.as_u16();
                 let body = res.text().unwrap_or_default();
                 log::warn!("refresh token exchange failed ({code}): {body}");
+                if let Ok(error_res) =
+                    serde_json::from_str::<ConnectErrorRes>(&body)
+                {
+                    if error_res.error == "invalid_grant" {
+                        return Err(Error::SessionExpired);
+                    }
+                }
                 if body.is_empty() {
                     Err(Error::RequestFailed { status: code })
                 } else {
@@ -2442,6 +2449,13 @@ impl Client {
                 let code = s.as_u16();
                 let body = res.text().await.unwrap_or_default();
                 log::warn!("refresh token exchange failed ({code}): {body}");
+                if let Ok(error_res) =
+                    serde_json::from_str::<ConnectErrorRes>(&body)
+                {
+                    if error_res.error == "invalid_grant" {
+                        return Err(Error::SessionExpired);
+                    }
+                }
                 if body.is_empty() {
                     Err(Error::RequestFailed { status: code })
                 } else {

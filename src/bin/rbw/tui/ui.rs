@@ -107,6 +107,11 @@ pub fn render(f: &mut Frame, app: &App) {
         render_locked_prompt(f, name, f.area());
         return;
     }
+    if let Mode::SessionExpiredPrompt(name) = &app.mode {
+        f.render_widget(Clear, f.area());
+        render_session_expired_prompt(f, name, f.area());
+        return;
+    }
 
     // Search bar sits at the bottom (fzf-style), just above the status line.
     let [main, search, status] = Layout::vertical([
@@ -135,7 +140,9 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::Settings(view) => render_settings(f, view, main),
         Mode::Help => render_help(f, app, main),
         Mode::Normal | Mode::Search => {}
-        Mode::LockedPrompt(_) => unreachable!(),
+        Mode::LockedPrompt(_) | Mode::SessionExpiredPrompt(_) => {
+            unreachable!()
+        }
     }
 }
 
@@ -871,6 +878,9 @@ fn status_hint(app: &App) -> String {
         Mode::LockedPrompt(_) => {
             "⏎/y unlock · any other key dismiss".to_string()
         }
+        Mode::SessionExpiredPrompt(_) => {
+            "⏎/y log in · any other key dismiss".to_string()
+        }
         Mode::Normal => format!(
             "{} search · {} edit · {} add · {} delete · {}/{}/{} copy · {} open · {} attach · {} accounts · {} settings · {} sync · {} reveal · {} help · {} quit",
             km.primary_chord(TuiAction::ToggleSearch),
@@ -1283,6 +1293,40 @@ fn render_locked_prompt(f: &mut Frame, name: &str, area: Rect) {
         Line::raw(""),
         Line::from(Span::styled(
             "⏎/y unlock · any other key dismiss",
+            Style::default().fg(DIM),
+        )),
+    ]);
+    f.render_widget(Paragraph::new(text).alignment(Alignment::Center), inner);
+}
+
+// A sync discovered the account's refresh token is dead (`Error::
+// SessionExpired`) -- the local vault is still unlocked and browsable, but
+// talking to the server again needs a fresh interactive login rather than
+// just re-unlocking. Mirrors `render_locked_prompt`'s layout and keybinds.
+fn render_session_expired_prompt(f: &mut Frame, name: &str, area: Rect) {
+    let rect = centered(56, 6, area);
+    let b = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(Span::styled(
+            " session expired ",
+            Style::default().fg(Color::Yellow).bold(),
+        ));
+    let inner = b.inner(rect);
+    f.render_widget(b, rect);
+    let text = Text::from(vec![
+        Line::from(vec![
+            Span::styled(
+                format!("'{name}'"),
+                Style::default().fg(Color::White).bold(),
+            ),
+            Span::raw("'s session with the server has expired."),
+        ]),
+        Line::raw("The vault is still readable; log in to sync again."),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "⏎/y log in · any other key dismiss",
             Style::default().fg(DIM),
         )),
     ]);
@@ -1706,6 +1750,10 @@ mod test {
 
         // Agent lock-detection modal.
         app.mode = Mode::LockedPrompt("personal".to_string());
+        draw(&app);
+
+        // Expired-session modal.
+        app.mode = Mode::SessionExpiredPrompt("personal".to_string());
         draw(&app);
     }
 

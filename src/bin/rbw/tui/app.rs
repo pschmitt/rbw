@@ -70,6 +70,13 @@ pub enum Mode {
     // `App::poll_agent_lock`. Blocks normal interaction until the user
     // re-unlocks (or quits), same as the other modal overlays.
     LockedPrompt(String),
+    // A sync for the named account failed because its refresh token was
+    // rejected by the server (`Error::SessionExpired`) -- the local vault
+    // is still unlocked and readable, but talking to the server again
+    // needs a fresh interactive login, not just a pinentry-cached unlock.
+    // Set from the `tui/mod.rs` sync helpers, which recognize the error by
+    // its message (the only thing that survives the agent IPC boundary).
+    SessionExpiredPrompt(String),
 }
 
 // The accounts/settings panel: every configured account with its lock state
@@ -836,6 +843,10 @@ impl App {
             self.vaults.iter().map(|v| v.name.clone()).collect();
         let mut synced = Vec::new();
         let mut errors = Vec::new();
+        // First account whose session expired, if any -- surfaced as the
+        // modal prompt below rather than buried in the status line, since
+        // it needs an explicit action (a fresh login) to actually recover.
+        let mut expired = None;
         for name in names {
             match commands::tui_account_sync(&name) {
                 Ok(v) => {
@@ -847,7 +858,13 @@ impl App {
                     }
                     synced.push(name);
                 }
-                Err(e) => errors.push(format!("{name}: {e:#}")),
+                Err(e) => {
+                    if expired.is_none() && Self::is_session_expired_error(&e)
+                    {
+                        expired = Some(name.clone());
+                    }
+                    errors.push(format!("{name}: {e:#}"));
+                }
             }
         }
         self.detail_cache.clear();
@@ -855,7 +872,9 @@ impl App {
         self.recompute_filter();
         self.restore_selection(keep);
         self.ensure_detail();
-        if errors.is_empty() {
+        if let Some(name) = expired {
+            self.show_session_expired(name);
+        } else if errors.is_empty() {
             self.set_status(
                 Level::Success,
                 format!("synced {}", synced.join(", ")),
@@ -1286,6 +1305,22 @@ impl App {
         self.mode = Mode::LockedPrompt(name);
     }
 
+    // A sync error's message is the only thing that survives the round
+    // trip through the agent (see `Response::Error` and `simple_action`) --
+    // matched against `Error::SessionExpired`'s own message rather than a
+    // duplicated string literal, so the two can't drift apart.
+    pub fn is_session_expired_error(e: &anyhow::Error) -> bool {
+        e.to_string() == rbw::error::Error::SessionExpired.to_string()
+    }
+
+    // The transition made when a sync fails with `Error::SessionExpired`:
+    // by this point the agent has already cleared the account's dead
+    // refresh token, so all that's left is prompting for the fresh login
+    // that will actually re-authenticate it.
+    pub fn show_session_expired(&mut self, name: String) {
+        self.mode = Mode::SessionExpiredPrompt(name);
+    }
+
     // y/Y/Enter accepts (bounced to the event loop, same as `AccountUnlock`,
     // since pinentry needs the real terminal); anything else dismisses back
     // to `Normal`, mirroring `ConfirmDelete`'s y/n convention. Deliberately
@@ -1300,6 +1335,27 @@ impl App {
     // remains true.
     fn handle_locked_prompt(&mut self, key: KeyEvent) -> Action {
         let Mode::LockedPrompt(name) = &self.mode else {
+            return Action::None;
+        };
+        match key.code {
+            KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+                Action::UnlockAccount(name.clone())
+            }
+            _ => {
+                self.mode = Mode::Normal;
+                Action::None
+            }
+        }
+    }
+
+    // Same y/Y/Enter-accepts, anything-else-dismisses convention as
+    // `handle_locked_prompt`. Accepting fires the same `UnlockAccount`
+    // action -- by the time this prompt exists, the agent has already
+    // cleared the account's dead refresh token (see `sync` in
+    // rbw-agent/actions.rs), so the login half of that action now performs
+    // a real interactive re-login instead of silently no-opping.
+    fn handle_session_expired_prompt(&mut self, key: KeyEvent) -> Action {
+        let Mode::SessionExpiredPrompt(name) = &self.mode else {
             return Action::None;
         };
         match key.code {
@@ -1758,6 +1814,9 @@ impl App {
                 Action::None
             }
             Mode::LockedPrompt(_) => self.handle_locked_prompt(key),
+            Mode::SessionExpiredPrompt(_) => {
+                self.handle_session_expired_prompt(key)
+            }
         }
     }
 
@@ -2967,6 +3026,44 @@ mod test {
         a.handle_agent_locked("default".to_string());
         assert!(matches!(a.handle_key(key(KeyCode::Esc)), Action::None));
         assert!(matches!(a.mode, Mode::Normal));
+    }
+
+    // Same accept/dismiss keybinds as the lock-detection modal, but reached
+    // via a failed sync rather than `poll_agent_lock`.
+    #[test]
+    fn session_expired_prompt_accept_keys_request_unlock() {
+        let mut a = app_with_entries(1);
+        a.show_session_expired("default".to_string());
+
+        for k in [
+            key(KeyCode::Enter),
+            key(KeyCode::Char('y')),
+            key(KeyCode::Char('Y')),
+        ] {
+            a.mode = Mode::SessionExpiredPrompt("default".to_string());
+            match a.handle_key(k) {
+                Action::UnlockAccount(name) => assert_eq!(name, "default"),
+                _ => panic!("expected Action::UnlockAccount"),
+            }
+        }
+    }
+
+    #[test]
+    fn session_expired_prompt_other_keys_dismiss_to_normal() {
+        let mut a = app_with_entries(1);
+        a.show_session_expired("default".to_string());
+        assert!(matches!(a.handle_key(key(KeyCode::Esc)), Action::None));
+        assert!(matches!(a.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn is_session_expired_error_matches_only_that_error() {
+        assert!(App::is_session_expired_error(&anyhow::anyhow!(
+            rbw::error::Error::SessionExpired
+        )));
+        assert!(!App::is_session_expired_error(&anyhow::anyhow!(
+            "some other failure"
+        )));
     }
 
     // A poll that hasn't reached `LOCK_CHECK_INTERVAL` yet is a pure no-op —

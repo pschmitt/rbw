@@ -196,11 +196,20 @@ pub enum Error {
     #[error("api request returned error: {status}")]
     RequestFailed { status: u16 },
 
-    #[error("api request returned error: {status}\n{body}")]
+    #[error("api request returned error: {status}: {body}")]
     RequestFailedWithBody { status: u16, body: String },
 
     #[error("api request unauthorized")]
     RequestUnauthorized,
+
+    // The refresh token itself was rejected (`invalid_grant`, with no
+    // description -- unlike the same error during an actual login, which
+    // always carries one). Distinct from `RequestUnauthorized`: that's a
+    // dead access token, recoverable with a refresh; this means the
+    // refresh token is dead too, and only a fresh interactive login can
+    // recover -- see `sync` in rbw-agent/actions.rs.
+    #[error("session has expired; please log in again")]
+    SessionExpired,
 
     #[error("error making api request")]
     Reqwest { source: reqwest::Error },

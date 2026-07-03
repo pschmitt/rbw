@@ -230,6 +230,9 @@ fn unlock_and_sync_account(
             let _ = draw_app(terminal, app);
             match app.sync_account(name) {
                 Ok(()) => app.set_synced_status(name),
+                Err(e) if App::is_session_expired_error(&e) => {
+                    app.show_session_expired(name.to_string());
+                }
                 Err(e) => app.set_error(format!("{e:#}")),
             }
         }
@@ -246,6 +249,9 @@ fn sync_account(
     draw_app(terminal, app)?;
     match app.sync_account(name) {
         Ok(()) => app.set_synced_status(name),
+        Err(e) if App::is_session_expired_error(&e) => {
+            app.show_session_expired(name.to_string());
+        }
         Err(e) => app.set_error(format!("{e:#}")),
     }
     Ok(())
@@ -264,6 +270,9 @@ fn auto_unlock_and_sync_account(
             draw_app(terminal, app)?;
             match app.sync_account(name) {
                 Ok(()) => app.set_synced_status(name),
+                Err(e) if App::is_session_expired_error(&e) => {
+                    app.show_session_expired(name.to_string());
+                }
                 Err(e) => app.set_error(format!("{e:#}")),
             }
         }
