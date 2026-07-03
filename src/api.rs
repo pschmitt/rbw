@@ -1570,9 +1570,15 @@ impl Client {
             reqwest::StatusCode::UNAUTHORIZED => {
                 Err(Error::RequestUnauthorized)
             }
-            _ => Err(Error::RequestFailed {
-                status: res.status().as_u16(),
-            }),
+            _ => {
+                let code = res.status().as_u16();
+                let body = res.text().await.unwrap_or_default();
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
+            }
         }
     }
 
