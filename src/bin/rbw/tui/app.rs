@@ -344,6 +344,16 @@ struct AccountVault {
     name: String,
     db: rbw::db::Db,
     search: Vec<DecryptedSearchCipher>,
+    // Set only for a `--from-file` vault (see `commands::tui_vault_from_file`):
+    // full per-entry detail, already decrypted -- the export format is
+    // plaintext, so there's no cipherstring to decrypt and no agent to ask.
+    // `ensure_detail` reads straight from this instead of calling
+    // `decrypt_cipher` when set.
+    decrypted: Option<std::collections::HashMap<String, DecryptedCipher>>,
+    // Raw attachment bytes for a `--from-file` vault, keyed by attachment
+    // id (`DecryptedAttachment` itself only carries metadata). `None` for a
+    // live account, which fetches attachment bytes from the server instead.
+    attachment_data: Option<std::collections::HashMap<String, Vec<u8>>>,
 }
 
 pub struct App {
@@ -391,6 +401,10 @@ pub struct App {
     // cheap, but there's no need to make it on every ~500ms UI tick, so we
     // only actually check once `LOCK_CHECK_INTERVAL` has elapsed.
     last_lock_check: std::time::Instant,
+    // Set for `--from-file`: there's no account/agent/server behind this
+    // session, so every mutation (edit, add, delete, sync, attachment
+    // upload/delete, the accounts panel) is rejected instead of attempted.
+    read_only: bool,
 }
 
 // How often `poll_agent_lock` actually round-trips to the agent, throttled
@@ -423,12 +437,60 @@ impl App {
                 name: v.account,
                 db: v.db,
                 search: v.search,
+                decrypted: None,
+                attachment_data: None,
             })
             .collect();
+        Self::finish(
+            vaults,
+            open.locked,
+            open.multi,
+            initial_term,
+            keymap,
+            false,
+        )
+    }
+
+    // `--from-file`: a single synthetic, already-decrypted, read-only vault
+    // (see `commands::tui_vault_from_file`) instead of whatever's configured
+    // -- no other accounts, no agent, no lock-detection polling.
+    pub fn new_from_file(
+        vault: commands::TuiFileVault,
+        initial_term: Option<&str>,
+    ) -> Self {
+        let keymap = rbw::config::Config::load().map_or_else(
+            |_| Keymap::resolve(&std::collections::HashMap::new()),
+            |config| Keymap::resolve(&config.tui_keybindings),
+        );
+        let account_vault = AccountVault {
+            name: vault.label,
+            db: vault.db,
+            search: vault.search,
+            decrypted: Some(vault.decrypted),
+            attachment_data: Some(vault.attachment_data),
+        };
+        Self::finish(
+            vec![account_vault],
+            Vec::new(),
+            false,
+            initial_term,
+            keymap,
+            true,
+        )
+    }
+
+    fn finish(
+        vaults: Vec<AccountVault>,
+        locked: Vec<String>,
+        multi: bool,
+        initial_term: Option<&str>,
+        keymap: Keymap,
+        read_only: bool,
+    ) -> Self {
         let mut app = Self {
             vaults,
-            locked: open.locked,
-            multi: open.multi,
+            locked,
+            multi,
             search: Vec::new(),
             owner: Vec::new(),
             slot: Vec::new(),
@@ -448,6 +510,7 @@ impl App {
             // The account(s) handed to us were just unlocked by `tui_open`
             // moments ago, so there's no point re-checking immediately.
             last_lock_check: std::time::Instant::now(),
+            read_only,
         };
         app.rebuild_flat();
         app.recompute_filter();
@@ -611,6 +674,12 @@ impl App {
         if self.detail_cache.contains_key(&(o, id.clone())) {
             return;
         }
+        if let Some(decrypted) = &self.vaults[o].decrypted {
+            if let Some(detail) = decrypted.get(&id).cloned() {
+                self.detail_cache.insert((o, id), detail);
+            }
+            return;
+        }
         let entry = self.vaults[o].db.entries[self.slot[i]].clone();
         if let Err(e) = crate::actions::set_active_account(Some(
             self.vaults[o].name.clone(),
@@ -639,6 +708,16 @@ impl App {
     // external editor returns).
     pub fn set_error(&mut self, msg: String) {
         self.set_status(Level::Error, msg);
+    }
+
+    // Guards every mutating entry point in `--from-file` mode (there's no
+    // account/agent/server behind the session to save anything to). Returns
+    // whether the caller should bail out.
+    fn reject_if_read_only(&mut self) -> bool {
+        if self.read_only {
+            self.set_status(Level::Warn, "read-only: loaded from a file");
+        }
+        self.read_only
     }
 
     // ---- clipboard / open -----------------------------------------------
@@ -767,12 +846,41 @@ impl App {
             self.set_status(Level::Error, "could not decrypt entry");
             return;
         };
+        let dest = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+        // `--from-file`: the bytes are already in memory (embedded in the
+        // export by `rbw export --attachments`) -- no server to fetch them
+        // from, and nothing else here needs the agent, so this is the one
+        // attachment action that stays available in a read-only session.
+        if let Some(attachment_data) = &self.vaults[o].attachment_data {
+            let Some(data) = attachment_data.get(&att_id) else {
+                self.set_status(Level::Error, "attachment data not found");
+                return;
+            };
+            let file_name = detail
+                .attachments
+                .iter()
+                .find(|a| a.id == att_id)
+                .and_then(|a| a.file_name.clone())
+                .unwrap_or_else(|| att_id.clone());
+            let path = dest.join(file_name);
+            return match std::fs::write(&path, data) {
+                Ok(()) => {
+                    self.mode = Mode::Normal;
+                    self.set_status(
+                        Level::Success,
+                        format!("saved {}", path.display()),
+                    );
+                }
+                Err(e) => self.set_status(Level::Error, format!("{e}")),
+            };
+        }
+
         if let Err(e) = self.activate_current() {
             self.set_status(Level::Error, format!("{e:#}"));
             return;
         }
-        let dest = std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."));
         match commands::tui_attachment_get(
             &mut self.vaults[o].db,
             &entry,
@@ -838,6 +946,9 @@ impl App {
 
     // Ctrl-S: pull remote changes for every unlocked account, then rebuild.
     fn sync(&mut self) {
+        if self.reject_if_read_only() {
+            return;
+        }
         let keep = self.current_key();
         let names: Vec<String> =
             self.vaults.iter().map(|v| v.name.clone()).collect();
@@ -894,6 +1005,9 @@ impl App {
     }
 
     fn start_edit(&mut self) {
+        if self.reject_if_read_only() {
+            return;
+        }
         let Some(owner) = self.current_owner() else {
             self.set_status(Level::Warn, "nothing selected");
             return;
@@ -924,6 +1038,9 @@ impl App {
     }
 
     fn start_add(&mut self) {
+        if self.reject_if_read_only() {
+            return;
+        }
         let Some(owner) = self.add_target_owner() else {
             self.set_status(Level::Warn, "no unlocked account to add to");
             return;
@@ -1007,6 +1124,10 @@ impl App {
     }
 
     fn confirm_delete(&mut self) {
+        if self.reject_if_read_only() {
+            self.mode = Mode::Normal;
+            return;
+        }
         let Some(owner) = self.current_owner() else {
             self.mode = Mode::Normal;
             return;
@@ -1038,6 +1159,9 @@ impl App {
 
     // Called by the event loop once the real terminal has been restored.
     pub fn edit_in_editor(&mut self) -> anyhow::Result<()> {
+        if self.reject_if_read_only() {
+            return Ok(());
+        }
         let Some(owner) = self.current_owner() else {
             return Ok(());
         };
@@ -1069,6 +1193,9 @@ impl App {
     // ---- accounts panel -------------------------------------------------
 
     fn open_accounts(&mut self) {
+        if self.reject_if_read_only() {
+            return;
+        }
         match commands::tui_accounts() {
             Ok(accounts) => {
                 self.mode = Mode::Accounts(AccountsView {
@@ -1188,6 +1315,8 @@ impl App {
                 name: vault.account,
                 db: vault.db,
                 search: vault.search,
+                decrypted: None,
+                attachment_data: None,
             });
         }
         self.locked.retain(|n| n != name);
@@ -1215,6 +1344,8 @@ impl App {
                 name: vault.account,
                 db: vault.db,
                 search: vault.search,
+                decrypted: None,
+                attachment_data: None,
             });
         }
         self.detail_cache.clear();
@@ -1259,6 +1390,10 @@ impl App {
     // while cheap, still isn't free, and this covers the common single- and
     // active-account cases.
     pub fn poll_agent_lock(&mut self) {
+        // `--from-file`: no agent, nothing to lock.
+        if self.read_only {
+            return;
+        }
         let now = std::time::Instant::now();
         if now.duration_since(self.last_lock_check) < LOCK_CHECK_INTERVAL {
             return;
@@ -1414,6 +1549,9 @@ impl App {
     // ---- prompts (attachment upload / add account) ----------------------
 
     fn start_attachment_upload(&mut self) {
+        if self.reject_if_read_only() {
+            return;
+        }
         let Some(owner) = self.current_owner() else {
             return;
         };
@@ -1952,6 +2090,9 @@ impl App {
 
     // `d` in the picker: first press arms the confirm, second deletes.
     fn attachment_delete_pressed(&mut self) {
+        if self.reject_if_read_only() {
+            return;
+        }
         let (armed, att_id) = if let Mode::Attachments(v) = &self.mode {
             (
                 v.pending_delete,

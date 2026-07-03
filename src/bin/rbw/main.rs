@@ -261,9 +261,19 @@ enum Opt {
         #[arg(
             long,
             help = "Unlock and load every configured account up front, \
-                not just the ones already unlocked"
+                not just the ones already unlocked",
+            conflicts_with = "from_file"
         )]
         all: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Browse a `rbw export` file directly instead of a \
+                configured account -- read-only, no config/agent/account \
+                is touched. Prompts for a passphrase if the file is \
+                gpg-encrypted (`rbw export --encrypt`)."
+        )]
+        from_file: Option<std::path::PathBuf>,
     },
 
     #[command(
@@ -403,9 +413,19 @@ enum Opt {
             long,
             help = "With multiple accounts configured, unlock (prompting as \
                 needed) and include every account instead of just the \
-                already-unlocked ones"
+                already-unlocked ones",
+            conflicts_with = "from_file"
         )]
         all: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "List a `rbw export` file directly instead of a \
+                configured account -- no config/agent/account is touched. \
+                Prompts for a passphrase if the file is gpg-encrypted \
+                (`rbw export --encrypt`)."
+        )]
+        from_file: Option<std::path::PathBuf>,
     },
 
     #[command(about = "Get the primary value (password) of a given entry")]
@@ -521,9 +541,19 @@ enum Opt {
             long,
             help = "With multiple accounts configured, unlock (prompting as \
                 needed) and include every account instead of just the \
-                already-unlocked ones"
+                already-unlocked ones",
+            conflicts_with = "from_file"
         )]
         all: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Search a `rbw export` file directly instead of a \
+                configured account -- no config/agent/account is touched. \
+                Prompts for a passphrase if the file is gpg-encrypted \
+                (`rbw export --encrypt`)."
+        )]
+        from_file: Option<std::path::PathBuf>,
     },
 
     #[command(about = "List or download file attachments")]
@@ -1430,7 +1460,11 @@ fn main() {
         }
         Opt::Unlocked => commands::unlocked(),
         Opt::Sync { all } => commands::sync(all),
-        Opt::Tui { term, all } => tui::run(term.as_deref(), all),
+        Opt::Tui {
+            term,
+            all,
+            from_file,
+        } => tui::run(term.as_deref(), all, from_file.as_deref()),
         Opt::Export {
             attachments,
             encrypt,
@@ -1460,6 +1494,7 @@ fn main() {
             yaml,
             insecure,
             all,
+            from_file,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             term.map_or_else(
@@ -1470,6 +1505,7 @@ fn main() {
                         insecure,
                         output,
                         all,
+                        from_file.as_deref(),
                     )
                 },
                 |term| {
@@ -1481,6 +1517,7 @@ fn main() {
                         insecure,
                         output,
                         all,
+                        from_file.as_deref(),
                     )
                 },
             )
@@ -1604,6 +1641,7 @@ fn main() {
             yaml,
             insecure,
             all,
+            from_file,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             commands::search(
@@ -1614,6 +1652,7 @@ fn main() {
                 insecure,
                 output,
                 all,
+                from_file.as_deref(),
             )
         })(),
         Opt::Code {

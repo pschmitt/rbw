@@ -25,8 +25,8 @@
       exposes it too: `l` opens a prompt to link (or edit) the highlighted
       account's source, `L` clears it (with a y/n confirm), and a linked
       account shows a "→ linked to account/entry" line beneath it in the
-      panel. Only the master password is pulled from the linked entry today
-      (not username/TOTP).
+      panel. Pulls both the master password and a live-generated TOTP code
+      (if the linked entry has a secret) from the linked entry.
 - [x] TUI: detect the background agent getting locked while the TUI is
       open (`App::poll_agent_lock`, throttled to every few seconds), clear
       in-memory secrets, and show `Mode::LockedPrompt` that on accept opens
@@ -35,6 +35,27 @@
       (accounts, `unlock` policy, `exclude_from_list`, `tui_keybindings`,
       `password_gen`/`PasswordGenPolicy`, per-account `credential_source`,
       etc.) — keep this in sync whenever a new config option is added.
+- [x] `--from-file FILE` on `rbw list`/`rbw search`/`rbw tui`: browse a
+      `rbw export` file directly (plain JSON or gpg-encrypted, passphrase
+      auto-prompted if needed) instead of a configured account — no
+      config/agent/account touched at all, entirely in-memory and read-only
+      for that one invocation. `tui --from-file` shows a single synthetic
+      vault; every mutating action (edit/add/delete/sync/attachment
+      upload-or-delete/the accounts panel) is rejected with a clear
+      "read-only: loaded from a file" status instead of being attempted.
+      Attachment viewing/download still works (the bytes are already
+      embedded in the export by `rbw export --attachments`).
+
+## Backlog
+
+- [ ] `--from-file` writeback: let `rbw set`/`rbw edit`/`rbw remove`/`rbw
+      tui --from-file` actually modify the file in place instead of being
+      read-only. The loader already produces plain `DecryptedCipher`s (not
+      a live cipherstring `Db`), so this is mostly re-serializing that same
+      list back through the export format (`ExportedEntry`/`ExportedVault`,
+      already `Serialize`) on save, plus flipping `App::read_only` off and
+      wiring the TUI's edit/add/delete to mutate the in-memory entry list
+      instead of the account-mutation calls they use today.
 
 ## Pending ship work
 

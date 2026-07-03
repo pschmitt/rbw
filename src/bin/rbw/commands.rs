@@ -2874,13 +2874,73 @@ pub fn sync(all: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+// `list --from-file`: no term to filter by (a term routes through
+// `search_from_file` instead -- see `Opt::List`'s dispatch in main.rs), so
+// the only filtering here is `with_attachments`.
+fn list_from_file(
+    path: &std::path::Path,
+    fields: &[String],
+    with_attachments: bool,
+    insecure: bool,
+    output: OutputMode,
+) -> anyhow::Result<()> {
+    let vault = load_from_file(path)?;
+    let mut entries = vault.entries;
+    if with_attachments {
+        entries.retain(|entry| entry.attachment_metadata.has_attachments());
+    }
+
+    if output_is_structured(output) {
+        entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        return write_serialized_pretty(
+            &entries,
+            output,
+            "failed to write entries to stdout",
+        );
+    }
+
+    let mut fields: Vec<ListField> = fields
+        .iter()
+        .map(std::convert::TryFrom::try_from)
+        .collect::<anyhow::Result<_>>()?;
+    if insecure && !fields.contains(&ListField::Password) {
+        let insert_pos = fields
+            .iter()
+            .position(|f| matches!(f, ListField::User))
+            .map_or(fields.len(), |i| i + 1);
+        fields.insert(insert_pos, ListField::Password);
+    }
+
+    let mut entries: Vec<DecryptedListCipher> = entries
+        .iter()
+        .map(decrypted_cipher_to_search)
+        .map(std::convert::Into::into)
+        .collect();
+    entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+
+    print_entry_list(&entries, &fields, output, "")?;
+
+    Ok(())
+}
+
 pub fn list(
     fields: &[String],
     with_attachments: bool,
     insecure: bool,
     output: OutputMode,
     all: bool,
+    from_file: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        return list_from_file(
+            path,
+            fields,
+            with_attachments,
+            insecure,
+            output,
+        );
+    }
+
     let target_accounts = list_target_accounts(all)?;
     let tag_account = target_accounts.len() > 1;
 
@@ -3503,6 +3563,81 @@ fn print_entry_list(
     Ok(())
 }
 
+// `search --from-file`: same matching/output shape as the live-account
+// path below, just sourced from an already-decrypted in-memory vault.
+fn search_from_file(
+    path: &std::path::Path,
+    term: &str,
+    fields: &[String],
+    folder: Option<&str>,
+    with_attachments: bool,
+    insecure: bool,
+    output: OutputMode,
+) -> anyhow::Result<()> {
+    let vault = load_from_file(path)?;
+
+    if output_is_structured(output) {
+        let mut entries: Vec<DecryptedCipher> = vault
+            .entries
+            .into_iter()
+            .filter(|entry| {
+                decrypted_cipher_to_search(entry).search_match(
+                    term,
+                    folder,
+                    with_attachments,
+                )
+            })
+            .collect();
+        entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        if entries.is_empty() {
+            let c = std::io::stderr().is_terminal()
+                && std::env::var_os("NO_COLOR").is_none();
+            let msg = format!("no entries found matching '{term}'");
+            eprintln!("{}", style::warning(&msg, c));
+            std::process::exit(1);
+        }
+        return write_serialized_pretty(
+            &entries,
+            output,
+            "failed to write entries to stdout",
+        );
+    }
+
+    let mut fields: Vec<ListField> = fields
+        .iter()
+        .map(std::convert::TryFrom::try_from)
+        .collect::<anyhow::Result<_>>()?;
+    if insecure && !fields.contains(&ListField::Password) {
+        let insert_pos = fields
+            .iter()
+            .position(|f| matches!(f, ListField::User))
+            .map_or(fields.len(), |i| i + 1);
+        fields.insert(insert_pos, ListField::Password);
+    }
+
+    let mut entries: Vec<DecryptedListCipher> = vault
+        .entries
+        .iter()
+        .map(decrypted_cipher_to_search)
+        .filter(|entry| entry.search_match(term, folder, with_attachments))
+        .map(std::convert::Into::into)
+        .collect();
+    entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+
+    if entries.is_empty() {
+        let c = std::io::stderr().is_terminal()
+            && std::env::var_os("NO_COLOR").is_none();
+        let msg = format!("no entries found matching '{term}'");
+        eprintln!("{}", style::warning(&msg, c));
+        std::process::exit(1);
+    }
+
+    print_entry_list(&entries, &fields, output, term)?;
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn search(
     term: &str,
     fields: &[String],
@@ -3511,7 +3646,20 @@ pub fn search(
     insecure: bool,
     output: OutputMode,
     all: bool,
+    from_file: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        return search_from_file(
+            path,
+            term,
+            fields,
+            folder,
+            with_attachments,
+            insecure,
+            output,
+        );
+    }
+
     let target_accounts = list_target_accounts(all)?;
     let tag_account = target_accounts.len() > 1;
 
@@ -5454,6 +5602,12 @@ enum ImportedData {
 // don't match this shape instead of failing to parse the whole entry.
 #[derive(Debug, serde::Deserialize)]
 struct ImportedAttachment {
+    // Not used by `import` (a freshly-uploaded attachment always gets a new
+    // id from the server) -- only read by `load_from_file`, which has no
+    // server to assign one and needs a stable id to key its side table of
+    // attachment bytes by.
+    #[serde(default)]
+    id: Option<String>,
     #[serde(default)]
     file_name: Option<String>,
     #[serde(default)]
@@ -5462,6 +5616,10 @@ struct ImportedAttachment {
 
 #[derive(Debug, serde::Deserialize)]
 struct ImportedEntry {
+    // Same story as `ImportedAttachment::id`: `import` doesn't need it (new
+    // entries get a fresh id from the server), `load_from_file` does.
+    #[serde(default)]
+    id: Option<String>,
     #[serde(default)]
     org_id: Option<String>,
     #[serde(default)]
@@ -5605,6 +5763,96 @@ fn imported_to_editable(imported: &ImportedEntry) -> EditableCipher {
     }
 }
 
+// Mirrors `imported_data_to_editable`, but into `DecryptedData` -- the
+// shape `list`/`search`/`tui` already render -- for `--from-file`, which
+// treats an export as an already-decrypted, in-memory-only vault instead of
+// importing it. Unlike `EditableUri`, `DecryptedUri` keeps `match_type` as
+// the native enum rather than a display string, so no conversion needed.
+fn imported_data_to_decrypted(data: &ImportedData) -> DecryptedData {
+    match data {
+        ImportedData::Login {
+            username,
+            password,
+            totp,
+            uris,
+        } => DecryptedData::Login {
+            username: username.clone(),
+            password: password.clone(),
+            totp: totp.clone(),
+            uris: uris.as_ref().map(|v| {
+                v.iter()
+                    .map(|u| DecryptedUri {
+                        uri: u.uri.clone(),
+                        match_type: u.match_type,
+                    })
+                    .collect()
+            }),
+        },
+        ImportedData::Card {
+            cardholder_name,
+            number,
+            brand,
+            exp_month,
+            exp_year,
+            code,
+        } => DecryptedData::Card {
+            cardholder_name: cardholder_name.clone(),
+            number: number.clone(),
+            brand: brand.clone(),
+            exp_month: exp_month.clone(),
+            exp_year: exp_year.clone(),
+            code: code.clone(),
+        },
+        ImportedData::Identity {
+            title,
+            first_name,
+            middle_name,
+            last_name,
+            address1,
+            address2,
+            address3,
+            city,
+            state,
+            postal_code,
+            country,
+            phone,
+            email,
+            ssn,
+            license_number,
+            passport_number,
+            username,
+        } => DecryptedData::Identity {
+            title: title.clone(),
+            first_name: first_name.clone(),
+            middle_name: middle_name.clone(),
+            last_name: last_name.clone(),
+            address1: address1.clone(),
+            address2: address2.clone(),
+            address3: address3.clone(),
+            city: city.clone(),
+            state: state.clone(),
+            postal_code: postal_code.clone(),
+            country: country.clone(),
+            phone: phone.clone(),
+            email: email.clone(),
+            ssn: ssn.clone(),
+            license_number: license_number.clone(),
+            passport_number: passport_number.clone(),
+            username: username.clone(),
+        },
+        ImportedData::SecureNote => DecryptedData::SecureNote,
+        ImportedData::SshKey {
+            public_key,
+            fingerprint,
+            private_key,
+        } => DecryptedData::SshKey {
+            public_key: public_key.clone(),
+            fingerprint: fingerprint.clone(),
+            private_key: private_key.clone(),
+        },
+    }
+}
+
 fn imported_history_to_encrypted(
     history: &[ImportedHistoryEntry],
     org_id: Option<&str>,
@@ -5722,6 +5970,149 @@ fn load_import_json(
          export archive (from `rbw export --encrypt`), pass --decrypt or \
          --decrypt-passphrase"
     );
+}
+
+// A vault loaded from an export file for `--from-file` (`list`/`search`/
+// `tui`): entries are already decrypted, since that's what the export
+// format is. Attachment bytes are kept in a side table keyed by attachment
+// id, since `DecryptedAttachment` itself only carries metadata.
+pub struct FileVault {
+    pub entries: Vec<DecryptedCipher>,
+    pub attachment_data: std::collections::HashMap<String, Vec<u8>>,
+}
+
+// Loads an export file as a one-off, in-memory, read-only vault: no config,
+// no agent, no account touched at all. Reuses the same JSON/gpg-tar.gz
+// parsing `rbw import` uses, but -- unlike `import` -- doesn't require an
+// explicit `--decrypt` flag up front: plain JSON is tried first, and a
+// passphrase is only resolved (from $RBW_EXPORT_PASSPHRASE, then an
+// interactive prompt) if that fails.
+pub fn load_from_file(path: &std::path::Path) -> anyhow::Result<FileVault> {
+    let raw = read_import_input(Some(path))?;
+
+    let is_plain_json = std::str::from_utf8(&raw).is_ok_and(|text| {
+        serde_json::from_str::<serde_json::Value>(text).is_ok()
+    });
+    let json_text = if is_plain_json {
+        String::from_utf8(raw).unwrap()
+    } else {
+        let passphrase = resolve_env_or_prompted_passphrase(false)?;
+        decrypt_import_archive(&raw, &passphrase)?
+    };
+
+    let vault: ImportedVault = serde_json::from_str(&json_text).context(
+        "failed to parse import data (expected the JSON shape produced by \
+         `rbw export`)",
+    )?;
+
+    let mut attachment_data = std::collections::HashMap::new();
+    let entries = vault
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(i, imported)| {
+            let attachments = imported
+                .attachments
+                .iter()
+                .filter_map(|raw_attachment| {
+                    match parse_file_attachment(raw_attachment) {
+                        Ok((attachment, data)) => {
+                            attachment_data
+                                .insert(attachment.id.clone(), data);
+                            Some(attachment)
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "couldn't parse an attachment on '{}': {e:#}",
+                                imported.name
+                            );
+                            None
+                        }
+                    }
+                })
+                .collect::<Vec<_>>();
+            let id = imported
+                .id
+                .clone()
+                .unwrap_or_else(|| format!("from-file-{i}"));
+            DecryptedCipher {
+                attachment_metadata: AttachmentMetadata::new(
+                    &id,
+                    attachments.len(),
+                ),
+                id,
+                folder: imported.folder.clone(),
+                name: imported.name.clone(),
+                data: imported_data_to_decrypted(&imported.data),
+                fields: imported
+                    .fields
+                    .iter()
+                    .map(|f| DecryptedField {
+                        name: f.name.clone(),
+                        value: f.value.clone(),
+                        ty: f.ty.as_deref().and_then(|ty| {
+                            parse_field_type(ty)
+                                .inspect_err(|e| {
+                                    log::warn!(
+                                        "skipping an unrecognized field \
+                                        type on '{}': {e:#}",
+                                        imported.name
+                                    );
+                                })
+                                .ok()
+                        }),
+                    })
+                    .collect(),
+                notes: imported.notes.clone(),
+                history: imported
+                    .history
+                    .iter()
+                    .map(|h| DecryptedHistoryEntry {
+                        last_used_date: h.last_used_date.clone(),
+                        password: h.password.clone(),
+                    })
+                    .collect(),
+                attachments,
+                account: None,
+            }
+        })
+        .collect();
+
+    Ok(FileVault {
+        entries,
+        attachment_data,
+    })
+}
+
+// Parses one raw attachment JSON value (see `ImportedAttachment`) into a
+// `DecryptedAttachment` plus its decoded bytes. A missing id gets a
+// synthetic one (stable within this one load, which is all `--from-file`
+// needs it for) rather than failing the whole attachment.
+fn parse_file_attachment(
+    raw: &serde_json::Value,
+) -> anyhow::Result<(DecryptedAttachment, Vec<u8>)> {
+    let parsed: ImportedAttachment = serde_json::from_value(raw.clone())
+        .context("unrecognized attachment shape")?;
+    let data_base64 = parsed
+        .data_base64
+        .context("attachment is missing data_base64")?;
+    let data = rbw::base64::decode(&data_base64)
+        .context("failed to decode attachment data")?;
+    let id = parsed.id.unwrap_or_else(|| {
+        format!(
+            "from-file-attachment-{}",
+            &data_base64[..data_base64.len().min(16)]
+        )
+    });
+    Ok((
+        DecryptedAttachment {
+            id,
+            file_name: parsed.file_name,
+            size: None,
+            size_name: None,
+        },
+        data,
+    ))
 }
 
 // Uploads any embedded attachments on an imported entry to `entry` (the
@@ -7630,6 +8021,19 @@ fn entry_type_name(data: &rbw::db::EntryData) -> &'static str {
     }
 }
 
+// Mirrors `entry_type_name`, but for the already-decrypted `DecryptedData`
+// (used by `--from-file`, which has nothing else to call `entry_type_name`
+// with -- there's no `rbw::db::EntryData` cipherstring involved at all).
+fn decrypted_entry_type_name(data: &DecryptedData) -> &'static str {
+    match data {
+        DecryptedData::Login { .. } => "Login",
+        DecryptedData::Identity { .. } => "Identity",
+        DecryptedData::SshKey { .. } => "SSH Key",
+        DecryptedData::SecureNote => "Note",
+        DecryptedData::Card { .. } => "Card",
+    }
+}
+
 // A plan describing which batch-decrypt results make up a single list entry.
 // The `usize` fields are indices into the flat results vector returned by
 // `decrypt_batch`; `entry_type` needs no decryption so it is resolved up front.
@@ -8166,6 +8570,90 @@ fn decrypt_search_cipher(
         attachment_count: entry.attachments.len(),
         password: login_password,
     })
+}
+
+// Mirrors `decrypt_search_cipher`, but as a pure field projection off an
+// already-decrypted `DecryptedCipher` -- no decryption, can't fail. Used by
+// `--from-file`'s `list`/`search` to reuse the exact same matching
+// (`DecryptedSearchCipher::search_match`) and `Into<DecryptedListCipher>`
+// the live-account path uses.
+fn decrypted_cipher_to_search(
+    decrypted: &DecryptedCipher,
+) -> DecryptedSearchCipher {
+    let user = match &decrypted.data {
+        DecryptedData::Login { username, .. } => username.clone(),
+        _ => None,
+    };
+    let uris = if let DecryptedData::Login { uris, .. } = &decrypted.data {
+        uris.clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|u| (u.uri, u.match_type))
+            .collect()
+    } else {
+        vec![]
+    };
+    let fields = decrypted
+        .fields
+        .iter()
+        .filter_map(|field| {
+            if field.ty == Some(rbw::api::FieldType::Hidden) {
+                None
+            } else {
+                field.value.clone()
+            }
+        })
+        .collect();
+    let login_password = match &decrypted.data {
+        DecryptedData::Login { password, .. } => password.clone(),
+        _ => None,
+    };
+    let sensitive_fields: Vec<String> = {
+        let mut sf: Vec<String> = Vec::new();
+        match &decrypted.data {
+            DecryptedData::Login { password, .. } => {
+                sf.extend(password.clone());
+            }
+            DecryptedData::Card { number, code, .. } => {
+                sf.extend(number.clone());
+                sf.extend(code.clone());
+            }
+            DecryptedData::Identity {
+                ssn,
+                license_number,
+                passport_number,
+                ..
+            } => {
+                sf.extend(ssn.clone());
+                sf.extend(license_number.clone());
+                sf.extend(passport_number.clone());
+            }
+            DecryptedData::SshKey { private_key, .. } => {
+                sf.extend(private_key.clone());
+            }
+            DecryptedData::SecureNote => {}
+        }
+        for field in &decrypted.fields {
+            if field.ty == Some(rbw::api::FieldType::Hidden) {
+                sf.extend(field.value.clone());
+            }
+        }
+        sf
+    };
+
+    DecryptedSearchCipher {
+        id: decrypted.id.clone(),
+        entry_type: decrypted_entry_type_name(&decrypted.data).to_string(),
+        folder: decrypted.folder.clone(),
+        name: decrypted.name.clone(),
+        user,
+        uris,
+        fields,
+        notes: decrypted.notes.clone(),
+        sensitive_fields,
+        attachment_count: decrypted.attachment_metadata.attachment_count,
+        password: login_password,
+    }
 }
 
 pub fn decrypt_cipher(
@@ -8872,6 +9360,89 @@ pub struct TuiOpen {
     pub vaults: Vec<TuiVault>,
     pub locked: Vec<String>,
     pub multi: bool,
+}
+
+// The synthetic single vault behind `rbw tui --from-file`: like `TuiVault`,
+// but `decrypted`/`attachment_data` carry what would otherwise be decrypted
+// lazily via the agent -- there's no agent in this mode, since the export
+// format is already plaintext.
+pub struct TuiFileVault {
+    pub label: String,
+    pub db: rbw::db::Db,
+    pub search: Vec<DecryptedSearchCipher>,
+    pub decrypted: std::collections::HashMap<String, DecryptedCipher>,
+    pub attachment_data: std::collections::HashMap<String, Vec<u8>>,
+}
+
+// Loads `path` (see `load_from_file`) into a `TuiFileVault`: a placeholder
+// `rbw::db::Entry` per real entry (only `id` is real, used for indexing --
+// nothing will ever decrypt these through `decrypt_cipher`) plus the real
+// search index and full detail built directly from the already-decrypted
+// entries.
+pub fn tui_vault_from_file(
+    path: &std::path::Path,
+) -> anyhow::Result<TuiFileVault> {
+    let vault = load_from_file(path)?;
+    let label = path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .map_or_else(
+            || "export".to_string(),
+            |name| format!("export: {name}"),
+        );
+
+    let mut db = rbw::db::Db::new();
+    db.entries = vault
+        .entries
+        .iter()
+        .map(|entry| placeholder_entry(entry.id.clone()))
+        .collect();
+    let search = vault
+        .entries
+        .iter()
+        .map(decrypted_cipher_to_search)
+        .collect();
+    let decrypted = vault
+        .entries
+        .into_iter()
+        .map(|entry| (entry.id.clone(), entry))
+        .collect();
+
+    Ok(TuiFileVault {
+        label,
+        db,
+        search,
+        decrypted,
+        attachment_data: vault.attachment_data,
+    })
+}
+
+// A stand-in `rbw::db::Entry` carrying just enough (a real `id`) to satisfy
+// the TUI's `db.entries`/`search`/`slot` indexing for a `--from-file` vault.
+// Every other field is unused: `ensure_detail` reads full detail from
+// `AccountVault::decrypted` instead of ever calling `decrypt_cipher` on
+// this.
+fn placeholder_entry(id: String) -> rbw::db::Entry {
+    rbw::db::Entry {
+        id,
+        org_id: None,
+        folder: None,
+        folder_id: None,
+        name: String::new(),
+        data: rbw::db::EntryData::Login {
+            username: None,
+            password: None,
+            totp: None,
+            uris: Vec::new(),
+        },
+        fields: Vec::new(),
+        notes: None,
+        history: Vec::new(),
+        key: None,
+        master_password_reprompt: rbw::api::CipherRepromptType::None,
+        collection_ids: Vec::new(),
+        attachments: Vec::new(),
+    }
 }
 
 // Status of one configured account, for the accounts panel.
@@ -12287,6 +12858,107 @@ mod test {
         };
         assert!(credential_source_login_fields(&cipher, "entry", "account")
             .is_err());
+    }
+
+    #[test]
+    fn test_imported_data_to_decrypted_login() {
+        let imported = ImportedData::Login {
+            username: Some("alice".to_string()),
+            password: Some("hunter2".to_string()),
+            totp: Some("JBSWY3DPEHPK3PXP".to_string()),
+            uris: Some(vec![ImportedUri {
+                uri: "https://example.com".to_string(),
+                match_type: Some(rbw::api::UriMatchType::Domain),
+            }]),
+        };
+        let DecryptedData::Login {
+            username,
+            password,
+            totp,
+            uris,
+        } = imported_data_to_decrypted(&imported)
+        else {
+            panic!("expected DecryptedData::Login");
+        };
+        assert_eq!(username.as_deref(), Some("alice"));
+        assert_eq!(password.as_deref(), Some("hunter2"));
+        assert_eq!(totp.as_deref(), Some("JBSWY3DPEHPK3PXP"));
+        let uris = uris.unwrap();
+        assert_eq!(uris.len(), 1);
+        assert_eq!(uris[0].uri, "https://example.com");
+        assert_eq!(uris[0].match_type, Some(rbw::api::UriMatchType::Domain));
+    }
+
+    // `--from-file`'s core path (no gpg/passphrase involved): a plain JSON
+    // export, as `rbw export` (without `--encrypt`) produces, loads
+    // directly with no config/agent/account touched.
+    #[test]
+    fn test_load_from_file_reads_plain_json_export() {
+        let vault = ExportedVault {
+            entries: vec![ExportedEntry {
+                id: "entry-id".to_string(),
+                org_id: None,
+                folder: Some("Work".to_string()),
+                name: "example.com".to_string(),
+                data: DecryptedData::Login {
+                    username: Some("alice".to_string()),
+                    password: Some("hunter2".to_string()),
+                    totp: None,
+                    uris: None,
+                },
+                fields: vec![],
+                notes: Some("note text".to_string()),
+                history: vec![],
+                collection_ids: vec![],
+                attachments: vec![ExportedAttachment {
+                    id: "att-1".to_string(),
+                    file_name: "secret.txt".to_string(),
+                    data_base64: rbw::base64::encode(b"attachment bytes"),
+                }],
+            }],
+            collections: vec![],
+        };
+        let json = serde_json::to_string(&vault).unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+        file.flush().unwrap();
+
+        let loaded = load_from_file(file.path()).unwrap();
+        assert_eq!(loaded.entries.len(), 1);
+        let entry = &loaded.entries[0];
+        assert_eq!(entry.id, "entry-id");
+        assert_eq!(entry.folder.as_deref(), Some("Work"));
+        assert_eq!(entry.notes.as_deref(), Some("note text"));
+        assert_eq!(entry.attachments.len(), 1);
+        assert_eq!(entry.attachments[0].id, "att-1");
+        assert_eq!(&loaded.attachment_data["att-1"], b"attachment bytes");
+        let DecryptedData::Login {
+            username, password, ..
+        } = &entry.data
+        else {
+            panic!("expected DecryptedData::Login");
+        };
+        assert_eq!(username.as_deref(), Some("alice"));
+        assert_eq!(password.as_deref(), Some("hunter2"));
+    }
+
+    // A hand-written/older export missing `id` (added to `ImportedEntry`
+    // specifically for `--from-file`; `import` never needed it) still
+    // loads, with a synthetic-but-stable id instead of failing outright.
+    #[test]
+    fn test_load_from_file_generates_ids_when_missing() {
+        let json = serde_json::json!({
+            "entries": [{"name": "no id here", "type": "SecureNote"}],
+            "collections": []
+        })
+        .to_string();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+        file.flush().unwrap();
+
+        let loaded = load_from_file(file.path()).unwrap();
+        assert_eq!(loaded.entries.len(), 1);
+        assert_eq!(loaded.entries[0].id, "from-file-0");
     }
 
     #[track_caller]

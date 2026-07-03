@@ -45,7 +45,22 @@ fn disable_mouse() {
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
 }
 
-pub fn run(initial_term: Option<&str>, all: bool) -> anyhow::Result<()> {
+pub fn run(
+    initial_term: Option<&str>,
+    all: bool,
+    from_file: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        let vault = crate::commands::tui_vault_from_file(path)?;
+        let mut terminal = ratatui::init();
+        enable_mouse();
+        let mut app = App::new_from_file(vault, initial_term);
+        let res = run_loop(&mut terminal, &mut app);
+        disable_mouse();
+        ratatui::restore();
+        return res;
+    }
+
     crate::commands::tui_unlock_target()?;
     let mut terminal = ratatui::init();
     enable_mouse();
