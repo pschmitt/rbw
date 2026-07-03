@@ -49,6 +49,19 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -Dwarnings
       - run: cargo fmt --check
       - run: cargo deny check
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: msrv
+        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      # @master + an explicit toolchain input (rather than the @stable tag)
+      # so this always tracks whatever Cargo.toml currently declares.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --all-targets --all-features
   doc:
     runs-on: ubuntu-latest
     steps:
