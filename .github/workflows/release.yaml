@@ -112,11 +112,10 @@ jobs:
           else
             run_bin() { "./$bin" "$@"; }
           fi
-          mkdir "$pkg/completions"
-          for shell in bash zsh fish
-          do
-            run_bin completions "$shell" > "$pkg/completions/rbw.$shell"
-          done
+          mkdir -p "$pkg/completions/bash" "$pkg/completions/zsh" "$pkg/completions/fish"
+          run_bin completions bash > "$pkg/completions/bash/rbw"
+          run_bin completions zsh > "$pkg/completions/zsh/_rbw"
+          run_bin completions fish > "$pkg/completions/fish/rbw.fish"
           tar czf "$pkg.tar.gz" "$pkg"
       - uses: actions/upload-artifact@v4
         with:
