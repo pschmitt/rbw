@@ -756,11 +756,11 @@ enum Opt {
         #[arg(
             long,
             value_name = "FILE",
-            conflicts_with = "bulk",
-            help = "Update an entry directly in a `rbw export` file \
-                instead of a configured account -- no config/agent/account \
-                is touched. Prompts for a passphrase if the file is \
-                gpg-encrypted (`rbw export --encrypt`)."
+            help = "Update an entry (or, with --bulk, every matching entry) \
+                directly in a `rbw export` file instead of a configured \
+                account -- no config/agent/account is touched. Prompts for \
+                a passphrase if the file is gpg-encrypted (`rbw export \
+                --encrypt`)."
         )]
         from_file: Option<std::path::PathBuf>,
     },

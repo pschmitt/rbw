@@ -4673,7 +4673,22 @@ pub fn set(
 
     if let Some(path) = from_file {
         if bulk {
-            anyhow::bail!("--bulk is not supported with --from-file");
+            return set_from_file_bulk(
+                path,
+                &needles,
+                username,
+                folder,
+                ignore_case,
+                new_name,
+                new_username,
+                new_password,
+                new_notes,
+                new_uris,
+                new_totp,
+                diff,
+                new_attachments,
+                yes,
+            );
         }
         return set_from_file(
             path,
@@ -4892,6 +4907,224 @@ fn find_entries_all(
             decrypt_cipher(entry).map(|d| ((*entry).clone(), d))
         })
         .collect()
+}
+
+// `find_entries_all`'s `--from-file` counterpart: same matching
+// (`DecryptedSearchCipher::matches`) against the already-decrypted vault,
+// no agent/batch-decrypt involved -- can't fail the way a live decrypt
+// can, so this returns the plain `Vec` rather than a `Result`.
+fn find_entries_all_in_file(
+    entries: &[DecryptedCipher],
+    needle: &Needle,
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+) -> Vec<DecryptedCipher> {
+    entries
+        .iter()
+        .filter(|entry| {
+            decrypted_cipher_to_search(entry).matches(
+                needle,
+                username,
+                folder,
+                ignore_case,
+                false,
+                false,
+                false,
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+// `set --bulk --from-file`: same per-needle "find every match, compute
+// changes, confirm once, apply all" flow as the live `bulk` branch above,
+// but against the in-memory vault -- `apply_entry_update_decrypted`
+// instead of `apply_entry_update`, and a single `save_to_file` at the end
+// instead of a `rbw::actions::edit` + `sync` per entry.
+#[allow(clippy::too_many_arguments)]
+fn set_from_file_bulk(
+    path: &std::path::Path,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    new_name: Option<&str>,
+    new_username: Option<&str>,
+    new_password: Option<&str>,
+    new_notes: Option<&str>,
+    new_uris: &[String],
+    new_totp: Option<&str>,
+    diff: bool,
+    new_attachments: &[std::path::PathBuf],
+    yes: bool,
+) -> anyhow::Result<()> {
+    use std::io::Write as _;
+
+    struct BulkPending {
+        decrypted: DecryptedCipher,
+        entry_name: String,
+        changes: Vec<(&'static str, String, String)>,
+    }
+
+    let mut vault = load_from_file(path)?;
+    let mut any_err = false;
+    let mut pending: Vec<BulkPending> = Vec::new();
+
+    for needle in needles {
+        let matches = find_entries_all_in_file(
+            &vault.entries,
+            needle,
+            username,
+            folder,
+            ignore_case,
+        );
+        if matches.is_empty() {
+            eprintln!("{needle}: no entry found");
+            any_err = true;
+            continue;
+        }
+        for decrypted in matches {
+            let entry_name = decrypted.name.clone();
+            match compute_entry_changes(
+                &decrypted,
+                new_name,
+                new_username,
+                new_password,
+                new_notes,
+                new_uris,
+                new_totp,
+            ) {
+                Err(e) => {
+                    eprintln!("{entry_name}: {e:#}");
+                    any_err = true;
+                }
+                Ok(changes)
+                    if changes.is_empty() && new_attachments.is_empty() =>
+                {
+                    let c = stdout_supports_color();
+                    eprintln!(
+                        "{} {}",
+                        style::name(&entry_name, c),
+                        style::dim("(no changes)", c)
+                    );
+                }
+                Ok(changes) => {
+                    pending.push(BulkPending {
+                        decrypted,
+                        entry_name,
+                        changes,
+                    });
+                }
+            }
+        }
+    }
+
+    if !pending.is_empty() && !yes {
+        let c = stdout_supports_color();
+        let lbl = |s: &str| style::label(&format!("{s:<12}"), c);
+        eprintln!(
+            "About to update {} {}:",
+            style::name(&format!("{}", pending.len()), c),
+            if pending.len() == 1 {
+                "entry"
+            } else {
+                "entries"
+            }
+        );
+        for pu in &pending {
+            eprintln!();
+            eprintln!("{}:", style::name(&pu.entry_name, c));
+            for (field, old, new) in &pu.changes {
+                eprintln!(
+                    "  {} {} {} {}",
+                    lbl(field),
+                    style::old_val(old, c),
+                    style::dim("→", c),
+                    style::new_val(new, c),
+                );
+            }
+            for file in new_attachments {
+                eprintln!("  {} {}", lbl("attach"), file.display());
+            }
+        }
+        eprintln!();
+        eprint!("Apply all ({})? [y/N] ", pending.len());
+        let _ = std::io::stderr().flush();
+        let mut answer = String::new();
+        std::io::stdin()
+            .read_line(&mut answer)
+            .context("failed to read confirmation")?;
+        if !matches!(answer.trim(), "y" | "Y") {
+            eprintln!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    if pending.is_empty() {
+        return if any_err {
+            Err(anyhow::anyhow!("one or more needles matched no entry"))
+        } else {
+            Ok(())
+        };
+    }
+
+    let c = stdout_supports_color();
+    for pu in pending {
+        match apply_entry_update_decrypted(
+            &pu.decrypted,
+            new_name,
+            new_password,
+            new_username,
+            new_notes,
+            new_uris,
+            new_totp,
+            new_attachments,
+        ) {
+            Ok((updated, new_attachment_bytes)) => {
+                for (id, bytes) in new_attachment_bytes {
+                    vault.attachment_data.insert(id, bytes);
+                }
+                if let Some(pos) =
+                    vault.entries.iter().position(|e| e.id == updated.id)
+                {
+                    vault.entries[pos] = updated;
+                }
+                println!(
+                    "Item {} was updated",
+                    style::name(&pu.entry_name, c)
+                );
+                if diff {
+                    print_entry_diff(&pu.changes);
+                }
+            }
+            Err(e) => {
+                eprintln!("{}: {e:#}", pu.entry_name);
+                any_err = true;
+            }
+        }
+    }
+
+    backup_file(path)?;
+    let exported = vault
+        .entries
+        .iter()
+        .map(|e| {
+            to_exported_entry(e, &vault.attachment_data, &vault.entry_extra)
+        })
+        .collect();
+    save_to_file(
+        path,
+        exported,
+        vault.collections,
+        vault.passphrase.as_deref(),
+    )?;
+
+    if any_err {
+        Err(anyhow::anyhow!("one or more entries failed to update"))
+    } else {
+        Ok(())
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
