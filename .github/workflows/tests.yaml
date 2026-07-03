@@ -75,7 +75,9 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - uses: cargo-bins/cargo-binstall@main
-      - run: cargo binstall --no-confirm cargo-deny
+      # --force: rust-cache restores binstall's install manifest but not the
+      # binary itself, so without it binstall skips the (missing) install
+      - run: cargo binstall --no-confirm --force cargo-deny
       - run: cargo clippy --all-targets --all-features -- -Dwarnings
       - run: cargo fmt --check
       - run: cargo deny check
