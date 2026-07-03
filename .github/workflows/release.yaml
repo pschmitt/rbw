@@ -11,10 +11,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  # Note: aarch64-linux-android is deliberately not part of the asset matrix.
-  # tests.yaml only runs `cross check --no-default-features` for it (no full
-  # build, no clipboard feature), so there is no proven recipe for producing
-  # a usable release binary for that target yet.
   build:
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
@@ -28,6 +24,9 @@ jobs:
             os: ubuntu-latest
           - target: aarch64-apple-darwin
             os: macos-latest
+          # No clipboard feature: arboard has no Android backend.
+          - target: aarch64-linux-android
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install musl build dependencies
@@ -39,11 +38,30 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+      # cross-rs's aarch64-linux-android image bundles a pre-r18 standalone
+      # NDK toolchain with no libunwind, which current rustc requires at
+      # link time (`ld: cannot find -lunwind`) - build against a real NDK
+      # via cargo-ndk instead.
+      - uses: nttld/setup-ndk@v1
+        if: matrix.target == 'aarch64-linux-android'
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+      - uses: cargo-bins/cargo-binstall@main
+        if: matrix.target == 'aarch64-linux-android'
+      - name: Install cargo-ndk
+        if: matrix.target == 'aarch64-linux-android'
+        run: cargo binstall --no-confirm cargo-ndk
       - name: Build (musl)
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: TARGET_CC=clang-18 TARGET_AR=llvm-ar-18 cargo build --release --target x86_64-unknown-linux-musl
+      - name: Build (android)
+        if: matrix.target == 'aarch64-linux-android'
+        run: cargo ndk --target aarch64-linux-android --platform 24 -- build --release --no-default-features
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
       - name: Build
-        if: matrix.target != 'x86_64-unknown-linux-musl'
+        if: matrix.target != 'x86_64-unknown-linux-musl' && matrix.target != 'aarch64-linux-android'
         run: cargo build --release --target ${{ matrix.target }}
       - name: Package
         run: |
