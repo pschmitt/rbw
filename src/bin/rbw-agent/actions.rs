@@ -708,11 +708,21 @@ async fn unlock_success(
     Ok(())
 }
 
+// Lock the account the client named explicitly (`rbw -a NAME lock`), or
+// every account when the request doesn't carry one (plain `rbw lock`,
+// `rbw lock --all`, and requests from older clients).
 pub async fn lock(
     sock: &mut crate::sock::Sock,
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    account: Option<&str>,
 ) -> anyhow::Result<()> {
-    state.lock().await.clear();
+    {
+        let mut state = state.lock().await;
+        match account {
+            Some(name) => state.clear_account(name),
+            None => state.clear(),
+        }
+    }
 
     respond_ack(sock).await?;
 

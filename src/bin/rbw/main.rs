@@ -903,6 +903,9 @@ impl Opt {
             Self::Edit { .. } => "edit".to_string(),
             Self::Set { .. } => "set".to_string(),
             Self::Remove { .. } => "remove".to_string(),
+            Self::Collection { collection } => {
+                format!("collection {}", collection.subcommand_name())
+            }
             Self::ListCollections { .. } => "list-collections".to_string(),
             Self::CreateCollection { .. } => "create-collection".to_string(),
             Self::DeleteCollection { .. } => "delete-collection".to_string(),
@@ -912,8 +915,8 @@ impl Opt {
             }
             Self::RenameCollection { .. } => "rename-collection".to_string(),
             Self::History { .. } => "history".to_string(),
-            Self::Lock => "lock".to_string(),
-            Self::Purge => "purge".to_string(),
+            Self::Lock { .. } => "lock".to_string(),
+            Self::Purge { .. } => "purge".to_string(),
             Self::StopAgent => "stop-agent".to_string(),
             Self::Completions { .. } => "completions".to_string(),
         }
@@ -1139,6 +1142,8 @@ enum Attachment {
                 <entry>`); omit to delete the entry's only attachment"
         )]
         attachment: Option<String>,
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
     },
 }
 
@@ -1149,6 +1154,137 @@ impl Attachment {
             Self::Get { .. } => "get",
             Self::Create { .. } => "create",
             Self::Rm { .. } => "rm",
+        }
+        .to_string()
+    }
+}
+
+#[derive(Debug, clap::Parser)]
+enum Collection {
+    #[command(
+        about = "List all collections in the organization",
+        visible_alias = "ls"
+    )]
+    List {
+        #[arg(
+            short,
+            long,
+            value_enum,
+            help = "Output mode: name, json, yaml"
+        )]
+        output: Option<OutputArg>,
+        #[arg(
+            short = 'j',
+            long,
+            visible_alias = "json",
+            help = "Display output as JSON"
+        )]
+        raw: bool,
+        #[arg(long, help = "Display output as YAML")]
+        yaml: bool,
+    },
+    #[command(
+        about = "Create a new collection in an organization",
+        visible_alias = "add"
+    )]
+    Create {
+        #[arg(help = "Name of the collection")]
+        name: String,
+        #[arg(
+            long = "org-id",
+            help = "Organization ID (auto-detected if the vault has a \
+                single org)"
+        )]
+        org_id: Option<String>,
+    },
+    #[command(
+        about = "Delete an organization collection",
+        visible_aliases = ["rm", "remove", "del"]
+    )]
+    Delete {
+        #[arg(help = "Name or ID of the collection")]
+        collection: String,
+        #[arg(
+            long = "org-id",
+            help = "Organization ID (auto-detected if the vault has a \
+                single org)"
+        )]
+        org_id: Option<String>,
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
+    },
+    #[command(about = "Rename an organization collection")]
+    Rename {
+        #[arg(help = "Name or ID of the collection")]
+        collection: String,
+        #[arg(help = "New name for the collection")]
+        name: String,
+        #[arg(
+            long = "org-id",
+            alias = "organizationid",
+            help = "Organization ID (auto-detected if the vault has a \
+                single org)"
+        )]
+        org_id: Option<String>,
+    },
+    #[command(
+        about = "Assign an entry to organization collections",
+        long_about = "Assign an entry to organization collections\n\n\
+            Replaces the entry's current collection list with the given \
+            collections. Collections can be given by name or ID; names are \
+            resolved against the entry's organization."
+    )]
+    Assign {
+        #[arg(
+            help = "Name, URI, or UUID of the entry",
+            value_parser = commands::parse_needle,
+        )]
+        needle: commands::Needle,
+        #[arg(
+            help = "Collections (name or ID) the entry should belong to",
+            num_args = 1..,
+            required = true,
+        )]
+        collections: Vec<String>,
+        #[arg(long, help = "Username of the entry to display")]
+        user: Option<String>,
+        #[arg(long, help = "Folder name to search in")]
+        folder: Option<String>,
+        #[arg(short, long, help = "Ignore case")]
+        ignorecase: bool,
+        #[arg(
+            short = 'e',
+            long,
+            help = "Only match if needle is an exact entry name (no substring fallback)"
+        )]
+        exact: bool,
+    },
+    #[command(
+        name = "propagate-permissions",
+        about = "Grant members access to nested collections (topmost held -> edit, descendants -> manage)"
+    )]
+    PropagatePermissions {
+        #[arg(
+            long = "org-id",
+            help = "Organization ID (auto-detected if the vault has a single org)"
+        )]
+        org_id: Option<String>,
+        #[arg(long, help = "Execute the changes (default is a dry-run)")]
+        apply: bool,
+        #[arg(short, long, help = "Print per-run counts")]
+        verbose: bool,
+    },
+}
+
+impl Collection {
+    fn subcommand_name(&self) -> String {
+        match self {
+            Self::List { .. } => "list",
+            Self::Create { .. } => "create",
+            Self::Delete { .. } => "delete",
+            Self::Rename { .. } => "rename",
+            Self::Assign { .. } => "assign",
+            Self::PropagatePermissions { .. } => "propagate-permissions",
         }
         .to_string()
     }
@@ -1386,6 +1522,7 @@ fn main() {
             Attachment::Rm {
                 find_args,
                 attachment,
+                yes,
             } => commands::attachment_rm(
                 find_args.needles,
                 find_args.user.as_deref(),
@@ -1393,6 +1530,7 @@ fn main() {
                 find_args.ignorecase,
                 attachment.as_deref(),
                 find_args.exact,
+                yes,
             ),
         },
         Opt::Get {
@@ -1607,13 +1745,67 @@ fn main() {
             yes,
             find_args.exact,
         ),
-        Opt::Remove { find_args } => commands::remove(
+        Opt::Remove { find_args, yes } => commands::remove(
             find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
             find_args.ignorecase,
             find_args.exact,
+            yes,
         ),
+        Opt::Collection { collection } => match collection {
+            Collection::List { output, raw, yaml } => {
+                (|| -> anyhow::Result<()> {
+                    let output = resolve_output_mode(output, raw, yaml)?;
+                    commands::list_collections(output)
+                })()
+            }
+            Collection::Create { name, org_id } => {
+                commands::create_collection(&name, org_id.as_deref())
+            }
+            Collection::Delete {
+                collection,
+                org_id,
+                yes,
+            } => commands::delete_collection(
+                &collection,
+                org_id.as_deref(),
+                yes,
+            ),
+            Collection::Rename {
+                collection,
+                name,
+                org_id,
+            } => commands::rename_collection(
+                &collection,
+                org_id.as_deref(),
+                &name,
+            ),
+            Collection::Assign {
+                needle,
+                collections,
+                user,
+                folder,
+                ignorecase,
+                exact,
+            } => commands::assign_collections(
+                needle,
+                user.as_deref(),
+                folder.as_deref(),
+                ignorecase,
+                exact,
+                &collections,
+            ),
+            Collection::PropagatePermissions {
+                org_id,
+                apply,
+                verbose,
+            } => commands::propagate_collection_permissions(
+                org_id.as_deref(),
+                apply,
+                verbose,
+            ),
+        },
         Opt::ListCollections { output, raw, yaml } => {
             (|| -> anyhow::Result<()> {
                 let output = resolve_output_mode(output, raw, yaml)?;
@@ -1621,12 +1813,17 @@ fn main() {
             })()
         }
         Opt::CreateCollection { name, org_id } => {
-            commands::create_collection(&name, &org_id)
+            commands::create_collection(&name, org_id.as_deref())
         }
         Opt::DeleteCollection {
             collection_id,
             org_id,
-        } => commands::delete_collection(&collection_id, &org_id),
+            yes,
+        } => commands::delete_collection(
+            &collection_id,
+            org_id.as_deref(),
+            yes,
+        ),
         Opt::EditCollections { id, collections } => {
             commands::edit_collections(&id, &collections)
         }
@@ -1639,11 +1836,9 @@ fn main() {
             apply,
             verbose,
         ),
-        Opt::RenameCollection {
-            id,
-            organizationid,
-            name,
-        } => commands::rename_collection(&id, &organizationid, &name),
+        Opt::RenameCollection { id, org_id, name } => {
+            commands::rename_collection(&id, org_id.as_deref(), &name)
+        }
         Opt::History {
             find_args,
             output,
@@ -1660,8 +1855,8 @@ fn main() {
                 find_args.exact,
             )
         })(),
-        Opt::Lock => commands::lock(),
-        Opt::Purge => commands::purge(),
+        Opt::Lock { all } => commands::lock(all),
+        Opt::Purge { yes } => commands::purge(yes),
         Opt::StopAgent => commands::stop_agent(),
         Opt::Completions { shell } => {
             match shell {
@@ -1795,6 +1990,115 @@ mod test {
             &["rbw", "history", "--yaml", "name"][..],
             &["rbw", "search", "--insecure", "term"][..],
             &["rbw", "code", "--all", "name"][..],
+        ] {
+            parse(args);
+        }
+    }
+
+    #[test]
+    fn test_collection_group_parses() {
+        for args in [
+            &["rbw", "collection", "list"][..],
+            &["rbw", "collection", "ls", "-o", "json"][..],
+            &["rbw", "collection", "create", "name"][..],
+            &["rbw", "collection", "add", "name", "--org-id", "org"][..],
+            &["rbw", "collection", "delete", "name", "-y"][..],
+            &["rbw", "collection", "rm", "name"][..],
+            &["rbw", "collection", "remove", "name"][..],
+            &["rbw", "collection", "del", "name"][..],
+            &["rbw", "collection", "rename", "old", "new"][..],
+            &[
+                "rbw",
+                "collection",
+                "rename",
+                "old",
+                "new",
+                "--org-id",
+                "org",
+            ][..],
+            &[
+                "rbw",
+                "collection",
+                "rename",
+                "old",
+                "new",
+                "--organizationid",
+                "org",
+            ][..],
+            &["rbw", "collection", "assign", "entry", "coll"][..],
+            &["rbw", "collection", "assign", "-e", "entry", "c1", "c2"][..],
+            &["rbw", "collection", "propagate-permissions", "--apply"][..],
+        ] {
+            parse(args);
+        }
+    }
+
+    // The old flat collection commands stay available (hidden) with their
+    // original interfaces, so existing scripts keep working.
+    #[test]
+    fn test_collection_compat_shims_parse() {
+        for args in [
+            &["rbw", "list-collections"][..],
+            &["rbw", "lsc"][..],
+            &["rbw", "create-collection", "name"][..],
+            &["rbw", "create-collection", "name", "--org-id", "org"][..],
+            &["rbw", "delete-collection", "id", "--org-id", "org"][..],
+            &["rbw", "delete-collection", "id", "-y"][..],
+            &["rbw", "edit-collections", "id", "b64"][..],
+            &["rbw", "rename-collection", "id", "new", "--org-id", "org"][..],
+            &[
+                "rbw",
+                "rename-collection",
+                "id",
+                "new",
+                "--organizationid",
+                "org",
+            ][..],
+            &["rbw", "propagate-collection-permissions"][..],
+        ] {
+            parse(args);
+        }
+    }
+
+    #[test]
+    fn test_collection_assign_splits_entry_and_collections() {
+        let cli =
+            parse(&["rbw", "collection", "assign", "entry", "c1", "c2"]);
+        let Opt::Collection {
+            collection:
+                Collection::Assign {
+                    needle,
+                    collections,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("parsed as the wrong subcommand");
+        };
+        assert_eq!(needle.to_string(), "entry");
+        assert_eq!(collections, vec!["c1".to_string(), "c2".to_string()]);
+    }
+
+    #[test]
+    fn test_destructive_commands_accept_yes() {
+        for args in [
+            &["rbw", "remove", "-y", "name"][..],
+            &["rbw", "rm", "--yes", "name"][..],
+            &["rbw", "attachment", "rm", "-y", "name"][..],
+            &["rbw", "purge", "-y"][..],
+            &["rbw", "collection", "delete", "name", "--yes"][..],
+        ] {
+            parse(args);
+        }
+    }
+
+    #[test]
+    fn test_lock_parses_with_and_without_all() {
+        for args in [
+            &["rbw", "lock"][..],
+            &["rbw", "lock", "--all"][..],
+            &["rbw", "-a", "work", "lock"][..],
+            &["rbw", "-a", "work", "lock", "--all"][..],
         ] {
             parse(args);
         }

@@ -1491,6 +1491,31 @@ fn stderr_supports_color() -> bool {
     std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none()
 }
 
+// Ask for confirmation before a destructive operation. Only prompts when
+// stdin is a tty, so scripts and pipelines keep the historical no-prompt
+// behavior; interactive callers can skip the prompt with `-y`/`--yes`.
+// Returns false (after printing "Aborted.") when the user declines.
+fn confirm(prompt: &str) -> anyhow::Result<bool> {
+    use std::io::Write as _;
+
+    if !std::io::stdin().is_terminal() {
+        return Ok(true);
+    }
+
+    eprint!("{prompt} [y/N] ");
+    let _ = std::io::stderr().flush();
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .context("failed to read confirmation")?;
+    if matches!(answer.trim(), "y" | "Y") {
+        Ok(true)
+    } else {
+        eprintln!("Aborted.");
+        Ok(false)
+    }
+}
+
 // Central style palette.  Every coloured output in rbw goes through
 // these functions so that each semantic type always looks the same
 // regardless of which command produced it.
@@ -3272,6 +3297,7 @@ pub fn attachment_rm(
     ignore_case: bool,
     attachment: Option<&str>,
     force_exact: bool,
+    yes: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
     let mut db = load_db()?;
@@ -3296,6 +3322,18 @@ pub fn attachment_rm(
         .file_name
         .clone()
         .unwrap_or_else(|| attachment_id.clone());
+
+    if !yes {
+        let c = stdout_supports_color();
+        if !confirm(&format!(
+            "Delete attachment {} from {}?",
+            style::name(&file_name, c),
+            style::name(&decrypted.name, c)
+        ))? {
+            return Ok(());
+        }
+    }
+
     if let (Some(new_token), ()) = rbw::actions::delete_attachment(
         &access_token,
         &refresh_token,
@@ -3759,12 +3797,11 @@ pub fn remove(
     folder: Option<&str>,
     ignore_case: bool,
     force_exact: bool,
+    yes: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
 
     let mut db = load_db()?;
-    let access_token = db.access_token.as_ref().unwrap();
-    let refresh_token = db.refresh_token.as_ref().unwrap();
 
     let needle_str = needles
         .iter()
@@ -3777,9 +3814,21 @@ pub fn remove(
         needle_str
     );
 
-    let (entry, _) =
+    let (entry, decrypted) =
         find_entry(&db, needles, username, folder, ignore_case, force_exact)
             .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    if !yes
+        && !confirm(&format!(
+            "Delete entry {}?",
+            style::name(&decrypted.name, stdout_supports_color())
+        ))?
+    {
+        return Ok(());
+    }
+
+    let access_token = db.access_token.as_ref().unwrap();
+    let refresh_token = db.refresh_token.as_ref().unwrap();
 
     if let (Some(access_token), ()) =
         rbw::actions::remove(access_token, refresh_token, &entry.id)?
@@ -6291,31 +6340,94 @@ pub fn import(
     Ok(())
 }
 
-pub fn list_collections(output: OutputMode) -> anyhow::Result<()> {
-    #[derive(serde::Serialize)]
-    struct DecryptedCollection {
-        id: String,
-        org_id: String,
-        name: String,
-    }
+// A collection from the synced database, with its name decrypted.
+#[derive(Debug, serde::Serialize)]
+struct DecryptedCollection {
+    id: String,
+    org_id: String,
+    name: String,
+}
 
-    unlock(None)?;
-
-    let db = load_db()?;
-
-    let mut collections: Vec<DecryptedCollection> = db
-        .collections
+fn decrypt_collections(
+    db: &rbw::db::Db,
+) -> anyhow::Result<Vec<DecryptedCollection>> {
+    db.collections
         .iter()
         .map(|c| {
             let name =
-                crate::actions::decrypt(&c.name, None, Some(&c.org_id))?;
+                crate::actions::decrypt(&c.name, None, Some(&c.org_id))
+                    .with_context(|| {
+                        format!(
+                            "failed to decrypt collection name for {}",
+                            c.id
+                        )
+                    })?;
             Ok(DecryptedCollection {
                 id: c.id.clone(),
                 org_id: c.org_id.clone(),
                 name,
             })
         })
-        .collect::<anyhow::Result<_>>()?;
+        .collect()
+}
+
+// Resolve a collection given by name or ID against the synced collection
+// list (restricted to `org_id` when given). Mirrors entry lookup: exact ID
+// first, then exact name, then a case-insensitive substring fallback, and
+// errors listing the candidates when a name is ambiguous.
+fn resolve_collection<'a>(
+    collections: &'a [DecryptedCollection],
+    needle: &str,
+    org_id: Option<&str>,
+) -> anyhow::Result<&'a DecryptedCollection> {
+    let in_org =
+        |c: &&DecryptedCollection| org_id.is_none_or(|o| c.org_id == o);
+
+    if let Some(collection) = collections
+        .iter()
+        .filter(in_org)
+        .find(|c| c.id.eq_ignore_ascii_case(needle))
+    {
+        return Ok(collection);
+    }
+
+    let mut matches: Vec<&DecryptedCollection> = collections
+        .iter()
+        .filter(in_org)
+        .filter(|c| c.name == needle)
+        .collect();
+    if matches.is_empty() {
+        let needle_lower = needle.to_lowercase();
+        matches = collections
+            .iter()
+            .filter(in_org)
+            .filter(|c| c.name.to_lowercase().contains(&needle_lower))
+            .collect();
+    }
+
+    match matches[..] {
+        [] => Err(anyhow::anyhow!("no collection found for '{needle}'")),
+        [collection] => Ok(collection),
+        _ => {
+            let candidates = matches
+                .iter()
+                .map(|c| format!("{} ({})", c.name, c.id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(anyhow::anyhow!(
+                "multiple collections found for '{needle}': {candidates}; \
+                use the collection ID instead"
+            ))
+        }
+    }
+}
+
+pub fn list_collections(output: OutputMode) -> anyhow::Result<()> {
+    unlock(None)?;
+
+    let db = load_db()?;
+
+    let mut collections = decrypt_collections(&db)?;
     collections.sort_by(|a, b| a.name.cmp(&b.name));
 
     if output_is_structured(output) {
@@ -6384,19 +6496,98 @@ pub fn edit_collections(
     Ok(())
 }
 
-pub fn create_collection(name: &str, org_id: &str) -> anyhow::Result<()> {
+// Set the collections an entry belongs to, addressing the entry by needle
+// and the collections by name or ID (resolved in the entry's organization).
+// The human-friendly counterpart to `edit_collections`' base64 interface.
+pub fn assign_collections(
+    needle: Needle,
+    user: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+    collections: &[String],
+) -> anyhow::Result<()> {
     unlock(None)?;
 
     let mut db = load_db()?;
+
+    let desc = format!(
+        "{}{}",
+        user.map_or_else(String::new, |s| format!("{s}@")),
+        needle
+    );
+    let (entry, decrypted) =
+        find_entry(&db, vec![needle], user, folder, ignore_case, force_exact)
+            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    let Some(org_id) = entry.org_id.as_deref() else {
+        anyhow::bail!(
+            "entry '{}' is not owned by an organization, so it cannot be \
+            assigned to collections",
+            decrypted.name
+        );
+    };
+
+    let all_collections = decrypt_collections(&db)?;
+    let mut collection_ids = Vec::new();
+    let mut collection_names = Vec::new();
+    for needle in collections {
+        let collection =
+            resolve_collection(&all_collections, needle, Some(org_id))?;
+        if !collection_ids.contains(&collection.id) {
+            collection_ids.push(collection.id.clone());
+            collection_names.push(collection.name.clone());
+        }
+    }
+
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
 
-    let encrypted_name = crate::actions::encrypt(name, Some(org_id))?;
+    if let (Some(access_token), ()) = rbw::actions::edit_collections(
+        access_token,
+        refresh_token,
+        &entry.id,
+        &collection_ids,
+    )? {
+        db.access_token = Some(access_token);
+        save_db(&db)?;
+    }
+
+    crate::actions::sync()?;
+
+    let c = stdout_supports_color();
+    eprintln!(
+        "{} {} to {}",
+        style::success("Assigned", c),
+        style::name(&decrypted.name, c),
+        collection_names
+            .iter()
+            .map(|name| style::name(name, c))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+
+    Ok(())
+}
+
+pub fn create_collection(
+    name: &str,
+    org_id: Option<&str>,
+) -> anyhow::Result<()> {
+    unlock(None)?;
+
+    let mut db = load_db()?;
+    let org_id = resolve_org(&db, org_id)?;
+
+    let encrypted_name = crate::actions::encrypt(name, Some(&org_id))?;
+
+    let access_token = db.access_token.as_ref().unwrap();
+    let refresh_token = db.refresh_token.as_ref().unwrap();
 
     let (new_access_token, id) = rbw::actions::create_collection(
         access_token,
         refresh_token,
-        org_id,
+        &org_id,
         &encrypted_name,
     )?;
     if let Some(new_access_token) = new_access_token {
@@ -6412,20 +6603,35 @@ pub fn create_collection(name: &str, org_id: &str) -> anyhow::Result<()> {
 }
 
 pub fn delete_collection(
-    collection_id: &str,
-    org_id: &str,
+    collection: &str,
+    org_id: Option<&str>,
+    yes: bool,
 ) -> anyhow::Result<()> {
     unlock(None)?;
 
     let mut db = load_db()?;
+    let org_id = resolve_org(&db, org_id)?;
+    let all_collections = decrypt_collections(&db)?;
+    let collection =
+        resolve_collection(&all_collections, collection, Some(&org_id))?;
+
+    if !yes
+        && !confirm(&format!(
+            "Delete collection {}?",
+            style::name(&collection.name, stdout_supports_color())
+        ))?
+    {
+        return Ok(());
+    }
+
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
 
     if let (Some(access_token), ()) = rbw::actions::delete_collection(
         access_token,
         refresh_token,
-        org_id,
-        collection_id,
+        &org_id,
+        &collection.id,
     )? {
         db.access_token = Some(access_token);
         save_db(&db)?;
@@ -6437,23 +6643,28 @@ pub fn delete_collection(
 }
 
 pub fn rename_collection(
-    collection_id: &str,
-    org_id: &str,
+    collection: &str,
+    org_id: Option<&str>,
     name: &str,
 ) -> anyhow::Result<()> {
     unlock(None)?;
 
     let mut db = load_db()?;
+    let org_id = resolve_org(&db, org_id)?;
+    let all_collections = decrypt_collections(&db)?;
+    let collection =
+        resolve_collection(&all_collections, collection, Some(&org_id))?;
+
+    let encrypted_name = crate::actions::encrypt(name, Some(&org_id))?;
+
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
-
-    let encrypted_name = crate::actions::encrypt(name, Some(org_id))?;
 
     if let (Some(access_token), ()) = rbw::actions::rename_collection(
         access_token,
         refresh_token,
-        org_id,
-        collection_id,
+        &org_id,
+        &collection.id,
         &encrypted_name,
     )? {
         db.access_token = Some(access_token);
@@ -6521,27 +6732,31 @@ fn normalize_collection_name(name: &str) -> anyhow::Result<String> {
     Ok(trimmed.to_string())
 }
 
+// Resolve the target organization: the given `--org-id` (validated), or
+// auto-detected when the vault belongs to exactly one org. The org universe
+// is every org key delivered by sync, plus any org referenced by a synced
+// collection (for older local dbs that predate the org key list).
 fn resolve_org(
     db: &rbw::db::Db,
     org_id: Option<&str>,
 ) -> anyhow::Result<String> {
-    let org_ids: std::collections::BTreeSet<&str> =
-        db.collections.iter().map(|c| c.org_id.as_str()).collect();
+    let mut org_ids: std::collections::BTreeSet<&str> =
+        db.protected_org_keys.keys().map(String::as_str).collect();
+    org_ids.extend(db.collections.iter().map(|c| c.org_id.as_str()));
     org_id.map_or_else(
         || match org_ids.len() {
             0 => Err(anyhow::anyhow!("no organization found in vault")),
             1 => Ok((*org_ids.iter().next().unwrap()).to_string()),
             _ => Err(anyhow::anyhow!(
-                "multiple organizations found; pass --org-id"
+                "multiple organizations found ({}); pass --org-id",
+                org_ids.iter().copied().collect::<Vec<_>>().join(", ")
             )),
         },
         |o| {
             if org_ids.contains(o) {
                 Ok(o.to_string())
             } else {
-                Err(anyhow::anyhow!(
-                    "org {o} has no collections in this vault"
-                ))
+                Err(anyhow::anyhow!("org {o} not found in this vault"))
             }
         },
     )
@@ -6847,14 +7062,32 @@ pub fn history(
     Ok(())
 }
 
-pub fn lock() -> anyhow::Result<()> {
+// Locks the active account when one is selected via --account/RBW_ACCOUNT
+// (the request carries the account name, and the agent only clears that
+// account's keys); with no account selected, or with `--all`, every account
+// is locked.
+pub fn lock(all: bool) -> anyhow::Result<()> {
     ensure_agent()?;
-    crate::actions::lock()?;
+    if all {
+        crate::actions::lock_all()?;
+    } else {
+        crate::actions::lock()?;
+    }
 
     Ok(())
 }
 
-pub fn purge() -> anyhow::Result<()> {
+pub fn purge(yes: bool) -> anyhow::Result<()> {
+    let account = active_account()?;
+    if !yes
+        && !confirm(&format!(
+            "Remove the local copy of the password database for {}?",
+            style::name(account_email(&account)?, stdout_supports_color())
+        ))?
+    {
+        return Ok(());
+    }
+
     stop_agent()?;
 
     remove_db()?;
@@ -13540,5 +13773,88 @@ mod test {
     fn test_find_first_json_file_none_when_dir_is_empty() {
         let dir = tempfile::tempdir().unwrap();
         assert!(find_first_json_file(dir.path()).is_none());
+    }
+
+    fn collection(id: &str, org_id: &str, name: &str) -> DecryptedCollection {
+        DecryptedCollection {
+            id: id.to_string(),
+            org_id: org_id.to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_resolve_collection_matches_id_name_and_substring() {
+        let collections = vec![
+            collection("11111111-aaaa", "org1", "Infra"),
+            collection("22222222-bbbb", "org1", "Infra/Prod"),
+            collection("33333333-cccc", "org2", "Infra"),
+        ];
+
+        // Exact ID wins, even when other names would substring-match.
+        assert_eq!(
+            resolve_collection(&collections, "11111111-aaaa", None)
+                .unwrap()
+                .name,
+            "Infra"
+        );
+        // Exact name, restricted to the given org.
+        assert_eq!(
+            resolve_collection(&collections, "Infra", Some("org2"))
+                .unwrap()
+                .id,
+            "33333333-cccc"
+        );
+        // Substring fallback (case-insensitive).
+        assert_eq!(
+            resolve_collection(&collections, "prod", Some("org1"))
+                .unwrap()
+                .id,
+            "22222222-bbbb"
+        );
+        assert!(resolve_collection(&collections, "nope", None).is_err());
+    }
+
+    #[test]
+    fn test_resolve_collection_lists_candidates_on_ambiguity() {
+        let collections = vec![
+            collection("11111111-aaaa", "org1", "Infra"),
+            collection("22222222-bbbb", "org1", "Infra/Prod"),
+        ];
+
+        let err = resolve_collection(&collections, "infra", Some("org1"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("multiple collections found"), "{err}");
+        assert!(err.contains("Infra (11111111-aaaa)"), "{err}");
+        assert!(err.contains("Infra/Prod (22222222-bbbb)"), "{err}");
+
+        // An exact name match is not ambiguous with its substring siblings.
+        assert_eq!(
+            resolve_collection(&collections, "Infra", Some("org1"))
+                .unwrap()
+                .id,
+            "11111111-aaaa"
+        );
+    }
+
+    #[test]
+    fn test_resolve_org_auto_detects_single_org() {
+        let mut db = rbw::db::Db::default();
+        assert!(resolve_org(&db, None).is_err());
+
+        db.protected_org_keys
+            .insert("org1".to_string(), "key".to_string());
+        assert_eq!(resolve_org(&db, None).unwrap(), "org1");
+        assert_eq!(resolve_org(&db, Some("org1")).unwrap(), "org1");
+        assert!(resolve_org(&db, Some("org2")).is_err());
+
+        db.protected_org_keys
+            .insert("org2".to_string(), "key".to_string());
+        let err = resolve_org(&db, None).unwrap_err().to_string();
+        assert!(err.contains("multiple organizations found"), "{err}");
+        assert!(err.contains("org1"), "{err}");
+        assert!(err.contains("org2"), "{err}");
+        assert_eq!(resolve_org(&db, Some("org2")).unwrap(), "org2");
     }
 }
