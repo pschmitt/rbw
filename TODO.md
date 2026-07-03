@@ -38,7 +38,7 @@
 
 ## Pending ship work
 
-- [ ] Deploy the current `main` tip (`8474745`) through `nixos-config`:
+- [ ] Deploy the `v2.6.1` release through `nixos-config`:
       `nix flake lock --update-input rbw`, `just hm fnuc`, then restart the
       deployed `rbw-agent` so it picks up the new Nix store path.
 
@@ -48,7 +48,14 @@
       flat commands, and cover destructive confirmations plus account-scoped
       locking.
 
-- [ ] After deploy, prune stale merged worktrees/branches that are no longer
-      needed (`worktree-agent-a666928e233ad75ce`,
-      `worktree-agent-a5147e5e3cf5f349c`, and any older merged agent
-      worktrees that still exist locally).
+- [x] Prune stale merged worktrees/branches that are no longer needed
+      (`worktree-agent-a666928e233ad75ce`, `worktree-agent-a5147e5e3cf5f349c`,
+      and older merged agent worktrees).
+
+- [x] SSH-key (cipher type 5) support verified against a live Vaultwarden
+      (bw.brkn.lol, 1.36.0): the original wiring sent PascalCase `sshKey`
+      fields that Vaultwarden silently discarded (HTTP 200, `sshKey: null`) —
+      imports created invisible husks and `rbw set` wiped key material. Fixed
+      by serializing camelCase `privateKey`/`publicKey`/`keyFingerprint`
+      (old spellings kept as deserialize aliases) and re-verified live:
+      import, exact round-trip, and edit all preserve the key material.
