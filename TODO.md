@@ -57,7 +57,7 @@
 
 ## Pending ship work
 
-- [ ] Deploy the `v2.6.4` release through `nixos-config`:
+- [ ] Deploy the `v2.6.5` release through `nixos-config`:
       `nix flake lock --update-input rbw`, `just hm fnuc`, then restart the
       deployed `rbw-agent` so it picks up the new Nix store path.
 
