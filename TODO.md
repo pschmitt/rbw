@@ -45,17 +45,15 @@
       "read-only: loaded from a file" status instead of being attempted.
       Attachment viewing/download still works (the bytes are already
       embedded in the export by `rbw export --attachments`).
-
-## Backlog
-
-- [ ] `--from-file` writeback: let `rbw set`/`rbw edit`/`rbw remove`/`rbw
-      tui --from-file` actually modify the file in place instead of being
-      read-only. The loader already produces plain `DecryptedCipher`s (not
-      a live cipherstring `Db`), so this is mostly re-serializing that same
-      list back through the export format (`ExportedEntry`/`ExportedVault`,
-      already `Serialize`) on save, plus flipping `App::read_only` off and
-      wiring the TUI's edit/add/delete to mutate the in-memory entry list
-      instead of the account-mutation calls they use today.
+- [x] `--from-file` writeback: `rbw set/edit/remove/add --from-file FILE`
+      and `rbw tui --from-file FILE --write` modify the file in place
+      (`--bulk` stays account-only; `set --from-file --attach` and TUI
+      attachment upload/delete both work, embedding bytes directly since
+      there's no server to upload to). A `.bak` snapshot of the pre-edit
+      file is made once — before the first CLI write, and at TUI startup
+      when `--write` is given. `org_id`/`collection_ids` (not on
+      `DecryptedCipher`, tracked separately per entry) and `collections`
+      round-trip through untouched on every save.
 
 ## Pending ship work
 

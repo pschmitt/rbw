@@ -3823,6 +3823,7 @@ pub fn code(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn add(
     name: Option<&str>,
     username: Option<&str>,
@@ -3833,6 +3834,7 @@ pub fn add(
     generate: bool,
     gen_len: usize,
     gen_ty: rbw::pwgen::Type,
+    from_file: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
     if generate && !std::io::stdin().is_terminal() {
         // The editor ignores its template entirely and reads the entry
@@ -3845,7 +3847,144 @@ pub fn add(
         );
     }
     let generated = generate.then(|| rbw::pwgen::pwgen(gen_ty, gen_len));
+    if let Some(path) = from_file {
+        return add_from_file(
+            path,
+            name,
+            username,
+            uris,
+            folder,
+            json,
+            generated.as_deref(),
+        );
+    }
     add_structured(name, username, uris, folder, json, generated.as_deref())
+}
+
+// `add --from-file`'s counterpart to `add_structured`: same
+// template/`$EDITOR`/reparse flow, but `editable_to_decrypted` into a
+// fresh `DecryptedCipher` (a locally-generated id -- there's no server
+// here to assign one) instead of encrypting and pushing to the server.
+#[allow(clippy::too_many_arguments)]
+fn add_from_file(
+    path: &std::path::Path,
+    name: Option<&str>,
+    username: Option<&str>,
+    uris: &[(String, Option<rbw::api::UriMatchType>)],
+    folder: Option<&str>,
+    json: bool,
+    generated_password: Option<&str>,
+) -> anyhow::Result<()> {
+    let mut vault = load_from_file(path)?;
+
+    let editable_uris: Vec<EditableUri> = if uris.is_empty() {
+        vec![EditableUri {
+            uri: String::new(),
+            match_type: None,
+        }]
+    } else {
+        uris.iter()
+            .map(|(uri, mt)| EditableUri {
+                uri: uri.clone(),
+                match_type: mt.map(|m| uri_match_type_str(m).to_string()),
+            })
+            .collect()
+    };
+
+    let template = EditableCipher {
+        name: name.unwrap_or("").to_string(),
+        folder: folder.map(std::string::ToString::to_string),
+        notes: None,
+        data: EditableData::Login {
+            username: Some(username.unwrap_or("").to_string()),
+            password: Some(
+                generated_password.unwrap_or_default().to_string(),
+            ),
+            uris: editable_uris,
+            totp: None,
+        },
+        fields: Vec::new(),
+    };
+
+    let serialized = if json {
+        serde_json::to_string_pretty(&template)?
+    } else {
+        serde_yaml::to_string(&template)?
+    };
+
+    let (help, ext) = if json {
+        (
+            "# Fill in the JSON below. Lines starting with # are ignored.",
+            "json",
+        )
+    } else {
+        (
+            "# Fill in the YAML below. Lines starting with # are ignored.",
+            "yaml",
+        )
+    };
+
+    let contents = rbw::edit::edit(&serialized, help, ext)?;
+    let contents_trimmed = contents
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .fold(String::new(), |mut s, l| {
+            s.push_str(l);
+            s.push('\n');
+            s
+        });
+
+    if generated_password.is_none()
+        && contents_trimmed.trim() == serialized.trim()
+    {
+        eprintln!("{}", paint_no_changes());
+        return Ok(());
+    }
+
+    let cipher: EditableCipher = if json {
+        serde_json::from_str(&contents_trimmed)
+            .map_err(|e| anyhow::anyhow!("failed to parse JSON: {e}"))?
+    } else {
+        serde_yaml::from_str(&contents_trimmed)
+            .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?
+    };
+
+    if cipher.name.is_empty() {
+        return Err(anyhow::anyhow!("name cannot be empty"));
+    }
+
+    let (data, fields, notes) = editable_to_decrypted(&cipher);
+    let id = uuid::Uuid::new_v4().to_string();
+    vault.entries.push(DecryptedCipher {
+        attachment_metadata: AttachmentMetadata::new(&id, 0),
+        id,
+        folder: cipher.folder.clone(),
+        name: cipher.name.clone(),
+        data,
+        fields,
+        notes,
+        history: Vec::new(),
+        attachments: Vec::new(),
+        account: None,
+    });
+
+    backup_file(path)?;
+    let exported = vault
+        .entries
+        .iter()
+        .map(|e| {
+            to_exported_entry(e, &vault.attachment_data, &vault.entry_extra)
+        })
+        .collect();
+    save_to_file(
+        path,
+        exported,
+        vault.collections,
+        vault.passphrase.as_deref(),
+    )?;
+
+    print_created(&cipher.name);
+    Ok(())
 }
 
 pub fn generate(
@@ -3944,6 +4083,7 @@ pub fn generate(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn edit(
     needles: Vec<Needle>,
     username: Option<&str>,
@@ -3952,10 +4092,222 @@ pub fn edit(
     json: bool,
     _yaml: bool,
     force_exact: bool,
+    from_file: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        return edit_from_file(
+            path,
+            &needles,
+            username,
+            folder,
+            ignore_case,
+            json,
+            force_exact,
+        );
+    }
     edit_structured(needles, username, folder, ignore_case, json, force_exact)
 }
 
+// `edit --from-file`'s counterpart to `edit_structured`: same
+// `decrypted_to_editable` → `$EDITOR` → reparse flow (including no-op
+// detection on an untouched buffer and password-history tracking), but
+// `editable_to_decrypted` (plain data, no crypto) instead of
+// `editable_to_encrypted`, and saved back to `path` instead of pushed to
+// the server.
+fn edit_from_file(
+    path: &std::path::Path,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    json: bool,
+    force_exact: bool,
+) -> anyhow::Result<()> {
+    let mut vault = load_from_file(path)?;
+
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle_str
+    );
+
+    let decrypted = find_entry_in_file(
+        &vault.entries,
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    let editable = decrypted_to_editable(&decrypted);
+
+    let serialized = if json {
+        serde_json::to_string_pretty(&editable)?
+    } else {
+        serde_yaml::to_string(&editable)?
+    };
+
+    let (help, ext) = if json {
+        (
+            "# Edit the JSON below. Lines starting with # are ignored.",
+            "json",
+        )
+    } else {
+        (
+            "# Edit the YAML below. Lines starting with # are ignored.",
+            "yaml",
+        )
+    };
+
+    let contents = rbw::edit::edit(&serialized, help, ext)?;
+    let contents_trimmed = contents
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .fold(String::new(), |mut s, l| {
+            s.push_str(l);
+            s.push('\n');
+            s
+        });
+
+    if contents_trimmed.trim() == serialized.trim() {
+        eprintln!("{}", paint_no_changes());
+        return Ok(());
+    }
+
+    let updated: EditableCipher = if json {
+        serde_json::from_str(&contents_trimmed)
+            .map_err(|e| anyhow::anyhow!("failed to parse JSON: {e}"))?
+    } else {
+        serde_yaml::from_str(&contents_trimmed)
+            .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?
+    };
+
+    let (data, fields, notes) = editable_to_decrypted(&updated);
+
+    let mut new_entry = decrypted.clone();
+    new_entry.name = updated.name;
+    new_entry.folder = updated.folder;
+    new_entry.data = data;
+    new_entry.fields = fields;
+    new_entry.notes = notes;
+
+    if let (
+        DecryptedData::Login {
+            password: Some(old_pw),
+            ..
+        },
+        DecryptedData::Login {
+            password: new_pw, ..
+        },
+    ) = (&decrypted.data, &new_entry.data)
+    {
+        if Some(old_pw) != new_pw.as_ref() {
+            new_entry.history.insert(
+                0,
+                DecryptedHistoryEntry {
+                    last_used_date: format!(
+                        "{}",
+                        humantime::format_rfc3339(
+                            std::time::SystemTime::now()
+                        )
+                    ),
+                    password: old_pw.clone(),
+                },
+            );
+        }
+    }
+
+    if let Some(pos) = vault.entries.iter().position(|e| e.id == decrypted.id)
+    {
+        vault.entries[pos] = new_entry;
+    }
+
+    backup_file(path)?;
+    let exported = vault
+        .entries
+        .iter()
+        .map(|e| {
+            to_exported_entry(e, &vault.attachment_data, &vault.entry_extra)
+        })
+        .collect();
+    save_to_file(
+        path,
+        exported,
+        vault.collections,
+        vault.passphrase.as_deref(),
+    )
+}
+
+// `remove --from-file`: same needle matching and confirmation prompt as
+// the live-account path, but drops the entry from an in-memory vault and
+// saves it back to `path` instead of calling `rbw::actions::remove`.
+fn remove_from_file(
+    path: &std::path::Path,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+    yes: bool,
+) -> anyhow::Result<()> {
+    let mut vault = load_from_file(path)?;
+
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle_str
+    );
+
+    let decrypted = find_entry_in_file(
+        &vault.entries,
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    if !yes
+        && !confirm(&format!(
+            "Delete entry {}?",
+            style::name(&decrypted.name, stdout_supports_color())
+        ))?
+    {
+        return Ok(());
+    }
+
+    vault.entries.retain(|e| e.id != decrypted.id);
+
+    backup_file(path)?;
+    let exported = vault
+        .entries
+        .iter()
+        .map(|e| {
+            to_exported_entry(e, &vault.attachment_data, &vault.entry_extra)
+        })
+        .collect();
+    save_to_file(
+        path,
+        exported,
+        vault.collections,
+        vault.passphrase.as_deref(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn remove(
     needles: Vec<Needle>,
     username: Option<&str>,
@@ -3963,7 +4315,20 @@ pub fn remove(
     ignore_case: bool,
     force_exact: bool,
     yes: bool,
+    from_file: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        return remove_from_file(
+            path,
+            &needles,
+            username,
+            folder,
+            ignore_case,
+            force_exact,
+            yes,
+        );
+    }
+
     unlock(None)?;
 
     let mut db = load_db()?;
@@ -4279,6 +4644,7 @@ fn add_structured(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn set(
     needles: Vec<Needle>,
     username: Option<&str>,
@@ -4295,6 +4661,7 @@ pub fn set(
     bulk: bool,
     yes: bool,
     force_exact: bool,
+    from_file: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
     use std::io::Write as _;
 
@@ -4302,6 +4669,29 @@ pub fn set(
         entry: rbw::db::Entry,
         entry_name: String,
         changes: Vec<(&'static str, String, String)>,
+    }
+
+    if let Some(path) = from_file {
+        if bulk {
+            anyhow::bail!("--bulk is not supported with --from-file");
+        }
+        return set_from_file(
+            path,
+            &needles,
+            username,
+            folder,
+            ignore_case,
+            new_name,
+            new_username,
+            new_password,
+            new_notes,
+            new_uris,
+            new_totp,
+            diff,
+            new_attachments,
+            yes,
+            force_exact,
+        );
     }
 
     if bulk {
@@ -4810,6 +5200,249 @@ fn apply_entry_update(
     Ok(())
 }
 
+// Shared by `set_entry` (live account) and `set_from_file`: prints the
+// pending changes and asks to confirm, unless `yes`. `Ok(false)` means the
+// caller should abort without applying anything.
+fn confirm_entry_update(
+    entry_name: &str,
+    changes: &[(&'static str, String, String)],
+    new_attachments: &[std::path::PathBuf],
+    yes: bool,
+) -> anyhow::Result<bool> {
+    use std::io::Write as _;
+
+    if yes {
+        return Ok(true);
+    }
+
+    let c = stdout_supports_color();
+    let lbl = |s: &str| style::label(&format!("{s:<12}"), c);
+    eprintln!("About to update {}:", style::name(entry_name, c));
+    eprintln!();
+    for (field, old, new) in changes {
+        eprintln!(
+            "{} {} {} {}",
+            lbl(field),
+            style::old_val(old, c),
+            style::dim("→", c),
+            style::new_val(new, c),
+        );
+    }
+    for file in new_attachments {
+        eprintln!("{} {}", lbl("attach"), file.display());
+    }
+    eprintln!();
+    eprint!("Apply? [y/N] ");
+    let _ = std::io::stderr().flush();
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .context("failed to read confirmation")?;
+    if matches!(answer.trim(), "y" | "Y") {
+        Ok(true)
+    } else {
+        eprintln!("Aborted.");
+        Ok(false)
+    }
+}
+
+// `set --from-file`'s counterpart to `apply_entry_update`: same field
+// updates (including inserting the outgoing password into history -- pure
+// data, no crypto involved) but on a `DecryptedCipher` directly instead of
+// encrypting and pushing to the server. New attachments (`--attach`) are
+// read from disk and handed back with their raw bytes for the caller to
+// fold into the vault's attachment side table -- there's no server here to
+// assign them an id, so a fresh one is generated.
+fn apply_entry_update_decrypted(
+    decrypted: &DecryptedCipher,
+    new_name: Option<&str>,
+    new_password: Option<&str>,
+    new_username: Option<&str>,
+    new_notes: Option<&str>,
+    new_uris: &[String],
+    new_totp: Option<&str>,
+    new_attachments: &[std::path::PathBuf],
+) -> anyhow::Result<(DecryptedCipher, Vec<(String, Vec<u8>)>)> {
+    let mut updated = decrypted.clone();
+
+    if let Some(n) = new_name {
+        updated.name = n.to_string();
+    }
+    if let Some(n) = new_notes {
+        updated.notes = (!n.is_empty()).then(|| n.to_string());
+    }
+
+    if let DecryptedData::Login {
+        username,
+        password,
+        uris,
+        totp,
+    } = &mut updated.data
+    {
+        if new_username.is_some() {
+            *username = new_username.map(str::to_string);
+        }
+        if let Some(pw) = new_password {
+            if let Some(prev) = password.clone() {
+                updated.history.insert(
+                    0,
+                    DecryptedHistoryEntry {
+                        last_used_date: format!(
+                            "{}",
+                            humantime::format_rfc3339(
+                                std::time::SystemTime::now()
+                            )
+                        ),
+                        password: prev,
+                    },
+                );
+            }
+            *password = Some(pw.to_string());
+        }
+        if !new_uris.is_empty() {
+            *uris = Some(
+                new_uris
+                    .iter()
+                    .map(|u| DecryptedUri {
+                        uri: u.clone(),
+                        match_type: None,
+                    })
+                    .collect(),
+            );
+        }
+        if new_totp.is_some() {
+            *totp = new_totp.map(str::to_string);
+        }
+    }
+
+    let mut new_attachment_bytes = Vec::new();
+    for file in new_attachments {
+        let filename = file
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .ok_or_else(|| {
+                anyhow::anyhow!("invalid filename: {}", file.display())
+            })?
+            .to_string();
+        let data = std::fs::read(file)
+            .with_context(|| format!("failed to read {}", file.display()))?;
+        let id = uuid::Uuid::new_v4().to_string();
+        updated.attachments.push(DecryptedAttachment {
+            id: id.clone(),
+            file_name: Some(filename),
+            size: None,
+            size_name: None,
+        });
+        new_attachment_bytes.push((id, data));
+    }
+    updated.attachment_metadata =
+        AttachmentMetadata::new(&updated.id, updated.attachments.len());
+
+    Ok((updated, new_attachment_bytes))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set_from_file(
+    path: &std::path::Path,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    new_name: Option<&str>,
+    new_username: Option<&str>,
+    new_password: Option<&str>,
+    new_notes: Option<&str>,
+    new_uris: &[String],
+    new_totp: Option<&str>,
+    diff: bool,
+    new_attachments: &[std::path::PathBuf],
+    yes: bool,
+    force_exact: bool,
+) -> anyhow::Result<()> {
+    let mut vault = load_from_file(path)?;
+
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle_str
+    );
+
+    let decrypted = find_entry_in_file(
+        &vault.entries,
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    let entry_name = decrypted.name.clone();
+    let changes = compute_entry_changes(
+        &decrypted,
+        new_name,
+        new_username,
+        new_password,
+        new_notes,
+        new_uris,
+        new_totp,
+    )?;
+
+    if changes.is_empty() && new_attachments.is_empty() {
+        eprintln!("{}", paint_no_changes());
+        return Ok(());
+    }
+
+    if !confirm_entry_update(&entry_name, &changes, new_attachments, yes)? {
+        return Ok(());
+    }
+
+    let (updated, new_attachment_bytes) = apply_entry_update_decrypted(
+        &decrypted,
+        new_name,
+        new_password,
+        new_username,
+        new_notes,
+        new_uris,
+        new_totp,
+        new_attachments,
+    )?;
+    for (id, bytes) in new_attachment_bytes {
+        vault.attachment_data.insert(id, bytes);
+    }
+    if let Some(pos) = vault.entries.iter().position(|e| e.id == decrypted.id)
+    {
+        vault.entries[pos] = updated;
+    }
+
+    backup_file(path)?;
+    let exported = vault
+        .entries
+        .iter()
+        .map(|e| {
+            to_exported_entry(e, &vault.attachment_data, &vault.entry_extra)
+        })
+        .collect();
+    save_to_file(
+        path,
+        exported,
+        vault.collections,
+        vault.passphrase.as_deref(),
+    )?;
+
+    let c = stdout_supports_color();
+    println!("Item {} was updated", style::name(&entry_name, c));
+    if diff {
+        print_entry_diff(&changes);
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn set_entry(
     db: &mut rbw::db::Db,
@@ -4825,8 +5458,6 @@ fn set_entry(
     new_attachments: &[std::path::PathBuf],
     yes: bool,
 ) -> anyhow::Result<()> {
-    use std::io::Write as _;
-
     let entry_name = decrypted.name.clone();
 
     let changes = compute_entry_changes(
@@ -4844,34 +5475,8 @@ fn set_entry(
         return Ok(());
     }
 
-    if !yes {
-        let c = stdout_supports_color();
-        let lbl = |s: &str| style::label(&format!("{s:<12}"), c);
-        eprintln!("About to update {}:", style::name(&entry_name, c));
-        eprintln!();
-        for (field, old, new) in &changes {
-            eprintln!(
-                "{} {} {} {}",
-                lbl(field),
-                style::old_val(old, c),
-                style::dim("→", c),
-                style::new_val(new, c),
-            );
-        }
-        for file in new_attachments {
-            eprintln!("{} {}", lbl("attach"), file.display());
-        }
-        eprintln!();
-        eprint!("Apply? [y/N] ");
-        let _ = std::io::stderr().flush();
-        let mut answer = String::new();
-        std::io::stdin()
-            .read_line(&mut answer)
-            .context("failed to read confirmation")?;
-        if !matches!(answer.trim(), "y" | "Y") {
-            eprintln!("Aborted.");
-            return Ok(());
-        }
+    if !confirm_entry_update(&entry_name, &changes, new_attachments, yes)? {
+        return Ok(());
     }
 
     apply_entry_update(
@@ -5013,8 +5618,8 @@ struct ExportedEntry {
     attachments: Vec<ExportedAttachment>,
 }
 
-#[derive(serde::Serialize)]
-struct ExportedCollection {
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExportedCollection {
     id: String,
     org_id: String,
     name: String,
@@ -5979,6 +6584,26 @@ fn load_import_json(
 pub struct FileVault {
     pub entries: Vec<DecryptedCipher>,
     pub attachment_data: std::collections::HashMap<String, Vec<u8>>,
+    // `org_id`/`collection_ids` per entry, keyed by id: `DecryptedCipher`
+    // (shared with the live-account paths, where these are tracked on
+    // `rbw::db::Entry` instead) has no room for them, but a save still
+    // needs to round-trip them for any entry that isn't the one being
+    // edited -- otherwise editing one entry would silently drop another's
+    // org association.
+    pub entry_extra: std::collections::HashMap<String, FileEntryExtra>,
+    // Collections aren't editable through `--from-file` (nothing here
+    // creates/renames one), but are carried through so a `save_to_file`
+    // after editing entries doesn't silently drop them.
+    pub collections: Vec<ExportedCollection>,
+    // `Some` when the file was gpg-encrypted -- `save_to_file` re-encrypts
+    // with the same passphrase instead of re-prompting.
+    pub passphrase: Option<String>,
+}
+
+#[derive(Clone, Default)]
+pub struct FileEntryExtra {
+    pub org_id: Option<String>,
+    pub collection_ids: Vec<String>,
 }
 
 // Loads an export file as a one-off, in-memory, read-only vault: no config,
@@ -5993,11 +6618,14 @@ pub fn load_from_file(path: &std::path::Path) -> anyhow::Result<FileVault> {
     let is_plain_json = std::str::from_utf8(&raw).is_ok_and(|text| {
         serde_json::from_str::<serde_json::Value>(text).is_ok()
     });
+    let mut passphrase = None;
     let json_text = if is_plain_json {
         String::from_utf8(raw).unwrap()
     } else {
-        let passphrase = resolve_env_or_prompted_passphrase(false)?;
-        decrypt_import_archive(&raw, &passphrase)?
+        let resolved = resolve_env_or_prompted_passphrase(false)?;
+        let text = decrypt_import_archive(&raw, &resolved)?;
+        passphrase = Some(resolved);
+        text
     };
 
     let vault: ImportedVault = serde_json::from_str(&json_text).context(
@@ -6006,6 +6634,7 @@ pub fn load_from_file(path: &std::path::Path) -> anyhow::Result<FileVault> {
     )?;
 
     let mut attachment_data = std::collections::HashMap::new();
+    let mut entry_extra = std::collections::HashMap::new();
     let entries = vault
         .entries
         .iter()
@@ -6035,6 +6664,13 @@ pub fn load_from_file(path: &std::path::Path) -> anyhow::Result<FileVault> {
                 .id
                 .clone()
                 .unwrap_or_else(|| format!("from-file-{i}"));
+            entry_extra.insert(
+                id.clone(),
+                FileEntryExtra {
+                    org_id: imported.org_id.clone(),
+                    collection_ids: imported.collection_ids.clone(),
+                },
+            );
             DecryptedCipher {
                 attachment_metadata: AttachmentMetadata::new(
                     &id,
@@ -6078,9 +6714,26 @@ pub fn load_from_file(path: &std::path::Path) -> anyhow::Result<FileVault> {
         })
         .collect();
 
+    let collections = vault
+        .collections
+        .iter()
+        .enumerate()
+        .map(|(i, imported)| ExportedCollection {
+            id: imported
+                .id
+                .clone()
+                .unwrap_or_else(|| format!("from-file-collection-{i}")),
+            org_id: imported.org_id.clone(),
+            name: imported.name.clone(),
+        })
+        .collect();
+
     Ok(FileVault {
         entries,
         attachment_data,
+        entry_extra,
+        collections,
+        passphrase,
     })
 }
 
@@ -6113,6 +6766,92 @@ fn parse_file_attachment(
         },
         data,
     ))
+}
+
+// Writes `entries`/`collections` back to `path` in whatever format they
+// were loaded in (`passphrase` is `FileVault::passphrase`/
+// `TuiFileVault::passphrase` -- `Some` round-trips back through gpg with
+// the same passphrase, `None` writes plain JSON), via the exact same
+// tar.gz/gpg/atomic-write pipeline `export()` uses. Attachment bytes
+// aren't re-embedded here -- callers that add/keep an attachment already
+// have its `ExportedAttachment` (with `data_base64`) to put on the entry
+// before calling this.
+fn save_to_file(
+    path: &std::path::Path,
+    entries: Vec<ExportedEntry>,
+    collections: Vec<ExportedCollection>,
+    passphrase: Option<&str>,
+) -> anyhow::Result<()> {
+    let vault = ExportedVault {
+        entries,
+        collections,
+    };
+    if let Some(passphrase) = passphrase {
+        let archive = build_export_tar_gz(&vault)?;
+        let encrypted = gpg_symmetric_encrypt(passphrase, &archive)?;
+        write_secure_output_file(path, &encrypted)
+    } else {
+        let mut json = serde_json::to_vec_pretty(&vault)
+            .context("failed to serialize vault to JSON")?;
+        json.push(b'\n');
+        write_secure_output_file(path, &json)
+    }
+}
+
+// Snapshots `path` to a sibling `.bak` file before the first write of a
+// `--from-file` writeback session, so there's always a copy of the
+// pre-edit content sitting next to it regardless of how the edits that
+// follow turn out.
+fn backup_file(path: &std::path::Path) -> anyhow::Result<()> {
+    let mut backup = path.as_os_str().to_os_string();
+    backup.push(".bak");
+    std::fs::copy(path, &backup).with_context(|| {
+        format!(
+            "failed to back up {} to {}",
+            path.display(),
+            std::path::Path::new(&backup).display()
+        )
+    })?;
+    Ok(())
+}
+
+// The inverse of `load_from_file`'s per-entry mapping: re-attaches
+// `org_id`/`collection_ids` (not on `DecryptedCipher` at all -- see
+// `FileEntryExtra`) and re-embeds attachment bytes from the side table
+// (not on `DecryptedAttachment`, which only carries metadata) so a saved
+// entry round-trips through `load_from_file` unchanged if untouched.
+fn to_exported_entry(
+    decrypted: &DecryptedCipher,
+    attachment_data: &std::collections::HashMap<String, Vec<u8>>,
+    entry_extra: &std::collections::HashMap<String, FileEntryExtra>,
+) -> ExportedEntry {
+    let extra = entry_extra.get(&decrypted.id).cloned().unwrap_or_default();
+    ExportedEntry {
+        id: decrypted.id.clone(),
+        org_id: extra.org_id,
+        folder: decrypted.folder.clone(),
+        name: decrypted.name.clone(),
+        data: decrypted.data.clone(),
+        fields: decrypted.fields.clone(),
+        notes: decrypted.notes.clone(),
+        history: decrypted.history.clone(),
+        collection_ids: extra.collection_ids,
+        attachments: decrypted
+            .attachments
+            .iter()
+            .map(|a| ExportedAttachment {
+                id: a.id.clone(),
+                file_name: a
+                    .file_name
+                    .clone()
+                    .unwrap_or_else(|| a.id.clone()),
+                data_base64: attachment_data
+                    .get(&a.id)
+                    .map(rbw::base64::encode)
+                    .unwrap_or_default(),
+            })
+            .collect(),
+    }
 }
 
 // Uploads any embedded attachments on an imported entry to `entry` (the
@@ -7938,6 +8677,45 @@ fn find_entry_raw(
     ))
 }
 
+// `find_entry`'s `--from-file` counterpart: same matching
+// (`find_entry_raw`), against a `--from-file` vault's already-decrypted
+// entries instead of a live account's cipherstring `Db`. Builds the same
+// `(rbw::db::Entry, DecryptedSearchCipher)` pairs `find_entry` builds via
+// the agent (`placeholder_entry`/`decrypted_cipher_to_search` -- no agent
+// involved here, both are already in memory), then looks the winning id
+// back up in `entries` for the real (non-placeholder) result.
+fn find_entry_in_file(
+    entries: &[DecryptedCipher],
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+) -> anyhow::Result<DecryptedCipher> {
+    let pairs: Vec<(rbw::db::Entry, DecryptedSearchCipher)> = entries
+        .iter()
+        .map(|entry| {
+            (
+                placeholder_entry(entry.id.clone()),
+                decrypted_cipher_to_search(entry),
+            )
+        })
+        .collect();
+    let (matched, _) = find_entry_raw(
+        &pairs,
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )?;
+    entries
+        .iter()
+        .find(|entry| entry.id == matched.id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("entry no longer exists"))
+}
+
 fn decrypt_field(
     name: Field,
     field: Option<&str>,
@@ -9332,6 +10110,118 @@ fn editable_to_encrypted(
     Ok((data, fields, notes))
 }
 
+// `--from-file`'s counterpart to `editable_to_encrypted`: same shape, same
+// empty-string-means-unset filtering, but a plain field copy instead of
+// `crate::actions::encrypt(...)` -- there's nothing to encrypt against,
+// and nothing here can fail the way encryption can, so this is infallible.
+fn editable_to_decrypted(
+    editable: &EditableCipher,
+) -> (DecryptedData, Vec<DecryptedField>, Option<String>) {
+    let unset_if_empty =
+        |s: &Option<String>| s.clone().filter(|v| !v.is_empty());
+
+    let data = match &editable.data {
+        EditableData::Login {
+            username,
+            password,
+            uris,
+            totp,
+        } => DecryptedData::Login {
+            username: unset_if_empty(username),
+            password: unset_if_empty(password),
+            uris: (!uris.is_empty()).then(|| {
+                uris.iter()
+                    .filter(|u| !u.uri.is_empty())
+                    .map(|u| DecryptedUri {
+                        uri: u.uri.clone(),
+                        match_type: u
+                            .match_type
+                            .as_deref()
+                            .and_then(|mt| parse_uri_match_type(mt).ok()),
+                    })
+                    .collect()
+            }),
+            totp: unset_if_empty(totp),
+        },
+        EditableData::Card {
+            cardholder_name,
+            number,
+            brand,
+            exp_month,
+            exp_year,
+            code,
+        } => DecryptedData::Card {
+            cardholder_name: unset_if_empty(cardholder_name),
+            number: unset_if_empty(number),
+            brand: unset_if_empty(brand),
+            exp_month: unset_if_empty(exp_month),
+            exp_year: unset_if_empty(exp_year),
+            code: unset_if_empty(code),
+        },
+        EditableData::Identity {
+            title,
+            first_name,
+            middle_name,
+            last_name,
+            address1,
+            address2,
+            address3,
+            city,
+            state,
+            postal_code,
+            country,
+            phone,
+            email,
+            ssn,
+            license_number,
+            passport_number,
+            username,
+        } => DecryptedData::Identity {
+            title: unset_if_empty(title),
+            first_name: unset_if_empty(first_name),
+            middle_name: unset_if_empty(middle_name),
+            last_name: unset_if_empty(last_name),
+            address1: unset_if_empty(address1),
+            address2: unset_if_empty(address2),
+            address3: unset_if_empty(address3),
+            city: unset_if_empty(city),
+            state: unset_if_empty(state),
+            postal_code: unset_if_empty(postal_code),
+            country: unset_if_empty(country),
+            phone: unset_if_empty(phone),
+            email: unset_if_empty(email),
+            ssn: unset_if_empty(ssn),
+            license_number: unset_if_empty(license_number),
+            passport_number: unset_if_empty(passport_number),
+            username: unset_if_empty(username),
+        },
+        EditableData::SecureNote => DecryptedData::SecureNote,
+        EditableData::SshKey {
+            private_key,
+            public_key,
+            fingerprint,
+        } => DecryptedData::SshKey {
+            private_key: unset_if_empty(private_key),
+            public_key: unset_if_empty(public_key),
+            fingerprint: unset_if_empty(fingerprint),
+        },
+    };
+
+    let fields = editable
+        .fields
+        .iter()
+        .map(|f| DecryptedField {
+            name: unset_if_empty(&f.name),
+            value: unset_if_empty(&f.value),
+            ty: f.ty.as_deref().and_then(|ty| parse_field_type(ty).ok()),
+        })
+        .collect();
+
+    let notes = unset_if_empty(&editable.notes);
+
+    (data, fields, notes)
+}
+
 // ===========================================================================
 // TUI support
 //
@@ -9372,17 +10262,27 @@ pub struct TuiFileVault {
     pub search: Vec<DecryptedSearchCipher>,
     pub decrypted: std::collections::HashMap<String, DecryptedCipher>,
     pub attachment_data: std::collections::HashMap<String, Vec<u8>>,
+    pub entry_extra: std::collections::HashMap<String, FileEntryExtra>,
+    pub collections: Vec<ExportedCollection>,
+    pub passphrase: Option<String>,
+    pub path: std::path::PathBuf,
+    pub write: bool,
 }
 
 // Loads `path` (see `load_from_file`) into a `TuiFileVault`: a placeholder
 // `rbw::db::Entry` per real entry (only `id` is real, used for indexing --
 // nothing will ever decrypt these through `decrypt_cipher`) plus the real
 // search index and full detail built directly from the already-decrypted
-// entries.
+// entries. `write` (`rbw tui --from-file FILE --write`) takes a `.bak`
+// snapshot of the file right away, before any edit can happen.
 pub fn tui_vault_from_file(
     path: &std::path::Path,
+    write: bool,
 ) -> anyhow::Result<TuiFileVault> {
     let vault = load_from_file(path)?;
+    if write {
+        backup_file(path)?;
+    }
     let label = path
         .file_name()
         .and_then(std::ffi::OsStr::to_str)
@@ -9414,7 +10314,199 @@ pub fn tui_vault_from_file(
         search,
         decrypted,
         attachment_data: vault.attachment_data,
+        entry_extra: vault.entry_extra,
+        collections: vault.collections,
+        passphrase: vault.passphrase,
+        path: path.to_path_buf(),
+        write,
     })
+}
+
+// Rebuilds the placeholder `db.entries`/search index pair from a
+// `--from-file` vault's `decrypted` map -- the same construction
+// `tui_vault_from_file` does for the initial load, reused after every
+// `--write` mutation so the TUI's list/filtering stays in sync with
+// entries added, edited, or removed in memory.
+pub fn rebuild_file_vault_indices(
+    decrypted: &std::collections::HashMap<String, DecryptedCipher>,
+) -> (Vec<rbw::db::Entry>, Vec<DecryptedSearchCipher>) {
+    let entries = decrypted
+        .values()
+        .map(|entry| placeholder_entry(entry.id.clone()))
+        .collect();
+    let search = decrypted.values().map(decrypted_cipher_to_search).collect();
+    (entries, search)
+}
+
+// Everything a writable (`--write`) `--from-file` TUI vault needs to save
+// itself back to disk, alongside the `decrypted`/`attachment_data` maps
+// already on `AccountVault`.
+pub struct FileSaveTarget {
+    pub path: std::path::PathBuf,
+    pub passphrase: Option<String>,
+    pub collections: Vec<ExportedCollection>,
+    pub entry_extra: std::collections::HashMap<String, FileEntryExtra>,
+}
+
+// Writes `decrypted`/`attachment_data` back to `target.path`, in whatever
+// format it was loaded in. Called after every `--write` TUI mutation.
+fn save_file_vault(
+    decrypted: &std::collections::HashMap<String, DecryptedCipher>,
+    attachment_data: &std::collections::HashMap<String, Vec<u8>>,
+    target: &FileSaveTarget,
+) -> anyhow::Result<()> {
+    let exported = decrypted
+        .values()
+        .map(|e| to_exported_entry(e, attachment_data, &target.entry_extra))
+        .collect();
+    save_to_file(
+        &target.path,
+        exported,
+        target.collections.clone(),
+        target.passphrase.as_deref(),
+    )
+}
+
+// `rbw tui --from-file FILE --write`'s counterpart to `tui_save_edit`/
+// `tui_save_add`: applies an `EditableCipher` (a new entry if `entry_id`
+// is `None`, matching `tui_save_add`'s contract) directly to the in-memory
+// vault and saves back to the file, instead of encrypting and pushing to
+// the server. Existing attachments/history are preserved when editing;
+// history additionally gets the outgoing password inserted, same as
+// `tui_save_edit`.
+pub fn tui_save_edit_to_file(
+    decrypted: &mut std::collections::HashMap<String, DecryptedCipher>,
+    attachment_data: &std::collections::HashMap<String, Vec<u8>>,
+    target: &FileSaveTarget,
+    entry_id: Option<&str>,
+    updated: &EditableCipher,
+) -> anyhow::Result<()> {
+    if updated.name.trim().is_empty() {
+        anyhow::bail!("name cannot be empty");
+    }
+
+    let existing = entry_id.and_then(|id| decrypted.get(id));
+    let (data, fields, notes) = editable_to_decrypted(updated);
+
+    let mut history = existing.map(|e| e.history.clone()).unwrap_or_default();
+    if let Some(existing) = existing {
+        if let (
+            DecryptedData::Login {
+                password: Some(old_pw),
+                ..
+            },
+            DecryptedData::Login {
+                password: new_pw, ..
+            },
+        ) = (&existing.data, &data)
+        {
+            if Some(old_pw) != new_pw.as_ref() {
+                history.insert(
+                    0,
+                    DecryptedHistoryEntry {
+                        last_used_date: format!(
+                            "{}",
+                            humantime::format_rfc3339(
+                                std::time::SystemTime::now()
+                            )
+                        ),
+                        password: old_pw.clone(),
+                    },
+                );
+            }
+        }
+    }
+    let attachments =
+        existing.map(|e| e.attachments.clone()).unwrap_or_default();
+    let id = entry_id.map_or_else(
+        || uuid::Uuid::new_v4().to_string(),
+        std::string::ToString::to_string,
+    );
+
+    decrypted.insert(
+        id.clone(),
+        DecryptedCipher {
+            attachment_metadata: AttachmentMetadata::new(
+                &id,
+                attachments.len(),
+            ),
+            id,
+            folder: updated.folder.clone(),
+            name: updated.name.clone(),
+            data,
+            fields,
+            notes,
+            history,
+            attachments,
+            account: None,
+        },
+    );
+
+    save_file_vault(decrypted, attachment_data, target)
+}
+
+// `--write` TUI's counterpart to `tui_delete`.
+pub fn tui_delete_from_file(
+    decrypted: &mut std::collections::HashMap<String, DecryptedCipher>,
+    attachment_data: &std::collections::HashMap<String, Vec<u8>>,
+    target: &FileSaveTarget,
+    entry_id: &str,
+) -> anyhow::Result<()> {
+    decrypted.remove(entry_id);
+    save_file_vault(decrypted, attachment_data, target)
+}
+
+// `--write` TUI's counterpart to `tui_attachment_create`: reads `file`
+// straight into the vault's attachment side table (there's no server to
+// encrypt-and-upload to) and assigns it a fresh id.
+pub fn tui_attachment_create_to_file(
+    decrypted: &mut std::collections::HashMap<String, DecryptedCipher>,
+    attachment_data: &mut std::collections::HashMap<String, Vec<u8>>,
+    target: &FileSaveTarget,
+    entry_id: &str,
+    file: &std::path::Path,
+) -> anyhow::Result<()> {
+    let Some(entry) = decrypted.get_mut(entry_id) else {
+        anyhow::bail!("entry no longer exists");
+    };
+    let filename = file
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or_else(|| anyhow::anyhow!("invalid filename"))?
+        .to_string();
+    let data = std::fs::read(file)
+        .with_context(|| format!("failed to read {}", file.display()))?;
+    let id = uuid::Uuid::new_v4().to_string();
+    entry.attachments.push(DecryptedAttachment {
+        id: id.clone(),
+        file_name: Some(filename),
+        size: None,
+        size_name: None,
+    });
+    entry.attachment_metadata =
+        AttachmentMetadata::new(&entry.id, entry.attachments.len());
+    attachment_data.insert(id, data);
+
+    save_file_vault(decrypted, attachment_data, target)
+}
+
+// `--write` TUI's counterpart to `tui_attachment_delete`.
+pub fn tui_attachment_delete_from_file(
+    decrypted: &mut std::collections::HashMap<String, DecryptedCipher>,
+    attachment_data: &mut std::collections::HashMap<String, Vec<u8>>,
+    target: &FileSaveTarget,
+    entry_id: &str,
+    attachment_id: &str,
+) -> anyhow::Result<()> {
+    let Some(entry) = decrypted.get_mut(entry_id) else {
+        anyhow::bail!("entry no longer exists");
+    };
+    entry.attachments.retain(|a| a.id != attachment_id);
+    entry.attachment_metadata =
+        AttachmentMetadata::new(&entry.id, entry.attachments.len());
+    attachment_data.remove(attachment_id);
+
+    save_file_vault(decrypted, attachment_data, target)
 }
 
 // A stand-in `rbw::db::Entry` carrying just enough (a real `id`) to satisfy
@@ -12959,6 +14051,133 @@ mod test {
         let loaded = load_from_file(file.path()).unwrap();
         assert_eq!(loaded.entries.len(), 1);
         assert_eq!(loaded.entries[0].id, "from-file-0");
+    }
+
+    #[test]
+    fn test_editable_to_decrypted_login() {
+        let editable = EditableCipher {
+            name: "Example".to_string(),
+            folder: None,
+            notes: Some(String::new()),
+            data: EditableData::Login {
+                username: Some("alice".to_string()),
+                password: Some(String::new()),
+                uris: vec![EditableUri {
+                    uri: "https://example.com".to_string(),
+                    match_type: Some("domain".to_string()),
+                }],
+                totp: None,
+            },
+            fields: vec![],
+        };
+        let (data, _fields, notes) = editable_to_decrypted(&editable);
+        // An empty string means "unset", same as `editable_to_encrypted`.
+        assert_eq!(notes, None);
+        let DecryptedData::Login {
+            username,
+            password,
+            uris,
+            ..
+        } = data
+        else {
+            panic!("expected DecryptedData::Login");
+        };
+        assert_eq!(username.as_deref(), Some("alice"));
+        assert_eq!(password, None);
+        let uris = uris.unwrap();
+        assert_eq!(uris[0].uri, "https://example.com");
+        assert_eq!(uris[0].match_type, Some(rbw::api::UriMatchType::Domain));
+    }
+
+    fn sample_decrypted_cipher(id: &str, name: &str) -> DecryptedCipher {
+        DecryptedCipher {
+            id: id.to_string(),
+            folder: None,
+            name: name.to_string(),
+            data: DecryptedData::SecureNote,
+            fields: vec![],
+            notes: None,
+            history: vec![],
+            attachments: vec![],
+            attachment_metadata: AttachmentMetadata {
+                attachment_count: 0,
+            },
+            account: None,
+        }
+    }
+
+    #[test]
+    fn test_find_entry_in_file_matches_by_name() {
+        let entries = vec![
+            sample_decrypted_cipher("id-1", "GitHub"),
+            sample_decrypted_cipher("id-2", "GitLab"),
+        ];
+        let found = find_entry_in_file(
+            &entries,
+            &[parse_needle("GitHub").unwrap()],
+            None,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(found.id, "id-1");
+    }
+
+    #[test]
+    fn test_find_entry_in_file_reports_no_match() {
+        let entries = vec![sample_decrypted_cipher("id-1", "GitHub")];
+        assert!(find_entry_in_file(
+            &entries,
+            &[parse_needle("nonexistent").unwrap()],
+            None,
+            None,
+            false,
+            false,
+        )
+        .is_err());
+    }
+
+    // `save_to_file` -> `load_from_file` round trip: entries, collections,
+    // and org_id/collection_ids (via `FileEntryExtra`, not on
+    // `DecryptedCipher` itself) all survive a save untouched.
+    #[test]
+    fn test_save_to_file_round_trips_through_load_from_file() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+
+        let exported = vec![ExportedEntry {
+            id: "id-1".to_string(),
+            org_id: Some("org-1".to_string()),
+            folder: Some("Work".to_string()),
+            name: "Example".to_string(),
+            data: DecryptedData::Login {
+                username: Some("alice".to_string()),
+                password: Some("hunter2".to_string()),
+                totp: None,
+                uris: None,
+            },
+            fields: vec![],
+            notes: None,
+            history: vec![],
+            collection_ids: vec!["col-1".to_string()],
+            attachments: vec![],
+        }];
+        let collections = vec![ExportedCollection {
+            id: "col-1".to_string(),
+            org_id: "org-1".to_string(),
+            name: "Shared".to_string(),
+        }];
+
+        save_to_file(file.path(), exported, collections, None).unwrap();
+
+        let loaded = load_from_file(file.path()).unwrap();
+        assert_eq!(loaded.entries.len(), 1);
+        assert_eq!(loaded.entries[0].name, "Example");
+        assert_eq!(loaded.collections.len(), 1);
+        assert_eq!(loaded.collections[0].id, "col-1");
+        let extra = &loaded.entry_extra["id-1"];
+        assert_eq!(extra.org_id.as_deref(), Some("org-1"));
+        assert_eq!(extra.collection_ids, vec!["col-1".to_string()]);
     }
 
     #[track_caller]

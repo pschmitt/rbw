@@ -269,11 +269,20 @@ enum Opt {
             long,
             value_name = "FILE",
             help = "Browse a `rbw export` file directly instead of a \
-                configured account -- read-only, no config/agent/account \
-                is touched. Prompts for a passphrase if the file is \
-                gpg-encrypted (`rbw export --encrypt`)."
+                configured account -- read-only unless --write is also \
+                given, no config/agent/account is touched. Prompts for a \
+                passphrase if the file is gpg-encrypted (`rbw export \
+                --encrypt`)."
         )]
         from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            requires = "from_file",
+            help = "With --from-file, allow editing/adding/deleting \
+                entries and attachments, saving back to the file (a .bak \
+                copy of the pre-edit file is made once, at startup)"
+        )]
+        write: bool,
     },
 
     #[command(
@@ -646,6 +655,15 @@ enum Opt {
         generate: bool,
         #[command(flatten)]
         pwgen: PasswordGenArgs,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Add the entry directly to a `rbw export` file instead \
+                of a configured account -- no config/agent/account is \
+                touched. Prompts for a passphrase if the file is \
+                gpg-encrypted (`rbw export --encrypt`)."
+        )]
+        from_file: Option<std::path::PathBuf>,
     },
 
     #[command(
@@ -689,6 +707,15 @@ enum Opt {
         yaml: bool,
         #[arg(long, help = "Edit as JSON (structured mode)")]
         json: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Edit an entry directly in a `rbw export` file instead \
+                of a configured account -- no config/agent/account is \
+                touched. Prompts for a passphrase if the file is \
+                gpg-encrypted (`rbw export --encrypt`)."
+        )]
+        from_file: Option<std::path::PathBuf>,
     },
 
     #[command(about = "Set specific fields of an existing entry")]
@@ -726,6 +753,16 @@ enum Opt {
         bulk: bool,
         #[arg(short = 'y', long, help = "Skip confirmation prompt")]
         yes: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            conflicts_with = "bulk",
+            help = "Update an entry directly in a `rbw export` file \
+                instead of a configured account -- no config/agent/account \
+                is touched. Prompts for a passphrase if the file is \
+                gpg-encrypted (`rbw export --encrypt`)."
+        )]
+        from_file: Option<std::path::PathBuf>,
     },
 
     #[command(
@@ -737,6 +774,15 @@ enum Opt {
         find_args: FindArgs,
         #[arg(short = 'y', long, help = "Skip confirmation prompt")]
         yes: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Remove an entry directly from a `rbw export` file \
+                instead of a configured account -- no config/agent/account \
+                is touched. Prompts for a passphrase if the file is \
+                gpg-encrypted (`rbw export --encrypt`)."
+        )]
+        from_file: Option<std::path::PathBuf>,
     },
 
     #[command(about = "Manage organization collections")]
@@ -1464,7 +1510,8 @@ fn main() {
             term,
             all,
             from_file,
-        } => tui::run(term.as_deref(), all, from_file.as_deref()),
+            write,
+        } => tui::run(term.as_deref(), all, from_file.as_deref(), write),
         Opt::Export {
             attachments,
             encrypt,
@@ -1694,6 +1741,7 @@ fn main() {
             yaml,
             generate,
             pwgen,
+            from_file,
         } => {
             // Password-gen flags imply --generate, so `rbw create name -g
             // -l 24` and `rbw create name -l 24` both work as expected.
@@ -1718,6 +1766,7 @@ fn main() {
                 generate,
                 len,
                 ty,
+                from_file.as_deref(),
             )
         }
         Opt::Generate {
@@ -1759,6 +1808,7 @@ fn main() {
             find_args,
             json,
             yaml,
+            from_file,
         } => commands::edit(
             find_args.needles,
             find_args.user.as_deref(),
@@ -1767,6 +1817,7 @@ fn main() {
             json,
             yaml,
             find_args.exact,
+            from_file.as_deref(),
         ),
         Opt::Set {
             find_args,
@@ -1780,6 +1831,7 @@ fn main() {
             attachment,
             bulk,
             yes,
+            from_file,
         } => commands::set(
             find_args.needles,
             find_args.user.as_deref(),
@@ -1796,14 +1848,20 @@ fn main() {
             bulk,
             yes,
             find_args.exact,
+            from_file.as_deref(),
         ),
-        Opt::Remove { find_args, yes } => commands::remove(
+        Opt::Remove {
+            find_args,
+            yes,
+            from_file,
+        } => commands::remove(
             find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
             find_args.ignorecase,
             find_args.exact,
             yes,
+            from_file.as_deref(),
         ),
         Opt::Collection { collection } => match collection {
             Collection::List { output, raw, yaml } => {

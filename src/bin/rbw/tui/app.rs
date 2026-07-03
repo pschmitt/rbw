@@ -354,6 +354,12 @@ struct AccountVault {
     // id (`DecryptedAttachment` itself only carries metadata). `None` for a
     // live account, which fetches attachment bytes from the server instead.
     attachment_data: Option<std::collections::HashMap<String, Vec<u8>>>,
+    // `Some` only for a writable (`rbw tui --from-file FILE --write`)
+    // vault: everything needed to save `decrypted`/`attachment_data` back
+    // to disk. `None` for a live account (nothing to save to) and for a
+    // read-only `--from-file` vault (nothing can reach a mutation handler
+    // in the first place -- see `App::reject_if_read_only`).
+    file_save: Option<commands::FileSaveTarget>,
 }
 
 pub struct App {
@@ -439,6 +445,7 @@ impl App {
                 search: v.search,
                 decrypted: None,
                 attachment_data: None,
+                file_save: None,
             })
             .collect();
         Self::finish(
@@ -451,9 +458,10 @@ impl App {
         )
     }
 
-    // `--from-file`: a single synthetic, already-decrypted, read-only vault
-    // (see `commands::tui_vault_from_file`) instead of whatever's configured
-    // -- no other accounts, no agent, no lock-detection polling.
+    // `--from-file`: a single synthetic, already-decrypted vault (see
+    // `commands::tui_vault_from_file`) instead of whatever's configured --
+    // no other accounts, no agent, no lock-detection polling. Read-only
+    // unless `vault.write` (`--write`) is set.
     pub fn new_from_file(
         vault: commands::TuiFileVault,
         initial_term: Option<&str>,
@@ -462,12 +470,20 @@ impl App {
             |_| Keymap::resolve(&std::collections::HashMap::new()),
             |config| Keymap::resolve(&config.tui_keybindings),
         );
+        let read_only = !vault.write;
+        let file_save = vault.write.then_some(commands::FileSaveTarget {
+            path: vault.path,
+            passphrase: vault.passphrase,
+            collections: vault.collections,
+            entry_extra: vault.entry_extra,
+        });
         let account_vault = AccountVault {
             name: vault.label,
             db: vault.db,
             search: vault.search,
             decrypted: Some(vault.decrypted),
             attachment_data: Some(vault.attachment_data),
+            file_save,
         };
         Self::finish(
             vec![account_vault],
@@ -475,7 +491,7 @@ impl App {
             false,
             initial_term,
             keymap,
-            true,
+            read_only,
         )
     }
 
@@ -944,6 +960,27 @@ impl App {
         }
     }
 
+    // `reload_vault`'s `--from-file` counterpart: rebuilds the placeholder
+    // `db.entries`/search index straight from the vault's already-updated
+    // `decrypted` map (no agent round trip -- there's nothing to reload
+    // from, the in-memory map already reflects the save that was just
+    // written to disk).
+    fn reload_file_vault(&mut self, owner: usize) {
+        let Some(decrypted) = &self.vaults[owner].decrypted else {
+            return;
+        };
+        let (entries, search) =
+            commands::rebuild_file_vault_indices(decrypted);
+        let keep = self.current_key();
+        self.vaults[owner].db.entries = entries;
+        self.vaults[owner].search = search;
+        self.detail_cache.retain(|(o, _), _| *o != owner);
+        self.rebuild_flat();
+        self.recompute_filter();
+        self.restore_selection(keep);
+        self.ensure_detail();
+    }
+
     // Ctrl-S: pull remote changes for every unlocked account, then rebuild.
     fn sync(&mut self) {
         if self.reject_if_read_only() {
@@ -1065,6 +1102,33 @@ impl App {
         self.mode = Mode::Edit(EditForm::new(title, None, owner, base));
     }
 
+    // `submit_form`'s `--from-file` branch: same add-or-edit dispatch, but
+    // against the vault's in-memory `decrypted` map (via
+    // `commands::tui_save_edit_to_file`, which also handles the "add" case
+    // when `entry_id` is `None`) instead of the agent/server.
+    fn submit_form_to_file(
+        &mut self,
+        owner: usize,
+        entry_id: Option<&str>,
+        base: &EditableCipher,
+    ) -> anyhow::Result<()> {
+        let vault = &mut self.vaults[owner];
+        let (Some(decrypted), Some(attachment_data), Some(file_save)) = (
+            vault.decrypted.as_mut(),
+            vault.attachment_data.as_ref(),
+            vault.file_save.as_ref(),
+        ) else {
+            anyhow::bail!("no file to save to");
+        };
+        commands::tui_save_edit_to_file(
+            decrypted,
+            attachment_data,
+            file_save,
+            entry_id,
+            base,
+        )
+    }
+
     fn submit_form(&mut self) {
         let Mode::Edit(form) = &self.mode else {
             return;
@@ -1074,33 +1138,38 @@ impl App {
         let entry_id = form.entry_id.clone();
         let owner = form.owner;
 
-        if let Err(e) = crate::actions::set_active_account(Some(
-            self.vaults[owner].name.clone(),
-        )) {
-            self.set_status(Level::Error, format!("{e:#}"));
-            return;
-        }
-        let result = if is_new {
-            commands::tui_save_add(&mut self.vaults[owner].db, &base)
-        } else if let Some(id) = &entry_id {
-            self.vaults[owner]
-                .db
-                .entries
-                .iter()
-                .find(|e| &e.id == id)
-                .cloned()
-                .map_or_else(
-                    || Err(anyhow::anyhow!("entry no longer exists")),
-                    |entry| {
-                        commands::tui_save_edit(
-                            &mut self.vaults[owner].db,
-                            &entry,
-                            &base,
-                        )
-                    },
-                )
+        let from_file = self.vaults[owner].decrypted.is_some();
+        let result = if from_file {
+            self.submit_form_to_file(owner, entry_id.as_deref(), &base)
         } else {
-            Ok(())
+            if let Err(e) = crate::actions::set_active_account(Some(
+                self.vaults[owner].name.clone(),
+            )) {
+                self.set_status(Level::Error, format!("{e:#}"));
+                return;
+            }
+            if is_new {
+                commands::tui_save_add(&mut self.vaults[owner].db, &base)
+            } else if let Some(id) = &entry_id {
+                self.vaults[owner]
+                    .db
+                    .entries
+                    .iter()
+                    .find(|e| &e.id == id)
+                    .cloned()
+                    .map_or_else(
+                        || Err(anyhow::anyhow!("entry no longer exists")),
+                        |entry| {
+                            commands::tui_save_edit(
+                                &mut self.vaults[owner].db,
+                                &entry,
+                                &base,
+                            )
+                        },
+                    )
+            } else {
+                Ok(())
+            }
         };
         // `base` is consumed only for its name in the status message.
         let name = std::mem::take(&mut base.name);
@@ -1108,7 +1177,11 @@ impl App {
         match result {
             Ok(()) => {
                 self.mode = Mode::Normal;
-                self.reload_vault(owner);
+                if from_file {
+                    self.reload_file_vault(owner);
+                } else {
+                    self.reload_vault(owner);
+                }
                 self.set_status(
                     Level::Success,
                     if is_new {
@@ -1121,6 +1194,73 @@ impl App {
             // Keep the form open on failure so the edit isn't lost.
             Err(e) => self.set_status(Level::Error, format!("{e:#}")),
         }
+    }
+
+    fn attachment_delete_from_file(
+        &mut self,
+        owner: usize,
+        entry_id: &str,
+        attachment_id: &str,
+    ) -> anyhow::Result<()> {
+        let vault = &mut self.vaults[owner];
+        let (Some(decrypted), Some(attachment_data), Some(file_save)) = (
+            vault.decrypted.as_mut(),
+            vault.attachment_data.as_mut(),
+            vault.file_save.as_ref(),
+        ) else {
+            anyhow::bail!("no file to save to");
+        };
+        commands::tui_attachment_delete_from_file(
+            decrypted,
+            attachment_data,
+            file_save,
+            entry_id,
+            attachment_id,
+        )
+    }
+
+    fn attachment_create_to_file(
+        &mut self,
+        owner: usize,
+        entry_id: &str,
+        file: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        let vault = &mut self.vaults[owner];
+        let (Some(decrypted), Some(attachment_data), Some(file_save)) = (
+            vault.decrypted.as_mut(),
+            vault.attachment_data.as_mut(),
+            vault.file_save.as_ref(),
+        ) else {
+            anyhow::bail!("no file to save to");
+        };
+        commands::tui_attachment_create_to_file(
+            decrypted,
+            attachment_data,
+            file_save,
+            entry_id,
+            file,
+        )
+    }
+
+    fn delete_from_file(
+        &mut self,
+        owner: usize,
+        entry_id: &str,
+    ) -> anyhow::Result<()> {
+        let vault = &mut self.vaults[owner];
+        let (Some(decrypted), Some(attachment_data), Some(file_save)) = (
+            vault.decrypted.as_mut(),
+            vault.attachment_data.as_ref(),
+            vault.file_save.as_ref(),
+        ) else {
+            anyhow::bail!("no file to save to");
+        };
+        commands::tui_delete_from_file(
+            decrypted,
+            attachment_data,
+            file_save,
+            entry_id,
+        )
     }
 
     fn confirm_delete(&mut self) {
@@ -1139,15 +1279,26 @@ impl App {
         let name = self
             .current_search()
             .map_or_else(String::new, |s| s.name.clone());
-        if let Err(e) = self.activate_current() {
-            self.mode = Mode::Normal;
-            self.set_status(Level::Error, format!("{e:#}"));
-            return;
-        }
-        match commands::tui_delete(&mut self.vaults[owner].db, &entry) {
+
+        let from_file = self.vaults[owner].decrypted.is_some();
+        let result = if from_file {
+            self.delete_from_file(owner, &entry.id)
+        } else {
+            if let Err(e) = self.activate_current() {
+                self.mode = Mode::Normal;
+                self.set_status(Level::Error, format!("{e:#}"));
+                return;
+            }
+            commands::tui_delete(&mut self.vaults[owner].db, &entry)
+        };
+        match result {
             Ok(()) => {
                 self.mode = Mode::Normal;
-                self.reload_vault(owner);
+                if from_file {
+                    self.reload_file_vault(owner);
+                } else {
+                    self.reload_vault(owner);
+                }
                 self.set_status(Level::Success, format!("deleted '{name}'"));
             }
             Err(e) => {
@@ -1317,6 +1468,7 @@ impl App {
                 search: vault.search,
                 decrypted: None,
                 attachment_data: None,
+                file_save: None,
             });
         }
         self.locked.retain(|n| n != name);
@@ -1346,6 +1498,7 @@ impl App {
                 search: vault.search,
                 decrypted: None,
                 attachment_data: None,
+                file_save: None,
             });
         }
         self.detail_cache.clear();
@@ -1390,8 +1543,10 @@ impl App {
     // while cheap, still isn't free, and this covers the common single- and
     // active-account cases.
     pub fn poll_agent_lock(&mut self) {
-        // `--from-file`: no agent, nothing to lock.
-        if self.read_only {
+        // `--from-file`: no agent, nothing to lock, regardless of
+        // `read_only` (a writable from-file vault still isn't a real
+        // account the agent knows anything about).
+        if self.vaults.iter().any(|v| v.decrypted.is_some()) {
             return;
         }
         let now = std::time::Instant::now();
@@ -1778,6 +1933,23 @@ impl App {
                     self.set_status(Level::Warn, "no file path given");
                     return;
                 }
+                let file = expand_tilde(path.trim());
+                if self.vaults[owner].decrypted.is_some() {
+                    match self.attachment_create_to_file(owner, &id, &file) {
+                        Ok(()) => {
+                            self.mode = Mode::Normal;
+                            self.reload_file_vault(owner);
+                            self.set_status(
+                                Level::Success,
+                                "attachment uploaded",
+                            );
+                        }
+                        Err(e) => {
+                            self.set_status(Level::Error, format!("{e:#}"));
+                        }
+                    }
+                    return;
+                }
                 let Some(entry) = self.vaults[owner]
                     .db
                     .entries
@@ -1798,7 +1970,7 @@ impl App {
                 match commands::tui_attachment_create(
                     &mut self.vaults[owner].db,
                     &entry,
-                    &expand_tilde(path.trim()),
+                    &file,
                 ) {
                     Ok(()) => {
                         self.mode = Mode::Normal;
@@ -2117,17 +2289,27 @@ impl App {
         let Some(entry) = self.current_entry() else {
             return;
         };
-        if let Err(e) = self.activate_current() {
-            self.set_status(Level::Error, format!("{e:#}"));
-            return;
-        }
-        match commands::tui_attachment_delete(
-            &mut self.vaults[owner].db,
-            &entry,
-            &att_id,
-        ) {
+
+        let result = if self.vaults[owner].decrypted.is_some() {
+            self.attachment_delete_from_file(owner, &entry.id, &att_id)
+        } else {
+            if let Err(e) = self.activate_current() {
+                self.set_status(Level::Error, format!("{e:#}"));
+                return;
+            }
+            commands::tui_attachment_delete(
+                &mut self.vaults[owner].db,
+                &entry,
+                &att_id,
+            )
+        };
+        match result {
             Ok(()) => {
-                self.reload_vault(owner);
+                if self.vaults[owner].decrypted.is_some() {
+                    self.reload_file_vault(owner);
+                } else {
+                    self.reload_vault(owner);
+                }
                 self.set_status(Level::Success, "attachment deleted");
                 // Reopen the picker so the remaining attachments refresh.
                 self.open_attachments();

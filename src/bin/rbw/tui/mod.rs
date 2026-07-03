@@ -49,9 +49,10 @@ pub fn run(
     initial_term: Option<&str>,
     all: bool,
     from_file: Option<&std::path::Path>,
+    write: bool,
 ) -> anyhow::Result<()> {
     if let Some(path) = from_file {
-        let vault = crate::commands::tui_vault_from_file(path)?;
+        let vault = crate::commands::tui_vault_from_file(path, write)?;
         let mut terminal = ratatui::init();
         enable_mouse();
         let mut app = App::new_from_file(vault, initial_term);
