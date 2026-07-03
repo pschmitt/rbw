@@ -420,6 +420,13 @@ enum Opt {
         #[command(flatten)]
         find_args: FindArgs,
         #[arg(
+            short,
+            long,
+            value_enum,
+            help = "Output mode: name, json, yaml"
+        )]
+        output: Option<OutputArg>,
+        #[arg(
             short = 'j',
             long,
             visible_alias = "json",
@@ -428,6 +435,13 @@ enum Opt {
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
+        #[arg(
+            long,
+            help = "With multiple accounts configured, unlock (prompting as \
+                needed) and search every account instead of just the \
+                already-unlocked ones"
+        )]
+        all: bool,
     },
 
     #[command(about = "Search for entries")]
@@ -469,6 +483,11 @@ enum Opt {
         yaml: bool,
         #[arg(
             long,
+            help = "Include password column (shows sensitive data in plain text)"
+        )]
+        insecure: bool,
+        #[arg(
+            long,
             help = "With multiple accounts configured, unlock (prompting as \
                 needed) and include every account instead of just the \
                 already-unlocked ones"
@@ -490,8 +509,15 @@ enum Opt {
         #[command(flatten)]
         find_args: FindArgs,
         #[cfg(feature = "clipboard")]
-        #[arg(long, help = "Copy result to clipboard")]
+        #[arg(short, long, help = "Copy result to clipboard")]
         clipboard: bool,
+        #[arg(
+            long,
+            help = "With multiple accounts configured, unlock (prompting as \
+                needed) and search every account instead of just the \
+                already-unlocked ones"
+        )]
+        all: bool,
     },
 
     #[command(about = "Inject secrets into a template")]
@@ -726,6 +752,22 @@ enum Opt {
     History {
         #[command(flatten)]
         find_args: FindArgs,
+        #[arg(
+            short,
+            long,
+            value_enum,
+            help = "Output mode: name, json, yaml"
+        )]
+        output: Option<OutputArg>,
+        #[arg(
+            short = 'j',
+            long,
+            visible_alias = "json",
+            help = "Display output as JSON"
+        )]
+        raw: bool,
+        #[arg(long, help = "Display output as YAML")]
+        yaml: bool,
     },
 
     #[command(about = "Lock the password database")]
@@ -741,7 +783,10 @@ enum Opt {
         name = "completions",
         about = "Generate completion script for the given shell"
     )]
-    Completions { shell: CompletionShell },
+    Completions {
+        #[arg(help = "Shell to generate completions for")]
+        shell: CompletionShell,
+    },
 }
 
 impl Opt {
@@ -837,7 +882,7 @@ enum Config {
 
 #[derive(Debug, clap::Parser)]
 enum AccountCmd {
-    #[command(about = "List configured accounts")]
+    #[command(about = "List configured accounts", visible_alias = "ls")]
     List,
     #[command(about = "Add a new account")]
     Add {
@@ -855,7 +900,10 @@ enum AccountCmd {
         #[arg(long, help = "Make this the primary account")]
         primary: bool,
     },
-    #[command(about = "Remove an account")]
+    #[command(
+        about = "Remove an account",
+        visible_aliases = ["rm", "delete", "del"]
+    )]
     Remove {
         #[arg(help = "Name of the account to remove")]
         name: String,
@@ -888,7 +936,6 @@ enum AccountCmd {
         exclude_from_list: Option<bool>,
         #[arg(
             long,
-            requires = "credential_source_account",
             help = "Name of another configured account whose vault holds \
                 this account's master password; optionally combine with \
                 --credential-source-item to name the Login item explicitly, \
@@ -919,7 +966,7 @@ enum AccountCmd {
 
 #[derive(Debug, clap::Parser)]
 enum Attachment {
-    #[command(about = "List attachments for an entry")]
+    #[command(about = "List attachments for an entry", visible_alias = "ls")]
     List {
         #[command(flatten)]
         find_args: FindArgs,
@@ -944,25 +991,14 @@ enum Attachment {
         about = "Download and decrypt an attachment by id or filename"
     )]
     Get {
-        #[arg(
-            help = "Name, URI, UUID (or multiple terms, all required to match)",
-            value_parser = commands::parse_needle,
-            num_args = 1..,
-            required = true,
-        )]
-        needles: Vec<commands::Needle>,
+        #[command(flatten)]
+        find_args: FindArgs,
         #[arg(
             long,
             help = "Attachment ID or filename (see `rbw attachment list \
                 <entry>`); omit to download the entry's only attachment"
         )]
         attachment: Option<String>,
-        #[arg(long, help = "Username of the entry")]
-        user: Option<String>,
-        #[arg(long, help = "Folder name to search in")]
-        folder: Option<String>,
-        #[arg(short, long, help = "Ignore case")]
-        ignorecase: bool,
         #[arg(
             short,
             long,
@@ -980,6 +1016,10 @@ enum Attachment {
         about = "Upload a file as an attachment",
         visible_alias = "add"
     )]
+    // Can't flatten `FindArgs` here: clap requires every positional argument
+    // before a required positional (`file`) to be required itself, and
+    // `FindArgs`' needles are optional. Keep the same args (and help text)
+    // spelled out instead, with `required = true` on the needles.
     Create {
         #[arg(
             help = "Name, URI, UUID (or multiple terms, all required to match)",
@@ -990,37 +1030,32 @@ enum Attachment {
         needles: Vec<commands::Needle>,
         #[arg(help = "File to attach")]
         file: std::path::PathBuf,
-        #[arg(long, help = "Username of the entry")]
+        #[arg(long, help = "Username of the entry to display")]
         user: Option<String>,
         #[arg(long, help = "Folder name to search in")]
         folder: Option<String>,
         #[arg(short, long, help = "Ignore case")]
         ignorecase: bool,
+        #[arg(
+            short = 'e',
+            long,
+            help = "Only match if needle is an exact entry name (no substring fallback)"
+        )]
+        exact: bool,
     },
     #[command(
         about = "Delete an attachment from an entry",
         visible_aliases = ["remove", "delete"]
     )]
     Rm {
-        #[arg(
-            help = "Name, URI, UUID (or multiple terms, all required to match)",
-            value_parser = commands::parse_needle,
-            num_args = 1..,
-            required = true,
-        )]
-        needles: Vec<commands::Needle>,
+        #[command(flatten)]
+        find_args: FindArgs,
         #[arg(
             long,
             help = "Attachment ID or filename (see `rbw attachment list \
                 <entry>`); omit to delete the entry's only attachment"
         )]
         attachment: Option<String>,
-        #[arg(long, help = "Username of the entry")]
-        user: Option<String>,
-        #[arg(long, help = "Folder name to search in")]
-        folder: Option<String>,
-        #[arg(short, long, help = "Ignore case")]
-        ignorecase: bool,
     },
 }
 
@@ -1229,21 +1264,19 @@ fn main() {
                 )
             })(),
             Attachment::Get {
-                needles,
+                find_args,
                 attachment,
-                user,
-                folder,
-                ignorecase,
                 output,
                 raw,
             } => commands::attachment_get(
-                needles,
-                user.as_deref(),
-                folder.as_deref(),
-                ignorecase,
+                find_args.needles,
+                find_args.user.as_deref(),
+                find_args.folder.as_deref(),
+                find_args.ignorecase,
                 attachment.as_deref(),
                 output.as_deref(),
                 raw,
+                find_args.exact,
             ),
             Attachment::Create {
                 needles,
@@ -1251,25 +1284,25 @@ fn main() {
                 user,
                 folder,
                 ignorecase,
+                exact,
             } => commands::attachment_create(
                 needles,
                 user.as_deref(),
                 folder.as_deref(),
                 ignorecase,
                 &file,
+                exact,
             ),
             Attachment::Rm {
-                needles,
+                find_args,
                 attachment,
-                user,
-                folder,
-                ignorecase,
             } => commands::attachment_rm(
-                needles,
-                user.as_deref(),
-                folder.as_deref(),
-                ignorecase,
+                find_args.needles,
+                find_args.user.as_deref(),
+                find_args.folder.as_deref(),
+                find_args.ignorecase,
                 attachment.as_deref(),
+                find_args.exact,
             ),
         },
         Opt::Get {
@@ -1304,10 +1337,12 @@ fn main() {
         })(),
         Opt::Show {
             find_args,
+            output,
             raw,
             yaml,
+            all,
         } => (|| -> anyhow::Result<()> {
-            let output = resolve_output_mode(None, raw, yaml)?;
+            let output = resolve_output_mode(output, raw, yaml)?;
             commands::show(
                 find_args.needles,
                 find_args.user.as_deref(),
@@ -1315,6 +1350,7 @@ fn main() {
                 find_args.ignorecase,
                 output,
                 find_args.exact,
+                all,
             )
         })(),
         Opt::Search {
@@ -1325,6 +1361,7 @@ fn main() {
             output,
             raw,
             yaml,
+            insecure,
             all,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
@@ -1333,7 +1370,7 @@ fn main() {
                 &fields,
                 folder.as_deref(),
                 with_attachments,
-                false,
+                insecure,
                 output,
                 all,
             )
@@ -1342,6 +1379,7 @@ fn main() {
             find_args,
             #[cfg(feature = "clipboard")]
             clipboard,
+            all,
         } => commands::code(
             find_args.needles,
             find_args.user.as_deref(),
@@ -1352,6 +1390,7 @@ fn main() {
             false,
             find_args.ignorecase,
             find_args.exact,
+            all,
         ),
         Opt::Inject { input, output } => {
             commands::inject(input.as_deref(), output.as_deref())
@@ -1515,13 +1554,22 @@ fn main() {
             organizationid,
             name,
         } => commands::rename_collection(&id, &organizationid, &name),
-        Opt::History { find_args } => commands::history(
-            find_args.needles,
-            find_args.user.as_deref(),
-            find_args.folder.as_deref(),
-            find_args.ignorecase,
-            find_args.exact,
-        ),
+        Opt::History {
+            find_args,
+            output,
+            raw,
+            yaml,
+        } => (|| -> anyhow::Result<()> {
+            let output = resolve_output_mode(output, raw, yaml)?;
+            commands::history(
+                find_args.needles,
+                find_args.user.as_deref(),
+                find_args.folder.as_deref(),
+                find_args.ignorecase,
+                output,
+                find_args.exact,
+            )
+        })(),
         Opt::Lock => commands::lock(),
         Opt::Purge => commands::purge(),
         Opt::StopAgent => commands::stop_agent(),
@@ -1598,5 +1646,91 @@ fn main() {
         let msg = format!("{e:#}");
         eprintln!("{}", commands::style_error(&msg, c));
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    // Runs clap's internal consistency checks (positional ordering,
+    // conflicting shorts, ...) over the whole CLI definition, which
+    // otherwise only trip debug assertions at runtime.
+    #[test]
+    fn test_cli_definition_is_consistent() {
+        Cli::command().debug_assert();
+    }
+
+    fn parse(args: &[&str]) -> Cli {
+        Cli::try_parse_from(args).unwrap()
+    }
+
+    // Every find-based subcommand accepts `-e`/`--exact`, including the
+    // attachment subcommands that used to hand-roll their find args.
+    #[test]
+    fn test_find_based_subcommands_accept_exact() {
+        for args in [
+            &["rbw", "get", "-e", "name"][..],
+            &["rbw", "show", "--exact", "name"][..],
+            &["rbw", "code", "-e", "name"][..],
+            &["rbw", "history", "-e", "name"][..],
+            &["rbw", "attachment", "list", "-e", "name"][..],
+            &["rbw", "attachment", "get", "-e", "name"][..],
+            &["rbw", "attachment", "create", "-e", "name", "file.txt"][..],
+            &["rbw", "attachment", "rm", "-e", "name"][..],
+        ] {
+            parse(args);
+        }
+    }
+
+    #[test]
+    fn test_attachment_create_splits_needles_and_file() {
+        let cli = parse(&["rbw", "attachment", "create", "entry", "f.txt"]);
+        let Opt::Attachment {
+            attachment: Attachment::Create { needles, file, .. },
+        } = cli.command
+        else {
+            panic!("parsed as the wrong subcommand");
+        };
+        assert_eq!(needles.len(), 1);
+        assert_eq!(file, std::path::PathBuf::from("f.txt"));
+    }
+
+    #[test]
+    fn test_output_flags_on_show_and_history() {
+        for args in [
+            &["rbw", "show", "-o", "json", "name"][..],
+            &["rbw", "show", "--all", "name"][..],
+            &["rbw", "history", "-j", "name"][..],
+            &["rbw", "history", "--yaml", "name"][..],
+            &["rbw", "search", "--insecure", "term"][..],
+            &["rbw", "code", "--all", "name"][..],
+        ] {
+            parse(args);
+        }
+    }
+
+    #[test]
+    fn test_resolve_output_mode_layers_flags() {
+        assert_eq!(
+            resolve_output_mode(None, false, false).unwrap(),
+            commands::OutputMode::Default
+        );
+        assert_eq!(
+            resolve_output_mode(None, true, false).unwrap(),
+            commands::OutputMode::Json
+        );
+        assert_eq!(
+            resolve_output_mode(None, false, true).unwrap(),
+            commands::OutputMode::Yaml
+        );
+        assert_eq!(
+            resolve_output_mode(Some(OutputArg::Name), false, false).unwrap(),
+            commands::OutputMode::Name
+        );
+        assert!(
+            resolve_output_mode(Some(OutputArg::Name), true, false).is_err()
+        );
+        assert!(resolve_output_mode(None, true, true).is_err());
     }
 }
