@@ -280,7 +280,8 @@ plus collections) as JSON to stdout:
 rbw export > backup.json
 ```
 
-You can also write directly to a file without shell redirection:
+You can also write directly to a file without shell redirection (the file
+is created with mode 0600, since it contains the fully decrypted vault):
 
 ```sh
 rbw export --output backup.json
@@ -302,23 +303,28 @@ reported as skipped; pass `--overwrite` to update them in place instead.
 Entries that belonged to an organization the target account isn't a member
 of are imported into the personal vault instead of failing.
 
-If the export was produced with `rbw export --encrypt` (a gpg-encrypted
-tar.gz instead of raw JSON), pass the same passphrase back on import:
+Pass `--encrypt` to write the export as a symmetrically gpg-encrypted
+tar.gz archive instead of raw JSON, and `--decrypt` to read one back on
+import. Both take the passphrase from `$RBW_EXPORT_PASSPHRASE` if set, and
+prompt for it on the terminal (export asks twice, to confirm) otherwise:
 
 ```sh
 rbw export --encrypt --output backup.tar.gz.gpg
 rbw import --decrypt backup.tar.gz.gpg
 ```
 
-For non-interactive use, you can still pass the passphrase explicitly or set
-`RBW_EXPORT_PASSPHRASE` for both export and import:
+For non-interactive use, set `RBW_EXPORT_PASSPHRASE` for both export and
+import:
 
 ```sh
 RBW_EXPORT_PASSPHRASE='correct horse battery staple' rbw export --encrypt --output backup.tar.gz.gpg
 RBW_EXPORT_PASSPHRASE='correct horse battery staple' rbw import --decrypt backup.tar.gz.gpg
-# legacy explicit form still works:
-rbw import --decrypt-passphrase 'correct horse battery staple' backup.tar.gz.gpg
 ```
+
+The passphrase can also be passed inline (`rbw export --encrypt PASSPHRASE`
+and `rbw import --decrypt-passphrase PASSPHRASE`), but that exposes it to
+`ps` output and shell history, so prefer the prompt or the environment
+variable.
 
 `rbw import` prints a summary when it's done (entries created/updated/
 skipped, attachments restored, collections created) and exits non-zero if

@@ -270,8 +270,14 @@ enum Opt {
         about = "Export the entire vault as decrypted JSON",
         long_about = "Export the entire vault as decrypted JSON\n\n\
             Outputs all entries (with full details) and collections \
-            to stdout. Suitable for piping to a file for backup or \
-            migration to another instance via `rbw import`."
+            to stdout, or to a file given -o/--output. Suitable for \
+            backup or migration to another instance via `rbw import`.\n\n\
+            With --encrypt, the export is written as a symmetrically \
+            gpg-encrypted tar.gz archive instead of raw JSON. The \
+            passphrase is read from $RBW_EXPORT_PASSPHRASE if set, and \
+            prompted for on the terminal (with confirmation) otherwise; \
+            it can also be passed inline as `--encrypt PASSPHRASE`, but \
+            that exposes it to `ps` and shell history."
     )]
     Export {
         #[arg(
@@ -289,8 +295,9 @@ enum Opt {
             value_name = "PASSPHRASE",
             help = "Symmetrically gpg-encrypt the export as a tar.gz \
                 archive. If PASSPHRASE is omitted, rbw reads it from \
-                RBW_EXPORT_PASSPHRASE or prompts on the controlling tty. \
-                Requires `gpg` to be available on PATH."
+                RBW_EXPORT_PASSPHRASE or prompts on the controlling tty \
+                (twice, to confirm); passing it inline exposes it to `ps` \
+                and shell history. Requires `gpg` to be available on PATH."
         )]
         encrypt: Option<String>,
 
@@ -313,6 +320,10 @@ enum Opt {
             recreates its entries and collections in the target account's \
             vault (see the global --account/-a flag). Reads from stdin if \
             no file is given.\n\n\
+            With --decrypt, the passphrase is read from \
+            $RBW_EXPORT_PASSPHRASE if set, and prompted for on the \
+            terminal otherwise; --decrypt-passphrase takes it inline, but \
+            that exposes it to `ps` and shell history.\n\n\
             Entries that already exist (matched by name, and username for \
             logins) are left untouched and reported as skipped; pass \
             --overwrite to update them in place instead. Entries belonging \
@@ -331,8 +342,10 @@ enum Opt {
         decrypt: bool,
         #[arg(
             long,
+            value_name = "PASSPHRASE",
             help = "Passphrase to decrypt a gpg-encrypted export archive \
-                (produced by `rbw export --encrypt`)"
+                (produced by `rbw export --encrypt`). Prefer --decrypt, \
+                which keeps the passphrase out of `ps` and shell history"
         )]
         decrypt_passphrase: Option<String>,
         #[arg(

@@ -4932,6 +4932,11 @@ pub fn export(
     encrypt: Option<&str>,
     output: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
+    // Resolve the passphrase up front (from $RBW_EXPORT_PASSPHRASE or an
+    // interactive prompt when `--encrypt` was given without a value), so a
+    // mistyped confirmation fails before any decryption work happens.
+    let passphrase = resolve_export_passphrase(encrypt)?;
+
     unlock(None)?;
 
     let mut db = load_db()?;
@@ -4982,7 +4987,7 @@ pub fn export(
         collections,
     };
 
-    if let Some(passphrase) = resolve_export_passphrase(encrypt)? {
+    if let Some(passphrase) = passphrase {
         let archive = build_export_tar_gz(&vault)?;
         let encrypted = gpg_symmetric_encrypt(&passphrase, &archive)?;
         write_export_bytes(
@@ -5043,6 +5048,9 @@ fn resolve_env_or_prompted_passphrase(
 
 fn prompt_new_passphrase() -> anyhow::Result<String> {
     let first = prompt_hidden_tty("Export passphrase: ")?;
+    if first.is_empty() {
+        anyhow::bail!("passphrase must not be empty");
+    }
     let second = prompt_hidden_tty("Confirm export passphrase: ")?;
     if first != second {
         anyhow::bail!("passphrases did not match");
@@ -5610,44 +5618,15 @@ fn read_import_input(
     }
 }
 
-// Finds the first `*.json` file in `dir` (recursively), falling back to the
-// first file of any kind if none has a `.json` extension. `rbw export
-// --encrypt` is expected to wrap a single JSON file in the tar.gz, but the
-// exact filename isn't something worth hard-coding here.
-fn find_first_json_file(dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let mut stack = vec![dir.to_path_buf()];
-    let mut fallback: Option<std::path::PathBuf> = None;
-    while let Some(d) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().and_then(std::ffi::OsStr::to_str)
-                == Some("json")
-            {
-                return Some(path);
-            } else if fallback.is_none() {
-                fallback = Some(path);
-            }
-        }
-    }
-    fallback
-}
-
 // Decrypts a gpg-encrypted tar.gz archive (as produced by `rbw export
-// --encrypt`) and returns the JSON text found inside it. Shells out to `gpg`
-// and `tar` rather than pulling in new crates, matching how this codebase
-// already shells out to an external program for `rbw::edit` and `rbw run`.
+// --encrypt`) and returns the JSON text found inside it. The ciphertext is
+// streamed through gpg's stdin (with the passphrase on a dedicated pipe fd)
+// and the archive is unpacked entirely in memory, so the decrypted vault
+// never touches the filesystem.
 fn decrypt_import_archive(
     data: &[u8],
     passphrase: &str,
 ) -> anyhow::Result<String> {
-    let dir = tempfile::tempdir()
-        .context("failed to create a temp dir for import")?;
-
     let output = run_gpg_with_passphrase(
         ["--batch", "--yes", "--passphrase-fd", "3", "--decrypt"],
         passphrase,
@@ -5661,32 +5640,45 @@ fn decrypt_import_archive(
         );
     }
 
-    let tar_path = dir.path().join("import.tar.gz");
-    std::fs::write(&tar_path, &output.stdout)
-        .context("failed to stage the decrypted archive")?;
+    extract_vault_json(&output.stdout)
+}
 
-    let extract_dir = dir.path().join("extracted");
-    std::fs::create_dir_all(&extract_dir)
-        .context("failed to create an extraction dir")?;
-    let tar_status = std::process::Command::new("tar")
-        .arg("-xzf")
-        .arg(&tar_path)
-        .arg("-C")
-        .arg(&extract_dir)
-        .status()
-        .context("failed to run tar (is it installed and on $PATH?)")?;
-    if !tar_status.success() {
-        anyhow::bail!(
-            "failed to extract the decrypted archive (tar exited with \
-             {tar_status})"
-        );
+// Extracts the JSON text from an in-memory tar.gz archive: the first
+// `*.json` entry, falling back to the first regular file of any kind if
+// none has a `.json` extension. `rbw export --encrypt` is expected to wrap
+// a single JSON file in the tar.gz, but the exact filename isn't something
+// worth hard-coding here.
+fn extract_vault_json(targz: &[u8]) -> anyhow::Result<String> {
+    let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(targz));
+    let mut archive = tar::Archive::new(gz);
+    let mut fallback: Option<String> = None;
+    let entries = archive
+        .entries()
+        .context("failed to read the decrypted archive as a tar.gz")?;
+    for entry in entries {
+        let mut entry = entry
+            .context("failed to read the decrypted archive as a tar.gz")?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let is_json = entry.path().ok().is_some_and(|path| {
+            path.extension().and_then(std::ffi::OsStr::to_str) == Some("json")
+        });
+        if !is_json && fallback.is_some() {
+            continue;
+        }
+        let mut contents = String::new();
+        entry
+            .read_to_string(&mut contents)
+            .context("failed to read a file from the decrypted archive")?;
+        if is_json {
+            return Ok(contents);
+        }
+        fallback = Some(contents);
     }
-
-    let json_path = find_first_json_file(&extract_dir).ok_or_else(|| {
+    fallback.ok_or_else(|| {
         anyhow::anyhow!("no JSON file found inside the decrypted archive")
-    })?;
-    std::fs::read_to_string(&json_path)
-        .with_context(|| format!("failed to read {}", json_path.display()))
+    })
 }
 
 // Figures out whether `raw` is plain JSON (today's `rbw export` output) or a
@@ -6072,9 +6064,12 @@ pub fn import(
     decrypt_passphrase: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
-    let raw = read_import_input(file)?;
+    // Resolve the passphrase up front so `--decrypt`'s prompt happens
+    // before any input is read (the prompt goes to /dev/tty, so this works
+    // even when the archive itself arrives on stdin).
     let decrypt_passphrase =
         resolve_import_passphrase(decrypt, decrypt_passphrase)?;
+    let raw = read_import_input(file)?;
     let json_text = load_import_json(&raw, decrypt_passphrase.as_deref())?;
 
     let vault: ImportedVault = serde_json::from_str(&json_text).context(
@@ -13465,6 +13460,72 @@ mod test {
         );
     }
 
+    // Round-trips entirely through rbw's own code paths: encrypt
+    // (passphrase on fd 3 + plaintext via stdin) then
+    // `decrypt_import_archive` (passphrase on fd 3 + ciphertext via stdin +
+    // in-memory tar.gz extraction), so both directions of the
+    // passphrase-fd plumbing get exercised.
+    #[test]
+    #[ignore = "requires a real `gpg` binary on PATH"]
+    fn test_gpg_encrypt_decrypt_round_trip_via_passphrase_fd() {
+        let vault = ExportedVault {
+            entries: vec![sample_exported_entry(vec![])],
+            collections: vec![],
+        };
+        let passphrase = "correct horse battery staple";
+
+        let archive = build_export_tar_gz(&vault).unwrap();
+        let encrypted = gpg_symmetric_encrypt(passphrase, &archive).unwrap();
+        assert_ne!(encrypted, archive);
+
+        let json = decrypt_import_archive(&encrypted, passphrase).unwrap();
+        let decoded: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded["entries"][0]["name"], "example.com");
+
+        let err = decrypt_import_archive(&encrypted, "wrong passphrase")
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("decrypt"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // A payload much larger than the kernel's pipe buffer (64KiB), to
+    // prove the stdin-writer thread keeps gpg fed while its stdout is
+    // drained -- i.e. the streaming structure can't deadlock.
+    #[test]
+    #[ignore = "requires a real `gpg` binary on PATH"]
+    fn test_gpg_round_trip_survives_payloads_larger_than_pipe_buffer() {
+        let attachment_bytes: Vec<u8> = (0..2_000_000_u32)
+            .map(|i| {
+                u8::try_from(i.wrapping_mul(2_654_435_761) % 251).unwrap()
+            })
+            .collect();
+        let vault = ExportedVault {
+            entries: vec![sample_exported_entry(vec![ExportedAttachment {
+                id: "attachment-id".to_string(),
+                file_name: "big.bin".to_string(),
+                data_base64: rbw::base64::encode(&attachment_bytes),
+            }])],
+            collections: vec![],
+        };
+        let passphrase = "correct horse battery staple";
+
+        let archive = build_export_tar_gz(&vault).unwrap();
+        let encrypted = gpg_symmetric_encrypt(passphrase, &archive).unwrap();
+
+        let json = decrypt_import_archive(&encrypted, passphrase).unwrap();
+        let decoded: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let decoded_base64 = decoded["entries"][0]["attachments"][0]
+            ["data_base64"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            rbw::base64::decode(decoded_base64).unwrap(),
+            attachment_bytes
+        );
+    }
+
     #[test]
     #[cfg(unix)]
     fn test_write_secure_output_file_uses_owner_only_permissions() {
@@ -13478,6 +13539,31 @@ mod test {
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
         assert_eq!(std::fs::read(&path).unwrap(), br#"{"entries":[]}"#);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_write_secure_output_file_replaces_existing_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("backup.json");
+        std::fs::write(&path, b"something much longer than the export")
+            .unwrap();
+        std::fs::set_permissions(
+            &path,
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+
+        write_secure_output_file(&path, b"{}\n").unwrap();
+
+        // The atomic-rename replacement leaves neither stale trailing bytes
+        // nor the old (looser) permissions behind.
+        assert_eq!(std::fs::read(&path).unwrap(), b"{}\n");
+        let mode =
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]
@@ -13747,32 +13833,48 @@ mod test {
         assert!(matches!(vault.entries[0].data, ImportedData::SshKey { .. }));
     }
 
-    #[test]
-    fn test_find_first_json_file_prefers_json_extension() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("readme.txt"), b"not json").unwrap();
-        std::fs::write(dir.path().join("export.json"), b"{}").unwrap();
-
-        let found = find_first_json_file(dir.path()).unwrap();
-        assert_eq!(found.extension().and_then(|e| e.to_str()), Some("json"));
-    }
-
-    #[test]
-    fn test_find_first_json_file_falls_back_to_any_file() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("export.dat"), b"{}").unwrap();
-
-        let found = find_first_json_file(dir.path()).unwrap();
-        assert_eq!(
-            found.file_name().and_then(|f| f.to_str()),
-            Some("export.dat")
+    // Builds an in-memory tar.gz containing the given (name, contents)
+    // files, mirroring what `build_export_tar_gz` produces.
+    fn tar_gz_with_files(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let encoder = flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::default(),
         );
+        let mut builder = tar::Builder::new(encoder);
+        for (name, contents) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(u64::try_from(contents.len()).unwrap());
+            header.set_mode(0o644);
+            header.set_mtime(0);
+            header.set_cksum();
+            builder.append_data(&mut header, name, *contents).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap()
     }
 
     #[test]
-    fn test_find_first_json_file_none_when_dir_is_empty() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(find_first_json_file(dir.path()).is_none());
+    fn test_extract_vault_json_prefers_json_extension() {
+        let targz = tar_gz_with_files(&[
+            ("readme.txt", b"not json"),
+            ("export.json", b"{}"),
+        ]);
+        assert_eq!(extract_vault_json(&targz).unwrap(), "{}");
+    }
+
+    #[test]
+    fn test_extract_vault_json_falls_back_to_any_file() {
+        let targz = tar_gz_with_files(&[("export.dat", b"{}")]);
+        assert_eq!(extract_vault_json(&targz).unwrap(), "{}");
+    }
+
+    #[test]
+    fn test_extract_vault_json_errors_when_archive_is_empty() {
+        let targz = tar_gz_with_files(&[]);
+        let err = extract_vault_json(&targz).unwrap_err();
+        assert!(
+            format!("{err}").contains("no JSON file found"),
+            "unexpected error: {err}"
+        );
     }
 
     fn collection(id: &str, org_id: &str, name: &str) -> DecryptedCollection {
