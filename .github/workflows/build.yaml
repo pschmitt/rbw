@@ -51,7 +51,9 @@ jobs:
         with:
           ndk-version: r27c
       - uses: cargo-bins/cargo-binstall@main
-      - run: cargo binstall --no-confirm cargo-ndk
+      # --force: rust-cache restores binstall's install manifest but not the
+      # binary itself, so without it binstall skips the (missing) install
+      - run: cargo binstall --no-confirm --force cargo-ndk
       - run: cargo ndk --target aarch64-linux-android --platform 24 -- build --all-targets --release --no-default-features
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}

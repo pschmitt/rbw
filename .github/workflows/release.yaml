@@ -49,9 +49,11 @@ jobs:
           ndk-version: r27c
       - uses: cargo-bins/cargo-binstall@main
         if: matrix.target == 'aarch64-linux-android'
+      # --force: rust-cache restores binstall's install manifest but not the
+      # binary itself, so without it binstall skips the (missing) install
       - name: Install cargo-ndk
         if: matrix.target == 'aarch64-linux-android'
-        run: cargo binstall --no-confirm cargo-ndk
+        run: cargo binstall --no-confirm --force cargo-ndk
       - name: Build (musl)
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: TARGET_CC=clang-18 TARGET_AR=llvm-ar-18 cargo build --release --target x86_64-unknown-linux-musl
