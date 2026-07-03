@@ -40,8 +40,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: cargo-bins/cargo-binstall@main
-      - run: cargo binstall --no-confirm cross
+      - uses: taiki-e/install-action@cross
       - run: cross check --all-targets --target aarch64-linux-android --no-default-features
   test:
     runs-on: ubuntu-latest
