@@ -648,11 +648,22 @@ enum Opt {
     Remove {
         #[command(flatten)]
         find_args: FindArgs,
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
     },
 
+    #[command(about = "Manage organization collections")]
+    Collection {
+        #[command(subcommand)]
+        collection: Collection,
+    },
+
+    // Hidden compat shim for `rbw collection list`.
     #[command(
-        about = "List all collections in the organization",
-        visible_alias = "lsc"
+        about = "List all collections in the organization (use `rbw \
+            collection list`)",
+        alias = "lsc",
+        hide = true
     )]
     ListCollections {
         #[arg(
@@ -673,23 +684,49 @@ enum Opt {
         yaml: bool,
     },
 
-    #[command(about = "Create a new collection in an organization")]
+    // Hidden compat shim for `rbw collection create`.
+    #[command(
+        about = "Create a new collection in an organization (use `rbw \
+            collection create`)",
+        hide = true
+    )]
     CreateCollection {
         #[arg(help = "Name of the collection")]
         name: String,
-        #[arg(long = "org-id", help = "Organization ID")]
-        org_id: String,
+        #[arg(
+            long = "org-id",
+            help = "Organization ID (auto-detected if the vault has a \
+                single org)"
+        )]
+        org_id: Option<String>,
     },
 
-    #[command(about = "Delete an organization collection")]
+    // Hidden compat shim for `rbw collection delete`.
+    #[command(
+        about = "Delete an organization collection (use `rbw collection \
+            delete`)",
+        hide = true
+    )]
     DeleteCollection {
         #[arg(help = "ID of the collection")]
         collection_id: String,
-        #[arg(long = "org-id", help = "Organization ID")]
-        org_id: String,
+        #[arg(
+            long = "org-id",
+            help = "Organization ID (auto-detected if the vault has a \
+                single org)"
+        )]
+        org_id: Option<String>,
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
     },
 
-    #[command(about = "Edit collections for an entry")]
+    // Hidden compat shim for `rbw collection assign`, keeping the old
+    // script-oriented base64 interface intact.
+    #[command(
+        about = "Edit collections for an entry (use `rbw collection \
+            assign`)",
+        hide = true
+    )]
     EditCollections {
         #[arg(help = "ID of the entry")]
         id: String,
@@ -697,8 +734,11 @@ enum Opt {
         collections: String,
     },
 
+    // Hidden compat shim for `rbw collection propagate-permissions`.
     #[command(
-        about = "Grant members access to nested collections (topmost held -> edit, descendants -> manage)"
+        about = "Grant members access to nested collections (use `rbw \
+            collection propagate-permissions`)",
+        hide = true
     )]
     PropagateCollectionPermissions {
         #[arg(
@@ -712,12 +752,22 @@ enum Opt {
         verbose: bool,
     },
 
-    #[command(about = "Rename an organization collection")]
+    // Hidden compat shim for `rbw collection rename`.
+    #[command(
+        about = "Rename an organization collection (use `rbw collection \
+            rename`)",
+        hide = true
+    )]
     RenameCollection {
         #[arg(help = "ID of the collection")]
         id: String,
-        #[arg(long, help = "Organization ID")]
-        organizationid: String,
+        #[arg(
+            long = "org-id",
+            alias = "organizationid",
+            help = "Organization ID (auto-detected if the vault has a \
+                single org)"
+        )]
+        org_id: Option<String>,
         #[arg(help = "New name for the collection")]
         name: String,
     },
@@ -728,11 +778,26 @@ enum Opt {
         find_args: FindArgs,
     },
 
-    #[command(about = "Lock the password database")]
-    Lock,
+    #[command(
+        about = "Lock the password database",
+        long_about = "Lock the password database\n\n\
+            With an account selected (via --account or RBW_ACCOUNT), only \
+            that account is locked; otherwise every account is locked."
+    )]
+    Lock {
+        #[arg(
+            long,
+            help = "Lock every configured account, even when an account \
+                is selected via --account/RBW_ACCOUNT"
+        )]
+        all: bool,
+    },
 
     #[command(about = "Remove the local copy of the password database")]
-    Purge,
+    Purge {
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
+    },
 
     #[command(name = "stop-agent", about = "Terminate the background agent")]
     StopAgent,
