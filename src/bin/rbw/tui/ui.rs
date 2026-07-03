@@ -1152,8 +1152,9 @@ fn render_picker(f: &mut Frame, picker: &PickerView, area: Rect) {
     let width = 60u16.min(area.width.saturating_sub(4));
     let rows: Vec<_> = picker.rows().collect();
     // filter line + blank + hint + 2 border rows, plus up to 10 visible rows.
-    let height = (rows.len().min(10) as u16 + 5)
-        .clamp(6, area.height.saturating_sub(2));
+    let max_height = area.height.saturating_sub(2);
+    let height =
+        (rows.len().min(10) as u16 + 5).clamp(6.min(max_height), max_height);
     let rect = centered(width, height, area);
 
     f.render_widget(Clear, rect);
@@ -1324,8 +1325,9 @@ fn render_confirm_clear_credential_source(
 }
 
 fn render_attachments(f: &mut Frame, view: &AttachmentView, area: Rect) {
+    let max_height = area.height.saturating_sub(2);
     let height =
-        (view.items.len() as u16 + 4).clamp(5, area.height.saturating_sub(2));
+        (view.items.len() as u16 + 4).clamp(5.min(max_height), max_height);
     let rect = centered(64.min(area.width.saturating_sub(4)), height, area);
     f.render_widget(Clear, rect);
     let b = Block::default()
@@ -1389,8 +1391,9 @@ fn render_accounts(f: &mut Frame, view: &AccountsView, area: Rect) {
         .iter()
         .filter(|a| a.credential_source.is_some())
         .count() as u16;
+    let max_height = area.height.saturating_sub(2);
     let height = (view.accounts.len() as u16 + linked + 5)
-        .clamp(6, area.height.saturating_sub(2));
+        .clamp(6.min(max_height), max_height);
     let rect = centered(70.min(area.width.saturating_sub(4)), height, area);
     f.render_widget(Clear, rect);
     let b = Block::default()
