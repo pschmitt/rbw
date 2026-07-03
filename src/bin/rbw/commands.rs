@@ -1,7 +1,10 @@
 use std::ffi::OsString;
+use std::fs::OpenOptions;
 use std::io::Read as _;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
 use std::{fmt::Write as _, io::Write as _, os::unix::ffi::OsStrExt as _};
 
 use anyhow::Context as _;
@@ -20,6 +23,19 @@ const MISSING_CONFIG_HELP: &str =
         rbw config set base_url <url>\n\n\
     and, if your server has a non-default identity url:\n\n    \
         rbw config set identity_url <url>\n";
+
+const EXPORT_PASSPHRASE_ENV: &str = "RBW_EXPORT_PASSPHRASE";
+
+struct RestoreEcho {
+    fd: std::os::fd::RawFd,
+    original: libc::termios,
+}
+
+impl Drop for RestoreEcho {
+    fn drop(&mut self) {
+        let _ = tcsetattr(self.fd, &self.original);
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Needle {
@@ -4865,6 +4881,7 @@ fn export_attachments(
 pub fn export(
     attachments: bool,
     encrypt: Option<&str>,
+    output: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
     unlock(None)?;
 
@@ -4916,16 +4933,193 @@ pub fn export(
         collections,
     };
 
-    if let Some(passphrase) = encrypt {
+    if let Some(passphrase) = resolve_export_passphrase(encrypt)? {
         let archive = build_export_tar_gz(&vault)?;
-        let encrypted = gpg_symmetric_encrypt(passphrase, &archive)?;
-        std::io::stdout()
-            .write_all(&encrypted)
-            .context("failed to write encrypted export to stdout")?;
-        Ok(())
+        let encrypted = gpg_symmetric_encrypt(&passphrase, &archive)?;
+        write_export_bytes(
+            output,
+            &encrypted,
+            "failed to write encrypted export",
+        )
+    } else if let Some(path) = output {
+        let mut json = serde_json::to_vec_pretty(&vault)
+            .context("failed to serialize export to JSON")?;
+        json.push(b'\n');
+        write_export_bytes(Some(path), &json, "failed to write export JSON")
     } else {
         write_json_pretty(&vault, "failed to write export to stdout")
     }
+}
+
+fn resolve_export_passphrase(
+    encrypt: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    match encrypt {
+        None => Ok(None),
+        Some(passphrase) if !passphrase.is_empty() => {
+            Ok(Some(passphrase.to_string()))
+        }
+        Some(_) => resolve_env_or_prompted_passphrase(true).map(Some),
+    }
+}
+
+fn resolve_import_passphrase(
+    decrypt: bool,
+    decrypt_passphrase: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    if let Some(passphrase) = decrypt_passphrase {
+        return Ok(Some(passphrase.to_string()));
+    }
+    if decrypt {
+        return resolve_env_or_prompted_passphrase(false).map(Some);
+    }
+    Ok(None)
+}
+
+fn resolve_env_or_prompted_passphrase(
+    confirm: bool,
+) -> anyhow::Result<String> {
+    if let Ok(passphrase) = std::env::var(EXPORT_PASSPHRASE_ENV) {
+        if !passphrase.is_empty() {
+            return Ok(passphrase);
+        }
+    }
+
+    if confirm {
+        prompt_new_passphrase()
+    } else {
+        prompt_existing_passphrase()
+    }
+}
+
+fn prompt_new_passphrase() -> anyhow::Result<String> {
+    let first = prompt_hidden_tty("Export passphrase: ")?;
+    let second = prompt_hidden_tty("Confirm export passphrase: ")?;
+    if first != second {
+        anyhow::bail!("passphrases did not match");
+    }
+    Ok(first)
+}
+
+fn prompt_existing_passphrase() -> anyhow::Result<String> {
+    prompt_hidden_tty("Import passphrase: ")
+}
+
+fn prompt_hidden_tty(prompt: &str) -> anyhow::Result<String> {
+    let mut tty = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .context("failed to open /dev/tty for passphrase prompt")?;
+    let fd = std::os::fd::AsRawFd::as_raw_fd(&tty);
+    let original = tcgetattr(fd)?;
+    let mut hidden = original;
+    hidden.c_lflag &= !libc::ECHO;
+    tcsetattr(fd, &hidden)
+        .context("failed to disable terminal echo for passphrase prompt")?;
+
+    let _restore = RestoreEcho { fd, original };
+
+    tty.write_all(prompt.as_bytes())
+        .context("failed to write passphrase prompt")?;
+    tty.flush().context("failed to flush passphrase prompt")?;
+
+    let mut input = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(&mut tty),
+        &mut input,
+    )
+    .context("failed to read passphrase from /dev/tty")?;
+    tty.write_all(b"\n")
+        .context("failed to finish passphrase prompt")?;
+    tty.flush().context("failed to flush passphrase prompt")?;
+
+    Ok(input.trim_end_matches(['\r', '\n']).to_string())
+}
+
+fn tcgetattr(fd: std::os::fd::RawFd) -> std::io::Result<libc::termios> {
+    let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+    // SAFETY: `termios` points to valid uninitialized memory, and `fd` is an
+    // open tty fd when this helper is called.
+    let rc = unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) };
+    if rc == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        // SAFETY: successful `tcgetattr` initialized `termios`.
+        Ok(unsafe { termios.assume_init() })
+    }
+}
+
+fn tcsetattr(
+    fd: std::os::fd::RawFd,
+    termios: &libc::termios,
+) -> std::io::Result<()> {
+    // SAFETY: `termios` points to a valid termios struct and `fd` is an open
+    // tty fd when this helper is called.
+    let rc = unsafe { libc::tcsetattr(fd, libc::TCSANOW, termios) };
+    if rc == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn write_export_bytes(
+    output: Option<&std::path::Path>,
+    bytes: &[u8],
+    stdout_context: &'static str,
+) -> anyhow::Result<()> {
+    output.map_or_else(
+        || std::io::stdout().write_all(bytes).context(stdout_context),
+        |path| write_secure_output_file(path, bytes),
+    )
+}
+
+fn write_secure_output_file(
+    path: &std::path::Path,
+    bytes: &[u8],
+) -> anyhow::Result<()> {
+    let parent = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => std::path::Path::new("."),
+    };
+    let mut file = tempfile::Builder::new()
+        .prefix(".rbw-export.")
+        .tempfile_in(parent)
+        .with_context(|| {
+            format!(
+                "failed to open temporary export output near {}",
+                path.display()
+            )
+        })?;
+    file.as_file_mut()
+        .set_permissions(std::fs::Permissions::from_mode(0o600))
+        .with_context(|| {
+            format!("failed to set secure permissions on {}", path.display())
+        })?;
+    file.write_all(bytes)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    file.as_file_mut()
+        .sync_all()
+        .with_context(|| format!("failed to sync {}", path.display()))?;
+    file.persist(path)
+        .map_err(|err| err.error)
+        .with_context(|| format!("failed to persist {}", path.display()))?;
+    std::fs::File::open(parent)
+        .with_context(|| {
+            format!(
+                "failed to sync export output directory {}",
+                parent.display()
+            )
+        })?
+        .sync_all()
+        .with_context(|| {
+            format!(
+                "failed to sync export output directory {}",
+                parent.display()
+            )
+        })?;
+    Ok(())
 }
 
 // Packages `value` as pretty-printed JSON named `vault.json` inside an
@@ -4956,63 +5150,29 @@ fn build_export_tar_gz<T: serde::Serialize>(
     encoder.finish().context("failed to finalize gzip stream")
 }
 
-// Symmetrically encrypts `plaintext` with `gpg`, using `passphrase` piped
-// in via stdin (fd 0) rather than argv, so it doesn't leak into `ps` or
-// shell history. The plaintext itself is written to a temporary file and
-// passed as a positional argument, since `--passphrase-fd 0` already
-// claims stdin.
+// Symmetrically encrypts `plaintext` with `gpg`, passing the passphrase over
+// an inherited pipe fd and streaming the plaintext over stdin so neither the
+// passphrase nor the decrypted archive ever hit argv or the filesystem.
 fn gpg_symmetric_encrypt(
     passphrase: &str,
     plaintext: &[u8],
 ) -> anyhow::Result<Vec<u8>> {
-    let mut tmp = tempfile::NamedTempFile::new()
-        .context("failed to create temporary file for export archive")?;
-    tmp.write_all(plaintext)
-        .context("failed to write export archive to temporary file")?;
-    tmp.flush()
-        .context("failed to flush export archive to temporary file")?;
-
-    let mut child = std::process::Command::new("gpg")
-        .args([
+    let output = run_gpg_with_passphrase(
+        [
             "--batch",
             "--yes",
             "--passphrase-fd",
-            "0",
+            "3",
             "--symmetric",
             "--cipher-algo",
             "AES256",
             "-o",
             "-",
-        ])
-        .arg(tmp.path())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|source| {
-            if source.kind() == std::io::ErrorKind::NotFound {
-                anyhow::anyhow!(
-                    "gpg not found on PATH; install GnuPG to use \
-                     `rbw export --encrypt`"
-                )
-            } else {
-                anyhow::Error::from(source).context("failed to spawn gpg")
-            }
-        })?;
-
-    // unwrap is safe because we specified stdin as piped above
-    let mut stdin = child.stdin.take().unwrap();
-    stdin
-        .write_all(passphrase.as_bytes())
-        .context("failed to write passphrase to gpg")?;
-    stdin
-        .write_all(b"\n")
-        .context("failed to write passphrase to gpg")?;
-    drop(stdin);
-
-    let output = child
-        .wait_with_output()
-        .context("failed to wait for gpg to finish")?;
+        ],
+        passphrase,
+        plaintext.to_vec(),
+        "gpg not found on PATH; install GnuPG to use `rbw export --encrypt`",
+    )?;
 
     if !output.status.success() {
         anyhow::bail!(
@@ -5022,6 +5182,75 @@ fn gpg_symmetric_encrypt(
     }
 
     Ok(output.stdout)
+}
+
+fn run_gpg_with_passphrase<const N: usize>(
+    args: [&str; N],
+    passphrase: &str,
+    stdin_data: Vec<u8>,
+    not_found_message: &'static str,
+) -> anyhow::Result<std::process::Output> {
+    let (read_fd, write_fd) =
+        rustix::pipe::pipe().context("failed to create passphrase pipe")?;
+    let passphrase_fd = std::os::fd::AsRawFd::as_raw_fd(&read_fd);
+
+    {
+        let mut writer = std::fs::File::from(write_fd);
+        writer
+            .write_all(passphrase.as_bytes())
+            .and_then(|()| writer.write_all(b"\n"))
+            .context("failed to write passphrase to gpg pipe")?;
+    }
+
+    let mut child = {
+        let mut command = std::process::Command::new("gpg");
+        command
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        // SAFETY: this runs in the child between fork and exec. It only calls
+        // async-signal-safe libc functions (`dup2`/`close`) to map the pipe's
+        // read end to fd 3 for gpg's `--passphrase-fd 3`.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::dup2(passphrase_fd, 3) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if passphrase_fd != 3 && libc::close(passphrase_fd) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        command.spawn().map_err(|source| {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                anyhow::anyhow!(not_found_message)
+            } else {
+                anyhow::Error::from(source).context("failed to spawn gpg")
+            }
+        })?
+    };
+
+    drop(read_fd);
+
+    let stdin = child.stdin.take().context("failed to open gpg's stdin")?;
+    let stdin_writer = std::thread::spawn(move || -> std::io::Result<()> {
+        let mut stdin = stdin;
+        stdin.write_all(&stdin_data)
+    });
+
+    let output = child
+        .wait_with_output()
+        .context("failed to wait for gpg to finish")?;
+    stdin_writer
+        .join()
+        .map_err(|_| anyhow::anyhow!("gpg stdin writer thread panicked"))?
+        .context("failed to write payload to gpg")?;
+
+    Ok(output)
 }
 
 // ===========================================================================
@@ -5370,31 +5599,12 @@ fn decrypt_import_archive(
     let dir = tempfile::tempdir()
         .context("failed to create a temp dir for import")?;
 
-    let archive_path = dir.path().join("import.gpg");
-    std::fs::write(&archive_path, data)
-        .context("failed to stage the encrypted archive")?;
-
-    let mut child = std::process::Command::new("gpg")
-        .args(["--batch", "--yes", "--passphrase-fd", "0", "--decrypt"])
-        .arg(&archive_path)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .context("failed to run gpg (is it installed and on $PATH?)")?;
-
-    {
-        let stdin =
-            child.stdin.as_mut().context("failed to open gpg's stdin")?;
-        stdin
-            .write_all(passphrase.as_bytes())
-            .and_then(|()| stdin.write_all(b"\n"))
-            .context("failed to write the passphrase to gpg")?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .context("failed to read gpg's output")?;
+    let output = run_gpg_with_passphrase(
+        ["--batch", "--yes", "--passphrase-fd", "3", "--decrypt"],
+        passphrase,
+        data.to_vec(),
+        "failed to run gpg (is it installed and on $PATH?)",
+    )?;
     if !output.status.success() {
         anyhow::bail!(
             "gpg decryption failed: {}",
@@ -5451,7 +5661,7 @@ fn load_import_json(
 
     anyhow::bail!(
         "failed to parse import data as JSON; if this is a gpg-encrypted \
-         export archive (from `rbw export --encrypt`), pass \
+         export archive (from `rbw export --encrypt`), pass --decrypt or \
          --decrypt-passphrase"
     );
 }
@@ -5809,11 +6019,14 @@ fn import_overwrite_entry(
 
 pub fn import(
     file: Option<&std::path::Path>,
+    decrypt: bool,
     decrypt_passphrase: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
     let raw = read_import_input(file)?;
-    let json_text = load_import_json(&raw, decrypt_passphrase)?;
+    let decrypt_passphrase =
+        resolve_import_passphrase(decrypt, decrypt_passphrase)?;
+    let json_text = load_import_json(&raw, decrypt_passphrase.as_deref())?;
 
     let vault: ImportedVault = serde_json::from_str(&json_text).context(
         "failed to parse import data (expected the JSON shape produced by \
@@ -13020,6 +13233,21 @@ mod test {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn test_write_secure_output_file_uses_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("backup.json");
+        write_secure_output_file(&path, br#"{"entries":[]}"#).unwrap();
+
+        let mode =
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(std::fs::read(&path).unwrap(), br#"{"entries":[]}"#);
+    }
+
+    #[test]
     fn test_import_json_parses_plain_export_shape() {
         let json = r#"{
             "entries": [
@@ -13182,8 +13410,8 @@ mod test {
         let err = load_import_json(b"not json and not gpg either", None)
             .unwrap_err();
         assert!(
-            format!("{err}").contains("--decrypt-passphrase"),
-            "error should point at --decrypt-passphrase: {err}"
+            format!("{err}").contains("--decrypt or --decrypt-passphrase"),
+            "error should point at --decrypt/--decrypt-passphrase: {err}"
         );
     }
 
