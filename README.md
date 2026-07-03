@@ -21,46 +21,21 @@ and merge pull requests implementing those features.
 
 ## Installation
 
-### Arch Linux
+### Cargo
 
-`rbw` is available in the [extra
-repository](https://archlinux.org/packages/extra/x86_64/rbw/).
-Alternatively, you can install
-[`rbw-git`](https://aur.archlinux.org/packages/rbw-git/) from the AUR, which
-will always build from the latest master commit.
+With a working Rust toolchain, install this fork directly from Git:
 
-### Debian/Ubuntu
+```sh
+cargo install --locked --git https://github.com/pschmitt/rbw
+```
 
-`rbw` is officially packaged for Debian as
-[`rust-rbw`](https://tracker.debian.org/pkg/rust-rbw) and is available in
-testing (forky). You can install it using `sudo apt install rbw`.
+This requires the
+[`pinentry`](https://www.gnupg.org/related_software/pinentry/index.en.html)
+program to be installed (to display password prompts).
 
-Alternatively, you can download a Debian package from
-[https://git.tozt.net/rbw/releases/deb/
-](https://git.tozt.net/rbw/releases/deb/). The packages are signed by
-[`minisign`](https://github.com/jedisct1/minisign), and can be verified using
-the public key `RWTM0AZ5RpROOfAIWx1HvYQ6pw1+FKwN6526UFTKNImP/Hz3ynCFst3r`.
+### Home Manager
 
-### Fedora/EPEL
-
-`rbw` is available in [Fedora and EPEL 9](https://bodhi.fedoraproject.org/updates/?packages=rust-rbw)
-(for RHEL and compatible distributions).
-
-You can install it using `sudo dnf install rbw`.
-
-### Homebrew
-
-`rbw` is available in the [Homebrew repository](https://formulae.brew.sh/formula/rbw). You can install it via `brew install rbw`.
-
-### Nix
-
-`rbw` is available in the
-[NixOS repository](https://search.nixos.org/packages?show=rbw). You can try
-it out via `nix-shell -p rbw`.
-
-#### Home Manager
-
-This flake also exports a Home Manager module (`homeManagerModules.default`)
+This fork also exports a Home Manager module (`homeManagerModules.default`)
 that exposes `config.json` as declarative Nix options (mirroring `Config`
 and `Account` in `src/config.rs`), and installs `rbw` itself.
 
@@ -112,17 +87,6 @@ unset options are omitted from the generated file rather than written as
 option programs.rbw.declarative` or your editor's Nix LSP) for the full
 list of settings, including `accounts.<name>.unlock`,
 `accounts.<name>.exclude_from_list`, and `tui_keybindings`.
-
-### Alpine
-
-`rbw` is available in the [community repository](https://pkgs.alpinelinux.org/packages?name=rbw). You can install it with `apk add rbw`.
-
-### Other
-
-With a working Rust installation, `rbw` can be installed via `cargo install
---locked rbw`. This requires that the
-[`pinentry`](https://www.gnupg.org/related_software/pinentry/index.en.html)
-program is installed (to display password prompts).
 
 ## Configuration
 
