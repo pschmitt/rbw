@@ -140,7 +140,14 @@ async fn handle_request(
     let set_timeout = rbw::actions::AGENT_ACCOUNT
         .scope(
             account.clone(),
-            dispatch(action, sock, state.clone(), &environment, &account),
+            dispatch(
+                action,
+                sock,
+                state.clone(),
+                &environment,
+                &account,
+                account_name.as_deref(),
+            ),
         )
         .await?;
 
@@ -159,6 +166,11 @@ async fn dispatch(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     environment: &rbw::protocol::Environment,
     account: &rbw::config::Account,
+    // The account name as the client sent it: `None` means the client didn't
+    // select an account (which `account` above resolves to the primary one).
+    // `Lock` uses the distinction to decide between locking one account and
+    // locking all of them.
+    requested_account: Option<&str>,
 ) -> anyhow::Result<bool> {
     let set_timeout = match action {
         rbw::protocol::Action::Register => {
@@ -214,7 +226,8 @@ async fn dispatch(
             false
         }
         rbw::protocol::Action::Lock => {
-            crate::actions::lock(sock, state.clone()).await?;
+            crate::actions::lock(sock, state.clone(), requested_account)
+                .await?;
             false
         }
         rbw::protocol::Action::Sync => {

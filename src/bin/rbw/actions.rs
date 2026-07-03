@@ -85,6 +85,12 @@ pub fn lock() -> anyhow::Result<()> {
     simple_action(rbw::protocol::Action::Lock)
 }
 
+// Lock every configured account: send the request without an account so the
+// agent clears all of them, regardless of --account/RBW_ACCOUNT.
+pub fn lock_all() -> anyhow::Result<()> {
+    simple_action_as(None, rbw::protocol::Action::Lock)
+}
+
 pub fn quit() -> anyhow::Result<()> {
     match crate::sock::Sock::connect() {
         Ok(mut sock) => {
@@ -282,11 +288,18 @@ pub fn version() -> anyhow::Result<u32> {
 }
 
 fn simple_action(action: rbw::protocol::Action) -> anyhow::Result<()> {
+    simple_action_as(current_account(), action)
+}
+
+fn simple_action_as(
+    account: Option<String>,
+    action: rbw::protocol::Action,
+) -> anyhow::Result<()> {
     let mut sock = connect()?;
 
     sock.send(&rbw::protocol::Request::with_account(
         get_environment(),
-        current_account(),
+        account,
         action,
     ))?;
 

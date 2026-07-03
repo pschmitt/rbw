@@ -101,9 +101,8 @@ impl State {
         self.timeout.clear();
     }
 
-    // Lock a single account.
-    // Not called yet: needed by the in-flight multi-account branch.
-    #[allow(dead_code)]
+    // Lock a single account (the others stay unlocked, so the global
+    // timeout is left running for them).
     pub fn clear_account(&mut self, account: &str) {
         self.accounts.remove(account);
     }
