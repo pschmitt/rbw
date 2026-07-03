@@ -2660,13 +2660,14 @@ fn unlock_impl(
 }
 
 // If the currently-active account has a `credential_source` configured,
-// resolve its master password (and, if the linked entry has one, its TOTP
-// secret -- for auto-answering a 2FA challenge during login) from the
-// linked item in the source account's vault instead of prompting via
-// pinentry: unlock the source account (recursively following its own
-// `credential_source`, if it has one), find the linked item in its
-// already-unlocked vault, and pull both fields from it. Non-Login entry
-// types aren't handled specially -- resolution just fails for those.
+// resolve its master password (and, if the linked entry has one, a current
+// TOTP code generated from its secret -- for auto-answering a 2FA challenge
+// during login) from the linked item in the source account's vault instead
+// of prompting via pinentry: unlock the source account (recursively
+// following its own `credential_source`, if it has one), find the linked
+// item in its already-unlocked vault, and pull both fields from it.
+// Non-Login entry types aren't handled specially -- resolution just fails
+// for those.
 //
 // Returns `None` (falling back to the normal pinentry prompt) if there's no
 // `credential_source` configured, or if resolution fails for any reason: a
@@ -2714,7 +2715,23 @@ fn resolve_credential_source(
     let _ = crate::actions::set_active_account(Some(target.clone()));
 
     match result {
-        Ok(fields) => Some(fields),
+        Ok((password, totp_secret)) => {
+            // The linked entry's `totp` field is the raw secret, same as
+            // what `rbw code` generates from -- the server needs a
+            // computed current code, not the secret itself.
+            let totp = totp_secret.and_then(|secret| {
+                generate_totp(&secret)
+                    .inspect_err(|e| {
+                        log::warn!(
+                            "failed to generate a TOTP code from the \
+                            credential_source-resolved secret for account \
+                            '{target}': {e:#}"
+                        );
+                    })
+                    .ok()
+            });
+            Some((password, totp))
+        }
         Err(e) => {
             log::warn!(
                 "failed to resolve credential_source for account '{target}' \
