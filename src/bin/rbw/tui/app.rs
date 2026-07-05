@@ -2061,8 +2061,18 @@ impl App {
 
     // Right-arrow equivalent (also used for a detail-pane click): focus the
     // detail pane so Up/Down scroll it instead of moving the list selection.
+    // Allowed from Search too (not just Normal) so a mouse click works from
+    // the moment the TUI opens, without first having to Tab/Esc out of the
+    // filter box -- mirrors `mouse_scroll_list`/`mouse_select_list`, which
+    // already work while searching. `move_or_scroll` still only honors
+    // `detail_focused` in `Mode::Normal`, so Up/Down keeps moving the list
+    // while searching regardless; this only affects the mouse wheel (via
+    // `mouse_scroll_detail`, which doesn't consult `detail_focused` at all)
+    // and which pane's border renders as focused.
     pub fn focus_detail(&mut self) {
-        if matches!(self.mode, Mode::Normal) && !self.filtered.is_empty() {
+        if matches!(self.mode, Mode::Normal | Mode::Search)
+            && !self.filtered.is_empty()
+        {
             self.detail_focused = true;
         }
     }
@@ -2070,14 +2080,17 @@ impl App {
     // Left-arrow/Esc equivalent (also used for a list-pane click): focus
     // back on the list.
     pub fn focus_list(&mut self) {
-        if matches!(self.mode, Mode::Normal) {
+        if matches!(self.mode, Mode::Normal | Mode::Search) {
             self.detail_focused = false;
         }
     }
 
-    // Mouse wheel over the detail pane.
+    // Mouse wheel over the detail pane. Allowed from Search too, matching
+    // `handle_shared`'s Alt-j/k `scroll_detail` calls (shared between Normal
+    // and Search) -- the wheel shouldn't be more restrictive than the
+    // keyboard equivalent for the same action.
     pub fn mouse_scroll_detail(&mut self, delta: isize) {
-        if matches!(self.mode, Mode::Normal) {
+        if matches!(self.mode, Mode::Normal | Mode::Search) {
             self.scroll_detail(delta);
         }
     }
@@ -3166,6 +3179,29 @@ mod test {
         a.mouse_scroll_detail(1);
         assert_eq!(a.detail_scroll, 1);
         assert_eq!(a.selected, 0);
+    }
+
+    // Clicking/scrolling the detail pane also works while still searching
+    // (Mode::Search), not just once Tab/Esc has left the filter box for
+    // Mode::Normal -- the TUI opens straight into Search, so gating the
+    // mouse to Normal only meant neither did anything until the user first
+    // left the filter box. Alt-j/k already scrolls the detail pane during
+    // search (via `handle_shared`), so the wheel shouldn't be more
+    // restrictive than the keyboard equivalent.
+    #[test]
+    fn mouse_focus_and_scroll_detail_work_while_still_searching() {
+        let mut a = app_with_entries(2);
+        a.mode = Mode::Search;
+        a.detail_max_scroll.set(5);
+
+        a.focus_detail();
+        assert!(a.detail_focused);
+
+        a.mouse_scroll_detail(1);
+        assert_eq!(a.detail_scroll, 1);
+
+        a.focus_list();
+        assert!(!a.detail_focused);
     }
 
     // `S` opens the settings panel from Normal mode; Esc backs out without

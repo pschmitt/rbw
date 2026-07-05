@@ -236,8 +236,8 @@ fn type_marker(kind: &str) -> Span<'static> {
 }
 
 fn render_list(f: &mut Frame, app: &App, area: Rect) {
-    let focused = matches!(app.mode, Mode::Search)
-        || (matches!(app.mode, Mode::Normal) && !app.detail_focused);
+    let focused = matches!(app.mode, Mode::Normal | Mode::Search)
+        && !app.detail_focused;
     let total = app.search.len();
     let count = app.filtered.len();
     let title = if count == total {
@@ -392,7 +392,8 @@ fn list_item(
 }
 
 fn render_detail(f: &mut Frame, app: &App, area: Rect) {
-    let focused = matches!(app.mode, Mode::Normal) && app.detail_focused;
+    let focused =
+        matches!(app.mode, Mode::Normal | Mode::Search) && app.detail_focused;
     let b = block("details", focused);
     let inner = b.inner(area);
     f.render_widget(b, area);
