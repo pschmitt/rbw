@@ -859,7 +859,7 @@ impl App {
         let Some(detail) =
             self.detail_cache.get(&(o, entry.id.clone())).cloned()
         else {
-            self.set_status(Level::Error, "could not decrypt entry");
+            self.set_status(Level::Error, "could not decrypt item");
             return;
         };
         let dest = std::env::current_dir()
@@ -1158,7 +1158,7 @@ impl App {
                     .find(|e| &e.id == id)
                     .cloned()
                     .map_or_else(
-                        || Err(anyhow::anyhow!("entry no longer exists")),
+                        || Err(anyhow::anyhow!("item no longer exists")),
                         |entry| {
                             commands::tui_save_edit(
                                 &mut self.vaults[owner].db,
@@ -1323,7 +1323,7 @@ impl App {
         let Some(detail) =
             self.detail_cache.get(&(owner, entry.id.clone())).cloned()
         else {
-            anyhow::bail!("could not decrypt entry");
+            anyhow::bail!("could not decrypt item");
         };
         self.activate_current()?;
         let changed = commands::tui_edit_in_editor(
@@ -1958,7 +1958,7 @@ impl App {
                     .cloned()
                 else {
                     self.mode = Mode::Normal;
-                    self.set_status(Level::Error, "entry no longer exists");
+                    self.set_status(Level::Error, "item no longer exists");
                     return;
                 };
                 if let Err(e) = crate::actions::set_active_account(Some(
@@ -2082,6 +2082,14 @@ impl App {
     pub fn mouse_scroll_list(&mut self, delta: isize) {
         if matches!(self.mode, Mode::Normal | Mode::Search) {
             self.move_by(delta);
+        }
+    }
+
+    // Clicking a row in the list pane selects that item directly, same as
+    // arrowing onto it.
+    pub fn mouse_select_list(&mut self, index: usize) {
+        if matches!(self.mode, Mode::Normal | Mode::Search) {
+            self.select(index);
         }
     }
 
@@ -3738,5 +3746,22 @@ mod test {
             &a.mode,
             Mode::ConfirmClearCredentialSource(name) if name == "work"
         ));
+    }
+
+    // Mouse: clicking a row in the list pane jumps selection straight to it.
+    #[test]
+    fn mouse_select_list_jumps_to_the_clicked_row() {
+        let mut a = app_with_entries(3);
+        a.mouse_select_list(2);
+        assert_eq!(a.selected, 2);
+        a.mouse_select_list(0);
+        assert_eq!(a.selected, 0);
+    }
+
+    #[test]
+    fn mouse_select_list_clamps_to_the_last_item() {
+        let mut a = app_with_entries(3);
+        a.mouse_select_list(99);
+        assert_eq!(a.selected, 2);
     }
 }

@@ -157,7 +157,17 @@ fn run_loop(
                 match mouse.kind {
                     MouseEventKind::Down(MouseButton::Left) => match pane {
                         Some(ui::Pane::Detail) => app.focus_detail(),
-                        Some(ui::Pane::List) => app.focus_list(),
+                        Some(ui::Pane::List) => {
+                            app.focus_list();
+                            if let Some(index) = ui::list_index_at(
+                                full,
+                                app,
+                                mouse.column,
+                                mouse.row,
+                            ) {
+                                app.mouse_select_list(index);
+                            }
+                        }
                         None => {}
                     },
                     MouseEventKind::ScrollDown => match pane {

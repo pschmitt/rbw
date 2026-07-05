@@ -101,6 +101,31 @@ pub fn pane_at(full: Rect, x: u16, y: u16) -> Option<Pane> {
     }
 }
 
+// Which filtered-list index (if any) a click at `(x, y)` in the full
+// terminal area lands on. Items are always exactly one row tall and,
+// because `render_list` hands the widget a freshly-offset-0 `ListState`
+// every frame, ratatui's own scroll math collapses to: show item 0 unless
+// the selection doesn't fit, in which case scroll just far enough to keep
+// it as the last visible row. Mirrored here so a click resolves against the
+// same row the last frame actually drew.
+pub fn list_index_at(full: Rect, app: &App, x: u16, y: u16) -> Option<usize> {
+    let (list_area, _) = pane_layout(main_area(full));
+    let inner = block("", false).inner(list_area);
+    if x < inner.x || x >= inner.right() || y < inner.y || y >= inner.bottom()
+    {
+        return None;
+    }
+    let total = app.filtered.len();
+    if total == 0 {
+        return None;
+    }
+    let height = usize::from(inner.height);
+    let offset = app.selected.saturating_sub(height.saturating_sub(1));
+    let row = usize::from(y - inner.y);
+    let index = offset + row;
+    (index < total).then_some(index)
+}
+
 pub fn render(f: &mut Frame, app: &App) {
     if let Mode::LockedPrompt(name) = &app.mode {
         f.render_widget(Clear, f.area());
@@ -216,7 +241,7 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
     let total = app.search.len();
     let count = app.filtered.len();
     let title = if count == total {
-        format!("rbw · {total} entries")
+        format!("rbw · {total} items")
     } else {
         format!("rbw · {count}/{total}")
     };
@@ -226,7 +251,7 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
 
     if app.filtered.is_empty() {
         let msg = Paragraph::new(Text::styled(
-            "\n  no matching entries",
+            "\n  no matching items",
             Style::default().fg(DIM).italic(),
         ));
         f.render_widget(msg, inner);
@@ -377,7 +402,7 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
         let msg = if app.current_search().is_some() {
             "  decrypting…"
         } else {
-            "  select an entry"
+            "  select an item"
         };
         f.render_widget(
             Paragraph::new(Text::styled(
@@ -1234,7 +1259,7 @@ fn render_picker(f: &mut Frame, picker: &PickerView, area: Rect) {
 fn render_confirm(f: &mut Frame, app: &App, area: Rect) {
     let name = app
         .current_search()
-        .map_or_else(|| "this entry".to_string(), |s| s.name.clone());
+        .map_or_else(|| "this item".to_string(), |s| s.name.clone());
     let rect = centered(50, 5, area);
     f.render_widget(Clear, rect);
     let b = Block::default()
@@ -1242,7 +1267,7 @@ fn render_confirm(f: &mut Frame, app: &App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Red))
         .title(Span::styled(
-            " delete entry ",
+            " delete item ",
             Style::default().fg(Color::Red).bold(),
         ));
     let inner = b.inner(rect);
@@ -1573,10 +1598,10 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
             "browse / download attachments",
         ),
         (dc(TuiAction::Sync), "sync with the server (any focus)"),
-        (dc(TuiAction::StartEdit), "edit entry (inline form)"),
+        (dc(TuiAction::StartEdit), "edit item (inline form)"),
         (
             dc(TuiAction::OpenEditor),
-            "edit entry in $EDITOR (any focus)",
+            "edit item in $EDITOR (any focus)",
         ),
         (dc(TuiAction::StartAdd), "add a new login"),
         (
@@ -1587,7 +1612,7 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
             dc(TuiAction::OpenSettings),
             "settings: password-gen policy, etc.",
         ),
-        (dc(TuiAction::DeleteEntry), "delete entry"),
+        (dc(TuiAction::DeleteEntry), "delete item"),
         (dc(TuiAction::Help), "this help"),
         (format!("{} · esc", dc(TuiAction::Quit)), "quit"),
     ];
