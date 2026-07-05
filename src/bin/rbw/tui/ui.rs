@@ -901,10 +901,10 @@ fn status_hint(app: &App) -> String {
         }
         Mode::Help => "any key to close".to_string(),
         Mode::LockedPrompt(_) => {
-            "⏎/y unlock · any other key dismiss".to_string()
+            "⏎/y unlock · q quit · any other key dismiss".to_string()
         }
         Mode::SessionExpiredPrompt(_) => {
-            "⏎/y log in · any other key dismiss".to_string()
+            "⏎/y log in · q quit · any other key dismiss".to_string()
         }
         Mode::Normal => format!(
             "{} search · {} edit · {} add · {} delete · {}/{}/{} copy · {} open · {} attach · {} accounts · {} settings · {} sync · {} reveal · {} help · {} quit",
@@ -1317,7 +1317,7 @@ fn render_locked_prompt(f: &mut Frame, name: &str, area: Rect) {
         Line::raw("Cached secrets were cleared."),
         Line::raw(""),
         Line::from(Span::styled(
-            "⏎/y unlock · any other key dismiss",
+            "⏎/y unlock · q quit · any other key dismiss",
             Style::default().fg(DIM),
         )),
     ]);
@@ -1351,7 +1351,7 @@ fn render_session_expired_prompt(f: &mut Frame, name: &str, area: Rect) {
         Line::raw("The vault is still readable; log in to sync again."),
         Line::raw(""),
         Line::from(Span::styled(
-            "⏎/y log in · any other key dismiss",
+            "⏎/y log in · q quit · any other key dismiss",
             Style::default().fg(DIM),
         )),
     ]);

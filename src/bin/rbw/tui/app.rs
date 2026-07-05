@@ -1612,12 +1612,14 @@ impl App {
     }
 
     // y/Y/Enter accepts (bounced to the event loop, same as `AccountUnlock`,
-    // since pinentry needs the real terminal); anything else dismisses back
-    // to `Normal`, mirroring `ConfirmDelete`'s y/n convention. Deliberately
-    // not routed through the keymap: like `ConfirmDelete`'s y/n and Help's
-    // "any key closes", this is a small binary confirm tied to the widget's
-    // own semantics rather than a freely rebindable action (see the doc
-    // comment at the top of `keymap.rs`).
+    // since pinentry needs the real terminal); q/Q quits outright (there's no
+    // way to do anything useful while locked, so forcing a detour through
+    // Normal first would just be an extra keypress); anything else dismisses
+    // back to `Normal`, mirroring `ConfirmDelete`'s y/n convention.
+    // Deliberately not routed through the keymap: like `ConfirmDelete`'s y/n
+    // and Help's "any key closes", this is a small binary confirm tied to the
+    // widget's own semantics rather than a freely rebindable action (see the
+    // doc comment at the top of `keymap.rs`).
     //
     // Dismissing doesn't leave the session silently half-locked: the agent
     // is still locked, so `poll_agent_lock` pops the prompt right back up on
@@ -1631,6 +1633,7 @@ impl App {
             KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
                 Action::UnlockAccount(name.clone())
             }
+            KeyCode::Char('q' | 'Q') => Action::Quit,
             _ => {
                 self.mode = Mode::Normal;
                 Action::None
@@ -1638,8 +1641,8 @@ impl App {
         }
     }
 
-    // Same y/Y/Enter-accepts, anything-else-dismisses convention as
-    // `handle_locked_prompt`. Accepting fires the same `UnlockAccount`
+    // Same y/Y/Enter-accepts, q/Q-quits, anything-else-dismisses convention
+    // as `handle_locked_prompt`. Accepting fires the same `UnlockAccount`
     // action -- by the time this prompt exists, the agent has already
     // cleared the account's dead refresh token (see `sync` in
     // rbw-agent/actions.rs), so the login half of that action now performs
@@ -1652,6 +1655,7 @@ impl App {
             KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
                 Action::UnlockAccount(name.clone())
             }
+            KeyCode::Char('q' | 'Q') => Action::Quit,
             _ => {
                 self.mode = Mode::Normal;
                 Action::None
@@ -3359,6 +3363,18 @@ mod test {
         assert!(matches!(a.mode, Mode::Normal));
     }
 
+    // q/Q is the one dismiss key that doesn't just back out to Normal --
+    // there's nothing useful to do while locked, so it exits the app
+    // outright instead of making the user quit again from Normal.
+    #[test]
+    fn locked_prompt_q_quits() {
+        let mut a = app_with_entries(1);
+        for k in [KeyCode::Char('q'), KeyCode::Char('Q')] {
+            a.mode = Mode::LockedPrompt("default".to_string());
+            assert!(matches!(a.handle_key(key(k)), Action::Quit));
+        }
+    }
+
     // Same accept/dismiss keybinds as the lock-detection modal, but reached
     // via a failed sync rather than `poll_agent_lock`.
     #[test]
@@ -3385,6 +3401,15 @@ mod test {
         a.show_session_expired("default".to_string());
         assert!(matches!(a.handle_key(key(KeyCode::Esc)), Action::None));
         assert!(matches!(a.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn session_expired_prompt_q_quits() {
+        let mut a = app_with_entries(1);
+        for k in [KeyCode::Char('q'), KeyCode::Char('Q')] {
+            a.mode = Mode::SessionExpiredPrompt("default".to_string());
+            assert!(matches!(a.handle_key(key(k)), Action::Quit));
+        }
     }
 
     #[test]
