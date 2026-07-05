@@ -49,6 +49,7 @@ pub async fn register(
                 environment,
                 false,
                 Some(sock.inner()),
+                config_pinentry_timeout().await?,
             )
             .await
             .context("failed to read client_id from pinentry")?;
@@ -60,6 +61,7 @@ pub async fn register(
                 environment,
                 false,
                 Some(sock.inner()),
+                config_pinentry_timeout().await?,
             )
             .await
             .context("failed to read client_secret from pinentry")?;
@@ -269,6 +271,7 @@ async fn login_interactively(
                     environment,
                     true,
                     Some(sock.inner()),
+                    config_pinentry_timeout().await?,
                 )
                 .await
                 .context("failed to read password from pinentry")?
@@ -287,6 +290,7 @@ async fn login_interactively(
                 environment,
                 true,
                 Some(sock.inner()),
+                config_pinentry_timeout().await?,
             )
             .await
             .context("failed to read password from pinentry")?
@@ -432,6 +436,7 @@ async fn two_factor(
             environment,
             provider.grab(),
             Some(sock.inner()),
+            config_pinentry_timeout().await?,
         )
         .await
         .context("failed to read code from pinentry")?;
@@ -626,6 +631,7 @@ async fn unlock_state(
                         environment,
                         true,
                         client.as_deref_mut(),
+                        config_pinentry_timeout().await?,
                     )
                     .await
                     .context("failed to read password from pinentry")?
@@ -644,6 +650,7 @@ async fn unlock_state(
                     environment,
                     true,
                     client.as_deref_mut(),
+                    config_pinentry_timeout().await?,
                 )
                 .await
                 .context("failed to read password from pinentry")?
@@ -915,6 +922,7 @@ async fn decrypt_cipher(
                         environment,
                         true,
                         client.as_deref_mut(),
+                        config_pinentry_timeout().await?,
                     )
                     .await
                     .context("failed to read password from pinentry")?
@@ -933,6 +941,7 @@ async fn decrypt_cipher(
                     environment,
                     true,
                     client.as_deref_mut(),
+                    config_pinentry_timeout().await?,
                 )
                 .await
                 .context("failed to read password from pinentry")?
@@ -1324,6 +1333,13 @@ async fn save_db(
 async fn config_pinentry() -> anyhow::Result<String> {
     let config = rbw::config::Config::load_async().await?;
     Ok(config.pinentry)
+}
+
+// See `Config::pinentry_timeout`. Passed straight through to pinentry's own
+// `--timeout` flag, so `0` means "no timeout" there too.
+async fn config_pinentry_timeout() -> anyhow::Result<u64> {
+    let config = rbw::config::Config::load_async().await?;
+    Ok(config.pinentry_timeout)
 }
 
 pub async fn subscribe_to_notifications(

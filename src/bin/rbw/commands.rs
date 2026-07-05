@@ -2287,6 +2287,7 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
         "lock_timeout" => Some(config.lock_timeout.to_string()),
         "sync_interval" => Some(config.sync_interval.to_string()),
         "pinentry" => Some(config.pinentry),
+        "pinentry_timeout" => Some(config.pinentry_timeout.to_string()),
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     };
     let Some(value) = value else {
@@ -2370,6 +2371,11 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
             config.sync_interval = interval;
         }
         "pinentry" => config.pinentry = value.to_string(),
+        "pinentry_timeout" => {
+            config.pinentry_timeout = value
+                .parse()
+                .context("failed to parse value for pinentry_timeout")?;
+        }
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     }
     config.save()?;
@@ -2399,6 +2405,10 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
             config.lock_timeout = rbw::config::default_lock_timeout();
         }
         "pinentry" => config.pinentry = rbw::config::default_pinentry(),
+        "pinentry_timeout" => {
+            config.pinentry_timeout =
+                rbw::config::default_pinentry_timeout();
+        }
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     }
     config.save()?;

@@ -17,11 +17,19 @@ pub async fn getpin(
     // leaving it as an orphan competing for the terminal. See
     // https://github.com/doy/rbw/issues/352.
     cancel: Option<&mut tokio::net::UnixStream>,
+    // Seconds before pinentry gives up waiting at the terminal and exits on
+    // its own (`0` means never, matching pinentry's own `--timeout`
+    // semantics). Without this, a pinentry left unanswered -- the terminal
+    // it was meant for got closed, its process got orphaned, whatever --
+    // hangs around forever and wedges every subsequent unlock attempt behind
+    // it, since only one pinentry can hold the terminal at a time. See
+    // `Config::pinentry_timeout`.
+    timeout: u64,
 ) -> Result<crate::locked::Password> {
     let mut opts = tokio::process::Command::new(pinentry);
     opts.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped());
-    let mut args = vec!["--timeout".into(), "0".into()];
+    let mut args = vec!["--timeout".into(), timeout.to_string().into()];
     if let Some(tty) = environment.tty() {
         args.extend(["--ttyname".into(), tty.into()]);
     }
@@ -353,6 +361,7 @@ async fn test_getpin_cancelled_when_client_disconnects() {
             &environment,
             false,
             Some(&mut agent_side),
+            0,
         ),
         async {
             // Wait until the fake pinentry has acknowledged the setup

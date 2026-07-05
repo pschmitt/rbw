@@ -199,6 +199,15 @@ pub struct Config {
     pub sync_interval: u64,
     #[serde(default = "default_pinentry")]
     pub pinentry: String,
+    // Seconds pinentry waits at the terminal for input before giving up and
+    // exiting on its own; passed straight through to pinentry's own
+    // `--timeout` flag, so `0` means never (the old, unconditional
+    // behavior). Without this, a pinentry left unanswered -- its terminal
+    // closed, its process orphaned, whatever -- hangs around forever and
+    // wedges every subsequent unlock attempt behind it, since only one
+    // pinentry can hold the terminal at a time.
+    #[serde(default = "default_pinentry_timeout")]
+    pub pinentry_timeout: u64,
     // TUI keybinding overrides: action name (e.g. "copy_password",
     // "move_down") to a list of key chord strings (e.g. "ctrl-y", "alt-p",
     // "g", "pagedown") that fully replace that action's built-in default
@@ -234,6 +243,7 @@ impl Default for Config {
             lock_timeout: default_lock_timeout(),
             sync_interval: default_sync_interval(),
             pinentry: default_pinentry(),
+            pinentry_timeout: default_pinentry_timeout(),
             tui_keybindings: std::collections::HashMap::new(),
             password_gen: PasswordGenPolicy::default(),
             device_id: None,
@@ -251,6 +261,10 @@ pub fn default_sync_interval() -> u64 {
 
 pub fn default_pinentry() -> String {
     "pinentry".to_string()
+}
+
+pub fn default_pinentry_timeout() -> u64 {
+    300
 }
 
 impl Config {

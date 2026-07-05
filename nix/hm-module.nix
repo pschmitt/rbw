@@ -273,6 +273,17 @@ let
         default = "pinentry";
         description = "The pinentry executable to use.";
       };
+      pinentry_timeout = mkOption {
+        type = types.ints.unsigned;
+        default = 300;
+        description = ''
+          Seconds pinentry waits at the terminal for input before giving up
+          and exiting on its own. Setting this to `0` disables the timeout
+          (pinentry waits forever) -- not recommended, since a pinentry left
+          unanswered for any reason then hangs around forever and wedges
+          every subsequent unlock attempt behind it.
+        '';
+      };
       tui_keybindings = mkOption {
         type = types.attrsOf (types.listOf types.str);
         default = { };
