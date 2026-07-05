@@ -7,8 +7,8 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 // Whether `list`/`search`/`get` should proactively unlock this account
 // (prompting as needed) when merging entries across every configured
-// account. Independent of `Account::exclude_from_list`, which controls
-// whether the account's entries show up in the merge at all.
+// account. Independent of `Account::exclude_from` (see `ExcludeContext`),
+// which controls whether the account's entries show up in the merge at all.
 #[derive(
     serde::Serialize,
     serde::Deserialize,
@@ -32,6 +32,46 @@ pub enum UnlockPolicy {
     // it too.
     #[default]
     OnDemand,
+}
+
+// An account's `unlock` policy plus (optionally) where its master password
+// comes from. Grouped together because both are about *how* an account gets
+// unlocked, unlike `exclude_from`, which is about whether it participates in
+// a merge at all once unlocked.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq,
+)]
+pub struct UnlockConfig {
+    #[serde(default)]
+    pub policy: UnlockPolicy,
+    // See `CredentialSource`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials: Option<CredentialSource>,
+}
+
+// Which commands should skip this account when merging entries across every
+// configured account. `All` is a magic catch-all equivalent to listing every
+// other variant. An account not excluded from a given context is still only
+// actually queried there subject to its own `unlock.policy` (see
+// `UnlockPolicy`) and that context's own `--all`-style flag, where it has
+// one; `exclude_from` is a hard opt-out layered on top of that, not an
+// alternative to it. Still reachable via `--account <name>` directly (or,
+// for `tui`, via `rbw tui --account <name>`) regardless of what it's
+// excluded from.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExcludeContext {
+    List,
+    Search,
+    Get,
+    Show,
+    Code,
+    Sync,
+    Unlock,
+    Tui,
+    All,
 }
 
 // Default password-generation policy: the fallback used by `rbw gen` and
@@ -116,17 +156,12 @@ pub struct Account {
     pub ui_url: Option<String>,
     pub notifications_url: Option<String>,
     pub client_cert_path: Option<std::path::PathBuf>,
-    // See `UnlockPolicy`.
+    // See `UnlockConfig`.
     #[serde(default)]
-    pub unlock: UnlockPolicy,
-    // Hard opt-out: never include this account's entries in a `list`/
-    // `search`/`get` merge across accounts (even if unlocked, even with
-    // `--all`). Still reachable via `--account <name>` directly.
-    #[serde(default)]
-    pub exclude_from_list: bool,
-    // See `CredentialSource`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credential_source: Option<CredentialSource>,
+    pub unlock: UnlockConfig,
+    // See `ExcludeContext`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_from: Vec<ExcludeContext>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -339,9 +374,8 @@ impl Config {
                 ui_url: self.ui_url.clone(),
                 notifications_url: self.notifications_url.clone(),
                 client_cert_path: self.client_cert_path.clone(),
-                unlock: UnlockPolicy::default(),
-                exclude_from_list: false,
-                credential_source: None,
+                unlock: UnlockConfig::default(),
+                exclude_from: Vec::new(),
             }];
         }
         Vec::new()
@@ -401,9 +435,8 @@ impl Config {
             ui_url: self.ui_url.take(),
             notifications_url: self.notifications_url.take(),
             client_cert_path: self.client_cert_path.take(),
-            unlock: UnlockPolicy::default(),
-            exclude_from_list: false,
-            credential_source: None,
+            unlock: UnlockConfig::default(),
+            exclude_from: Vec::new(),
         });
         if self.primary_account.is_none() {
             self.primary_account = Some(name);
@@ -456,7 +489,7 @@ impl Config {
                 .ok_or_else(|| Error::UnknownAccount {
                     name: current.clone(),
                 })?;
-            let Some(source) = &account.credential_source else {
+            let Some(source) = &account.unlock.credentials else {
                 break;
             };
             if source.account == account.name {
@@ -504,6 +537,13 @@ impl Config {
 }
 
 impl Account {
+    // Whether this account should be skipped for `ctx`: either `ctx` itself
+    // or the magic `ExcludeContext::All` is in `exclude_from`.
+    pub fn excluded_from(&self, ctx: ExcludeContext) -> bool {
+        self.exclude_from.contains(&ctx)
+            || self.exclude_from.contains(&ExcludeContext::All)
+    }
+
     pub fn base_url(&self) -> String {
         self.base_url.clone().map_or_else(
             || "https://api.bitwarden.com".to_string(),
@@ -613,7 +653,9 @@ pub async fn device_id(config: &Config) -> Result<String> {
 
 #[cfg(test)]
 mod test {
-    use super::{Account, Config, CredentialSource, Error};
+    use super::{
+        Account, Config, CredentialSource, Error, ExcludeContext,
+    };
 
     fn named(name: &str, email: &str) -> Account {
         Account {
@@ -704,7 +746,7 @@ mod test {
     fn credential_source_chain_resolves_valid_chain() {
         let mut c = Config::new();
         let mut work = named("work", "b@co.com");
-        work.credential_source = Some(CredentialSource {
+        work.unlock.credentials = Some(CredentialSource {
             account: "personal".to_string(),
             item: Some("work login".to_string()),
         });
@@ -722,7 +764,7 @@ mod test {
     fn credential_source_chain_rejects_self_reference() {
         let mut c = Config::new();
         let mut work = named("work", "b@co.com");
-        work.credential_source = Some(CredentialSource {
+        work.unlock.credentials = Some(CredentialSource {
             account: "work".to_string(),
             item: Some("whoops".to_string()),
         });
@@ -740,17 +782,17 @@ mod test {
     fn credential_source_chain_rejects_cycle() {
         let mut c = Config::new();
         let mut a = named("a", "a@x.com");
-        a.credential_source = Some(CredentialSource {
+        a.unlock.credentials = Some(CredentialSource {
             account: "b".to_string(),
             item: Some("e".to_string()),
         });
         let mut b = named("b", "b@x.com");
-        b.credential_source = Some(CredentialSource {
+        b.unlock.credentials = Some(CredentialSource {
             account: "c".to_string(),
             item: Some("e".to_string()),
         });
         let mut cc = named("c", "c@x.com");
-        cc.credential_source = Some(CredentialSource {
+        cc.unlock.credentials = Some(CredentialSource {
             account: "a".to_string(),
             item: Some("e".to_string()),
         });
@@ -768,7 +810,7 @@ mod test {
     fn credential_source_chain_rejects_unknown_account() {
         let mut c = Config::new();
         let mut work = named("work", "b@co.com");
-        work.credential_source = Some(CredentialSource {
+        work.unlock.credentials = Some(CredentialSource {
             account: "nonexistent".to_string(),
             item: Some("e".to_string()),
         });
@@ -788,5 +830,44 @@ mod test {
         .unwrap();
         assert_eq!(source.account, "personal");
         assert_eq!(source.item.as_deref(), Some("work login"));
+    }
+
+    // An account with an empty `exclude_from` isn't excluded from anything.
+    #[test]
+    fn excluded_from_is_false_by_default() {
+        let a = named("work", "b@co.com");
+        assert!(!a.excluded_from(ExcludeContext::List));
+        assert!(!a.excluded_from(ExcludeContext::Tui));
+    }
+
+    // `exclude_from` only excludes the specific contexts it names.
+    #[test]
+    fn excluded_from_checks_only_the_listed_contexts() {
+        let mut a = named("work", "b@co.com");
+        a.exclude_from = vec![ExcludeContext::List, ExcludeContext::Search];
+        assert!(a.excluded_from(ExcludeContext::List));
+        assert!(a.excluded_from(ExcludeContext::Search));
+        assert!(!a.excluded_from(ExcludeContext::Tui));
+        assert!(!a.excluded_from(ExcludeContext::Get));
+    }
+
+    // The magic `all` value excludes from every context, not just the ones
+    // spelled out alongside it.
+    #[test]
+    fn excluded_from_all_covers_every_context() {
+        let mut a = named("work", "b@co.com");
+        a.exclude_from = vec![ExcludeContext::All];
+        for ctx in [
+            ExcludeContext::List,
+            ExcludeContext::Search,
+            ExcludeContext::Get,
+            ExcludeContext::Show,
+            ExcludeContext::Code,
+            ExcludeContext::Sync,
+            ExcludeContext::Unlock,
+            ExcludeContext::Tui,
+        ] {
+            assert!(a.excluded_from(ctx));
+        }
     }
 }

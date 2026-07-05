@@ -2457,9 +2457,8 @@ pub fn account_add(
         ui_url: None,
         notifications_url: None,
         client_cert_path: None,
-        unlock: rbw::config::UnlockPolicy::default(),
-        exclude_from_list: false,
-        credential_source: None,
+        unlock: rbw::config::UnlockConfig::default(),
+        exclude_from: Vec::new(),
     });
     // The first account is always primary; otherwise only if asked.
     if primary || first {
@@ -2523,29 +2522,36 @@ pub fn account_set_primary(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-// Change one or more per-account settings (currently `unlock`,
-// `exclude_from_list`, and `credential_source` — see `rbw::config::Account`).
-// Leaves a setting unchanged when its argument is `None`/`false`.
+// Change one or more per-account settings (currently `unlock.policy`,
+// `exclude_from`, and `unlock.credentials` — see `rbw::config::Account`).
+// Leaves a setting unchanged when its argument is `None`/empty/`false`.
 #[allow(clippy::fn_params_excessive_bools)]
 pub fn account_set(
     name: &str,
     unlock: Option<rbw::config::UnlockPolicy>,
-    exclude_from_list: Option<bool>,
+    exclude_from: Vec<rbw::config::ExcludeContext>,
+    clear_exclude_from: bool,
     credential_source_account: Option<String>,
     credential_source_item: Option<String>,
     clear_credential_source: bool,
 ) -> anyhow::Result<()> {
     if unlock.is_none()
-        && exclude_from_list.is_none()
+        && exclude_from.is_empty()
+        && !clear_exclude_from
         && credential_source_account.is_none()
         && credential_source_item.is_none()
         && !clear_credential_source
     {
         anyhow::bail!(
-            "nothing to change: pass --unlock, --exclude-from-list, \
-            --credential-source-account and optionally \
-            --credential-source-item, or \
+            "nothing to change: pass --unlock, --exclude-from (repeatable) \
+            or --clear-exclude-from, --credential-source-account and \
+            optionally --credential-source-item, or \
             --clear-credential-source"
+        );
+    }
+    if clear_exclude_from && !exclude_from.is_empty() {
+        anyhow::bail!(
+            "--clear-exclude-from can't be combined with --exclude-from"
         );
     }
     if clear_credential_source
@@ -2566,15 +2572,17 @@ pub fn account_set(
         anyhow::bail!("account '{name}' not found");
     };
     if let Some(unlock) = unlock {
-        account.unlock = unlock;
+        account.unlock.policy = unlock;
     }
-    if let Some(exclude_from_list) = exclude_from_list {
-        account.exclude_from_list = exclude_from_list;
+    if clear_exclude_from {
+        account.exclude_from = Vec::new();
+    } else if !exclude_from.is_empty() {
+        account.exclude_from = exclude_from;
     }
     if clear_credential_source {
-        account.credential_source = None;
+        account.unlock.credentials = None;
     } else if let Some(source_account) = credential_source_account {
-        account.credential_source = Some(rbw::config::CredentialSource {
+        account.unlock.credentials = Some(rbw::config::CredentialSource {
             account: source_account,
             item: credential_source_item
                 .filter(|item| !item.trim().is_empty()),
@@ -2702,7 +2710,7 @@ fn resolve_credential_source(
     }
 
     let account = config.account(Some(&target)).ok()?;
-    let source = account.credential_source.as_ref()?;
+    let source = account.unlock.credentials.as_ref()?;
 
     visited.push(target.clone());
     let result =
@@ -2819,7 +2827,10 @@ fn credential_source_login_fields(
 // actual unlocking as a side effect of building its target list; this just
 // reports what ended up unlocked.
 pub fn unlock_all() -> anyhow::Result<()> {
-    let target_accounts = list_target_accounts(true)?;
+    let target_accounts = list_target_accounts(
+        true,
+        rbw::config::ExcludeContext::Unlock,
+    )?;
     let c = stdout_supports_color();
     for account in &target_accounts {
         eprintln!(
@@ -2841,7 +2852,8 @@ pub fn unlocked() -> anyhow::Result<()> {
 }
 
 pub fn sync(all: bool) -> anyhow::Result<()> {
-    let target_accounts = list_target_accounts(all)?;
+    let target_accounts =
+        list_target_accounts(all, rbw::config::ExcludeContext::Sync)?;
     let c = stdout_supports_color();
 
     let mut failed = Vec::new();
@@ -2941,7 +2953,8 @@ pub fn list(
         );
     }
 
-    let target_accounts = list_target_accounts(all)?;
+    let target_accounts =
+        list_target_accounts(all, rbw::config::ExcludeContext::List)?;
     let tag_account = target_accounts.len() > 1;
 
     // Structured output (`--json`/`--yaml`) always emits the *full* decrypted
@@ -3048,7 +3061,8 @@ pub fn get(
     force_exact: bool,
     all: bool,
 ) -> anyhow::Result<()> {
-    let target_accounts = list_target_accounts(all)?;
+    let target_accounts =
+        list_target_accounts(all, rbw::config::ExcludeContext::Get)?;
     let tag_account = target_accounts.len() > 1;
 
     let needle_str = needles
@@ -3122,7 +3136,8 @@ pub fn show(
     force_exact: bool,
     all: bool,
 ) -> anyhow::Result<()> {
-    let target_accounts = list_target_accounts(all)?;
+    let target_accounts =
+        list_target_accounts(all, rbw::config::ExcludeContext::Show)?;
 
     let needle_str = needles
         .iter()
@@ -3660,7 +3675,8 @@ pub fn search(
         );
     }
 
-    let target_accounts = list_target_accounts(all)?;
+    let target_accounts =
+        list_target_accounts(all, rbw::config::ExcludeContext::Search)?;
     let tag_account = target_accounts.len() > 1;
 
     // Structured output (`--json`/`--yaml`) emits the *full* decrypted entry
@@ -3785,7 +3801,8 @@ pub fn code(
     force_exact: bool,
     all: bool,
 ) -> anyhow::Result<()> {
-    let target_accounts = list_target_accounts(all)?;
+    let target_accounts =
+        list_target_accounts(all, rbw::config::ExcludeContext::Code)?;
 
     let needle_str = needles
         .iter()
@@ -10825,11 +10842,15 @@ fn should_unlock_for_merge(
 // Which accounts `list`/`search`/`get` should query. An explicit --account/
 // RBW_ACCOUNT always wins and scopes to just that one account, unchanged from
 // single-account behavior. Otherwise every configured account is a candidate,
-// filtered per-account by `Account::exclude_from_list` and `Account::unlock`
+// filtered per-account by `Account::excluded_from(ctx)` and `Account::unlock`
 // (see `should_unlock_for_merge`); an account that isn't proactively
 // unlocked still makes it into the merge if it happens to already be
-// unlocked.
-fn list_target_accounts(all: bool) -> anyhow::Result<Vec<String>> {
+// unlocked. `ctx` identifies the calling subcommand (e.g. `List`, `Search`,
+// `Get`) so each can be excluded independently via `exclude_from`.
+fn list_target_accounts(
+    all: bool,
+    ctx: rbw::config::ExcludeContext,
+) -> anyhow::Result<Vec<String>> {
     if let Some(name) = crate::actions::current_account() {
         return Ok(vec![name]);
     }
@@ -10845,11 +10866,11 @@ fn list_target_accounts(all: bool) -> anyhow::Result<Vec<String>> {
 
     let mut out = Vec::new();
     for account in &accounts {
-        if account.exclude_from_list {
+        if account.excluded_from(ctx) {
             continue;
         }
         crate::actions::set_active_account(Some(account.name.clone()))?;
-        if should_unlock_for_merge(account.unlock, all) {
+        if should_unlock_for_merge(account.unlock.policy, all) {
             unlock(None)?;
             out.push(account.name.clone());
         } else if active_account_unlocked() {
@@ -10861,12 +10882,15 @@ fn list_target_accounts(all: bool) -> anyhow::Result<Vec<String>> {
 
 // Open the multi-account TUI. Unlocks the target account (--account /
 // RBW_ACCOUNT, else primary) up front — pinentry runs here, on the real
-// terminal, before the UI takes over the screen. Every other configured
-// account is then unlocked per `should_unlock_for_merge` (so `unlock:
-// always` accounts always come up, `--all` additionally brings in the
-// `on-demand` ones, and `never` accounts are only loaded if already
-// unlocked); the rest are reported as locked for lazy unlock from the
-// accounts panel.
+// terminal, before the UI takes over the screen; the target is always
+// loaded regardless of `exclude_from`, since it was asked for explicitly.
+// Every other configured account not excluded from `Tui` is then unlocked
+// per `should_unlock_for_merge` (so `unlock: always` accounts always come
+// up, `--all` additionally brings in the `on-demand` ones, and `never`
+// accounts are only loaded if already unlocked); the rest are reported as
+// locked for lazy unlock from the accounts panel. An account excluded from
+// `Tui` is skipped entirely -- it won't appear locked in the accounts panel
+// either, unless it's the target.
 pub fn tui_open_with_progress<F>(
     all: bool,
     target_unlocked: bool,
@@ -10877,19 +10901,25 @@ where
 {
     let config = rbw::config::Config::load()?;
     let accounts = config.accounts();
+    let target = crate::actions::current_account()
+        .unwrap_or_else(|| config.primary_account_name());
 
     if !target_unlocked {
-        let target = crate::actions::current_account()
-            .unwrap_or_else(|| config.primary_account_name());
-        crate::actions::set_active_account(Some(target))?;
+        crate::actions::set_active_account(Some(target.clone()))?;
         unlock(None)?;
     }
 
     let mut vaults = Vec::new();
     let mut locked = Vec::new();
     for account in &accounts {
+        if account.name != target
+            && account.excluded_from(rbw::config::ExcludeContext::Tui)
+        {
+            continue;
+        }
         crate::actions::set_active_account(Some(account.name.clone()))?;
-        let should_unlock = should_unlock_for_merge(account.unlock, all);
+        let should_unlock =
+            should_unlock_for_merge(account.unlock.policy, all);
         if should_unlock && !active_account_unlocked() {
             let msg = format!("unlocking '{}'...", account.name);
             progress(&msg);
@@ -10972,6 +11002,9 @@ pub fn tui_accounts() -> anyhow::Result<Vec<TuiAccount>> {
     let accounts = config.accounts();
     let mut out = Vec::with_capacity(accounts.len());
     for account in accounts {
+        if account.excluded_from(rbw::config::ExcludeContext::Tui) {
+            continue;
+        }
         crate::actions::set_active_account(Some(account.name.clone()))?;
         out.push(TuiAccount {
             unlocked: active_account_unlocked(),
@@ -10979,7 +11012,8 @@ pub fn tui_accounts() -> anyhow::Result<Vec<TuiAccount>> {
             server: tui_account_server(account.base_url.as_deref()),
             email: account.email.clone(),
             credential_source: account
-                .credential_source
+                .unlock
+                .credentials
                 .as_ref()
                 .map(|cs| (cs.account.clone(), cs.item.clone())),
             name: account.name,
@@ -11092,9 +11126,8 @@ pub fn tui_account_add(
         ui_url: None,
         notifications_url: None,
         client_cert_path: None,
-        unlock: rbw::config::UnlockPolicy::default(),
-        exclude_from_list: false,
-        credential_source: None,
+        unlock: rbw::config::UnlockConfig::default(),
+        exclude_from: Vec::new(),
     });
     if first {
         config.primary_account = Some(name.to_string());
@@ -11157,7 +11190,7 @@ pub fn tui_account_set_credential_source(
     else {
         anyhow::bail!("account '{name}' not found");
     };
-    account.credential_source = Some(rbw::config::CredentialSource {
+    account.unlock.credentials = Some(rbw::config::CredentialSource {
         account: source_account.to_string(),
         item: source_item
             .map(str::trim)
@@ -11182,7 +11215,7 @@ pub fn tui_account_clear_credential_source(name: &str) -> anyhow::Result<()> {
     else {
         anyhow::bail!("account '{name}' not found");
     };
-    account.credential_source = None;
+    account.unlock.credentials = None;
     config.save()?;
     Ok(())
 }

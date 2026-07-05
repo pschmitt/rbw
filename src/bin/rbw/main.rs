@@ -129,6 +129,36 @@ impl From<UnlockArg> for rbw::config::UnlockPolicy {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+#[value(rename_all = "kebab-case")]
+enum ExcludeContextArg {
+    List,
+    Search,
+    Get,
+    Show,
+    Code,
+    Sync,
+    Unlock,
+    Tui,
+    All,
+}
+
+impl From<ExcludeContextArg> for rbw::config::ExcludeContext {
+    fn from(value: ExcludeContextArg) -> Self {
+        match value {
+            ExcludeContextArg::List => Self::List,
+            ExcludeContextArg::Search => Self::Search,
+            ExcludeContextArg::Get => Self::Get,
+            ExcludeContextArg::Show => Self::Show,
+            ExcludeContextArg::Code => Self::Code,
+            ExcludeContextArg::Sync => Self::Sync,
+            ExcludeContextArg::Unlock => Self::Unlock,
+            ExcludeContextArg::Tui => Self::Tui,
+            ExcludeContextArg::All => Self::All,
+        }
+    }
+}
+
 fn resolve_output_mode(
     output: Option<OutputArg>,
     json: bool,
@@ -1103,12 +1133,21 @@ enum AccountCmd {
         unlock: Option<UnlockArg>,
         #[arg(
             long,
-            value_parser = clap::value_parser!(bool),
-            help = "Exclude this account's entries from list/search/get \
-                merges, even when unlocked or with --all (still reachable \
-                via --account)"
+            value_enum,
+            action = clap::ArgAction::Append,
+            conflicts_with = "clear_exclude_from",
+            help = "Skip this account for the given command(s) (repeatable), \
+                even when unlocked or with --all: list, search, get, show, \
+                code, sync, unlock, tui, or the magic value all. Still \
+                reachable via --account. Replaces the existing list."
         )]
-        exclude_from_list: Option<bool>,
+        exclude_from: Vec<ExcludeContextArg>,
+        #[arg(
+            long,
+            help = "Clear this account's exclude-from list, including it \
+                in every command's default merge behavior again"
+        )]
+        clear_exclude_from: bool,
         #[arg(
             long,
             help = "Name of another configured account whose vault holds \
@@ -1468,14 +1507,16 @@ fn main() {
             AccountCmd::Set {
                 name,
                 unlock,
-                exclude_from_list,
+                exclude_from,
+                clear_exclude_from,
                 credential_source_account,
                 credential_source_item,
                 clear_credential_source,
             } => commands::account_set(
                 &name,
                 unlock.map(std::convert::Into::into),
-                exclude_from_list,
+                exclude_from.into_iter().map(Into::into).collect(),
+                clear_exclude_from,
                 credential_source_account,
                 credential_source_item,
                 clear_credential_source,

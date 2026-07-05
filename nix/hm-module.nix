@@ -105,78 +105,109 @@ let
         ui_url = mkNullOrStr "The vault UI URL for this account. Defaults to the official Bitwarden vault UI if unset.";
         notifications_url = mkNullOrStr "The notifications server URL for this account. Defaults to the `/notifications` path on `base_url`, or the official server, if unset.";
         client_cert_path = mkNullOrPath "Path to a client certificate to present to the server for this account, if required.";
+        # See `UnlockConfig` in `src/config.rs`.
         unlock = mkOption {
-          type = types.enum [
-            "always"
-            "never"
-            "on-demand"
-          ];
-          default = "on-demand";
-          description = ''
-            Whether `list`/`search`/`get` should proactively unlock this
-            account (prompting as needed) when merging entries across every
-            configured account:
+          type = types.submodule {
+            options = {
+              policy = mkOption {
+                type = types.enum [
+                  "always"
+                  "never"
+                  "on-demand"
+                ];
+                default = "on-demand";
+                description = ''
+                  Whether `list`/`search`/`get` should proactively unlock
+                  this account (prompting as needed) when merging entries
+                  across every configured account:
 
-            - `always`: always unlock this account for a merge, even on a
-              plain `rbw list` with no `--all`.
-            - `never`: never proactively unlock this account for a merge,
-              not even with `--all`; only included if already unlocked.
-            - `on-demand` (default): included in a merge only if already
-              unlocked; `--all` unlocks it too.
-          '';
-        };
-        exclude_from_list = mkOption {
-          type = types.bool;
-          default = false;
-          description = ''
-            Hard opt-out: never include this account's entries in a
-            `list`/`search`/`get` merge across accounts (even if unlocked,
-            even with `--all`). Still reachable via `--account <name>`
-            directly.
-          '';
-        };
-        # See `CredentialSource`.
-        credential_source = mkOption {
-          type = types.nullOr (
-            types.submodule {
-              options = {
-                account = mkOption {
-                  type = types.str;
-                  description = ''
-                    Name of the *other* configured account whose vault holds
-                    this account's master password. Must not be this
-                    account's own name, and must not form a cycle with other
-                    accounts' `credential_source`s.
-                  '';
-                };
-                item = mkOption {
-                  type = types.nullOr types.str;
-                  default = null;
-                  description = ''
-                    Optional name of the Login item in that account's vault
-                    holding this account's master password (matched the same
-                    way as an `rbw get NAME` lookup). When unset, rbw tries
-                    to find a unique Login item whose URI matches this
-                    account's server URL instead.
-                  '';
-                };
+                  - `always`: always unlock this account for a merge, even
+                    on a plain `rbw list` with no `--all`.
+                  - `never`: never proactively unlock this account for a
+                    merge, not even with `--all`; only included if already
+                    unlocked.
+                  - `on-demand` (default): included in a merge only if
+                    already unlocked; `--all` unlocks it too.
+                '';
               };
-            }
-          );
-          default = null;
+              # See `CredentialSource`.
+              credentials = mkOption {
+                type = types.nullOr (
+                  types.submodule {
+                    options = {
+                      account = mkOption {
+                        type = types.str;
+                        description = ''
+                          Name of the *other* configured account whose vault
+                          holds this account's master password. Must not be
+                          this account's own name, and must not form a cycle
+                          with other accounts' `unlock.credentials`.
+                        '';
+                      };
+                      item = mkOption {
+                        type = types.nullOr types.str;
+                        default = null;
+                        description = ''
+                          Optional name of the Login item in that account's
+                          vault holding this account's master password
+                          (matched the same way as an `rbw get NAME` lookup).
+                          When unset, rbw tries to find a unique Login item
+                          whose URI matches this account's server URL
+                          instead.
+                        '';
+                      };
+                    };
+                  }
+                );
+                default = null;
+                description = ''
+                  Points at a Login item, in another configured account's
+                  vault, that holds this account's master password. Used by
+                  the agent's unlock flow to skip the pinentry prompt: the
+                  source account is unlocked (recursively, if it itself has
+                  `unlock.credentials` set), the named item is looked up in
+                  its vault and its `password` field is used as this
+                  account's master password. If `item` is unset, rbw tries
+                  to find a unique URI match for this account's server URL
+                  instead. Mirrors `Option<CredentialSource>` in
+                  `src/config.rs`. Unset (`null`, the default) means this
+                  account is unlocked normally via pinentry. See `rbw
+                  account set
+                  --credential-source-account/--credential-source-item`, or
+                  the equivalent TUI accounts-panel action.
+                '';
+              };
+            };
+          };
+          default = { };
           description = ''
-            Points at a Login item, in another configured account's vault,
-            that holds this account's master password. Used by the agent's
-            unlock flow to skip the pinentry prompt: the source account is
-            unlocked (recursively, if it itself has a `credential_source`),
-            the named item is looked up in its vault and its `password`
-            field is used as this account's master password. If `item` is
-            unset, rbw tries to find a unique URI match for this account's
-            server URL instead. Mirrors `Option<CredentialSource>` in
-            `src/config.rs`. Unset (`null`, the default) means this account
-            is unlocked normally via pinentry. See `rbw account set
-            --credential-source-account/--credential-source-item`, or the
-            equivalent TUI accounts-panel action.
+            This account's unlock policy and (optionally) where its master
+            password comes from. Mirrors `UnlockConfig` in `src/config.rs`.
+          '';
+        };
+        # See `ExcludeContext` in `src/config.rs`.
+        exclude_from = mkOption {
+          type = types.listOf (
+            types.enum [
+              "list"
+              "search"
+              "get"
+              "show"
+              "code"
+              "sync"
+              "unlock"
+              "tui"
+              "all"
+            ]
+          );
+          default = [ ];
+          description = ''
+            Hard opt-out: skip this account for the listed commands (even if
+            unlocked, even with that command's own `--all`). `"all"` is a
+            magic value equivalent to listing every other one. Still
+            reachable via `--account <name>` directly (or, for `"tui"`, via
+            `rbw tui --account <name>`) regardless of what it's excluded
+            from.
           '';
         };
       };
