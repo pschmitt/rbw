@@ -10801,15 +10801,34 @@ pub fn tui_account_unlocked(name: &str) -> anyhow::Result<bool> {
     Ok(active_account_unlocked())
 }
 
+// Whether an account should be proactively unlocked (prompting as needed)
+// for a multi-account merge: `Always` unconditionally, `Never` not even with
+// `all`, and the default `OnDemand` only when `all` is set. Shared by
+// `list_target_accounts` and `tui_open_with_progress` so the two can't drift
+// apart the way they used to -- `tui_open_with_progress` independently
+// re-implemented this as `all && account.unlock != Never`, which silently
+// dropped the "unconditionally" half of `Always`: an account configured
+// `unlock: always` only actually got unlocked by `rbw tui` if `--all` was
+// also passed on that invocation, unlike every other command honoring the
+// same policy.
+fn should_unlock_for_merge(
+    policy: rbw::config::UnlockPolicy,
+    all: bool,
+) -> bool {
+    match policy {
+        rbw::config::UnlockPolicy::Always => true,
+        rbw::config::UnlockPolicy::Never => false,
+        rbw::config::UnlockPolicy::OnDemand => all,
+    }
+}
+
 // Which accounts `list`/`search`/`get` should query. An explicit --account/
 // RBW_ACCOUNT always wins and scopes to just that one account, unchanged from
 // single-account behavior. Otherwise every configured account is a candidate,
-// filtered per-account by `Account::exclude_from_list` and `Account::unlock`:
-// `Always` accounts are unlocked unconditionally, `Never` accounts only make
-// it in if already unlocked (never prompted, not even by `--all`), and the
-// default `OnDemand` behaves like `Never` unless `all` (the --all flag) is
-// set, in which case it's unlocked too — same as the pre-multi-account
-// behavior of a plain `rbw list` extended to every on-demand account.
+// filtered per-account by `Account::exclude_from_list` and `Account::unlock`
+// (see `should_unlock_for_merge`); an account that isn't proactively
+// unlocked still makes it into the merge if it happens to already be
+// unlocked.
 fn list_target_accounts(all: bool) -> anyhow::Result<Vec<String>> {
     if let Some(name) = crate::actions::current_account() {
         return Ok(vec![name]);
@@ -10830,12 +10849,7 @@ fn list_target_accounts(all: bool) -> anyhow::Result<Vec<String>> {
             continue;
         }
         crate::actions::set_active_account(Some(account.name.clone()))?;
-        let should_unlock = match account.unlock {
-            rbw::config::UnlockPolicy::Always => true,
-            rbw::config::UnlockPolicy::Never => false,
-            rbw::config::UnlockPolicy::OnDemand => all,
-        };
-        if should_unlock {
+        if should_unlock_for_merge(account.unlock, all) {
             unlock(None)?;
             out.push(account.name.clone());
         } else if active_account_unlocked() {
@@ -10847,11 +10861,12 @@ fn list_target_accounts(all: bool) -> anyhow::Result<Vec<String>> {
 
 // Open the multi-account TUI. Unlocks the target account (--account /
 // RBW_ACCOUNT, else primary) up front — pinentry runs here, on the real
-// terminal, before the UI takes over the screen. With `all`, every
-// configured account whose `unlock` policy isn't `never` is unlocked here
-// too (pinentry runs once per locked account, same as `rbw sync --all`);
-// otherwise only accounts that are already unlocked are loaded, and the
-// rest are reported as locked for lazy unlock from the accounts panel.
+// terminal, before the UI takes over the screen. Every other configured
+// account is then unlocked per `should_unlock_for_merge` (so `unlock:
+// always` accounts always come up, `--all` additionally brings in the
+// `on-demand` ones, and `never` accounts are only loaded if already
+// unlocked); the rest are reported as locked for lazy unlock from the
+// accounts panel.
 pub fn tui_open_with_progress<F>(
     all: bool,
     target_unlocked: bool,
@@ -10874,8 +10889,7 @@ where
     let mut locked = Vec::new();
     for account in &accounts {
         crate::actions::set_active_account(Some(account.name.clone()))?;
-        let should_unlock = all
-            && !matches!(account.unlock, rbw::config::UnlockPolicy::Never);
+        let should_unlock = should_unlock_for_merge(account.unlock, all);
         if should_unlock && !active_account_unlocked() {
             let msg = format!("unlocking '{}'...", account.name);
             progress(&msg);
@@ -12439,6 +12453,45 @@ pub fn generate_totp(secret: &str) -> anyhow::Result<String> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    // `Always` unlocks regardless of `--all`/`all` -- the bug this guards
+    // against had `tui_open_with_progress` gating it behind `all` too, so an
+    // `unlock: always` account silently stayed locked on a plain `rbw tui`.
+    #[test]
+    fn test_should_unlock_for_merge_always_ignores_the_all_flag() {
+        assert!(should_unlock_for_merge(
+            rbw::config::UnlockPolicy::Always,
+            false
+        ));
+        assert!(should_unlock_for_merge(
+            rbw::config::UnlockPolicy::Always,
+            true
+        ));
+    }
+
+    #[test]
+    fn test_should_unlock_for_merge_never_ignores_the_all_flag() {
+        assert!(!should_unlock_for_merge(
+            rbw::config::UnlockPolicy::Never,
+            false
+        ));
+        assert!(!should_unlock_for_merge(
+            rbw::config::UnlockPolicy::Never,
+            true
+        ));
+    }
+
+    #[test]
+    fn test_should_unlock_for_merge_on_demand_follows_the_all_flag() {
+        assert!(!should_unlock_for_merge(
+            rbw::config::UnlockPolicy::OnDemand,
+            false
+        ));
+        assert!(should_unlock_for_merge(
+            rbw::config::UnlockPolicy::OnDemand,
+            true
+        ));
+    }
 
     #[test]
     fn test_tui_account_server_strips_scheme_and_trailing_slash() {
