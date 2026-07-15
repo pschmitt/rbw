@@ -1,11 +1,20 @@
 _rbw_wrapper() {
-  local cur prev folder opts res name user
+  local cur prev folder attachment opts res name user start mode
   COMPREPLY=()
 
-  if [[ "${COMP_WORDS[1]}" == "get" ]] && [[ $COMP_CWORD -gt 1 ]]; then
-    for (( i=2; i < COMP_CWORD; i++ )); do
+  if [[ "${COMP_WORDS[1]}" == "get" ]]; then
+    start=2
+    mode=get
+  elif [[ "${COMP_WORDS[1]}" == "attachment" ]] \
+    && [[ "${COMP_WORDS[2]}" == "get" || "${COMP_WORDS[2]}" == "list" || "${COMP_WORDS[2]}" == "rm" ]]; then
+    start=3
+    mode=attachment
+  fi
+
+  if [[ -n "$mode" ]] && [[ $COMP_CWORD -ge $start ]]; then
+    for (( i=start; i < COMP_CWORD; i++ )); do
       case "${COMP_WORDS[i]}" in
-        --folder|-f|--field)
+        --folder|--attachment|-f|--field)
           (( i++ ))
           if [ "${COMP_WORDS[i]}" == "=" ]; then
             (( i++ ))
@@ -16,7 +25,7 @@ _rbw_wrapper() {
         *)
           if [ -z "$name" ]; then
             name="${COMP_WORDS[i]}"
-          else
+          elif [[ "$mode" == get ]]; then
             user="${COMP_WORDS[i]}"
             break
           fi
@@ -27,7 +36,7 @@ _rbw_wrapper() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    for (( i=2; i < ${#COMP_WORDS[@]}; i++ )); do
+    for (( i=start; i < ${#COMP_WORDS[@]}; i++ )); do
       if [[ "${COMP_WORDS[i-2]}" == "--folder" ]] && [[ "${COMP_WORDS[i-1]}" == "=" ]]; then
         folder="${COMP_WORDS[i]}"
         if [[ $i -eq $COMP_CWORD ]]; then
@@ -42,6 +51,21 @@ _rbw_wrapper() {
       elif [[ "${COMP_WORDS[i-1]}" == "--folder" ]]; then
         folder="${COMP_WORDS[i]}"
       fi
+
+      if [[ "${COMP_WORDS[i-2]}" == "--attachment" ]] && [[ "${COMP_WORDS[i-1]}" == "=" ]]; then
+        attachment="${COMP_WORDS[i]}"
+        if [[ $i -eq $COMP_CWORD ]]; then
+          prev="--attachment"
+        fi
+      elif [[ "${COMP_WORDS[i-1]}" == "--attachment" ]] && [[ "${COMP_WORDS[i]}" == "=" ]]; then
+        attachment=""
+        if [[ $i -eq $COMP_CWORD ]]; then
+          prev="--attachment"
+          cur=""
+        fi
+      elif [[ "${COMP_WORDS[i-1]}" == "--attachment" ]]; then
+        attachment="${COMP_WORDS[i]}"
+      fi
     done
 
     if [[ "$prev" == --folder ]]; then
@@ -50,14 +74,26 @@ _rbw_wrapper() {
         rbw list --fields folder 2>/dev/null \
           | awk -v folder="$folder" 'NF && $1 ~ folder && !a[$1]++ {print $1}' 2>/dev/null
       )
+    elif [[ "$mode" == attachment ]] && [[ "$prev" == --attachment ]]; then
+      # rbw attachment get $name --attachment $cur
+      res=$(
+        rbw attachment list "$name" --output name 2>/dev/null
+      )
     elif [[ "$prev" != --field ]]; then
       if [ -z "$name" ]; then
         # rbw get ... $cur
-        res=$(
-          rbw list --fields name,folder 2>/dev/null \
-            | awk -F'\t' -v folder="$folder" '$1 && (!folder || $2 == folder) {print $1}' 2>/dev/null
-        )
-      elif [ -z "$user" ]; then
+        if [[ "$mode" == attachment ]]; then
+          res=$(
+            rbw list --fields name,folder --with-attachments 2>/dev/null \
+              | awk -F'\t' -v folder="$folder" '$1 && (!folder || $2 == folder) {print $1}' 2>/dev/null
+          )
+        else
+          res=$(
+            rbw list --fields name,folder 2>/dev/null \
+              | awk -F'\t' -v folder="$folder" '$1 && (!folder || $2 == folder) {print $1}' 2>/dev/null
+          )
+        fi
+      elif [[ "$mode" == get ]] && [ -z "$user" ]; then
         # rbw get ... name $cur
         res=$(
           rbw list --fields name,folder,user 2>/dev/null \
@@ -70,7 +106,24 @@ _rbw_wrapper() {
     fi
 
     if [[ "$cur" == -* ]]; then
-      res="-f --field --full --raw --clipboard -i --ignorecase --all -h --help $res"
+      if [[ "$mode" == attachment ]]; then
+        case "${COMP_WORDS[2]}" in
+          get)
+            res="-o --output --raw -h --help $res"
+            [ -z "$attachment" ] && res="--attachment $res"
+            ;;
+          list)
+            res="-o --output -j --raw --json --yaml -h --help $res"
+            ;;
+          rm)
+            res="-y --yes -h --help $res"
+            [ -z "$attachment" ] && res="--attachment $res"
+            ;;
+        esac
+        res="--user -i --ignorecase -e --exact $res"
+      else
+        res="-f --field --full --raw --clipboard -i --ignorecase --all -h --help $res"
+      fi
       if [ -z "$folder" ]; then
         res="--folder $res"
       fi
