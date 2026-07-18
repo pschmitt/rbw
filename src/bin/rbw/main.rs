@@ -241,7 +241,16 @@ enum Opt {
     Register,
 
     #[command(about = "Log in to the Bitwarden server")]
-    Login,
+    Login {
+        #[arg(long, help = "Read the password from standard input")]
+        stdin: bool,
+        #[arg(
+            long,
+            help = "TOTP code for the 2FA challenge, if the account \
+                requires it (only meaningful with --stdin)"
+        )]
+        totp: Option<String>,
+    },
 
     #[command(about = "Print version information")]
     Version,
@@ -254,6 +263,13 @@ enum Opt {
             conflicts_with = "all"
         )]
         stdin: bool,
+        #[arg(
+            long,
+            help = "TOTP code for the 2FA challenge on first-time login, \
+                if the account requires it (only meaningful with --stdin)",
+            conflicts_with = "all"
+        )]
+        totp: Option<String>,
         #[arg(
             long,
             help = "With multiple accounts configured, unlock (prompting \
@@ -999,7 +1015,7 @@ impl Opt {
             }
             Self::Account { .. } => "account".to_string(),
             Self::Register => "register".to_string(),
-            Self::Login => "login".to_string(),
+            Self::Login { .. } => "login".to_string(),
             Self::Version => "version".to_string(),
             Self::Unlock { .. } => "unlock".to_string(),
             Self::Unlocked => "unlocked".to_string(),
@@ -1431,6 +1447,15 @@ impl Config {
     }
 }
 
+// Shared by `login --stdin` and `unlock --stdin`.
+fn read_stdin_password() -> Option<String> {
+    let mut buf = String::new();
+    let _ = std::io::stdin()
+        .read_line(&mut buf)
+        .context("failed to read password from stdin");
+    Some(buf.trim_end_matches('\n').to_string())
+}
+
 fn main() {
     let cli = Cli::parse();
     let opt = cli.command;
@@ -1523,26 +1548,20 @@ fn main() {
             ),
         },
         Opt::Register => commands::register(),
-        Opt::Login => commands::login(),
+        Opt::Login { stdin, totp } => {
+            let password = stdin.then(read_stdin_password).flatten();
+            commands::login(password, totp)
+        }
         Opt::Version => {
             println!("rbw {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        Opt::Unlock { stdin, all } => {
+        Opt::Unlock { stdin, totp, all } => {
             if all {
                 commands::unlock_all()
             } else {
-                let password = if stdin {
-                    let mut buf = String::new();
-                    let _ = std::io::stdin()
-                        .read_line(&mut buf)
-                        .context("failed to read password from stdin");
-                    Some(buf.trim_end_matches('\n').to_string())
-                } else {
-                    None
-                };
-
-                commands::unlock(password)
+                let password = stdin.then(read_stdin_password).flatten();
+                commands::unlock(password, totp)
             }
         }
         Opt::Unlocked => commands::unlocked(),

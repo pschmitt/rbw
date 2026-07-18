@@ -2623,15 +2623,26 @@ pub fn register() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn login() -> anyhow::Result<()> {
+// `password`/`totp` come from `--stdin`/`--totp` (e.g. for a fully
+// non-interactive first login on a brand-new host); when absent, falls back
+// to `credential_source` resolution, then the normal interactive pinentry
+// flow, exactly as before.
+pub fn login(
+    password: Option<String>,
+    totp: Option<String>,
+) -> anyhow::Result<()> {
     ensure_agent()?;
-    login_resolving_credential_source(&mut Vec::new())?;
-
-    Ok(())
+    match password {
+        Some(password) => crate::actions::login(Some(password), totp),
+        None => login_resolving_credential_source(&mut Vec::new()),
+    }
 }
 
-pub fn unlock(password: Option<String>) -> anyhow::Result<()> {
-    unlock_impl(password, &mut Vec::new())
+pub fn unlock(
+    password: Option<String>,
+    totp: Option<String>,
+) -> anyhow::Result<()> {
+    unlock_impl(password, totp, &mut Vec::new())
 }
 
 // Max hops to follow through `credential_source` chains before giving up.
@@ -2659,6 +2670,7 @@ fn login_resolving_credential_source(
 // into itself even if the static cycle check somehow missed something.
 fn unlock_impl(
     password: Option<String>,
+    totp: Option<String>,
     visited: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     ensure_agent()?;
@@ -2669,7 +2681,7 @@ fn unlock_impl(
                     (Some(password), totp)
                 })
         },
-        |password| (Some(password), None),
+        |password| (Some(password), totp),
     );
     crate::actions::login(password.clone(), totp)?;
     crate::actions::unlock(password)?;
@@ -2771,7 +2783,7 @@ fn resolve_from_credential_source(
     visited: &mut Vec<String>,
 ) -> anyhow::Result<(String, Option<String>)> {
     crate::actions::set_active_account(Some(source.account.clone()))?;
-    unlock_impl(None, visited)?;
+    unlock_impl(None, None, visited)?;
     if !active_account_unlocked() {
         anyhow::bail!("source account '{}' did not unlock", source.account);
     }
@@ -3186,7 +3198,7 @@ pub fn attachment_list(
     output: OutputMode,
     force_exact: bool,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
+    unlock(None, None)?;
     let db = load_db()?;
     let (_, decrypted) =
         find_entry(&db, needles, user, folder, ignore_case, force_exact)?;
@@ -3257,7 +3269,7 @@ pub fn attachment_get(
     raw: bool,
     force_exact: bool,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
+    unlock(None, None)?;
     let mut db = load_db()?;
     let (entry, decrypted) =
         find_entry(&db, needles, user, folder, ignore_case, force_exact)?;
@@ -3340,7 +3352,7 @@ pub fn attachment_create(
     file: &std::path::Path,
     force_exact: bool,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
+    unlock(None, None)?;
     let mut db = load_db()?;
     let access_token = db.access_token.as_ref().unwrap().clone();
     let refresh_token = db.refresh_token.as_ref().unwrap().clone();
@@ -3401,7 +3413,7 @@ pub fn attachment_rm(
     force_exact: bool,
     yes: bool,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
+    unlock(None, None)?;
     let mut db = load_db()?;
     let (entry, decrypted) =
         find_entry(&db, needles, user, folder, ignore_case, force_exact)?;
@@ -4026,7 +4038,7 @@ pub fn generate(
     println!("{password}");
 
     if let Some(name) = name {
-        unlock(None)?;
+        unlock(None, None)?;
 
         let mut db = load_db()?;
         // unwrap is safe here because the call to unlock above is guaranteed
@@ -4356,7 +4368,7 @@ pub fn remove(
         );
     }
 
-    unlock(None)?;
+    unlock(None, None)?;
 
     let mut db = load_db()?;
 
@@ -4407,7 +4419,7 @@ fn edit_structured(
     json: bool,
     force_exact: bool,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
+    unlock(None, None)?;
 
     let mut db = load_db()?;
     let access_token = db.access_token.as_ref().unwrap().clone();
@@ -4629,7 +4641,7 @@ fn add_structured(
         return Err(anyhow::anyhow!("name cannot be empty"));
     }
 
-    unlock(None)?;
+    unlock(None, None)?;
 
     let mut db = load_db()?;
     let access_token = db.access_token.as_ref().unwrap().clone();
@@ -4737,7 +4749,7 @@ pub fn set(
     }
 
     if bulk {
-        unlock(None)?;
+        unlock(None, None)?;
         let mut db = load_db()?;
         let mut any_err = false;
 
@@ -5171,7 +5183,7 @@ fn set_one(
     yes: bool,
     force_exact: bool,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
+    unlock(None, None)?;
 
     let mut db = load_db()?;
 
@@ -5967,7 +5979,7 @@ pub fn export(
     // mistyped confirmation fails before any decryption work happens.
     let passphrase = resolve_export_passphrase(encrypt)?;
 
-    unlock(None)?;
+    unlock(None, None)?;
 
     let mut db = load_db()?;
     let entries_snapshot = db.entries.clone();
@@ -7484,7 +7496,7 @@ pub fn import(
          `rbw export`)",
     )?;
 
-    unlock(None)?;
+    unlock(None, None)?;
 
     let mut db = load_db()?;
     let mut access_token = db.access_token.as_ref().unwrap().clone();
@@ -7825,7 +7837,7 @@ fn resolve_collection<'a>(
 }
 
 pub fn list_collections(output: OutputMode) -> anyhow::Result<()> {
-    unlock(None)?;
+    unlock(None, None)?;
 
     let db = load_db()?;
 
@@ -7870,7 +7882,7 @@ pub fn edit_collections(
     id: &str,
     collections_b64: &str,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
+    unlock(None, None)?;
 
     let mut db = load_db()?;
     let access_token = db.access_token.as_ref().unwrap();
@@ -7909,7 +7921,7 @@ pub fn assign_collections(
     force_exact: bool,
     collections: &[String],
 ) -> anyhow::Result<()> {
-    unlock(None)?;
+    unlock(None, None)?;
 
     let mut db = load_db()?;
 
@@ -7976,7 +7988,7 @@ pub fn create_collection(
     name: &str,
     org_id: Option<&str>,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
+    unlock(None, None)?;
 
     let mut db = load_db()?;
     let org_id = resolve_org(&db, org_id)?;
@@ -8009,7 +8021,7 @@ pub fn delete_collection(
     org_id: Option<&str>,
     yes: bool,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
+    unlock(None, None)?;
 
     let mut db = load_db()?;
     let org_id = resolve_org(&db, org_id)?;
@@ -8049,7 +8061,7 @@ pub fn rename_collection(
     org_id: Option<&str>,
     name: &str,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
+    unlock(None, None)?;
 
     let mut db = load_db()?;
     let org_id = resolve_org(&db, org_id)?;
@@ -8169,7 +8181,7 @@ pub fn propagate_collection_permissions(
     apply: bool,
     verbose: bool,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
+    unlock(None, None)?;
     crate::actions::sync()?;
 
     let mut db = load_db()?;
@@ -8425,7 +8437,7 @@ pub fn history(
     output: OutputMode,
     force_exact: bool,
 ) -> anyhow::Result<()> {
-    unlock(None)?;
+    unlock(None, None)?;
 
     let db = load_db()?;
 
@@ -10866,7 +10878,7 @@ fn list_target_accounts(
     }
 
     crate::actions::set_active_account(None)?;
-    unlock(None)?;
+    unlock(None, None)?;
 
     let config = rbw::config::Config::load()?;
     let accounts = config.accounts();
@@ -10881,7 +10893,7 @@ fn list_target_accounts(
         }
         crate::actions::set_active_account(Some(account.name.clone()))?;
         if should_unlock_for_merge(account.unlock.policy, all) {
-            unlock(None)?;
+            unlock(None, None)?;
             out.push(account.name.clone());
         } else if active_account_unlocked() {
             out.push(account.name.clone());
@@ -10916,7 +10928,7 @@ where
 
     if !target_unlocked {
         crate::actions::set_active_account(Some(target.clone()))?;
-        unlock(None)?;
+        unlock(None, None)?;
     }
 
     let mut vaults = Vec::new();
@@ -10933,7 +10945,7 @@ where
         if should_unlock && !active_account_unlocked() {
             let msg = format!("unlocking '{}'...", account.name);
             progress(&msg);
-            unlock(None)?;
+            unlock(None, None)?;
         }
         if active_account_unlocked() {
             let msg = format!("syncing '{}'...", account.name);
@@ -10961,7 +10973,7 @@ pub fn tui_unlock_target() -> anyhow::Result<()> {
     let target = crate::actions::current_account()
         .unwrap_or_else(|| config.primary_account_name());
     crate::actions::set_active_account(Some(target))?;
-    unlock(None)?;
+    unlock(None, None)?;
     Ok(())
 }
 
@@ -10969,7 +10981,7 @@ pub fn tui_unlock_target() -> anyhow::Result<()> {
 // caller must have restored the real terminal first (like the $EDITOR path).
 pub fn tui_unlock_account(name: &str) -> anyhow::Result<TuiVault> {
     crate::actions::set_active_account(Some(name.to_string()))?;
-    unlock(None)?;
+    unlock(None, None)?;
     let (db, search) = tui_reload()?;
     Ok(TuiVault {
         account: name.to_string(),
@@ -11643,7 +11655,7 @@ struct InjectContext {
 
 impl InjectContext {
     fn load() -> anyhow::Result<Self> {
-        unlock(None)?;
+        unlock(None, None)?;
 
         let db = load_db()?;
         Ok(Self {
