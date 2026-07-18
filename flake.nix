@@ -99,6 +99,7 @@
           expected =
             builtins.toJSON {
               pinentry = "pinentry-gtk2";
+              pinentry_timeout = 300;
               lock_timeout = 120;
               sync_interval = 3600;
               primary_account = "personal";
@@ -107,8 +108,10 @@
                   name = "personal";
                   email = "me@example.com";
                   base_url = "https://vault.example.com";
-                  unlock = "on-demand";
-                  exclude_from_list = false;
+                  unlock = {
+                    policy = "on-demand";
+                  };
+                  exclude_from = [ ];
                 }
               ];
               tui_keybindings = { };

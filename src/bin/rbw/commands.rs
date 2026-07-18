@@ -2406,8 +2406,7 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
         }
         "pinentry" => config.pinentry = rbw::config::default_pinentry(),
         "pinentry_timeout" => {
-            config.pinentry_timeout =
-                rbw::config::default_pinentry_timeout();
+            config.pinentry_timeout = rbw::config::default_pinentry_timeout();
         }
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     }
@@ -2632,10 +2631,10 @@ pub fn login(
     totp: Option<String>,
 ) -> anyhow::Result<()> {
     ensure_agent()?;
-    match password {
-        Some(password) => crate::actions::login(Some(password), totp),
-        None => login_resolving_credential_source(&mut Vec::new()),
-    }
+    password.map_or_else(
+        || login_resolving_credential_source(&mut Vec::new()),
+        |password| crate::actions::login(Some(password), totp),
+    )
 }
 
 pub fn unlock(
@@ -2849,10 +2848,8 @@ fn credential_source_login_fields(
 // actual unlocking as a side effect of building its target list; this just
 // reports what ended up unlocked.
 pub fn unlock_all() -> anyhow::Result<()> {
-    let target_accounts = list_target_accounts(
-        true,
-        rbw::config::ExcludeContext::Unlock,
-    )?;
+    let target_accounts =
+        list_target_accounts(true, rbw::config::ExcludeContext::Unlock)?;
     let c = stdout_supports_color();
     for account in &target_accounts {
         eprintln!(

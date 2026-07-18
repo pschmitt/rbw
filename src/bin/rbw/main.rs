@@ -1448,12 +1448,12 @@ impl Config {
 }
 
 // Shared by `login --stdin` and `unlock --stdin`.
-fn read_stdin_password() -> Option<String> {
+fn read_stdin_password() -> String {
     let mut buf = String::new();
     let _ = std::io::stdin()
         .read_line(&mut buf)
         .context("failed to read password from stdin");
-    Some(buf.trim_end_matches('\n').to_string())
+    buf.trim_end_matches('\n').to_string()
 }
 
 fn main() {
@@ -1549,7 +1549,7 @@ fn main() {
         },
         Opt::Register => commands::register(),
         Opt::Login { stdin, totp } => {
-            let password = stdin.then(read_stdin_password).flatten();
+            let password = stdin.then(read_stdin_password);
             commands::login(password, totp)
         }
         Opt::Version => {
@@ -1560,7 +1560,7 @@ fn main() {
             if all {
                 commands::unlock_all()
             } else {
-                let password = stdin.then(read_stdin_password).flatten();
+                let password = stdin.then(read_stdin_password);
                 commands::unlock(password, totp)
             }
         }

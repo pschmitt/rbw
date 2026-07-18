@@ -667,9 +667,7 @@ pub async fn device_id(config: &Config) -> Result<String> {
 
 #[cfg(test)]
 mod test {
-    use super::{
-        Account, Config, CredentialSource, Error, ExcludeContext,
-    };
+    use super::{Account, Config, CredentialSource, Error, ExcludeContext};
 
     fn named(name: &str, email: &str) -> Account {
         Account {
@@ -707,7 +705,7 @@ mod test {
             c.account(Some("work")).unwrap().email.as_deref(),
             Some("b@co.com")
         );
-        assert!(c.account(None).unwrap().name == "personal");
+        assert_eq!(c.account(None).unwrap().name, "personal");
         assert!(c.account(Some("nope")).is_err());
     }
 
