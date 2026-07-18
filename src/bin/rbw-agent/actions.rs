@@ -1163,10 +1163,13 @@ pub async fn encrypt_attachment(
     )
     .context("failed to encrypt attachment key")?;
 
-    // Encrypt filename with the attachment key
+    // Encrypt filename with the cipher's effective key (its own key, or the
+    // account/org key if it has none) -- matching upstream Bitwarden clients,
+    // which decrypt attachment file names with the same key used for the
+    // rest of the cipher's fields rather than the attachment's own key.
     let encrypted_filename =
         rbw::cipherstring::CipherString::encrypt_symmetric(
-            &attachment_keys,
+            effective_keys,
             filename.as_bytes(),
         )
         .context("failed to encrypt attachment filename")?;
