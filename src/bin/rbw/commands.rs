@@ -2862,9 +2862,8 @@ pub fn unlock_all() -> anyhow::Result<()> {
 }
 
 pub fn unlocked() -> anyhow::Result<()> {
-    // not ensure_agent, because we don't want `rbw unlocked` to start the
-    // agent if it's not running
-    let _ = check_agent_version();
+    // This is a passive check: don't start the agent or perform a separate
+    // version handshake before asking it for the lock state.
     crate::actions::unlocked()?;
 
     Ok(())
