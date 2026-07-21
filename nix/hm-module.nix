@@ -35,6 +35,19 @@ let
     types
     ;
 
+  # Provides `genJqSecretsReplacementSnippet`: given a Nix value containing
+  # `{ _secret = "/path/to/file"; }` markers anywhere inside it (including
+  # nested inside lists), generates a shell snippet that renders the value to
+  # JSON with each marker replaced by that file's contents, read at
+  # activation time rather than baked into the Nix store. Used below so
+  # account fields like `email`/`base_url` can point at a sops-nix secret
+  # instead of embedding the value in `config.json` -- mirrors the same
+  # `_secret` convention used for `glab`'s config in this repo (see
+  # modules/home-manager/glab.nix).
+  utils = import "${pkgs.path}/nixos/lib/utils.nix" {
+    inherit lib config pkgs;
+  };
+
   cfg = config.programs.rbw.declarative;
 
   # Recursively drop `null` values from attrsets (including those nested
@@ -63,6 +76,31 @@ let
     description:
     mkOption {
       type = types.nullOr types.str;
+      default = null;
+      inherit description;
+    };
+
+  # A `{ _secret = "/path/to/file"; }` marker, resolved at activation time by
+  # `utils.genJqSecretsReplacementSnippet` (see `utils` above) into that
+  # file's contents -- e.g. a sops-nix secret's `config.sops.secrets.<name>.path`.
+  secretRef = types.submodule {
+    options._secret = mkOption {
+      type = types.either types.str types.path;
+      description = ''
+        Path to a file whose contents become this value, resolved at
+        activation time instead of being embedded in the Nix store (e.g. a
+        sops-nix secret's `.path`).
+      '';
+    };
+  };
+
+  # Like `mkNullOrStr`, but also accepts a `secretRef` so the value can be
+  # sourced from a file (e.g. a sops-nix secret) instead of being written
+  # literally into `config.json`'s Nix store copy.
+  mkNullOrStrOrSecret =
+    description:
+    mkOption {
+      type = types.nullOr (types.either types.str secretRef);
       default = null;
       inherit description;
     };
@@ -98,12 +136,12 @@ let
             unrelated to the email/server. Defaults to the attribute name.
           '';
         };
-        email = mkNullOrStr "The email address to log into this account with.";
-        sso_id = mkNullOrStr "The SSO organization ID for this account. Defaults to the regular login process if unset.";
-        base_url = mkNullOrStr "The URL of the Bitwarden/Vaultwarden server for this account. Defaults to the official Bitwarden server if unset.";
-        identity_url = mkNullOrStr "The identity server URL for this account. Defaults to the `/identity` path on `base_url`, or the official server, if unset.";
-        ui_url = mkNullOrStr "The vault UI URL for this account. Defaults to the official Bitwarden vault UI if unset.";
-        notifications_url = mkNullOrStr "The notifications server URL for this account. Defaults to the `/notifications` path on `base_url`, or the official server, if unset.";
+        email = mkNullOrStrOrSecret "The email address to log into this account with.";
+        sso_id = mkNullOrStrOrSecret "The SSO organization ID for this account. Defaults to the regular login process if unset.";
+        base_url = mkNullOrStrOrSecret "The URL of the Bitwarden/Vaultwarden server for this account. Defaults to the official Bitwarden server if unset.";
+        identity_url = mkNullOrStrOrSecret "The identity server URL for this account. Defaults to the `/identity` path on `base_url`, or the official server, if unset.";
+        ui_url = mkNullOrStrOrSecret "The vault UI URL for this account. Defaults to the official Bitwarden vault UI if unset.";
+        notifications_url = mkNullOrStrOrSecret "The notifications server URL for this account. Defaults to the `/notifications` path on `base_url`, or the official server, if unset.";
         client_cert_path = mkNullOrPath "Path to a client certificate to present to the server for this account, if required.";
         # See `UnlockConfig` in `src/config.rs`.
         unlock = mkOption {
@@ -219,15 +257,15 @@ let
     options = {
       # ---- legacy single-account fields, retained for backward
       # compatibility; prefer `accounts` for new configs -------------------
-      email = mkNullOrStr ''
+      email = mkNullOrStrOrSecret ''
         Legacy top-level email address. Retained for backward compatibility
         with configs predating multi-account support; prefer `accounts`.
       '';
-      sso_id = mkNullOrStr "Legacy top-level SSO organization ID; prefer `accounts`.";
-      base_url = mkNullOrStr "Legacy top-level server URL; prefer `accounts`.";
-      identity_url = mkNullOrStr "Legacy top-level identity server URL; prefer `accounts`.";
-      ui_url = mkNullOrStr "Legacy top-level vault UI URL; prefer `accounts`.";
-      notifications_url = mkNullOrStr "Legacy top-level notifications server URL; prefer `accounts`.";
+      sso_id = mkNullOrStrOrSecret "Legacy top-level SSO organization ID; prefer `accounts`.";
+      base_url = mkNullOrStrOrSecret "Legacy top-level server URL; prefer `accounts`.";
+      identity_url = mkNullOrStrOrSecret "Legacy top-level identity server URL; prefer `accounts`.";
+      ui_url = mkNullOrStrOrSecret "Legacy top-level vault UI URL; prefer `accounts`.";
+      notifications_url = mkNullOrStrOrSecret "Legacy top-level notifications server URL; prefer `accounts`.";
       client_cert_path = mkNullOrPath "Legacy top-level client certificate path; prefer `accounts`.";
 
       # ---- accounts --------------------------------------------------------
@@ -373,20 +411,40 @@ in
     };
   };
 
-  config = mkIf cfg.enable {
-    home.packages = [ cfg.package ];
-
-    xdg.configFile."rbw/config.json".text =
-      let
-        rendered = cfg.settings // {
+  config = mkIf cfg.enable (
+    let
+      rendered = filterNulls (
+        cfg.settings
+        // {
           accounts = lib.attrValues cfg.settings.accounts;
           password_gen =
             if isDefaultPasswordGen cfg.settings.password_gen then
               null
             else
               cfg.settings.password_gen;
-        };
-      in
-      builtins.toJSON (filterNulls rendered) + "\n";
-  };
+        }
+      );
+      configFile = "${config.xdg.configHome}/rbw/config.json";
+    in
+    {
+      home.packages = [ cfg.package ];
+
+      # Rendered via an activation script (rather than `xdg.configFile`,
+      # which would symlink into the world-readable Nix store) so that any
+      # `_secret` markers in `rendered` -- see `secretRef` above -- get
+      # resolved from their source file at activation time instead of
+      # having their value embedded in the store. Mirrors the `_secret`
+      # convention used for `glab`'s config in this repo (see
+      # modules/home-manager/glab.nix).
+      home.activation.rbw-config = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        $DRY_RUN_CMD mkdir -p "$(dirname '${configFile}')"
+        $DRY_RUN_CMD rm -f '${configFile}'
+        if [[ -z "''${DRY_RUN_CMD:-}" ]]
+        then
+          ${utils.genJqSecretsReplacementSnippet rendered configFile}
+          chmod 600 '${configFile}'
+        fi
+      '';
+    }
+  );
 }
