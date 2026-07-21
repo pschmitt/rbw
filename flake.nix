@@ -67,7 +67,11 @@
       # Smoke test: build a minimal home-manager configuration exercising
       # `programs.rbw.declarative`, and assert the rendered `config.json` matches what
       # we expect (field naming, kebab-case `unlock` enum, `accounts`
-      # attrsOf->list conversion, null-stripping).
+      # attrsOf->list conversion, null-stripping). Config rendering happens
+      # in a `home.activation` script (not `xdg.configFile`, since it needs
+      # to resolve `_secret` markers from disk at activation time -- see
+      # `nix/hm-module.nix`), so the check actually runs that script rather
+      # than reading a Nix-store-rendered file.
       checks = forAllSystems (
         system:
         let
@@ -78,7 +82,7 @@
               self.homeManagerModules.default
               {
                 home.username = "rbw-test";
-                home.homeDirectory = "/home/rbw-test";
+                home.homeDirectory = "/build/rbw-test";
                 home.stateVersion = "24.05";
                 programs.rbw.declarative = {
                   enable = true;
@@ -95,7 +99,8 @@
               }
             ];
           };
-          actual = hm.config.xdg.configFile."rbw/config.json".text;
+          activationScript = hm.config.home.activation.rbw-config.data;
+          configFile = "${hm.config.xdg.configHome}/rbw/config.json";
           expected =
             builtins.toJSON {
               pinentry = "pinentry-gtk2";
@@ -119,16 +124,16 @@
             + "\n";
         in
         {
-          hm-module-config-json = pkgs.runCommand "rbw-hm-module-check" { } ''
-            cat > actual.json <<'ACTUAL_EOF'
-            ${actual}
-            ACTUAL_EOF
-            cat > expected.json <<'EXPECTED_EOF'
-            ${expected}
-            EXPECTED_EOF
-            diff -u expected.json actual.json
-            touch "$out"
-          '';
+          hm-module-config-json =
+            pkgs.runCommand "rbw-hm-module-check" { nativeBuildInputs = [ pkgs.jq ]; }
+              ''
+                ${activationScript}
+                jq . > expected.json <<'EXPECTED_EOF'
+                ${expected}
+                EXPECTED_EOF
+                diff -u expected.json '${configFile}'
+                touch "$out"
+              '';
         }
       );
     };
