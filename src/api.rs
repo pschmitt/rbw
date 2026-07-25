@@ -986,6 +986,7 @@ struct CiphersPostReq {
     login: Option<CipherLogin>,
     card: Option<CipherCard>,
     identity: Option<CipherIdentity>,
+    fields: Vec<CipherField>,
     #[serde(rename = "secureNote")]
     secure_note: Option<CipherSecureNote>,
     #[serde(rename = "sshKey")]
@@ -1587,6 +1588,7 @@ impl Client {
         access_token: &str,
         name: &str,
         data: &crate::db::EntryData,
+        fields: &[crate::db::Field],
         notes: Option<&str>,
         folder_id: Option<&str>,
     ) -> Result<()> {
@@ -1604,6 +1606,15 @@ impl Client {
             login: None,
             card: None,
             identity: None,
+            fields: fields
+                .iter()
+                .map(|field| CipherField {
+                    ty: field.ty,
+                    name: field.name.clone(),
+                    value: field.value.clone(),
+                    linked_id: field.linked_id,
+                })
+                .collect(),
             secure_note: None,
             ssh_key: None,
         };

@@ -4105,6 +4105,7 @@ pub fn generate(
                 uris,
                 totp: None,
             },
+            &[],
             None,
             folder_id.as_deref(),
         )? {
@@ -4643,7 +4644,7 @@ fn add_structured(
     let access_token = db.access_token.as_ref().unwrap().clone();
     let refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
-    let (data, _fields, notes) = editable_to_encrypted(&cipher, None)?;
+    let (data, fields, notes) = editable_to_encrypted(&cipher, None)?;
 
     let encrypted_name = crate::actions::encrypt(&cipher.name, None)?;
     let encrypted_notes = notes
@@ -4667,6 +4668,7 @@ fn add_structured(
         &refresh_token,
         &encrypted_name,
         &data,
+        &fields,
         encrypted_notes.as_deref(),
         folder_id.as_deref(),
     )? {
@@ -7264,7 +7266,7 @@ fn import_create_entry(
 ) -> anyhow::Result<(usize, usize)> {
     let editable = imported_to_editable(imported);
 
-    let (data, _fields, notes) = editable_to_encrypted(&editable, None)?;
+    let (data, fields, notes) = editable_to_encrypted(&editable, None)?;
     let encrypted_name = crate::actions::encrypt(&imported.name, None)?;
     let encrypted_notes = notes
         .as_deref()
@@ -7285,6 +7287,7 @@ fn import_create_entry(
         refresh_token,
         &encrypted_name,
         &data,
+        &fields,
         encrypted_notes.as_deref(),
         folder_id.as_deref(),
     )? {
@@ -11354,8 +11357,7 @@ pub fn tui_save_edit(
     Ok(())
 }
 
-// Create a new entry from a filled-in template (custom fields are not sent by
-// the add API, matching `rbw add`).
+// Create a new entry from a filled-in template.
 pub fn tui_save_add(
     db: &mut rbw::db::Db,
     cipher: &EditableCipher,
@@ -11373,7 +11375,7 @@ pub fn tui_save_add(
         .clone()
         .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
 
-    let (data, _fields, notes) = editable_to_encrypted(cipher, None)?;
+    let (data, fields, notes) = editable_to_encrypted(cipher, None)?;
     let encrypted_name = crate::actions::encrypt(&cipher.name, None)?;
     let encrypted_notes = notes
         .as_deref()
@@ -11392,6 +11394,7 @@ pub fn tui_save_add(
         &refresh_token,
         &encrypted_name,
         &data,
+        &fields,
         encrypted_notes.as_deref(),
         folder_id.as_deref(),
     )? {
