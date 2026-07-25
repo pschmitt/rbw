@@ -664,6 +664,7 @@ mod tests {
             login: None,
             card: None,
             identity: None,
+            fields: Vec::new(),
             secure_note: None,
             ssh_key: Some(test_ssh_key()),
         };
