@@ -1915,7 +1915,38 @@ impl Client {
         }
     }
 
+    // Soft delete (move to trash): both official Bitwarden and Vaultwarden
+    // treat the bare `DELETE /ciphers/{id}` as a *permanent*, unrecoverable
+    // delete -- the trash-recoverable soft delete is this PUT route
+    // instead (confirmed against bitwarden/server's CiphersController.cs
+    // `PutDelete`/`SoftDeleteAsync` and vaultwarden's `delete_cipher_put`).
     pub fn remove(&self, access_token: &str, id: &str) -> Result<()> {
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .put(self.api_url(&format!("/ciphers/{id}/delete")))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    // The actual permanent, unrecoverable delete -- bypasses trash
+    // entirely (or purges an entry already in it). This is what the bare
+    // `DELETE /ciphers/{id}` route really does; see `remove()`'s comment.
+    // Only reachable via `rbw remove --force`.
+    pub fn delete_permanently(
+        &self,
+        access_token: &str,
+        id: &str,
+    ) -> Result<()> {
         let client = reqwest::blocking::Client::new();
         let res = client
             .delete(self.api_url(&format!("/ciphers/{id}")))

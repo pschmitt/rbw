@@ -112,3 +112,22 @@
       `edit-collections`, `rename-collection`,
       `propagate-collection-permissions`) -- `rbw collection <subcommand>`
       is now the only interface.
+- [x] **Data-loss bug fix**: `rbw remove`/`rbw delete` (`Client::remove()`)
+      was calling `DELETE /ciphers/{id}`, which both official Bitwarden
+      (`CiphersController.Delete`/`_cipherService.DeleteAsync`) and
+      Vaultwarden (`delete_cipher()`) treat as a *permanent, unrecoverable*
+      delete -- not the trash-recoverable soft delete the command's name,
+      aliases (`rm`/`delete`/`del`), and help text all promise. The real
+      soft-delete route is `PUT /ciphers/{id}/delete`
+      (`PutDelete`/`SoftDeleteAsync` server-side, `delete_cipher_put()` on
+      Vaultwarden) -- confirmed against both projects' source and fixed.
+      Found live: restoring an old trashed test item and then removing it
+      again made it vanish entirely from the server's sync response
+      instead of going back to trash, which is exactly what a permanent
+      delete on the wrong endpoint would do. Since the bare `DELETE
+      /ciphers/{id}` genuinely is the real permanent delete, added `rbw
+      remove --force` (bypasses trash entirely; falls back to a trashed
+      entry if no live one matches, so it also purges something already
+      in the trash) so that capability isn't lost -- with a stronger
+      confirmation prompt ("This cannot be undone!") than the plain
+      soft-delete path.

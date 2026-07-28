@@ -913,6 +913,15 @@ enum Opt {
     Remove {
         #[command(flatten)]
         find_args: FindArgs,
+        #[arg(
+            long,
+            help = "Permanently delete the entry instead of moving it to \
+                the trash -- this cannot be undone. Falls back to a \
+                trashed entry if no live one matches, so this also \
+                purges something already in the trash.",
+            conflicts_with = "from_file"
+        )]
+        force: bool,
         #[arg(short = 'y', long, help = "Skip confirmation prompt")]
         yes: bool,
         #[arg(
@@ -1966,6 +1975,7 @@ fn main() {
         ),
         Opt::Remove {
             find_args,
+            force,
             yes,
             from_file,
         } => commands::remove(
@@ -1974,6 +1984,7 @@ fn main() {
             find_args.folder.as_deref(),
             find_args.ignorecase,
             find_args.exact,
+            force,
             yes,
             from_file.as_deref(),
         ),
@@ -2287,6 +2298,7 @@ mod test {
         for args in [
             &["rbw", "remove", "-y", "name"][..],
             &["rbw", "rm", "--yes", "name"][..],
+            &["rbw", "remove", "--force", "-y", "name"][..],
             &["rbw", "attachment", "rm", "-y", "name"][..],
             &["rbw", "purge", "-y"][..],
             &["rbw", "collection", "delete", "name", "--yes"][..],

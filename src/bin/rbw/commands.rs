@@ -4496,6 +4496,7 @@ pub fn remove(
     folder: Option<&str>,
     ignore_case: bool,
     force_exact: bool,
+    force: bool,
     yes: bool,
     from_file: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
@@ -4526,25 +4527,62 @@ pub fn remove(
         needle_str
     );
 
-    let (entry, decrypted) =
+    // Plain `remove` only ever targets a live (non-trashed) entry -- moving
+    // it to trash. `--force` additionally falls back to a trashed entry (to
+    // permanently purge something already there) if no live match exists.
+    let (entry, decrypted) = if force {
+        find_entry(
+            &db,
+            needles.clone(),
+            username,
+            folder,
+            ignore_case,
+            force_exact,
+        )
+        .or_else(|_| {
+            find_deleted_entry(
+                &db,
+                &needles,
+                username,
+                folder,
+                ignore_case,
+                force_exact,
+            )
+        })
+        .with_context(|| format!("couldn't find entry for '{desc}'"))?
+    } else {
         find_entry(&db, needles, username, folder, ignore_case, force_exact)
-            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+            .with_context(|| format!("couldn't find entry for '{desc}'"))?
+    };
 
-    if !yes
-        && !confirm(&format!(
+    let prompt = if force {
+        format!(
+            "Permanently delete entry {}? This cannot be undone!",
+            style::name(&decrypted.name, stdout_supports_color())
+        )
+    } else {
+        format!(
             "Delete entry {}?",
             style::name(&decrypted.name, stdout_supports_color())
-        ))?
-    {
+        )
+    };
+    if !yes && !confirm(&prompt)? {
         return Ok(());
     }
 
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
 
-    if let (Some(access_token), ()) =
+    let rotated = if force {
+        rbw::actions::delete_permanently(
+            access_token,
+            refresh_token,
+            &entry.id,
+        )?
+    } else {
         rbw::actions::remove(access_token, refresh_token, &entry.id)?
-    {
+    };
+    if let (Some(access_token), ()) = rotated {
         db.access_token = Some(access_token);
         save_db(&db)?;
     }

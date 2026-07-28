@@ -265,6 +265,22 @@ fn remove_once(access_token: &str, id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn delete_permanently(
+    access_token: &str,
+    refresh_token: &str,
+    id: &str,
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        delete_permanently_once(access_token, id)
+    })
+}
+
+fn delete_permanently_once(access_token: &str, id: &str) -> Result<()> {
+    let (client, _) = api_client()?;
+    client.delete_permanently(access_token, id)?;
+    Ok(())
+}
+
 pub fn archive(
     access_token: &str,
     refresh_token: &str,
