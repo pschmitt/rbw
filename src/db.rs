@@ -21,6 +21,10 @@ pub struct Entry {
     pub key: Option<String>,
     pub master_password_reprompt: crate::api::CipherRepromptType,
     #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub deleted: bool,
+    #[serde(default)]
     pub collection_ids: Vec<String>,
     #[serde(default)]
     pub attachments: Vec<Attachment>,

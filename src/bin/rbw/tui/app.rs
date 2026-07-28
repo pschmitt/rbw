@@ -9,8 +9,9 @@ use std::collections::HashMap;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::commands::{
-    self, DecryptedCipher, DecryptedData, DecryptedSearchCipher,
-    EditableCipher, EditableData, EditableUri,
+    self, ArchivedFilter, DecryptedCipher, DecryptedData,
+    DecryptedSearchCipher, EditableCipher, EditableData, EditableUri,
+    TrashFilter,
 };
 
 use super::input::Input;
@@ -411,6 +412,17 @@ pub struct App {
     // session, so every mutation (edit, add, delete, sync, attachment
     // upload/delete, the accounts panel) is rejected instead of attempted.
     read_only: bool,
+    // Main list's archived-visibility filter, initialized from
+    // `hide_archived` (config.json) and cycled at runtime by
+    // `TuiAction::CycleArchivedFilter`.
+    pub archived_filter: ArchivedFilter,
+    // Main list's trash-visibility filter, initialized from `hide_trashed`
+    // (config.json). Unlike `archived_filter`, there's no runtime toggle
+    // for this yet (no `TuiAction` cycles it) -- restoring/browsing trash
+    // from the TUI is left for a later pass; this only needs to keep
+    // trashed entries (which now survive sync instead of being dropped,
+    // see `SyncResCipher::to_entry`) from silently appearing in the list.
+    pub trash_filter: TrashFilter,
 }
 
 // How often `poll_agent_lock` actually round-trips to the agent, throttled
@@ -421,11 +433,33 @@ const LOCK_CHECK_INTERVAL: std::time::Duration =
 
 impl App {
     pub fn new(open: commands::TuiOpen, initial_term: Option<&str>) -> Self {
-        let keymap = rbw::config::Config::load().map_or_else(
-            |_| Keymap::resolve(&std::collections::HashMap::new()),
+        let config = rbw::config::Config::load().ok();
+        let keymap = config.as_ref().map_or_else(
+            || Keymap::resolve(&std::collections::HashMap::new()),
             |config| Keymap::resolve(&config.tui_keybindings),
         );
-        Self::with_keymap(open, initial_term, keymap)
+        let archived_filter =
+            config.as_ref().map_or(ArchivedFilter::Hide, |config| {
+                if config.hide_archived {
+                    ArchivedFilter::Hide
+                } else {
+                    ArchivedFilter::Include
+                }
+            });
+        let trash_filter = config.map_or(TrashFilter::Hide, |config| {
+            if config.hide_trashed {
+                TrashFilter::Hide
+            } else {
+                TrashFilter::Include
+            }
+        });
+        Self::with_keymap(
+            open,
+            initial_term,
+            keymap,
+            archived_filter,
+            trash_filter,
+        )
     }
 
     // Split out from `new` so tests (including `super::ui`'s) can supply a
@@ -435,6 +469,8 @@ impl App {
         open: commands::TuiOpen,
         initial_term: Option<&str>,
         keymap: Keymap,
+        archived_filter: ArchivedFilter,
+        trash_filter: TrashFilter,
     ) -> Self {
         let vaults = open
             .vaults
@@ -455,6 +491,8 @@ impl App {
             initial_term,
             keymap,
             false,
+            archived_filter,
+            trash_filter,
         )
     }
 
@@ -466,10 +504,26 @@ impl App {
         vault: commands::TuiFileVault,
         initial_term: Option<&str>,
     ) -> Self {
-        let keymap = rbw::config::Config::load().map_or_else(
-            |_| Keymap::resolve(&std::collections::HashMap::new()),
+        let config = rbw::config::Config::load().ok();
+        let keymap = config.as_ref().map_or_else(
+            || Keymap::resolve(&std::collections::HashMap::new()),
             |config| Keymap::resolve(&config.tui_keybindings),
         );
+        let archived_filter =
+            config.as_ref().map_or(ArchivedFilter::Hide, |config| {
+                if config.hide_archived {
+                    ArchivedFilter::Hide
+                } else {
+                    ArchivedFilter::Include
+                }
+            });
+        let trash_filter = config.map_or(TrashFilter::Hide, |config| {
+            if config.hide_trashed {
+                TrashFilter::Hide
+            } else {
+                TrashFilter::Include
+            }
+        });
         let read_only = !vault.write;
         let file_save = vault.write.then_some(commands::FileSaveTarget {
             path: vault.path,
@@ -492,9 +546,12 @@ impl App {
             initial_term,
             keymap,
             read_only,
+            archived_filter,
+            trash_filter,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish(
         vaults: Vec<AccountVault>,
         locked: Vec<String>,
@@ -502,6 +559,8 @@ impl App {
         initial_term: Option<&str>,
         keymap: Keymap,
         read_only: bool,
+        archived_filter: ArchivedFilter,
+        trash_filter: TrashFilter,
     ) -> Self {
         let mut app = Self {
             vaults,
@@ -527,6 +586,8 @@ impl App {
             // moments ago, so there's no point re-checking immediately.
             last_lock_check: std::time::Instant::now(),
             read_only,
+            archived_filter,
+            trash_filter,
         };
         app.rebuild_flat();
         app.recompute_filter();
@@ -586,7 +647,9 @@ impl App {
             .iter()
             .enumerate()
             .filter(|(_, c)| {
-                term.is_empty() || c.search_match(&term, None, false)
+                (term.is_empty() || c.search_match(&term, None, false))
+                    && self.archived_filter.matches(c.archived)
+                    && self.trash_filter.matches(c.deleted)
             })
             .map(|(i, _)| i)
             .collect();
@@ -1306,6 +1369,68 @@ impl App {
                 self.set_status(Level::Error, format!("{e:#}"));
             }
         }
+    }
+
+    // `TuiAction::ToggleArchived`: archives the selected entry if it isn't
+    // archived, unarchives it if it is. Unlike `confirm_delete`, this
+    // doesn't go through a confirm mode (reversible either way), and isn't
+    // available for `--from-file` vaults at all (no local semantics for
+    // archiving -- same reasoning as the CLI's `archive`/`unarchive`
+    // commands not supporting `--from-file`).
+    fn toggle_archived(&mut self) {
+        let Some(owner) = self.current_owner() else {
+            return;
+        };
+        let Some(entry) = self.current_entry() else {
+            return;
+        };
+        let name = self
+            .current_search()
+            .map_or_else(String::new, |s| s.name.clone());
+
+        if self.vaults[owner].decrypted.is_some() {
+            self.set_status(
+                Level::Warn,
+                "archiving isn't supported for --from-file vaults",
+            );
+            return;
+        }
+
+        if let Err(e) = self.activate_current() {
+            self.set_status(Level::Error, format!("{e:#}"));
+            return;
+        }
+
+        let will_archive = !entry.archived;
+        match commands::tui_toggle_archived(
+            &mut self.vaults[owner].db,
+            &entry,
+        ) {
+            Ok(()) => {
+                self.reload_vault(owner);
+                let verb = if will_archive {
+                    "archived"
+                } else {
+                    "unarchived"
+                };
+                self.set_status(Level::Success, format!("{verb} '{name}'"));
+            }
+            Err(e) => {
+                self.set_status(Level::Error, format!("{e:#}"));
+            }
+        }
+    }
+
+    // `TuiAction::CycleArchivedFilter`: Hide -> Only -> Include -> Hide.
+    // Purely a local view toggle, no server round-trip.
+    fn cycle_archived_filter(&mut self) {
+        self.archived_filter = self.archived_filter.next();
+        self.recompute_filter();
+        self.select(0);
+        self.set_status(
+            Level::Info,
+            format!("archived filter: {}", self.archived_filter.label()),
+        );
     }
 
     // Called by the event loop once the real terminal has been restored.
@@ -2220,10 +2345,23 @@ impl App {
             Some(TuiAction::StartAdd) => self.start_add(),
             Some(TuiAction::OpenAccounts) => self.open_accounts(),
             Some(TuiAction::OpenSettings) => self.open_settings(),
+            // Excludes an already-trashed entry (only reachable at all if
+            // `hide_trashed` is disabled) -- re-"deleting" a trashed item
+            // is a permanent purge server-side, not a second soft-delete,
+            // so this key must not offer it. Restoring a trashed entry
+            // isn't wired into the TUI yet; use `rbw restore` instead.
             Some(TuiAction::DeleteEntry)
-                if self.current_search().is_some() =>
+                if self.current_search().is_some_and(|s| !s.deleted) =>
             {
                 self.mode = Mode::ConfirmDelete;
+            }
+            Some(TuiAction::ToggleArchived)
+                if self.current_search().is_some() =>
+            {
+                self.toggle_archived();
+            }
+            Some(TuiAction::CycleArchivedFilter) => {
+                self.cycle_archived_filter();
             }
             Some(TuiAction::Sync) => self.sync(),
             Some(TuiAction::Help) => self.mode = Mode::Help,
@@ -2942,8 +3080,9 @@ fn detail_first_uri(detail: &DecryptedCipher) -> Option<String> {
 #[cfg(test)]
 mod test {
     use super::{
-        AccountsView, Action, App, AttachmentItem, AttachmentView, Keymap,
-        Mode, PickerKind, Prompt, SettingValue,
+        AccountsView, Action, App, ArchivedFilter, AttachmentItem,
+        AttachmentView, Keymap, Mode, PickerKind, Prompt, SettingValue,
+        TrashFilter,
     };
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -2960,6 +3099,8 @@ mod test {
             },
             None,
             Keymap::resolve(&std::collections::HashMap::new()),
+            ArchivedFilter::Hide,
+            TrashFilter::Hide,
         )
     }
 
@@ -2980,6 +3121,8 @@ mod test {
             },
             None,
             Keymap::resolve(&overrides),
+            ArchivedFilter::Hide,
+            TrashFilter::Hide,
         )
     }
 
@@ -3014,6 +3157,8 @@ mod test {
                 history: vec![],
                 key: None,
                 master_password_reprompt: rbw::api::CipherRepromptType::None,
+                archived: false,
+                deleted: false,
                 collection_ids: vec![],
                 attachments: vec![],
             });
@@ -3032,6 +3177,8 @@ mod test {
             },
             None,
             Keymap::resolve(&std::collections::HashMap::new()),
+            ArchivedFilter::Hide,
+            TrashFilter::Hide,
         );
         a.mode = Mode::Normal;
         a
@@ -3350,6 +3497,8 @@ mod test {
                 attachment_metadata: crate::commands::AttachmentMetadata {
                     attachment_count: 0,
                 },
+                archived: false,
+                deleted: false,
                 account: None,
             },
         );

@@ -225,12 +225,6 @@ collection` command group:
 `--org-id`; when the vault contains exactly one organization, it is
 auto-detected and the flag can be omitted.
 
-The old flat commands (`list-collections`/`lsc`, `create-collection`,
-`delete-collection`, `edit-collections`, `rename-collection`, and
-`propagate-collection-permissions`) still work as hidden compatibility shims
-for existing scripts, but the `rbw collection` subcommands are the documented
-interface going forward.
-
 ### Template and command injection
 
 `rbw inject` can render templates containing secret references. References use

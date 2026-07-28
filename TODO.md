@@ -78,3 +78,37 @@
       by serializing camelCase `privateKey`/`publicKey`/`keyFingerprint`
       (old spellings kept as deserialize aliases) and re-verified live:
       import, exact round-trip, and edit all preserve the key material.
+
+- [x] Item archiving and trash restore, matching Bitwarden's own Archive
+      feature (`ArchivedDate`/`archivedDate`, parallel to the existing
+      `DeletedDate`/`deletedDate` trash field): `rbw archive`/`rbw
+      unarchive <entry>` and `rbw restore <entry>` (undoes `rbw remove`/`rbw
+      delete`), all with `--bulk` (find every match across needles, preview,
+      confirm once, one bulk API call) and `-y`/`--yes`. Archived and
+      trashed entries now survive sync instead of being dropped, but are
+      hidden from `rbw list`/`rbw search` by default — overridable with
+      `--archived`/`--include-archived` and `--trashed`(`--deleted`)/
+      `--include-trashed`(`--include-deleted`), each backed by a config.json
+      default (`hide_archived`, `hide_trashed`, both `true`; mirrored in the
+      home-manager module). `find_entry`/`find_entry_multi`/
+      `find_entries_all` (used by `get`/`edit`/`set`/`remove`/etc.)
+      unconditionally exclude trashed entries, so a plain `rbw remove` can
+      never accidentally re-target (and permanently purge) something
+      already in the trash; `rbw restore` resolves against a dedicated
+      trashed-only lookup instead. The TUI hides both by default too (own
+      `archived_filter`/`trash_filter`, initialized from config), with `x`
+      to archive/unarchive the selected entry and `X` to cycle the
+      archived-visibility filter (Hide/Only/Include) -- trash browsing/
+      restore isn't wired into the TUI yet, just the safe-by-default
+      hiding. Verified live against bitwarden.com (the account that
+      actually had Archive-eligible + trashed items) with a temporary
+      build: archive/unarchive round-tripped correctly, `--archived`/
+      `--trashed` filtered correctly, and organically surfaced real
+      pre-existing archived/trashed entries. `rbw export`/`import` and
+      `--from-file` don't round-trip either flag yet (deferred, no local
+      file semantics for either concept today).
+- [x] Removed the hidden flat-command compatibility shims for collections
+      (`list-collections`/`lsc`, `create-collection`, `delete-collection`,
+      `edit-collections`, `rename-collection`,
+      `propagate-collection-permissions`) -- `rbw collection <subcommand>`
+      is now the only interface.

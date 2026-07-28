@@ -65,12 +65,7 @@ let
       v;
 
   isDefaultPasswordGen =
-    pg:
-    pg.length == null
-    && !pg.no_symbols
-    && !pg.only_numbers
-    && !pg.nonconfusables
-    && !pg.diceware;
+    pg: pg.length == null && !pg.no_symbols && !pg.only_numbers && !pg.nonconfusables && !pg.diceware;
 
   mkNullOrStr =
     description:
@@ -322,6 +317,27 @@ let
           every subsequent unlock attempt behind it.
         '';
       };
+      hide_archived = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Whether archived entries are hidden from `rbw list`/`rbw search`
+          (and the TUI) by default. Overridable per-invocation with
+          `--archived` (show only archived) / `--include-archived`
+          (disable hiding).
+        '';
+      };
+      hide_trashed = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Whether trashed entries (removed via `rbw remove`/`rbw delete`)
+          are hidden from `rbw list`/`rbw search` (and the TUI) by
+          default. Overridable per-invocation with `--trashed`/`--deleted`
+          (show only trashed) / `--include-trashed`/`--include-deleted`
+          (disable hiding).
+        '';
+      };
       tui_keybindings = mkOption {
         type = types.attrsOf (types.listOf types.str);
         default = { };
@@ -418,10 +434,7 @@ in
         // {
           accounts = lib.attrValues cfg.settings.accounts;
           password_gen =
-            if isDefaultPasswordGen cfg.settings.password_gen then
-              null
-            else
-              cfg.settings.password_gen;
+            if isDefaultPasswordGen cfg.settings.password_gen then null else cfg.settings.password_gen;
         }
       );
       configFile = "${config.xdg.configHome}/rbw/config.json";

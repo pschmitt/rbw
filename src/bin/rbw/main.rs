@@ -104,6 +104,39 @@ fn resolve_pwgen(cli: &PasswordGenArgs) -> (usize, rbw::pwgen::Type) {
     rbw::pwgen::resolve(cli.into(), (&policy).into())
 }
 
+// Resolves `--archived`/`--include-archived` against the configured
+// `hide_archived` default (falling back to the hide-by-default behavior if
+// the config can't be loaded).
+fn resolve_archived_filter(
+    archived: bool,
+    include_archived: bool,
+) -> commands::ArchivedFilter {
+    let hide_archived_default =
+        rbw::config::Config::load().map_or(true, |c| c.hide_archived);
+    commands::ArchivedFilter::from_flags(
+        archived,
+        include_archived,
+        hide_archived_default,
+    )
+}
+
+// Resolves `--trashed`/`--deleted` and `--include-trashed`/
+// `--include-deleted` against the configured `hide_trashed` default
+// (falling back to the hide-by-default behavior if the config can't be
+// loaded).
+fn resolve_trash_filter(
+    trashed: bool,
+    include_trashed: bool,
+) -> commands::TrashFilter {
+    let hide_trashed_default =
+        rbw::config::Config::load().map_or(true, |c| c.hide_trashed);
+    commands::TrashFilter::from_flags(
+        trashed,
+        include_trashed,
+        hide_trashed_default,
+    )
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 enum OutputArg {
     Name,
@@ -466,6 +499,37 @@ enum Opt {
         insecure: bool,
         #[arg(
             long,
+            help = "Show only archived entries",
+            conflicts_with = "include_archived"
+        )]
+        archived: bool,
+        #[arg(
+            long,
+            help = "Include archived entries alongside normal ones (by \
+                default, archived entries are hidden unless `--archived`/\
+                `--include-archived` is given, or `hide_archived` is set to \
+                false in config.json)"
+        )]
+        include_archived: bool,
+        #[arg(
+            long,
+            alias = "deleted",
+            help = "Show only trashed entries (i.e. removed via `rbw \
+                remove`/`rbw delete`)",
+            conflicts_with = "include_trashed"
+        )]
+        trashed: bool,
+        #[arg(
+            long,
+            alias = "include-deleted",
+            help = "Include trashed entries alongside normal ones (by \
+                default, trashed entries are hidden unless `--trashed`/\
+                `--include-trashed` is given, or `hide_trashed` is set to \
+                false in config.json)"
+        )]
+        include_trashed: bool,
+        #[arg(
+            long,
             help = "With multiple accounts configured, unlock (prompting as \
                 needed) and include every account instead of just the \
                 already-unlocked ones",
@@ -592,6 +656,37 @@ enum Opt {
             help = "Include password column (shows sensitive data in plain text)"
         )]
         insecure: bool,
+        #[arg(
+            long,
+            help = "Show only archived entries",
+            conflicts_with = "include_archived"
+        )]
+        archived: bool,
+        #[arg(
+            long,
+            help = "Include archived entries alongside normal ones (by \
+                default, archived entries are hidden unless `--archived`/\
+                `--include-archived` is given, or `hide_archived` is set to \
+                false in config.json)"
+        )]
+        include_archived: bool,
+        #[arg(
+            long,
+            alias = "deleted",
+            help = "Show only trashed entries (i.e. removed via `rbw \
+                remove`/`rbw delete`)",
+            conflicts_with = "include_trashed"
+        )]
+        trashed: bool,
+        #[arg(
+            long,
+            alias = "include-deleted",
+            help = "Include trashed entries alongside normal ones (by \
+                default, trashed entries are hidden unless `--trashed`/\
+                `--include-trashed` is given, or `hide_trashed` is set to \
+                false in config.json)"
+        )]
+        include_trashed: bool,
         #[arg(
             long,
             help = "With multiple accounts configured, unlock (prompting as \
@@ -831,124 +926,68 @@ enum Opt {
         from_file: Option<std::path::PathBuf>,
     },
 
+    #[command(
+        about = "Archive a given entry (hidden from list/search by default)"
+    )]
+    Archive {
+        #[command(flatten)]
+        find_args: FindArgs,
+        #[arg(
+            long,
+            help = "Treat each needle as matching every entry it finds, \
+                archiving all of them"
+        )]
+        bulk: bool,
+        #[arg(
+            short = 'y',
+            long,
+            help = "Skip confirmation prompt (only asked with --bulk)"
+        )]
+        yes: bool,
+    },
+
+    #[command(about = "Unarchive a given entry")]
+    Unarchive {
+        #[command(flatten)]
+        find_args: FindArgs,
+        #[arg(
+            long,
+            help = "Treat each needle as matching every entry it finds, \
+                unarchiving all of them"
+        )]
+        bulk: bool,
+        #[arg(
+            short = 'y',
+            long,
+            help = "Skip confirmation prompt (only asked with --bulk)"
+        )]
+        yes: bool,
+    },
+
+    #[command(
+        about = "Restore a given entry out of the trash (undo `rbw remove`/`rbw delete`)"
+    )]
+    Restore {
+        #[command(flatten)]
+        find_args: FindArgs,
+        #[arg(
+            long,
+            help = "Treat each needle as matching every entry it finds, \
+                restoring all of them"
+        )]
+        bulk: bool,
+        #[arg(
+            short = 'y',
+            long,
+            help = "Skip confirmation prompt (only asked with --bulk)"
+        )]
+        yes: bool,
+    },
+
     #[command(about = "Manage organization collections")]
     Collection {
         #[command(subcommand)]
         collection: Collection,
-    },
-
-    // Hidden compat shim for `rbw collection list`.
-    #[command(
-        about = "List all collections in the organization (use `rbw \
-            collection list`)",
-        alias = "lsc",
-        hide = true
-    )]
-    ListCollections {
-        #[arg(
-            short,
-            long,
-            value_enum,
-            help = "Output mode: name, json, yaml"
-        )]
-        output: Option<OutputArg>,
-        #[arg(
-            short = 'j',
-            long,
-            visible_alias = "json",
-            help = "Display output as JSON"
-        )]
-        raw: bool,
-        #[arg(long, help = "Display output as YAML")]
-        yaml: bool,
-    },
-
-    // Hidden compat shim for `rbw collection create`.
-    #[command(
-        about = "Create a new collection in an organization (use `rbw \
-            collection create`)",
-        hide = true
-    )]
-    CreateCollection {
-        #[arg(help = "Name of the collection")]
-        name: String,
-        #[arg(
-            long = "org-id",
-            help = "Organization ID (auto-detected if the vault has a \
-                single org)"
-        )]
-        org_id: Option<String>,
-    },
-
-    // Hidden compat shim for `rbw collection delete`.
-    #[command(
-        about = "Delete an organization collection (use `rbw collection \
-            delete`)",
-        hide = true
-    )]
-    DeleteCollection {
-        #[arg(help = "ID of the collection")]
-        collection_id: String,
-        #[arg(
-            long = "org-id",
-            help = "Organization ID (auto-detected if the vault has a \
-                single org)"
-        )]
-        org_id: Option<String>,
-        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
-        yes: bool,
-    },
-
-    // Hidden compat shim for `rbw collection assign`, keeping the old
-    // script-oriented base64 interface intact.
-    #[command(
-        about = "Edit collections for an entry (use `rbw collection \
-            assign`)",
-        hide = true
-    )]
-    EditCollections {
-        #[arg(help = "ID of the entry")]
-        id: String,
-        #[arg(help = "Base64-encoded JSON array of collection IDs")]
-        collections: String,
-    },
-
-    // Hidden compat shim for `rbw collection propagate-permissions`.
-    #[command(
-        about = "Grant members access to nested collections (use `rbw \
-            collection propagate-permissions`)",
-        hide = true
-    )]
-    PropagateCollectionPermissions {
-        #[arg(
-            long = "org-id",
-            help = "Organization ID (auto-detected if the vault has a single org)"
-        )]
-        org_id: Option<String>,
-        #[arg(long, help = "Execute the changes (default is a dry-run)")]
-        apply: bool,
-        #[arg(short, long, help = "Print per-run counts")]
-        verbose: bool,
-    },
-
-    // Hidden compat shim for `rbw collection rename`.
-    #[command(
-        about = "Rename an organization collection (use `rbw collection \
-            rename`)",
-        hide = true
-    )]
-    RenameCollection {
-        #[arg(help = "ID of the collection")]
-        id: String,
-        #[arg(
-            long = "org-id",
-            alias = "organizationid",
-            help = "Organization ID (auto-detected if the vault has a \
-                single org)"
-        )]
-        org_id: Option<String>,
-        #[arg(help = "New name for the collection")]
-        name: String,
     },
 
     #[command(about = "View the password history for a given entry")]
@@ -1038,17 +1077,12 @@ impl Opt {
             Self::Edit { .. } => "edit".to_string(),
             Self::Set { .. } => "set".to_string(),
             Self::Remove { .. } => "remove".to_string(),
+            Self::Archive { .. } => "archive".to_string(),
+            Self::Unarchive { .. } => "unarchive".to_string(),
+            Self::Restore { .. } => "restore".to_string(),
             Self::Collection { collection } => {
                 format!("collection {}", collection.subcommand_name())
             }
-            Self::ListCollections { .. } => "list-collections".to_string(),
-            Self::CreateCollection { .. } => "create-collection".to_string(),
-            Self::DeleteCollection { .. } => "delete-collection".to_string(),
-            Self::EditCollections { .. } => "edit-collections".to_string(),
-            Self::PropagateCollectionPermissions { .. } => {
-                "propagate-collection-permissions".to_string()
-            }
-            Self::RenameCollection { .. } => "rename-collection".to_string(),
             Self::History { .. } => "history".to_string(),
             Self::Lock { .. } => "lock".to_string(),
             Self::Purge { .. } => "purge".to_string(),
@@ -1600,10 +1634,17 @@ fn main() {
             raw,
             yaml,
             insecure,
+            archived,
+            include_archived,
+            trashed,
+            include_trashed,
             all,
             from_file,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
+            let archived_filter =
+                resolve_archived_filter(archived, include_archived);
+            let trash_filter = resolve_trash_filter(trashed, include_trashed);
             term.map_or_else(
                 || {
                     commands::list(
@@ -1612,6 +1653,8 @@ fn main() {
                         insecure,
                         output,
                         all,
+                        archived_filter,
+                        trash_filter,
                         from_file.as_deref(),
                     )
                 },
@@ -1624,6 +1667,8 @@ fn main() {
                         insecure,
                         output,
                         all,
+                        archived_filter,
+                        trash_filter,
                         from_file.as_deref(),
                     )
                 },
@@ -1747,10 +1792,17 @@ fn main() {
             raw,
             yaml,
             insecure,
+            archived,
+            include_archived,
+            trashed,
+            include_trashed,
             all,
             from_file,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
+            let archived_filter =
+                resolve_archived_filter(archived, include_archived);
+            let trash_filter = resolve_trash_filter(trashed, include_trashed);
             commands::search(
                 &term,
                 &fields,
@@ -1759,6 +1811,8 @@ fn main() {
                 insecure,
                 output,
                 all,
+                archived_filter,
+                trash_filter,
                 from_file.as_deref(),
             )
         })(),
@@ -1923,6 +1977,45 @@ fn main() {
             yes,
             from_file.as_deref(),
         ),
+        Opt::Archive {
+            find_args,
+            bulk,
+            yes,
+        } => commands::archive(
+            find_args.needles,
+            find_args.user.as_deref(),
+            find_args.folder.as_deref(),
+            find_args.ignorecase,
+            find_args.exact,
+            bulk,
+            yes,
+        ),
+        Opt::Unarchive {
+            find_args,
+            bulk,
+            yes,
+        } => commands::unarchive(
+            find_args.needles,
+            find_args.user.as_deref(),
+            find_args.folder.as_deref(),
+            find_args.ignorecase,
+            find_args.exact,
+            bulk,
+            yes,
+        ),
+        Opt::Restore {
+            find_args,
+            bulk,
+            yes,
+        } => commands::restore(
+            &find_args.needles,
+            find_args.user.as_deref(),
+            find_args.folder.as_deref(),
+            find_args.ignorecase,
+            find_args.exact,
+            bulk,
+            yes,
+        ),
         Opt::Collection { collection } => match collection {
             Collection::List { output, raw, yaml } => {
                 (|| -> anyhow::Result<()> {
@@ -1976,39 +2069,6 @@ fn main() {
                 verbose,
             ),
         },
-        Opt::ListCollections { output, raw, yaml } => {
-            (|| -> anyhow::Result<()> {
-                let output = resolve_output_mode(output, raw, yaml)?;
-                commands::list_collections(output)
-            })()
-        }
-        Opt::CreateCollection { name, org_id } => {
-            commands::create_collection(&name, org_id.as_deref())
-        }
-        Opt::DeleteCollection {
-            collection_id,
-            org_id,
-            yes,
-        } => commands::delete_collection(
-            &collection_id,
-            org_id.as_deref(),
-            yes,
-        ),
-        Opt::EditCollections { id, collections } => {
-            commands::edit_collections(&id, &collections)
-        }
-        Opt::PropagateCollectionPermissions {
-            org_id,
-            apply,
-            verbose,
-        } => commands::propagate_collection_permissions(
-            org_id.as_deref(),
-            apply,
-            verbose,
-        ),
-        Opt::RenameCollection { id, org_id, name } => {
-            commands::rename_collection(&id, org_id.as_deref(), &name)
-        }
         Opt::History {
             find_args,
             output,
@@ -2198,33 +2258,6 @@ mod test {
             &["rbw", "collection", "assign", "entry", "coll"][..],
             &["rbw", "collection", "assign", "-e", "entry", "c1", "c2"][..],
             &["rbw", "collection", "propagate-permissions", "--apply"][..],
-        ] {
-            parse(args);
-        }
-    }
-
-    // The old flat collection commands stay available (hidden) with their
-    // original interfaces, so existing scripts keep working.
-    #[test]
-    fn test_collection_compat_shims_parse() {
-        for args in [
-            &["rbw", "list-collections"][..],
-            &["rbw", "lsc"][..],
-            &["rbw", "create-collection", "name"][..],
-            &["rbw", "create-collection", "name", "--org-id", "org"][..],
-            &["rbw", "delete-collection", "id", "--org-id", "org"][..],
-            &["rbw", "delete-collection", "id", "-y"][..],
-            &["rbw", "edit-collections", "id", "b64"][..],
-            &["rbw", "rename-collection", "id", "new", "--org-id", "org"][..],
-            &[
-                "rbw",
-                "rename-collection",
-                "id",
-                "new",
-                "--organizationid",
-                "org",
-            ][..],
-            &["rbw", "propagate-collection-permissions"][..],
         ] {
             parse(args);
         }

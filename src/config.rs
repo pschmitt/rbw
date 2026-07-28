@@ -208,6 +208,17 @@ pub struct Config {
     // pinentry can hold the terminal at a time.
     #[serde(default = "default_pinentry_timeout")]
     pub pinentry_timeout: u64,
+    // Whether archived entries are hidden from `rbw list`/`rbw search` (and
+    // the TUI) by default. Overridable per-invocation with `--archived`
+    // (show only archived) / `--include-archived` (disable hiding).
+    #[serde(default = "default_hide_archived")]
+    pub hide_archived: bool,
+    // Whether trashed entries (removed via `rbw remove`/`rbw delete`) are
+    // hidden from `rbw list`/`rbw search` (and the TUI) by default.
+    // Overridable per-invocation with `--trashed`/`--deleted` (show only
+    // trashed) / `--include-trashed`/`--include-deleted` (disable hiding).
+    #[serde(default = "default_hide_trashed")]
+    pub hide_trashed: bool,
     // TUI keybinding overrides: action name (e.g. "copy_password",
     // "move_down") to a list of key chord strings (e.g. "ctrl-y", "alt-p",
     // "g", "pagedown") that fully replace that action's built-in default
@@ -244,6 +255,8 @@ impl Default for Config {
             sync_interval: default_sync_interval(),
             pinentry: default_pinentry(),
             pinentry_timeout: default_pinentry_timeout(),
+            hide_archived: default_hide_archived(),
+            hide_trashed: default_hide_trashed(),
             tui_keybindings: std::collections::HashMap::new(),
             password_gen: PasswordGenPolicy::default(),
             device_id: None,
@@ -265,6 +278,14 @@ pub fn default_pinentry() -> String {
 
 pub fn default_pinentry_timeout() -> u64 {
     300
+}
+
+pub fn default_hide_archived() -> bool {
+    true
+}
+
+pub fn default_hide_trashed() -> bool {
+    true
 }
 
 impl Config {

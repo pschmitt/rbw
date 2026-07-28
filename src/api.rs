@@ -436,6 +436,8 @@ struct SyncResCipher {
     fields: Option<Vec<CipherField>>,
     #[serde(rename = "DeletedDate", alias = "deletedDate")]
     deleted_date: Option<String>,
+    #[serde(rename = "ArchivedDate", alias = "archivedDate")]
+    archived_date: Option<String>,
     #[serde(rename = "Key", alias = "key")]
     key: Option<String>,
     #[serde(rename = "Reprompt", alias = "reprompt")]
@@ -467,9 +469,6 @@ impl SyncResCipher {
         &self,
         folders: &[SyncResFolder],
     ) -> Option<crate::db::Entry> {
-        if self.deleted_date.is_some() {
-            return None;
-        }
         let history =
             self.password_history
                 .as_ref()
@@ -589,6 +588,8 @@ impl SyncResCipher {
             history,
             key: self.key.clone(),
             master_password_reprompt: self.reprompt,
+            archived: self.archived_date.is_some(),
+            deleted: self.deleted_date.is_some(),
             collection_ids: self.collection_ids.clone(),
             attachments: self
                 .attachments
@@ -1028,6 +1029,11 @@ struct CiphersPutReqHistory {
 struct CiphersCollectionsPutReq {
     #[serde(rename = "collectionIds")]
     collection_ids: Vec<String>,
+}
+
+#[derive(serde::Serialize, Debug)]
+struct CipherIdsReq {
+    ids: Vec<String>,
 }
 
 #[derive(serde::Serialize, Debug)]
@@ -1914,6 +1920,132 @@ impl Client {
         let res = client
             .delete(self.api_url(&format!("/ciphers/{id}")))
             .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    pub fn archive(&self, access_token: &str, id: &str) -> Result<()> {
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .put(self.api_url(&format!("/ciphers/{id}/archive")))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    pub fn unarchive(&self, access_token: &str, id: &str) -> Result<()> {
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .put(self.api_url(&format!("/ciphers/{id}/unarchive")))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    pub fn archive_multiple(
+        &self,
+        access_token: &str,
+        ids: &[String],
+    ) -> Result<()> {
+        let req = CipherIdsReq { ids: ids.to_vec() };
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .put(self.api_url("/ciphers/archive"))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&req)
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    pub fn unarchive_multiple(
+        &self,
+        access_token: &str,
+        ids: &[String],
+    ) -> Result<()> {
+        let req = CipherIdsReq { ids: ids.to_vec() };
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .put(self.api_url("/ciphers/unarchive"))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&req)
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    pub fn restore(&self, access_token: &str, id: &str) -> Result<()> {
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .put(self.api_url(&format!("/ciphers/{id}/restore")))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    pub fn restore_multiple(
+        &self,
+        access_token: &str,
+        ids: &[String],
+    ) -> Result<()> {
+        let req = CipherIdsReq { ids: ids.to_vec() };
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .put(self.api_url("/ciphers/restore"))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&req)
             .send()
             .map_err(|source| Error::Reqwest { source })?;
         match res.status() {

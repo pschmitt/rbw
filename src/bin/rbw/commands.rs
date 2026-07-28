@@ -214,6 +214,8 @@ struct DecryptedListCipher {
     collection_ids: Option<Vec<String>>,
     #[serde(flatten)]
     attachment_metadata: AttachmentMetadata,
+    archived: bool,
+    deleted: bool,
     // Set when this entry was merged in from a non-active account (multi-
     // account `list`/`search`); omitted otherwise so single-account output is
     // unchanged.
@@ -234,10 +236,115 @@ pub struct DecryptedSearchCipher {
     pub fields: Vec<String>,
     pub notes: Option<String>,
     pub attachment_count: usize,
+    pub archived: bool,
+    pub deleted: bool,
     #[serde(skip)]
     sensitive_fields: Vec<String>,
     #[serde(skip)]
     password: Option<String>,
+}
+
+// How `list`/`search` (and the TUI) treat archived entries: hidden by
+// default (per the `hide_archived` config option), shown alongside normal
+// entries with `--include-archived`, or exclusively with `--archived`.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ArchivedFilter {
+    Hide,
+    Only,
+    Include,
+}
+
+impl ArchivedFilter {
+    pub fn matches(self, archived: bool) -> bool {
+        match self {
+            Self::Hide => !archived,
+            Self::Only => archived,
+            Self::Include => true,
+        }
+    }
+
+    // Resolves the `--archived`/`--include-archived` flags (mutually
+    // exclusive, enforced by clap) against the configured default: when
+    // neither flag is given, falls back to `hide_archived` from
+    // `config.json`.
+    pub fn from_flags(
+        archived: bool,
+        include_archived: bool,
+        hide_archived_default: bool,
+    ) -> Self {
+        if archived {
+            Self::Only
+        } else if include_archived {
+            Self::Include
+        } else if hide_archived_default {
+            Self::Hide
+        } else {
+            Self::Include
+        }
+    }
+
+    // Cycles the TUI's runtime archived-filter override: Hide -> Only ->
+    // Include -> Hide.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Hide => Self::Only,
+            Self::Only => Self::Include,
+            Self::Include => Self::Hide,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Hide => "hiding archived",
+            Self::Only => "archived only",
+            Self::Include => "including archived",
+        }
+    }
+}
+
+// How `list`/`search` (and the TUI) treat trashed (soft-deleted, via `rbw
+// remove`/`rbw delete`) entries: hidden by default (per the
+// `hide_trashed` config option), shown alongside normal entries with
+// `--include-trashed`/`--include-deleted`, or exclusively with
+// `--trashed`/`--deleted`. Structurally identical to `ArchivedFilter`, but
+// kept as a separate type since the two dimensions are independent and
+// naming call sites `trash_filter.matches(entry.deleted)` stays clearer
+// than reusing one generic type for both.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum TrashFilter {
+    Hide,
+    Only,
+    Include,
+}
+
+impl TrashFilter {
+    pub fn matches(self, deleted: bool) -> bool {
+        match self {
+            Self::Hide => !deleted,
+            Self::Only => deleted,
+            Self::Include => true,
+        }
+    }
+
+    // Resolves the `--trashed`/`--deleted` and `--include-trashed`/
+    // `--include-deleted` flags (mutually exclusive, enforced by clap)
+    // against the configured default: when neither flag is given, falls
+    // back to `hide_trashed` from `config.json`.
+    pub fn from_flags(
+        trashed: bool,
+        include_trashed: bool,
+        hide_trashed_default: bool,
+    ) -> Self {
+        if trashed {
+            Self::Only
+        } else if include_trashed {
+            Self::Include
+        } else if hide_trashed_default {
+            Self::Hide
+        } else {
+            Self::Include
+        }
+    }
 }
 
 // One AND-ed word of a `search`/`list`/TUI-filter query: either a bare word
@@ -423,6 +530,8 @@ impl DecryptedSearchCipher {
             fields: vec![],
             notes: None,
             attachment_count: 0,
+            archived: false,
+            deleted: false,
             sensitive_fields: vec![],
             password: None,
         }
@@ -666,6 +775,8 @@ impl From<DecryptedSearchCipher> for DecryptedListCipher {
             uris: Some(value.uris.into_iter().map(|(s, _)| s).collect()),
             collection_ids: None,
             attachment_metadata,
+            archived: value.archived,
+            deleted: value.deleted,
             account: None,
         }
     }
@@ -710,6 +821,8 @@ pub struct DecryptedCipher {
     pub attachments: Vec<DecryptedAttachment>,
     #[serde(flatten)]
     pub attachment_metadata: AttachmentMetadata,
+    pub archived: bool,
+    pub deleted: bool,
     // Set when this entry was merged in from a non-active account (multi-
     // account `list`/`search`); omitted otherwise so single-account output is
     // unchanged.
@@ -2288,6 +2401,8 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
         "sync_interval" => Some(config.sync_interval.to_string()),
         "pinentry" => Some(config.pinentry),
         "pinentry_timeout" => Some(config.pinentry_timeout.to_string()),
+        "hide_archived" => Some(config.hide_archived.to_string()),
+        "hide_trashed" => Some(config.hide_trashed.to_string()),
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     };
     let Some(value) = value else {
@@ -2376,6 +2491,16 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
                 .parse()
                 .context("failed to parse value for pinentry_timeout")?;
         }
+        "hide_archived" => {
+            config.hide_archived = value
+                .parse()
+                .context("failed to parse value for hide_archived")?;
+        }
+        "hide_trashed" => {
+            config.hide_trashed = value
+                .parse()
+                .context("failed to parse value for hide_trashed")?;
+        }
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     }
     config.save()?;
@@ -2407,6 +2532,12 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
         "pinentry" => config.pinentry = rbw::config::default_pinentry(),
         "pinentry_timeout" => {
             config.pinentry_timeout = rbw::config::default_pinentry_timeout();
+        }
+        "hide_archived" => {
+            config.hide_archived = rbw::config::default_hide_archived();
+        }
+        "hide_trashed" => {
+            config.hide_trashed = rbw::config::default_hide_trashed();
         }
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     }
@@ -2953,12 +3084,15 @@ fn list_from_file(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn list(
     fields: &[String],
     with_attachments: bool,
     insecure: bool,
     output: OutputMode,
     all: bool,
+    archived_filter: ArchivedFilter,
+    trash_filter: TrashFilter,
     from_file: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
     if let Some(path) = from_file {
@@ -3000,6 +3134,8 @@ pub fn list(
             entries
                 .retain(|entry| entry.attachment_metadata.has_attachments());
         }
+        entries.retain(|entry| archived_filter.matches(entry.archived));
+        entries.retain(|entry| trash_filter.matches(entry.deleted));
         entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         return write_serialized_pretty(
             &entries,
@@ -3057,6 +3193,8 @@ pub fn list(
     if with_attachments {
         entries.retain(|entry| entry.attachment_metadata.has_attachments());
     }
+    entries.retain(|entry| archived_filter.matches(entry.archived));
+    entries.retain(|entry| trash_filter.matches(entry.deleted));
     entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
     print_entry_list(&entries, &fields, output, "")?;
@@ -3679,6 +3817,8 @@ pub fn search(
     insecure: bool,
     output: OutputMode,
     all: bool,
+    archived_filter: ArchivedFilter,
+    trash_filter: TrashFilter,
     from_file: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
     if let Some(path) = from_file {
@@ -3715,7 +3855,9 @@ pub fn search(
                             term,
                             folder,
                             with_attachments,
-                        ) =>
+                        ) && archived_filter
+                            .matches(searchable.archived)
+                            && trash_filter.matches(searchable.deleted) =>
                     {
                         decrypt_cipher(entry).ok()
                     }
@@ -3783,6 +3925,8 @@ pub fn search(
             .filter(|entry| {
                 entry.as_ref().map_or(true, |entry| {
                     entry.search_match(term, folder, with_attachments)
+                        && archived_filter.matches(entry.archived)
+                        && trash_filter.matches(entry.deleted)
                 })
             })
             .map(|entry| entry.map(std::convert::Into::into))
@@ -4000,6 +4144,8 @@ fn add_from_file(
         notes,
         history: Vec::new(),
         attachments: Vec::new(),
+        archived: false,
+        deleted: false,
         account: None,
     });
 
@@ -4404,6 +4550,479 @@ pub fn remove(
     }
 
     crate::actions::sync()?;
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn archive(
+    needles: Vec<Needle>,
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+    bulk: bool,
+    yes: bool,
+) -> anyhow::Result<()> {
+    archive_or_unarchive(
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+        bulk,
+        yes,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn unarchive(
+    needles: Vec<Needle>,
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+    bulk: bool,
+    yes: bool,
+) -> anyhow::Result<()> {
+    archive_or_unarchive(
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+        bulk,
+        yes,
+        false,
+    )
+}
+
+// Shared implementation for `rbw archive`/`rbw unarchive`: unlike `remove`,
+// this is fully reversible, so neither path confirms by default -- only the
+// bulk path prints a preview and confirms (unless `-y`), same as `set
+// --bulk`, since it can silently touch many entries at once.
+#[allow(clippy::too_many_arguments)]
+fn archive_or_unarchive(
+    needles: Vec<Needle>,
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+    bulk: bool,
+    yes: bool,
+    archive: bool,
+) -> anyhow::Result<()> {
+    use std::io::Write as _;
+
+    let verb = if archive { "archive" } else { "unarchive" };
+
+    if bulk {
+        unlock(None, None)?;
+        let mut db = load_db()?;
+        let mut any_err = false;
+
+        let mut pending: Vec<(rbw::db::Entry, String)> = Vec::new();
+        let c = stdout_supports_color();
+
+        for needle in &needles {
+            match find_entries_all(&db, needle, username, folder, ignore_case)
+            {
+                Err(e) => {
+                    eprintln!("{needle}: {e:#}");
+                    any_err = true;
+                }
+                Ok(entries) => {
+                    for (entry, decrypted) in entries {
+                        if entry.archived == archive {
+                            eprintln!(
+                                "{} {}",
+                                style::name(&decrypted.name, c),
+                                style::dim(
+                                    if archive {
+                                        "(already archived)"
+                                    } else {
+                                        "(not archived)"
+                                    },
+                                    c
+                                )
+                            );
+                            continue;
+                        }
+                        pending.push((entry, decrypted.name.clone()));
+                    }
+                }
+            }
+        }
+
+        if pending.is_empty() {
+            return if any_err {
+                Err(anyhow::anyhow!("one or more entries failed to resolve"))
+            } else {
+                Ok(())
+            };
+        }
+
+        if !yes {
+            eprintln!(
+                "About to {verb} {} {}:",
+                style::name(&format!("{}", pending.len()), c),
+                if pending.len() == 1 {
+                    "entry"
+                } else {
+                    "entries"
+                }
+            );
+            for (_, name) in &pending {
+                eprintln!("  {}", style::name(name, c));
+            }
+            eprintln!();
+            eprint!("Apply to all ({})? [y/N] ", pending.len());
+            let _ = std::io::stderr().flush();
+            let mut answer = String::new();
+            std::io::stdin()
+                .read_line(&mut answer)
+                .context("failed to read confirmation")?;
+            if !matches!(answer.trim(), "y" | "Y") {
+                eprintln!("Aborted.");
+                return Ok(());
+            }
+        }
+
+        let access_token = db.access_token.as_ref().unwrap();
+        let refresh_token = db.refresh_token.as_ref().unwrap();
+        let ids: Vec<String> =
+            pending.iter().map(|(entry, _)| entry.id.clone()).collect();
+
+        let rotated = if archive {
+            rbw::actions::archive_multiple(access_token, refresh_token, &ids)?
+        } else {
+            rbw::actions::unarchive_multiple(
+                access_token,
+                refresh_token,
+                &ids,
+            )?
+        };
+        if let (Some(access_token), ()) = rotated {
+            db.access_token = Some(access_token);
+            save_db(&db)?;
+        }
+
+        crate::actions::sync()?;
+
+        for (_, name) in &pending {
+            println!("Item {} was {verb}d", style::name(name, c));
+        }
+
+        return if any_err {
+            Err(anyhow::anyhow!("one or more entries failed to resolve"))
+        } else {
+            Ok(())
+        };
+    }
+
+    unlock(None, None)?;
+
+    let mut db = load_db()?;
+
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle_str
+    );
+
+    let (entry, decrypted) =
+        find_entry(&db, needles, username, folder, ignore_case, force_exact)
+            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    let c = stdout_supports_color();
+    if entry.archived == archive {
+        println!(
+            "{} {}",
+            style::name(&decrypted.name, c),
+            if archive {
+                "is already archived"
+            } else {
+                "is not archived"
+            }
+        );
+        return Ok(());
+    }
+
+    let access_token = db.access_token.as_ref().unwrap();
+    let refresh_token = db.refresh_token.as_ref().unwrap();
+
+    let rotated = if archive {
+        rbw::actions::archive(access_token, refresh_token, &entry.id)?
+    } else {
+        rbw::actions::unarchive(access_token, refresh_token, &entry.id)?
+    };
+    if let (Some(access_token), ()) = rotated {
+        db.access_token = Some(access_token);
+        save_db(&db)?;
+    }
+
+    crate::actions::sync()?;
+
+    println!("Item {} was {verb}d", style::name(&decrypted.name, c));
+
+    Ok(())
+}
+
+// `find_entry`'s counterpart for `rbw restore`: only matches entries that
+// *are* trashed (the exact opposite of `find_entry`'s exclusion, kept as a
+// separate function rather than a shared parameter so the exclusion in
+// `find_entry`/`find_entry_multi` can stay an unconditional invariant
+// everywhere else).
+fn find_deleted_entry(
+    db: &rbw::db::Db,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+) -> anyhow::Result<(rbw::db::Entry, DecryptedCipher)> {
+    let mut requests = BatchRequests::new();
+    let plans: Vec<SearchCipherPlan> = db
+        .entries
+        .iter()
+        .map(|entry| SearchCipherPlan::build(entry, &mut requests))
+        .collect();
+    let results = if requests.is_empty() {
+        Vec::new()
+    } else {
+        crate::actions::decrypt_batch(requests.into_vec())?
+    };
+    let mut ciphers: Vec<(rbw::db::Entry, DecryptedSearchCipher)> = db
+        .entries
+        .iter()
+        .zip(plans)
+        .map(|(entry, plan)| {
+            plan.resolve(&results)
+                .map(|decrypted| (entry.clone(), decrypted))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    ciphers.retain(|(entry, _)| entry.deleted);
+    let (entry, _) = find_entry_raw(
+        &ciphers,
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )?;
+    let decrypted_entry = decrypt_cipher(&entry)?;
+    Ok((entry, decrypted_entry))
+}
+
+// `find_entries_all`'s counterpart for `rbw restore --bulk`: same idea as
+// `find_deleted_entry` above, but for the bulk path.
+fn find_deleted_entries_all(
+    db: &rbw::db::Db,
+    needle: &Needle,
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+) -> anyhow::Result<Vec<(rbw::db::Entry, DecryptedCipher)>> {
+    let mut requests = BatchRequests::new();
+    let plans: Vec<SearchCipherPlan> = db
+        .entries
+        .iter()
+        .map(|entry| SearchCipherPlan::build(entry, &mut requests))
+        .collect();
+    let results = if requests.is_empty() {
+        Vec::new()
+    } else {
+        crate::actions::decrypt_batch(requests.into_vec())?
+    };
+    let ciphers: Vec<(rbw::db::Entry, DecryptedSearchCipher)> = db
+        .entries
+        .iter()
+        .zip(plans)
+        .map(|(entry, plan)| {
+            plan.resolve(&results).map(|d| (entry.clone(), d))
+        })
+        .collect::<anyhow::Result<_>>()?;
+
+    let matches: Vec<_> = ciphers
+        .iter()
+        .filter(|(entry, _)| entry.deleted)
+        .filter(|(_, d)| {
+            d.matches(
+                needle,
+                username,
+                folder,
+                ignore_case,
+                false,
+                false,
+                false,
+            )
+        })
+        .collect();
+
+    if matches.is_empty() {
+        return Err(anyhow::anyhow!("no trashed entry found for '{needle}'"));
+    }
+
+    matches
+        .iter()
+        .map(|(entry, _)| {
+            decrypt_cipher(entry).map(|d| ((*entry).clone(), d))
+        })
+        .collect()
+}
+
+// `rbw restore`: undoes `rbw remove`/`rbw delete` -- restores an entry out
+// of the trash. Unlike `archive`/`unarchive`, this only ever goes one
+// direction, so there's no toggle to share between two public entry
+// points; otherwise modeled directly on `archive_or_unarchive` (same
+// single/`--bulk` shape, same non-destructive no-confirm-unless-`--bulk`
+// policy, since restoring is itself the "undo" and needs no undo of its
+// own).
+#[allow(clippy::too_many_arguments)]
+pub fn restore(
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+    bulk: bool,
+    yes: bool,
+) -> anyhow::Result<()> {
+    use std::io::Write as _;
+
+    if bulk {
+        unlock(None, None)?;
+        let mut db = load_db()?;
+        let mut any_err = false;
+
+        let mut pending: Vec<(rbw::db::Entry, String)> = Vec::new();
+        let c = stdout_supports_color();
+
+        for needle in needles {
+            match find_deleted_entries_all(
+                &db,
+                needle,
+                username,
+                folder,
+                ignore_case,
+            ) {
+                Err(e) => {
+                    eprintln!("{needle}: {e:#}");
+                    any_err = true;
+                }
+                Ok(entries) => {
+                    for (entry, decrypted) in entries {
+                        pending.push((entry, decrypted.name.clone()));
+                    }
+                }
+            }
+        }
+
+        if pending.is_empty() {
+            return if any_err {
+                Err(anyhow::anyhow!("one or more entries failed to resolve"))
+            } else {
+                Ok(())
+            };
+        }
+
+        if !yes {
+            eprintln!(
+                "About to restore {} {}:",
+                style::name(&format!("{}", pending.len()), c),
+                if pending.len() == 1 {
+                    "entry"
+                } else {
+                    "entries"
+                }
+            );
+            for (_, name) in &pending {
+                eprintln!("  {}", style::name(name, c));
+            }
+            eprintln!();
+            eprint!("Apply to all ({})? [y/N] ", pending.len());
+            let _ = std::io::stderr().flush();
+            let mut answer = String::new();
+            std::io::stdin()
+                .read_line(&mut answer)
+                .context("failed to read confirmation")?;
+            if !matches!(answer.trim(), "y" | "Y") {
+                eprintln!("Aborted.");
+                return Ok(());
+            }
+        }
+
+        let access_token = db.access_token.as_ref().unwrap();
+        let refresh_token = db.refresh_token.as_ref().unwrap();
+        let ids: Vec<String> =
+            pending.iter().map(|(entry, _)| entry.id.clone()).collect();
+
+        if let (Some(access_token), ()) =
+            rbw::actions::restore_multiple(access_token, refresh_token, &ids)?
+        {
+            db.access_token = Some(access_token);
+            save_db(&db)?;
+        }
+
+        crate::actions::sync()?;
+
+        for (_, name) in &pending {
+            println!("Item {} was restored", style::name(name, c));
+        }
+
+        return if any_err {
+            Err(anyhow::anyhow!("one or more entries failed to resolve"))
+        } else {
+            Ok(())
+        };
+    }
+
+    unlock(None, None)?;
+
+    let mut db = load_db()?;
+
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle_str
+    );
+
+    let (entry, decrypted) = find_deleted_entry(
+        &db,
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find a trashed entry for '{desc}'"))?;
+
+    let c = stdout_supports_color();
+
+    let access_token = db.access_token.as_ref().unwrap();
+    let refresh_token = db.refresh_token.as_ref().unwrap();
+
+    if let (Some(access_token), ()) =
+        rbw::actions::restore(access_token, refresh_token, &entry.id)?
+    {
+        db.access_token = Some(access_token);
+        save_db(&db)?;
+    }
+
+    crate::actions::sync()?;
+
+    println!("Item {} was restored", style::name(&decrypted.name, c));
 
     Ok(())
 }
@@ -4921,6 +5540,12 @@ fn find_entries_all(
 
     let matches: Vec<_> = ciphers
         .iter()
+        // Trashed entries are never a `--bulk` candidate (matches
+        // `find_entry_raw`'s exclusion, and Bitwarden's own precondition
+        // that a trashed item can't be re-edited/re-archived) -- see
+        // `find_deleted_entries_all` for `rbw restore --bulk`'s dedicated
+        // trashed-only counterpart.
+        .filter(|(_, d)| !d.deleted)
         .filter(|(_, d)| {
             d.matches(
                 needle,
@@ -6979,6 +7604,8 @@ pub fn load_from_file(path: &std::path::Path) -> anyhow::Result<FileVault> {
                     })
                     .collect(),
                 attachments,
+                archived: false,
+                deleted: false,
                 account: None,
             }
         })
@@ -7877,41 +8504,8 @@ pub fn list_collections(output: OutputMode) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn edit_collections(
-    id: &str,
-    collections_b64: &str,
-) -> anyhow::Result<()> {
-    unlock(None, None)?;
-
-    let mut db = load_db()?;
-    let access_token = db.access_token.as_ref().unwrap();
-    let refresh_token = db.refresh_token.as_ref().unwrap();
-
-    let json_bytes = rbw::base64::decode(collections_b64)
-        .context("failed to decode base64 collections")?;
-    let json_str = std::str::from_utf8(&json_bytes)
-        .context("collections is not valid UTF-8")?;
-    let collection_ids: Vec<String> = serde_json::from_str(json_str)
-        .context("failed to parse collection IDs JSON")?;
-
-    if let (Some(access_token), ()) = rbw::actions::edit_collections(
-        access_token,
-        refresh_token,
-        id,
-        &collection_ids,
-    )? {
-        db.access_token = Some(access_token);
-        save_db(&db)?;
-    }
-
-    crate::actions::sync()?;
-
-    Ok(())
-}
-
 // Set the collections an entry belongs to, addressing the entry by needle
 // and the collections by name or ID (resolved in the entry's organization).
-// The human-friendly counterpart to `edit_collections`' base64 interface.
 pub fn assign_collections(
     needle: Needle,
     user: Option<&str>,
@@ -8606,12 +9200,18 @@ fn find_entry(
     ignore_case: bool,
     force_exact: bool,
 ) -> anyhow::Result<(rbw::db::Entry, DecryptedCipher)> {
-    // Fast-path: exactly one UUID needle — try exact match first
+    // Fast-path: exactly one UUID needle — try exact match first. Trashed
+    // entries are never a candidate for ordinary name/UUID resolution
+    // (restoring one is the one exception -- see
+    // `find_deleted_entry`/`find_deleted_entries_all`, `rbw restore`'s
+    // dedicated trashed-only counterpart).
     if needles.len() == 1 {
         if let Needle::Uuid(uuid, s) = &needles[0] {
             let uuid = *uuid;
             for cipher in &db.entries {
-                if uuid::Uuid::parse_str(&cipher.id) == Ok(uuid) {
+                if !cipher.deleted
+                    && uuid::Uuid::parse_str(&cipher.id) == Ok(uuid)
+                {
                     return Ok((cipher.clone(), decrypt_cipher(cipher)?));
                 }
             }
@@ -8631,7 +9231,7 @@ fn find_entry(
     } else {
         crate::actions::decrypt_batch(requests.into_vec())?
     };
-    let ciphers: Vec<(rbw::db::Entry, DecryptedSearchCipher)> = db
+    let mut ciphers: Vec<(rbw::db::Entry, DecryptedSearchCipher)> = db
         .entries
         .iter()
         .zip(plans)
@@ -8640,6 +9240,7 @@ fn find_entry(
                 .map(|decrypted| (entry.clone(), decrypted))
         })
         .collect::<anyhow::Result<_>>()?;
+    ciphers.retain(|(entry, _)| !entry.deleted);
     let (entry, _) = find_entry_raw(
         &ciphers,
         &needles,
@@ -8693,6 +9294,9 @@ fn find_entry_multi(
                 pool.push((entry.clone(), plan.resolve(&results)?));
             }
         }
+        // Trashed entries are never a candidate for ordinary name/UUID
+        // resolution -- see `find_entry`'s matching exclusion.
+        pool.retain(|(entry, _)| !entry.deleted);
 
         // Fast-path a single UUID needle, same as `find_entry`.
         let mut needles = needles;
@@ -9096,6 +9700,8 @@ struct ListCipherPlan {
     entry_type: Option<String>,
     collection_ids: Option<Vec<String>>,
     attachment_count: usize,
+    archived: bool,
+    deleted: bool,
 }
 
 impl ListCipherPlan {
@@ -9194,6 +9800,8 @@ impl ListCipherPlan {
             entry_type,
             collection_ids,
             attachment_count: entry.attachments.len(),
+            archived: entry.archived,
+            deleted: entry.deleted,
         }
     }
 
@@ -9239,6 +9847,8 @@ impl ListCipherPlan {
             entry_type: self.entry_type,
             collection_ids: self.collection_ids,
             attachment_metadata,
+            archived: self.archived,
+            deleted: self.deleted,
             account: None,
         })
     }
@@ -9287,6 +9897,8 @@ struct SearchCipherPlan {
     fields: Vec<usize>,
     sensitive_fields: Vec<usize>,
     attachment_count: usize,
+    archived: bool,
+    deleted: bool,
     password: Option<usize>,
 }
 
@@ -9418,6 +10030,8 @@ impl SearchCipherPlan {
             fields,
             sensitive_fields,
             attachment_count: entry.attachments.len(),
+            archived: entry.archived,
+            deleted: entry.deleted,
             password: password_idx,
         }
     }
@@ -9477,6 +10091,8 @@ impl SearchCipherPlan {
             notes,
             sensitive_fields,
             attachment_count: self.attachment_count,
+            archived: self.archived,
+            deleted: self.deleted,
             password,
         })
     }
@@ -9617,6 +10233,8 @@ fn decrypt_search_cipher(
         notes,
         sensitive_fields,
         attachment_count: entry.attachments.len(),
+        archived: entry.archived,
+        deleted: entry.deleted,
         password: login_password,
     })
 }
@@ -9701,6 +10319,8 @@ fn decrypted_cipher_to_search(
         notes: decrypted.notes.clone(),
         sensitive_fields,
         attachment_count: decrypted.attachment_metadata.attachment_count,
+        archived: decrypted.archived,
+        deleted: decrypted.deleted,
         password: login_password,
     }
 }
@@ -10055,6 +10675,8 @@ pub fn decrypt_cipher(
             &entry.id,
             attachment_count,
         ),
+        archived: entry.archived,
+        deleted: entry.deleted,
         account: None,
     })
 }
@@ -10689,6 +11311,8 @@ pub fn tui_save_edit_to_file(
     }
     let attachments =
         existing.map(|e| e.attachments.clone()).unwrap_or_default();
+    let archived = existing.is_some_and(|e| e.archived);
+    let deleted = existing.is_some_and(|e| e.deleted);
     let id = entry_id.map_or_else(
         || uuid::Uuid::new_v4().to_string(),
         std::string::ToString::to_string,
@@ -10709,6 +11333,8 @@ pub fn tui_save_edit_to_file(
             notes,
             history,
             attachments,
+            archived,
+            deleted,
             account: None,
         },
     );
@@ -10803,6 +11429,8 @@ fn placeholder_entry(id: String) -> rbw::db::Entry {
         history: Vec::new(),
         key: None,
         master_password_reprompt: rbw::api::CipherRepromptType::None,
+        archived: false,
+        deleted: false,
         collection_ids: Vec::new(),
         attachments: Vec::new(),
     }
@@ -11423,6 +12051,36 @@ pub fn tui_delete(
     if let (Some(new_token), ()) =
         rbw::actions::remove(&access_token, &refresh_token, &entry.id)?
     {
+        db.access_token = Some(new_token);
+        save_db(db)?;
+    }
+
+    crate::actions::sync()?;
+    Ok(())
+}
+
+// `TuiAction::ToggleArchived`'s implementation: archives the entry if it
+// isn't archived, unarchives it if it is. Otherwise identical to
+// `tui_delete` -- same token handling, same trailing sync.
+pub fn tui_toggle_archived(
+    db: &mut rbw::db::Db,
+    entry: &rbw::db::Entry,
+) -> anyhow::Result<()> {
+    let access_token = db
+        .access_token
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
+    let refresh_token = db
+        .refresh_token
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
+
+    let rotated = if entry.archived {
+        rbw::actions::unarchive(&access_token, &refresh_token, &entry.id)?
+    } else {
+        rbw::actions::archive(&access_token, &refresh_token, &entry.id)?
+    };
+    if let (Some(new_token), ()) = rotated {
         db.access_token = Some(new_token);
         save_db(db)?;
     }
@@ -12626,6 +13284,8 @@ mod test {
                 fields: vec![],
                 notes: None,
                 attachment_count: 2,
+                archived: false,
+                deleted: false,
                 sensitive_fields: vec![],
                 password: None,
             },
@@ -12650,6 +13310,8 @@ mod test {
             fields: vec![],
             notes: None,
             attachment_count: 0,
+            archived: false,
+            deleted: false,
             sensitive_fields: vec![],
             password: None,
         };
@@ -12670,6 +13332,8 @@ mod test {
             fields: vec!["custom-value".to_string()],
             notes: Some("some notes here".to_string()),
             attachment_count: 0,
+            archived: false,
+            deleted: false,
             sensitive_fields: vec![],
             password: None,
         };
@@ -13105,6 +13769,8 @@ mod test {
                 attachment_metadata: AttachmentMetadata {
                     attachment_count: 0,
                 },
+                archived: false,
+                deleted: false,
                 account: None,
             };
         let login = |password: Option<&str>| DecryptedData::Login {
@@ -14239,6 +14905,8 @@ mod test {
             attachment_metadata: AttachmentMetadata {
                 attachment_count: 0,
             },
+            archived: false,
+            deleted: false,
             account: None,
         }
     }
@@ -14286,6 +14954,8 @@ mod test {
             attachment_metadata: AttachmentMetadata {
                 attachment_count: 0,
             },
+            archived: false,
+            deleted: false,
             account: None,
         };
         assert!(credential_source_login_fields(&cipher, "entry", "account")
@@ -14442,6 +15112,8 @@ mod test {
             attachment_metadata: AttachmentMetadata {
                 attachment_count: 0,
             },
+            archived: false,
+            deleted: false,
             account: None,
         }
     }
@@ -14630,6 +15302,8 @@ mod test {
                 history: vec![],
                 key: None,
                 master_password_reprompt: rbw::api::CipherRepromptType::None,
+                archived: false,
+                deleted: false,
                 collection_ids: vec![],
                 attachments: vec![],
             },
@@ -14648,6 +15322,8 @@ mod test {
                 fields: vec![],
                 notes: None,
                 attachment_count: 0,
+                archived: false,
+                deleted: false,
                 sensitive_fields: vec![],
                 password: None,
             },
@@ -15408,6 +16084,8 @@ mod test {
                 history: vec![],
                 attachments: vec![],
                 attachment_metadata: AttachmentMetadata::new("example-id", 0),
+                archived: false,
+                deleted: false,
                 account: None,
             };
 

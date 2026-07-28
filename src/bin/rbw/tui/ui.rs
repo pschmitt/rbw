@@ -334,7 +334,16 @@ fn list_item(
         .as_deref()
         .map_or(0, unicode_width::UnicodeWidthStr::width);
 
+    // Only reachable when the archived-filter mode isn't `Hide` (otherwise
+    // archived rows are excluded from `app.filtered` entirely), so this
+    // only shows up when it's actually useful to distinguish rows.
+    let archived_text = entry.archived.then_some("archived ");
+    let archived_w = archived_text.map_or(0, str::len);
+
     let mut left = vec![marker];
+    if let Some(archived_text) = archived_text {
+        left.push(Span::styled(archived_text, Style::default().fg(DIM)));
+    }
     if let Some(badge_text) = &badge_text {
         left.push(Span::styled(
             badge_text.clone(),
@@ -366,6 +375,7 @@ fn list_item(
 
     // Right-align the folder tag within the row when there's room.
     let left_w: usize = 2 // marker
+        + archived_w
         + badge_w
         + name.width()
         + user.as_deref().map_or(0, |u| u.width() + 2);
@@ -908,11 +918,12 @@ fn status_hint(app: &App) -> String {
             "⏎/y log in · q quit · any other key dismiss".to_string()
         }
         Mode::Normal => format!(
-            "{} search · {} edit · {} add · {} delete · {}/{}/{} copy · {} open · {} attach · {} accounts · {} settings · {} sync · {} reveal · {} help · {} quit",
+            "{} search · {} edit · {} add · {} delete · {} archive · {}/{}/{} copy · {} open · {} attach · {} accounts · {} settings · {} sync · {} reveal · {} help · {} quit",
             km.primary_chord(TuiAction::ToggleSearch),
             km.primary_chord(TuiAction::StartEdit),
             km.primary_chord(TuiAction::StartAdd),
             km.primary_chord(TuiAction::DeleteEntry),
+            km.primary_chord(TuiAction::ToggleArchived),
             km.primary_chord(TuiAction::CopyPassword),
             km.primary_chord(TuiAction::CopyUsername),
             km.primary_chord(TuiAction::CopyTotp),
@@ -1555,7 +1566,7 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
     let km = &app.keymap;
     let dc = |action: TuiAction| km.display_chords(action).join(" · ");
 
-    let entries: [(String, &str); 21] = [
+    let entries: [(String, &str); 23] = [
         (
             "type".to_string(),
             "filter the list (search is always live)",
@@ -1614,6 +1625,11 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
             "settings: password-gen policy, etc.",
         ),
         (dc(TuiAction::DeleteEntry), "delete item"),
+        (dc(TuiAction::ToggleArchived), "archive / unarchive item"),
+        (
+            dc(TuiAction::CycleArchivedFilter),
+            "cycle archived visibility: hide / only / include",
+        ),
         (dc(TuiAction::Help), "this help"),
         (format!("{} · esc", dc(TuiAction::Quit)), "quit"),
     ];
@@ -1809,6 +1825,8 @@ mod test {
             attachment_metadata: AttachmentMetadata {
                 attachment_count: 0,
             },
+            archived: false,
+            deleted: false,
             account: None,
         };
 
@@ -1868,6 +1886,8 @@ mod test {
             attachment_metadata: AttachmentMetadata {
                 attachment_count: 0,
             },
+            archived: false,
+            deleted: false,
             account: None,
         };
 
@@ -1921,6 +1941,8 @@ mod test {
             attachment_metadata: AttachmentMetadata {
                 attachment_count: 0,
             },
+            archived: false,
+            deleted: false,
             account: None,
         };
 
@@ -2015,6 +2037,8 @@ mod test {
             },
             None,
             keymap,
+            crate::commands::ArchivedFilter::Hide,
+            crate::commands::TrashFilter::Hide,
         )
     }
 

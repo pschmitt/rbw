@@ -223,6 +223,13 @@ pub enum TuiAction {
     OpenAccounts,
     OpenSettings,
     DeleteEntry,
+    // Archives the selected entry if it isn't archived, unarchives it if it
+    // is -- a single toggle rather than two separate keys, since the action
+    // is reversible either way.
+    ToggleArchived,
+    // Cycles the main list's archived-visibility filter: Hide (default) ->
+    // Only -> Include -> Hide.
+    CycleArchivedFilter,
     Sync,
     Help,
     AttachmentClose,
@@ -275,6 +282,8 @@ impl TuiAction {
         Self::OpenAccounts,
         Self::OpenSettings,
         Self::DeleteEntry,
+        Self::ToggleArchived,
+        Self::CycleArchivedFilter,
         Self::Sync,
         Self::Help,
         Self::AttachmentClose,
@@ -350,6 +359,8 @@ impl TuiAction {
             Self::OpenAccounts => "open_accounts",
             Self::OpenSettings => "open_settings",
             Self::DeleteEntry => "delete",
+            Self::ToggleArchived => "toggle_archived",
+            Self::CycleArchivedFilter => "cycle_archived_filter",
             Self::Sync => "sync",
             Self::Help => "help",
             Self::AttachmentClose => "attachment_close",
@@ -414,6 +425,8 @@ impl TuiAction {
             Self::AttachmentDownload => &["enter"],
             Self::AttachmentUpload => &["a", "u"],
             Self::AttachmentDelete | Self::DeleteEntry => &["d"],
+            Self::ToggleArchived => &["x"],
+            Self::CycleArchivedFilter => &["X"],
             Self::AccountUnlock => &["enter", "u"],
             Self::AccountSync => &["s"],
             Self::AccountSetPrimary => &["p"],

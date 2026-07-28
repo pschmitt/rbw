@@ -265,6 +265,102 @@ fn remove_once(access_token: &str, id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn archive(
+    access_token: &str,
+    refresh_token: &str,
+    id: &str,
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        archive_once(access_token, id)
+    })
+}
+
+fn archive_once(access_token: &str, id: &str) -> Result<()> {
+    let (client, _) = api_client()?;
+    client.archive(access_token, id)?;
+    Ok(())
+}
+
+pub fn unarchive(
+    access_token: &str,
+    refresh_token: &str,
+    id: &str,
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        unarchive_once(access_token, id)
+    })
+}
+
+fn unarchive_once(access_token: &str, id: &str) -> Result<()> {
+    let (client, _) = api_client()?;
+    client.unarchive(access_token, id)?;
+    Ok(())
+}
+
+pub fn archive_multiple(
+    access_token: &str,
+    refresh_token: &str,
+    ids: &[String],
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        archive_multiple_once(access_token, ids)
+    })
+}
+
+fn archive_multiple_once(access_token: &str, ids: &[String]) -> Result<()> {
+    let (client, _) = api_client()?;
+    client.archive_multiple(access_token, ids)?;
+    Ok(())
+}
+
+pub fn unarchive_multiple(
+    access_token: &str,
+    refresh_token: &str,
+    ids: &[String],
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        unarchive_multiple_once(access_token, ids)
+    })
+}
+
+fn unarchive_multiple_once(access_token: &str, ids: &[String]) -> Result<()> {
+    let (client, _) = api_client()?;
+    client.unarchive_multiple(access_token, ids)?;
+    Ok(())
+}
+
+pub fn restore(
+    access_token: &str,
+    refresh_token: &str,
+    id: &str,
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        restore_once(access_token, id)
+    })
+}
+
+fn restore_once(access_token: &str, id: &str) -> Result<()> {
+    let (client, _) = api_client()?;
+    client.restore(access_token, id)?;
+    Ok(())
+}
+
+pub fn restore_multiple(
+    access_token: &str,
+    refresh_token: &str,
+    ids: &[String],
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        restore_multiple_once(access_token, ids)
+    })
+}
+
+fn restore_multiple_once(access_token: &str, ids: &[String]) -> Result<()> {
+    let (client, _) = api_client()?;
+    client.restore_multiple(access_token, ids)?;
+    Ok(())
+}
+
 pub fn edit_collections(
     access_token: &str,
     refresh_token: &str,
