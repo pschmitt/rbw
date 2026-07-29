@@ -1604,6 +1604,25 @@ fn stderr_supports_color() -> bool {
     std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none()
 }
 
+// A `{position}/{len} items` progress bar on stderr for long per-item loops
+// (bulk import/mirror creates, collection purges). Renders nothing (every
+// method becomes a no-op) when stderr isn't a terminal, so piped/logged
+// output stays exactly as before -- no half-drawn bar frames in a log file.
+#[allow(clippy::literal_string_with_formatting_args)]
+fn item_progress_bar(len: u64) -> indicatif::ProgressBar {
+    if !std::io::stderr().is_terminal() {
+        return indicatif::ProgressBar::hidden();
+    }
+    let pb = indicatif::ProgressBar::new(len);
+    pb.set_draw_target(indicatif::ProgressDrawTarget::stderr());
+    if let Ok(style) = indicatif::ProgressStyle::with_template(
+        "{spinner} {msg} [{bar:30}] {pos}/{len} items",
+    ) {
+        pb.set_style(style.progress_chars("=> "));
+    }
+    pb
+}
+
 // Ask for confirmation before a destructive operation. Only prompts when
 // stdin is a tty, so scripts and pipelines keep the historical no-prompt
 // behavior; interactive callers can skip the prompt with `-y`/`--yes`.
@@ -8834,6 +8853,11 @@ fn import_vault(
 ) -> anyhow::Result<()> {
     unlock(None, None)?;
 
+    // Case-insensitive by name so the created/updated/skipped log (and the
+    // progress bar below) reads in a human-sensible order instead of
+    // whatever order the source vault happened to return entries in.
+    vault.entries.sort_by_cached_key(|e| e.name.to_lowercase());
+
     let mut db = load_db()?;
     let mut access_token = db.access_token.as_ref().unwrap().clone();
     let mut refresh_token = db.refresh_token.as_ref().unwrap().clone();
@@ -8992,7 +9016,12 @@ fn import_vault(
     let mut attachments_restored = 0usize;
     let mut attachments_failed = 0usize;
 
+    let pb = item_progress_bar(
+        u64::try_from(vault.entries.len()).unwrap_or(u64::MAX),
+    );
     for imported in &vault.entries {
+        pb.set_message(imported.name.clone());
+
         let username = match &imported.data {
             ImportedData::Login { username, .. } => username.clone(),
             _ => None,
@@ -9010,12 +9039,13 @@ fn import_vault(
                     imported,
                 )
             } else {
-                eprintln!(
+                pb.println(format!(
                     "{} '{}' (already exists; use --overwrite to replace)",
                     style::warning("Skipped", c),
                     imported.name,
-                );
+                ));
                 entries_skipped += 1;
+                pb.inc(1);
                 continue;
             }
         } else {
@@ -9037,25 +9067,27 @@ fn import_vault(
                 } else {
                     entries_created += 1;
                 }
-                eprintln!(
+                pb.println(format!(
                     "{} '{}'",
                     style::success(
                         if is_update { "Updated" } else { "Created" },
                         c
                     ),
                     imported.name,
-                );
+                ));
             }
             Err(e) => {
-                eprintln!(
+                pb.println(format!(
                     "{} failed to import '{}': {e:#}",
                     style_error("Error:", c),
                     imported.name,
-                );
+                ));
                 entries_failed += 1;
             }
         }
+        pb.inc(1);
     }
+    pb.finish_and_clear();
 
     eprintln!();
     eprintln!("{}", style::section("Import summary:", c));
@@ -9160,6 +9192,8 @@ fn purge_collection_entries(needle: &str) -> anyhow::Result<()> {
     );
 
     let mut failed = 0usize;
+    let pb =
+        item_progress_bar(u64::try_from(targets.len()).unwrap_or(u64::MAX));
     for entry in &targets {
         match rbw::actions::delete_permanently(
             &access_token,
@@ -9173,15 +9207,17 @@ fn purge_collection_entries(needle: &str) -> anyhow::Result<()> {
             }
             Ok((None, ())) => {}
             Err(e) => {
-                eprintln!(
+                pb.println(format!(
                     "{} failed to delete an entry in '{collection_name}': \
                      {e:#}",
                     style_error("Error:", c)
-                );
+                ));
                 failed += 1;
             }
         }
+        pb.inc(1);
     }
+    pb.finish_and_clear();
 
     crate::actions::sync()?;
 
@@ -9304,16 +9340,14 @@ pub fn mirror_vault(
     if purge_dest {
         if let Some(needle) = dest_collection {
             eprintln!(
-                "  {} every entry currently in destination collection \
-                 '{needle}' will be PERMANENTLY DELETED first (the rest of \
-                 the destination is untouched)",
-                style_error("DANGER:", c)
+                "  {} destination collection '{needle}' (rest of the \
+                 destination untouched)",
+                style_error("Purge:", c)
             );
         } else {
             eprintln!(
-                "  {} the destination's personal vault will be PERMANENTLY \
-                 PURGED first",
-                style_error("DANGER:", c)
+                "  {} destination's entire personal vault",
+                style_error("Purge:", c)
             );
         }
     }
