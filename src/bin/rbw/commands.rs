@@ -4241,7 +4241,7 @@ pub fn generate(
             }
         }
 
-        if let (Some(access_token), ()) = rbw::actions::add(
+        if let (Some(access_token), _) = rbw::actions::add(
             &access_token,
             refresh_token,
             &name,
@@ -5350,7 +5350,7 @@ fn add_structured(
         None
     };
 
-    if let (Some(new_token), ()) = rbw::actions::add(
+    if let (Some(new_token), _) = rbw::actions::add(
         &access_token,
         &refresh_token,
         &encrypted_name,
@@ -8563,10 +8563,7 @@ fn import_create_entry(
         None
     };
 
-    let before_ids: std::collections::HashSet<String> =
-        db.entries.iter().map(|e| e.id.clone()).collect();
-
-    if let (Some(new_token), ()) = rbw::actions::add(
+    let (new_token, new_entry_id) = rbw::actions::add(
         access_token,
         refresh_token,
         &encrypted_name,
@@ -8574,30 +8571,12 @@ fn import_create_entry(
         &fields,
         encrypted_notes.as_deref(),
         folder_id.as_deref(),
-    )? {
+    )?;
+    if let Some(new_token) = new_token {
         access_token.clone_from(&new_token);
         db.access_token = Some(new_token);
         save_db(db)?;
     }
-
-    crate::actions::sync()?;
-    *db = load_db()?;
-    *access_token = db.access_token.as_ref().unwrap().clone();
-    *refresh_token = db.refresh_token.as_ref().unwrap().clone();
-
-    // `add` doesn't return the new entry's id, so find it by diffing the
-    // entry id set from before/after the sync above.
-    let Some(new_entry) = db
-        .entries
-        .iter()
-        .find(|e| !before_ids.contains(&e.id))
-        .cloned()
-    else {
-        anyhow::bail!(
-            "entry was created but couldn't be located afterward (sync may \
-             be delayed)"
-        );
-    };
 
     let target_org = imported
         .org_id
@@ -8623,7 +8602,7 @@ fn import_create_entry(
         if let (Some(new_token), ()) = rbw::actions::edit(
             access_token,
             refresh_token,
-            &new_entry.id,
+            &new_entry_id,
             org_id,
             &org_encrypted_name,
             &org_data,
@@ -8636,10 +8615,6 @@ fn import_create_entry(
             db.access_token = Some(new_token);
             save_db(db)?;
         }
-        crate::actions::sync()?;
-        *db = load_db()?;
-        *access_token = db.access_token.as_ref().unwrap().clone();
-        *refresh_token = db.refresh_token.as_ref().unwrap().clone();
     }
 
     if target_org.is_some() {
@@ -8652,22 +8627,31 @@ fn import_create_entry(
             if let (Some(new_token), ()) = rbw::actions::edit_collections(
                 access_token,
                 refresh_token,
-                &new_entry.id,
+                &new_entry_id,
                 &resolved_collections,
             )? {
                 access_token.clone_from(&new_token);
                 db.access_token = Some(new_token);
                 save_db(db)?;
             }
-            crate::actions::sync()?;
-            *db = load_db()?;
-            *access_token = db.access_token.as_ref().unwrap().clone();
-            *refresh_token = db.refresh_token.as_ref().unwrap().clone();
         }
     }
 
+    // No attachments to restore -- skip the sync below entirely; nothing
+    // else in this function needs the freshly-synced local `db` state
+    // (`upload_imported_attachments` would just no-op on an empty list
+    // anyway).
+    if imported.attachments.is_empty() {
+        return Ok((0, 0));
+    }
+
+    crate::actions::sync()?;
+    *db = load_db()?;
+    *access_token = db.access_token.as_ref().unwrap().clone();
+    *refresh_token = db.refresh_token.as_ref().unwrap().clone();
+
     let Some(final_entry) =
-        db.entries.iter().find(|e| e.id == new_entry.id).cloned()
+        db.entries.iter().find(|e| e.id == new_entry_id).cloned()
     else {
         anyhow::bail!("entry disappeared from the vault after import");
     };
@@ -8726,6 +8710,13 @@ fn import_overwrite_entry(
         access_token.clone_from(&new_token);
         db.access_token = Some(new_token);
         save_db(db)?;
+    }
+
+    // No attachments to restore -- nothing downstream needs a fresh sync of
+    // the local `db` (`upload_imported_attachments` no-ops on an empty
+    // list), so skip the round-trip entirely.
+    if imported.attachments.is_empty() {
+        return Ok((0, 0));
     }
 
     crate::actions::sync()?;
@@ -9126,6 +9117,85 @@ fn import_vault(
     Ok(())
 }
 
+// The scoped counterpart to `purge_vault` for `mirror --purge-dest
+// --dest-collection`: permanently deletes every entry currently assigned to
+// `needle` (name or ID) in the active account, via the same per-cipher
+// `delete_permanently` primitive `rbw remove --force` uses -- not the
+// server's whole-vault purge endpoint, which explicitly skips org/
+// collection-owned ciphers and so can't do this. Entries outside this
+// collection, and the collection itself, are left untouched.
+fn purge_collection_entries(needle: &str) -> anyhow::Result<()> {
+    let mut db = load_db()?;
+    let mut access_token = db.access_token.as_ref().unwrap().clone();
+    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+
+    let decrypted_collections = decrypt_collections(&db)?;
+    let collection =
+        resolve_collection(&decrypted_collections, needle, None)?;
+    let collection_id = collection.id.clone();
+    let collection_name = collection.name.clone();
+
+    let targets: Vec<rbw::db::Entry> = db
+        .entries
+        .iter()
+        .filter(|e| e.collection_ids.contains(&collection_id))
+        .cloned()
+        .collect();
+
+    let c = stdout_supports_color();
+    if targets.is_empty() {
+        eprintln!(
+            "{} no entries currently in '{collection_name}' -- nothing to \
+             purge",
+            style::warning("Note:", c)
+        );
+        return Ok(());
+    }
+
+    eprintln!(
+        "{} permanently deleting {} entr{} from '{collection_name}'...",
+        style_error("Purging:", c),
+        targets.len(),
+        if targets.len() == 1 { "y" } else { "ies" }
+    );
+
+    let mut failed = 0usize;
+    for entry in &targets {
+        match rbw::actions::delete_permanently(
+            &access_token,
+            &refresh_token,
+            &entry.id,
+        ) {
+            Ok((Some(new_token), ())) => {
+                access_token.clone_from(&new_token);
+                db.access_token = Some(new_token);
+                save_db(&db)?;
+            }
+            Ok((None, ())) => {}
+            Err(e) => {
+                eprintln!(
+                    "{} failed to delete an entry in '{collection_name}': \
+                     {e:#}",
+                    style_error("Error:", c)
+                );
+                failed += 1;
+            }
+        }
+    }
+
+    crate::actions::sync()?;
+
+    if failed > 0 {
+        anyhow::bail!(
+            "{failed} entr{} in '{collection_name}' failed to purge; \
+             destination may be in a mixed state",
+            if failed == 1 { "y" } else { "ies" }
+        );
+    }
+
+    Ok(())
+}
+
 // `rbw mirror --from A --to B`: copies vault contents from one already-
 // configured local account to another, reusing the same export/import
 // conversion machinery `rbw export`/`rbw import` are built on, rather than
@@ -9146,11 +9216,13 @@ fn import_vault(
 // per-entry summary) is identical to importing an export file, without a
 // file ever touching disk.
 //
-// `--purge-dest` wipes the destination's personal vault first (via the
-// same `purge_vault`/`Action::PurgeVault` path `rbw purge-vault` uses) --
-// but only for a whole-vault mirror (no `--collection`/`--org-id`): a
-// scoped purge (delete only what's in one collection/org before importing)
-// isn't implemented yet, see TODO.md.
+// `--purge-dest` wipes the destination first. For a whole-vault mirror (no
+// `--collection`/`--org-id`) it goes through the same `purge_vault`/
+// `Action::PurgeVault` path `rbw purge-vault` uses; combined with
+// `--dest-collection` it instead permanently deletes only the entries
+// currently assigned to that one destination collection (`purge_vault`'s
+// own server-side endpoint explicitly skips org/collection-owned ciphers,
+// so it can't do this), leaving the rest of the destination untouched.
 #[allow(clippy::too_many_arguments)]
 pub fn mirror_vault(
     from: &str,
@@ -9230,17 +9302,30 @@ pub fn mirror_vault(
         }
     );
     if purge_dest {
-        eprintln!(
-            "  {} the destination's personal vault will be PERMANENTLY \
-             PURGED first",
-            style_error("DANGER:", c)
-        );
+        if let Some(needle) = dest_collection {
+            eprintln!(
+                "  {} every entry currently in destination collection \
+                 '{needle}' will be PERMANENTLY DELETED first (the rest of \
+                 the destination is untouched)",
+                style_error("DANGER:", c)
+            );
+        } else {
+            eprintln!(
+                "  {} the destination's personal vault will be PERMANENTLY \
+                 PURGED first",
+                style_error("DANGER:", c)
+            );
+        }
     }
 
     if !yes {
         let prompt = if purge_dest {
+            let purge_desc = dest_collection.map_or_else(
+                || format!("purge '{to}'"),
+                |needle| format!("purge collection '{needle}' in '{to}'"),
+            );
             format!(
-                "{} this will purge '{to}' and then copy {entry_count} \
+                "{} this will {purge_desc} and then copy {entry_count} \
                  entr{plural} from '{from}'. This cannot be undone! \
                  Continue?",
                 style_error("DANGER:", c),
@@ -9259,12 +9344,20 @@ pub fn mirror_vault(
     unlock(None, None)?;
 
     if purge_dest {
-        // Already confirmed above (the whole-mirror confirmation covers
-        // it), so pass `yes: true` to skip `purge_vault`'s own prompt --
-        // but it still requires the master-password re-proof, exactly like
-        // a standalone `rbw purge-vault` (`--stdin`-suppliable the same
-        // way).
-        purge_vault(true, password)?;
+        if let Some(needle) = dest_collection {
+            // Scoped purge: no master-password re-proof needed here (unlike
+            // the whole-vault path below) since it's just a loop of ordinary
+            // per-cipher permanent deletes, the same primitive `rbw remove
+            // --force` uses.
+            purge_collection_entries(needle)?;
+        } else {
+            // Already confirmed above (the whole-mirror confirmation covers
+            // it), so pass `yes: true` to skip `purge_vault`'s own prompt --
+            // but it still requires the master-password re-proof, exactly
+            // like a standalone `rbw purge-vault` (`--stdin`-suppliable the
+            // same way).
+            purge_vault(true, password)?;
+        }
     }
 
     let (bw, attachments_flat) = exported_vault_to_bw(&vault);
@@ -9491,10 +9584,7 @@ fn move_entry_to_personal(
         .map(|n| crate::actions::encrypt(n, None))
         .transpose()?;
 
-    let before_ids: std::collections::HashSet<String> =
-        db.entries.iter().map(|e| e.id.clone()).collect();
-
-    if let (Some(new_token), ()) = rbw::actions::add(
+    let (new_token, new_entry_id) = rbw::actions::add(
         access_token,
         refresh_token,
         &encrypted_name,
@@ -9502,28 +9592,12 @@ fn move_entry_to_personal(
         &fields,
         encrypted_notes.as_deref(),
         entry.folder_id.as_deref(),
-    )? {
+    )?;
+    if let Some(new_token) = new_token {
         access_token.clone_from(&new_token);
         db.access_token = Some(new_token);
         save_db(db)?;
     }
-
-    crate::actions::sync()?;
-    *db = load_db()?;
-    access_token.clone_from(db.access_token.as_ref().unwrap());
-
-    let Some(new_entry) = db
-        .entries
-        .iter()
-        .find(|e| !before_ids.contains(&e.id))
-        .cloned()
-    else {
-        anyhow::bail!(
-            "entry was created in the personal vault but couldn't be \
-             located afterward (sync may be delayed) -- the original org \
-             entry was left untouched"
-        );
-    };
 
     if !decrypted.history.is_empty() {
         let history = decrypted
@@ -9540,7 +9614,7 @@ fn move_entry_to_personal(
         if let (Some(new_token), ()) = rbw::actions::edit(
             access_token,
             refresh_token,
-            &new_entry.id,
+            &new_entry_id,
             None,
             &encrypted_name,
             &data,
@@ -13874,7 +13948,7 @@ pub fn tui_save_add(
             None
         };
 
-    if let (Some(new_token), ()) = rbw::actions::add(
+    if let (Some(new_token), _) = rbw::actions::add(
         &access_token,
         &refresh_token,
         &encrypted_name,
@@ -19029,5 +19103,29 @@ mod test {
         .to_string();
         assert!(err.contains("--purge-dest"), "{err}");
         assert!(err.contains("--org-id"), "{err}");
+    }
+
+    // `--purge-dest` combined with `--dest-collection` (unlike the source-
+    // side `--collection`/`--org-id` above) is a supported scoped purge, so
+    // it must clear the guard clause -- whatever it fails on next (loading
+    // config, an unconfigured account, ...) depends on the environment the
+    // test runs in, so just check the guard's own refusal text is absent.
+    #[test]
+    fn test_mirror_vault_allows_purge_dest_with_dest_collection() {
+        let err = mirror_vault(
+            "a",
+            "b",
+            None,
+            None,
+            Some("some-collection"),
+            false,
+            false,
+            true,
+            true,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(!err.contains("can't be combined"), "{err}");
     }
 }

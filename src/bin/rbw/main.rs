@@ -1154,20 +1154,23 @@ enum Opt {
             given -- identical semantics to `rbw import`. --attachments \
             also downloads and re-uploads attachment contents (slower, and \
             considerably more data).\n\n\
-            --purge-dest permanently wipes the destination's personal \
-            vault before copying, via the same server-side purge endpoint \
-            `rbw purge-vault` uses -- only supported for a whole-vault \
-            mirror (no --collection/--org-id); combining them is refused \
-            with an explanatory error rather than attempting a partial \
-            scoped purge.\n\n\
+            --purge-dest wipes the destination before copying. Combined \
+            with --dest-collection, it only permanently deletes entries \
+            currently assigned to that one destination collection (the \
+            rest of the destination is untouched) -- otherwise it wipes \
+            the destination's whole personal vault via the same server- \
+            side purge endpoint `rbw purge-vault` uses. --purge-dest still \
+            only supports a whole-vault mirror on the *source* side (no \
+            --collection/--org-id); combining those is refused with an \
+            explanatory error.\n\n\
             This is destructive-adjacent (can overwrite entries, and with \
             --purge-dest can wipe the destination entirely), so it prints \
             a preview and asks for confirmation unless -y/--yes is given. \
-            --purge-dest additionally needs the destination's master \
-            password re-proved, exactly like `rbw purge-vault` \
-            (`--stdin` supplies it non-interactively); plain mirroring \
-            (without --purge-dest) needs no fresh password beyond having \
-            both accounts unlocked."
+            --purge-dest without --dest-collection additionally needs the \
+            destination's master password re-proved, exactly like `rbw \
+            purge-vault` (`--stdin` supplies it non-interactively); plain \
+            mirroring, and --purge-dest combined with --dest-collection, \
+            need no fresh password beyond having both accounts unlocked."
     )]
     Mirror {
         #[arg(

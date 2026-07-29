@@ -1061,6 +1061,12 @@ struct CollectionCreateRes {
     id: String,
 }
 
+#[derive(serde::Deserialize, Debug)]
+struct CipherCreateRes {
+    #[serde(rename = "Id", alias = "id")]
+    id: String,
+}
+
 // The body of the first step of the v2 attachment upload (POST
 // /ciphers/{id}/attachment/v2): reserve an upload slot for a file of the given
 // (encrypted) size.
@@ -1797,7 +1803,7 @@ impl Client {
         fields: &[crate::db::Field],
         notes: Option<&str>,
         folder_id: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let mut req = CiphersPostReq {
             ty: match data {
                 crate::db::EntryData::Login { .. } => 1,
@@ -1930,7 +1936,10 @@ impl Client {
             .map_err(|source| Error::Reqwest { source })?;
         let status = res.status();
         match status {
-            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::OK => {
+                let cipher_res: CipherCreateRes = res.json_with_path()?;
+                Ok(cipher_res.id)
+            }
             reqwest::StatusCode::UNAUTHORIZED => {
                 Err(Error::RequestUnauthorized)
             }

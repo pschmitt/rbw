@@ -310,7 +310,7 @@ pub fn add(
     fields: &[crate::db::Field],
     notes: Option<&str>,
     folder_id: Option<&str>,
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<String>, String)> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         add_once(access_token, name, data, fields, notes, folder_id)
     })
@@ -323,10 +323,9 @@ fn add_once(
     fields: &[crate::db::Field],
     notes: Option<&str>,
     folder_id: Option<&str>,
-) -> Result<()> {
+) -> Result<String> {
     let (client, _) = api_client()?;
-    client.add(access_token, name, data, fields, notes, folder_id)?;
-    Ok(())
+    client.add(access_token, name, data, fields, notes, folder_id)
 }
 
 pub fn edit(
