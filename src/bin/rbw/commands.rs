@@ -1620,6 +1620,11 @@ fn item_progress_bar(len: u64) -> indicatif::ProgressBar {
     ) {
         pb.set_style(style.progress_chars("=> "));
     }
+    // Without this, indicatif only redraws when `inc`/`set_message` are
+    // called -- once per item, i.e. once per network round-trip -- so the
+    // spinner visibly stutters instead of animating. A steady background
+    // tick decouples the redraw rate from the actual work rate.
+    pb.enable_steady_tick(std::time::Duration::from_millis(80));
     pb
 }
 
@@ -9016,7 +9021,12 @@ fn import_vault(
     // Index existing entries by (name, username) so already-imported
     // entries can be detected without recreating them. Login-typed entries
     // are additionally keyed on their username, so two different logins
-    // that happen to share a name don't collide with each other.
+    // that happen to share a name don't collide with each other. When
+    // `--collection`/`--dest-collection` names one destination collection,
+    // this is scoped to just that collection's own members -- otherwise an
+    // unrelated entry with the same name/username sitting in some other
+    // collection (or the personal vault) would count as "already there"
+    // and get skipped, leaving the target collection missing it entirely.
     let existing_index = {
         let mut requests = BatchRequests::new();
         let plans: Vec<SearchCipherPlan> = db
@@ -9034,6 +9044,11 @@ fn import_vault(
             rbw::db::Entry,
         > = std::collections::HashMap::new();
         for (entry, plan) in db.entries.iter().zip(plans) {
+            if let Some((dest_id, _)) = &dest_collection {
+                if !entry.collection_ids.contains(dest_id) {
+                    continue;
+                }
+            }
             if let Ok(decrypted) = plan.resolve(&results) {
                 index.insert((decrypted.name, decrypted.user), entry.clone());
             }
@@ -9047,6 +9062,8 @@ fn import_vault(
     let mut entries_failed = 0usize;
     let mut attachments_restored = 0usize;
     let mut attachments_failed = 0usize;
+    let mut skipped_names: Vec<String> = Vec::new();
+    let mut failed_names: Vec<(String, String)> = Vec::new();
 
     let pb = item_progress_bar(
         u64::try_from(vault.entries.len()).unwrap_or(u64::MAX),
@@ -9077,6 +9094,7 @@ fn import_vault(
                     imported.name,
                 ));
                 entries_skipped += 1;
+                skipped_names.push(imported.name.clone());
                 pb.inc(1);
                 continue;
             }
@@ -9115,6 +9133,7 @@ fn import_vault(
                     imported.name,
                 ));
                 entries_failed += 1;
+                failed_names.push((imported.name.clone(), format!("{e:#}")));
             }
         }
         pb.inc(1);
@@ -9169,6 +9188,21 @@ fn import_vault(
              locally)",
             style::warning(&collections_unavailable.to_string(), c)
         );
+    }
+
+    if !skipped_names.is_empty() {
+        eprintln!();
+        eprintln!("{}", style::section("Skipped entries:", c));
+        for name in &skipped_names {
+            eprintln!("  {}", style::warning(name, c));
+        }
+    }
+    if !failed_names.is_empty() {
+        eprintln!();
+        eprintln!("{}", style::section("Failed entries:", c));
+        for (name, err) in &failed_names {
+            eprintln!("  {}: {err}", style_error(name, c));
+        }
     }
 
     if entries_failed > 0 {
