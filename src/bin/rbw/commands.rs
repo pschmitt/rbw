@@ -6660,37 +6660,54 @@ fn export_attachments(
     Ok(out)
 }
 
-pub fn export(
-    format: crate::import_bitwarden::ExportFormat,
+// Builds rbw's own decrypted `ExportedVault` shape from the currently
+// active account (see `crate::actions::set_active_account`) -- shared by
+// `export` (whole vault, no scoping) and `mirror_vault` (which additionally
+// scopes to a single `--collection` and/or `--org-id`, since a cross-account
+// copy shouldn't have to mean "the entire source vault"). Assumes the
+// account is already unlocked.
+fn build_exported_vault(
     attachments: bool,
-    encrypt: Option<&str>,
-    output: Option<&std::path::Path>,
-) -> anyhow::Result<()> {
-    use crate::import_bitwarden::ExportFormat;
+    collection: Option<&str>,
+    org_id: Option<&str>,
+) -> anyhow::Result<ExportedVault> {
+    let mut db = load_db()?;
 
-    // Resolve the passphrase up front (from $RBW_EXPORT_PASSPHRASE or an
-    // interactive prompt when `--encrypt` was given without a value), so a
-    // mistyped confirmation fails before any decryption work happens.
-    // `--encrypt` means two different things depending on `--format`: rbw's
-    // own gpg passphrase for the default format, or the Bitwarden
-    // "Encrypted JSON" export's password for `bitwarden-encrypted-json`.
-    // That format always needs *some* password, so unlike rbw's own
-    // (optionally encrypted) format, choosing it prompts on its own even
-    // without `--encrypt` -- `--encrypt` only still matters there to
-    // supply the password inline and skip the prompt.
-    let passphrase = resolve_export_passphrase(encrypt)?;
-    let passphrase = if matches!(format, ExportFormat::BitwardenEncryptedJson)
-        && passphrase.is_none()
-    {
-        Some(resolve_env_or_prompted_passphrase(true)?)
-    } else {
-        passphrase
+    // Resolve `--collection` against the decrypted collection list up
+    // front (restricted to `--org-id` when both are given, so a collection
+    // name that only matches within that org doesn't need to be globally
+    // unique). `--org-id` alone (no `--collection`) just filters by
+    // organization directly.
+    let (scope_collection_id, scope_org_id): (
+        Option<String>,
+        Option<String>,
+    ) = match collection {
+        Some(needle) => {
+            let decrypted = decrypt_collections(&db)?;
+            let found = resolve_collection(&decrypted, needle, org_id)?;
+            (Some(found.id.clone()), Some(found.org_id.clone()))
+        }
+        None => (None, org_id.map(std::string::ToString::to_string)),
     };
 
-    unlock(None, None)?;
-
-    let mut db = load_db()?;
-    let entries_snapshot = db.entries.clone();
+    let entries_snapshot: Vec<rbw::db::Entry> = db
+        .entries
+        .iter()
+        .filter(|entry| {
+            if let Some(cid) = &scope_collection_id {
+                if !entry.collection_ids.iter().any(|c| c == cid) {
+                    return false;
+                }
+            }
+            if let Some(oid) = &scope_org_id {
+                if entry.org_id.as_deref() != Some(oid.as_str()) {
+                    return false;
+                }
+            }
+            true
+        })
+        .cloned()
+        .collect();
 
     let mut entries: Vec<ExportedEntry> = Vec::new();
     for entry in &entries_snapshot {
@@ -6720,6 +6737,7 @@ pub fn export(
     let mut collections: Vec<ExportedCollection> = db
         .collections
         .iter()
+        .filter(|c| scope_org_id.as_deref().is_none_or(|oid| c.org_id == oid))
         .map(|c| {
             let name =
                 crate::actions::decrypt(&c.name, None, Some(&c.org_id))?;
@@ -6732,10 +6750,47 @@ pub fn export(
         .collect::<anyhow::Result<_>>()?;
     collections.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let vault = ExportedVault {
+    Ok(ExportedVault {
         entries,
         collections,
+    })
+}
+
+pub fn export(
+    format: crate::import_bitwarden::ExportFormat,
+    attachments: bool,
+    encrypt: Option<&str>,
+    output: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
+    use crate::import_bitwarden::ExportFormat;
+
+    // Resolve the passphrase up front (from $RBW_EXPORT_PASSPHRASE or an
+    // interactive prompt when `--encrypt` was given without a value), so a
+    // mistyped confirmation fails before any decryption work happens.
+    // `--encrypt` means two different things depending on `--format`: rbw's
+    // own gpg passphrase for the default format, or the Bitwarden
+    // "Encrypted JSON" export's password for `bitwarden-encrypted-json`.
+    // That format always needs *some* password, so unlike rbw's own
+    // (optionally encrypted) format, choosing it prompts on its own even
+    // without `--encrypt` -- `--encrypt` only still matters there to
+    // supply the password inline and skip the prompt.
+    let passphrase = resolve_export_passphrase(encrypt)?;
+    let passphrase = if matches!(format, ExportFormat::BitwardenEncryptedJson)
+        && passphrase.is_none()
+    {
+        Some(resolve_env_or_prompted_passphrase(true)?)
+    } else {
+        passphrase
     };
+
+    unlock(None, None)?;
+
+    let vault = build_exported_vault(attachments, None, None)?;
+    // Reloaded (rather than threaded through `build_exported_vault`) purely
+    // for the KDF settings the `BitwardenEncryptedJson` branch below needs;
+    // cheap, since it's just the local db.json cache, and none of those
+    // fields change as a side effect of building the vault.
+    let db = load_db()?;
 
     match format {
         ExportFormat::Rbw => {
@@ -8738,7 +8793,7 @@ pub fn import(
         }
     };
 
-    let mut vault: ImportedVault = match detected {
+    let vault: ImportedVault = match detected {
         crate::import_bitwarden::DetectedFormat::Rbw => {
             let json_text =
                 load_import_json(&raw, decrypt_passphrase.as_deref())?;
@@ -8770,6 +8825,22 @@ pub fn import(
         }
     };
 
+    import_vault(vault, collection, overwrite)
+}
+
+// Creates/updates entries and collections in the currently active account
+// from an already-parsed `ImportedVault` -- the part of `import` that
+// doesn't care which export format the data originally came from. Also
+// reused by `mirror_vault`, which builds an `ImportedVault` in memory (via
+// `exported_vault_to_bw` + `bw_vault_to_imported`) from a *source account's*
+// vault rather than parsing it from a file, but otherwise wants the exact
+// same create-or-skip-or-overwrite/collection-creation/attachment-upload
+// behavior and summary output.
+fn import_vault(
+    mut vault: ImportedVault,
+    collection: Option<&str>,
+    overwrite: bool,
+) -> anyhow::Result<()> {
     unlock(None, None)?;
 
     let mut db = load_db()?;
@@ -9053,6 +9124,167 @@ pub fn import(
     }
 
     Ok(())
+}
+
+// `rbw mirror --from A --to B`: copies vault contents from one already-
+// configured local account to another, reusing the same export/import
+// conversion machinery `rbw export`/`rbw import` are built on, rather than
+// reimplementing the separate-CLI-logins-plus-temp-files pipeline the
+// standalone `bw-sync.sh` migration script this replaces used. Named
+// `mirror` rather than `sync` -- `rbw sync` already means "pull the latest
+// vault from the server for the active account", unrelated to copying
+// between two accounts.
+//
+// Builds an `ExportedVault` from the source account entirely in memory
+// (`build_exported_vault`, optionally scoped to a single `--collection`
+// and/or `--org-id`), converts it through the same `exported_vault_to_bw`
+// -> `bw_vault_to_imported` pipeline `rbw export --format bitwarden-json`
+// and `rbw import` already use, then feeds the result through the same
+// `import_vault` entry-creation logic `rbw import` uses -- so behavior
+// (skip-vs-overwrite matching, collection creation/reuse, personal-vault
+// fallback for organizations the destination isn't a member of, the
+// per-entry summary) is identical to importing an export file, without a
+// file ever touching disk.
+//
+// `--purge-dest` wipes the destination's personal vault first (via the
+// same `purge_vault`/`Action::PurgeVault` path `rbw purge-vault` uses) --
+// but only for a whole-vault mirror (no `--collection`/`--org-id`): a
+// scoped purge (delete only what's in one collection/org before importing)
+// isn't implemented yet, see TODO.md.
+#[allow(clippy::too_many_arguments)]
+pub fn mirror_vault(
+    from: &str,
+    to: &str,
+    collection: Option<&str>,
+    org_id: Option<&str>,
+    attachments: bool,
+    overwrite: bool,
+    purge_dest: bool,
+    yes: bool,
+    password: Option<String>,
+) -> anyhow::Result<()> {
+    if from == to {
+        anyhow::bail!("--from and --to must name different accounts");
+    }
+
+    if purge_dest && (collection.is_some() || org_id.is_some()) {
+        anyhow::bail!(
+            "--purge-dest only supports a whole-vault mirror right now; \
+             it can't be combined with --collection/--org-id (there's no \
+             scoped-purge implementation yet). Run without --purge-dest, \
+             or without --collection/--org-id."
+        );
+    }
+
+    let config = rbw::config::Config::load()?;
+    let from_account = config.account(Some(from))?;
+    let to_account = config.account(Some(to))?;
+
+    let c = stdout_supports_color();
+
+    // Gather the source vault before asking for confirmation, so the
+    // preview shows real counts instead of vague "everything" language.
+    crate::actions::set_active_account(Some(from.to_string()))?;
+    unlock(None, None)?;
+    let vault = build_exported_vault(attachments, collection, org_id)?;
+
+    let entry_count = vault.entries.len();
+    let collection_count = vault.collections.len();
+    let plural = if entry_count == 1 { "y" } else { "ies" };
+
+    eprintln!("{}", style::section("Mirror plan:", c));
+    eprintln!(
+        "  from: {} ({})",
+        style::name(from, c),
+        from_account.email.as_deref().unwrap_or("no email set")
+    );
+    eprintln!(
+        "  to:   {} ({})",
+        style::name(to, c),
+        to_account.email.as_deref().unwrap_or("no email set")
+    );
+    if let Some(needle) = collection {
+        eprintln!("  scope: collection '{needle}'");
+    } else if let Some(org) = org_id {
+        eprintln!("  scope: organization '{org}'");
+    } else {
+        eprintln!("  scope: entire vault");
+    }
+    eprintln!(
+        "  entries to copy: {entry_count} ({collection_count} \
+         collection(s))"
+    );
+    if attachments {
+        eprintln!("  attachments: included");
+    }
+    eprintln!(
+        "  existing entries at destination: {}",
+        if overwrite {
+            "will be overwritten"
+        } else {
+            "will be skipped"
+        }
+    );
+    if purge_dest {
+        eprintln!(
+            "  {} the destination's personal vault will be PERMANENTLY \
+             PURGED first",
+            style_error("DANGER:", c)
+        );
+    }
+
+    if !yes {
+        let prompt = if purge_dest {
+            format!(
+                "{} this will purge '{to}' and then copy {entry_count} \
+                 entr{plural} from '{from}'. This cannot be undone! \
+                 Continue?",
+                style_error("DANGER:", c),
+            )
+        } else {
+            format!(
+                "Copy {entry_count} entr{plural} from '{from}' to '{to}'?"
+            )
+        };
+        if !confirm(&prompt)? {
+            return Ok(());
+        }
+    }
+
+    crate::actions::set_active_account(Some(to.to_string()))?;
+    unlock(None, None)?;
+
+    if purge_dest {
+        // Already confirmed above (the whole-mirror confirmation covers
+        // it), so pass `yes: true` to skip `purge_vault`'s own prompt --
+        // but it still requires the master-password re-proof, exactly like
+        // a standalone `rbw purge-vault` (`--stdin`-suppliable the same
+        // way).
+        purge_vault(true, password)?;
+    }
+
+    let (bw, attachments_flat) = exported_vault_to_bw(&vault);
+
+    let attachments_map = if attachments {
+        let mut map: std::collections::HashMap<
+            String,
+            Vec<crate::import_bitwarden::ZipAttachment>,
+        > = std::collections::HashMap::new();
+        for (name, file_name, data) in attachments_flat {
+            map.entry(crate::import_bitwarden::sanitize_zip_folder_name(
+                &name,
+            ))
+            .or_default()
+            .push(crate::import_bitwarden::ZipAttachment { file_name, data });
+        }
+        Some(map)
+    } else {
+        None
+    };
+
+    let imported = bw_vault_to_imported(bw, attachments_map);
+
+    import_vault(imported, None, overwrite)
 }
 
 // A collection from the synced database, with its name decrypted.
@@ -18743,5 +18975,53 @@ mod test {
         assert!(err.contains("org1"), "{err}");
         assert!(err.contains("org2"), "{err}");
         assert_eq!(resolve_org(&db, Some("org2")).unwrap(), "org2");
+    }
+
+    // Both of `mirror_vault`'s guard clauses are checked before any
+    // config/agent access, so they're directly unit-testable without a
+    // configured account.
+    #[test]
+    fn test_mirror_vault_rejects_identical_from_and_to() {
+        let err = mirror_vault(
+            "same", "same", None, None, false, false, false, true, None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("must name different accounts"), "{err}");
+    }
+
+    #[test]
+    fn test_mirror_vault_rejects_purge_dest_with_a_scope() {
+        let err = mirror_vault(
+            "a",
+            "b",
+            Some("some-collection"),
+            None,
+            false,
+            false,
+            true,
+            true,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("--purge-dest"), "{err}");
+        assert!(err.contains("--collection"), "{err}");
+
+        let err = mirror_vault(
+            "a",
+            "b",
+            None,
+            Some("org-id"),
+            false,
+            false,
+            true,
+            true,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("--purge-dest"), "{err}");
+        assert!(err.contains("--org-id"), "{err}");
     }
 }
