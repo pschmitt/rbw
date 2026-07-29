@@ -1220,9 +1220,10 @@ enum Opt {
         overwrite: bool,
         #[arg(
             long,
-            help = "Permanently wipe the destination's personal vault \
-                before copying (whole-vault mirrors only -- refused \
-                together with --collection/--org-id)"
+            help = "Permanently wipe the destination before copying: the \
+                whole personal vault, or just --dest-collection's entries \
+                if given (refused together with source-side --collection/\
+                --org-id)"
         )]
         purge_dest: bool,
         #[arg(short = 'y', long, help = "Skip confirmation prompt")]
