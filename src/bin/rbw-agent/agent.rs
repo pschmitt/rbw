@@ -255,6 +255,52 @@ async fn dispatch(
             .await?;
             true
         }
+        rbw::protocol::Action::CreateOrg { name } => {
+            crate::actions::create_org(sock, state.clone(), account, &name)
+                .await?;
+            true
+        }
+        rbw::protocol::Action::ConfirmOrgUser {
+            org_id,
+            user_id,
+            public_key_der_b64,
+        } => {
+            crate::actions::confirm_org_user(
+                sock,
+                state.clone(),
+                account,
+                &org_id,
+                &user_id,
+                &public_key_der_b64,
+            )
+            .await?;
+            true
+        }
+        rbw::protocol::Action::DeleteOrg {
+            org_id,
+            mut password,
+        } => {
+            // Same locked-memory + zeroize treatment as `Unlock`'s password.
+            let locked_password = password.as_deref().map(|p| {
+                let mut v = rbw::locked::Vec::new();
+                v.extend(p.as_bytes().iter().copied());
+                rbw::locked::Password::new(v)
+            });
+            if let Some(ref mut p) = password {
+                zeroize::Zeroize::zeroize(p);
+            }
+
+            crate::actions::delete_org(
+                sock,
+                state.clone(),
+                environment,
+                locked_password.as_ref(),
+                account,
+                &org_id,
+            )
+            .await?;
+            true
+        }
         rbw::protocol::Action::Decrypt {
             cipherstring,
             entry_key,

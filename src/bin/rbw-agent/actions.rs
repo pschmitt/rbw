@@ -544,11 +544,13 @@ async fn login_success(
     );
 
     match res {
-        Ok((keys, org_keys)) => {
-            state
-                .lock()
-                .await
-                .set_unlocked(&account.name, keys, org_keys);
+        Ok((keys, org_keys, rsa_private_key)) => {
+            state.lock().await.set_unlocked(
+                &account.name,
+                keys,
+                org_keys,
+                rsa_private_key,
+            );
         }
         Err(e) => return Err(e).context("failed to unlock database"),
     }
@@ -607,9 +609,15 @@ async fn unlock_state(
                 &protected_private_key,
                 &db.protected_org_keys,
             ) {
-                Ok((keys, org_keys)) => {
-                    return unlock_success(state, keys, org_keys, account)
-                        .await
+                Ok((keys, org_keys, rsa_private_key)) => {
+                    return unlock_success(
+                        state,
+                        keys,
+                        org_keys,
+                        rsa_private_key,
+                        account,
+                    )
+                    .await
                 }
                 Err(e) => return Err(e).context("failed to unlock database"),
             }
@@ -666,8 +674,15 @@ async fn unlock_state(
                 &protected_private_key,
                 &db.protected_org_keys,
             ) {
-                Ok((keys, org_keys)) => {
-                    unlock_success(state, keys, org_keys, account).await?;
+                Ok((keys, org_keys, rsa_private_key)) => {
+                    unlock_success(
+                        state,
+                        keys,
+                        org_keys,
+                        rsa_private_key,
+                        account,
+                    )
+                    .await?;
                     break;
                 }
                 Err(rbw::error::Error::IncorrectPassword { message }) => {
@@ -706,12 +721,15 @@ async fn unlock_success(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     keys: rbw::locked::Keys,
     org_keys: std::collections::HashMap<String, rbw::locked::Keys>,
+    rsa_private_key: rbw::locked::PrivateKey,
     account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
-    state
-        .lock()
-        .await
-        .set_unlocked(&account.name, keys, org_keys);
+    state.lock().await.set_unlocked(
+        &account.name,
+        keys,
+        org_keys,
+        rsa_private_key,
+    );
     Ok(())
 }
 
@@ -804,6 +822,243 @@ pub async fn purge_vault(
     Ok(())
 }
 
+// Creates a new organization owned by the current account (`rbw org
+// create`). Needs the account's own RSA key pair to encrypt a freshly
+// generated org key to itself as the initial (and, at creation time,
+// only) member -- so this reads the private key retained in agent state
+// from the original unlock, the same one `refresh_org_keys` uses.
+pub async fn create_org(
+    sock: &mut crate::sock::Sock,
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    account: &rbw::config::Account,
+    name: &str,
+) -> anyhow::Result<()> {
+    let rsa_private_key = {
+        let state = state.lock().await;
+        state
+            .account(&account.name)
+            .and_then(|a| a.rsa_private_key.clone())
+            .context("account must be unlocked to create an organization")?
+    };
+
+    let public_key =
+        rbw::cipherstring::rsa_public_key_from_private(&rsa_private_key)
+            .context("failed to derive RSA public key")?;
+
+    let org_key = rbw::cipherstring::generate_attachment_keys();
+    let org_key_bytes: Vec<u8> = org_key
+        .enc_key()
+        .iter()
+        .chain(org_key.mac_key())
+        .copied()
+        .collect();
+    let encrypted_key = rbw::cipherstring::CipherString::encrypt_asymmetric(
+        &public_key,
+        &org_key_bytes,
+    )?
+    .to_string();
+    let encrypted_collection_name =
+        rbw::cipherstring::CipherString::encrypt_symmetric(
+            &org_key,
+            b"Default Collection",
+        )?
+        .to_string();
+
+    let email = account_email(account)?;
+    let mut db = load_db(account).await?;
+    let access_token = db
+        .access_token
+        .clone()
+        .context("failed to find access token in db")?;
+    let refresh_token = db
+        .refresh_token
+        .clone()
+        .context("failed to find refresh token in db")?;
+
+    let (new_access_token, id) = rbw::actions::create_org(
+        &access_token,
+        &refresh_token,
+        name,
+        &email,
+        &encrypted_key,
+        &encrypted_collection_name,
+    )
+    .await
+    .context("failed to create organization")?;
+
+    if let Some(new_access_token) = new_access_token {
+        db.access_token = Some(new_access_token);
+        save_db(account, &db).await?;
+    }
+
+    // Refresh local state so the new org's key (and its default
+    // collection) are usable right away.
+    sync(None, state.clone(), account).await?;
+
+    sock.send(&rbw::protocol::Response::CreateOrg { id })
+        .await?;
+
+    Ok(())
+}
+
+// Confirms an org member who has accepted their invite (`rbw org
+// confirm`). The org's own key is already cached in agent state (from
+// unlock, or `refresh_org_keys` after a later sync) -- this just
+// re-encrypts it to the target's public key, which the client already
+// fetched (a plain lookup, no secret material of ours involved) and
+// passed through.
+pub async fn confirm_org_user(
+    sock: &mut crate::sock::Sock,
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    account: &rbw::config::Account,
+    org_id: &str,
+    user_id: &str,
+    public_key_der_b64: &str,
+) -> anyhow::Result<()> {
+    let org_key = {
+        let state = state.lock().await;
+        state.key(&account.name, Some(org_id)).cloned().context(
+            "org key not available -- is the account unlocked and a \
+                 member of this org?",
+        )?
+    };
+
+    let der = rbw::base64::decode(public_key_der_b64)
+        .context("invalid base64 public key")?;
+    let public_key = rbw::cipherstring::rsa_public_key_from_der(&der)
+        .context("failed to parse the target member's public key")?;
+
+    let org_key_bytes: Vec<u8> = org_key
+        .enc_key()
+        .iter()
+        .chain(org_key.mac_key())
+        .copied()
+        .collect();
+    let encrypted_key = rbw::cipherstring::CipherString::encrypt_asymmetric(
+        &public_key,
+        &org_key_bytes,
+    )?
+    .to_string();
+
+    let mut db = load_db(account).await?;
+    let access_token = db
+        .access_token
+        .clone()
+        .context("failed to find access token in db")?;
+    let refresh_token = db
+        .refresh_token
+        .clone()
+        .context("failed to find refresh token in db")?;
+
+    let new_access_token = rbw::actions::confirm_org_user(
+        &access_token,
+        &refresh_token,
+        org_id,
+        user_id,
+        &encrypted_key,
+    )
+    .await
+    .context("failed to confirm organization member")?;
+
+    if let Some(new_access_token) = new_access_token {
+        db.access_token = Some(new_access_token);
+        save_db(account, &db).await?;
+    }
+
+    sync(None, state.clone(), account).await?;
+
+    respond_ack(sock).await?;
+
+    Ok(())
+}
+
+// Permanently deletes an entire organization (`rbw org delete`). Same
+// master-password re-proof as `purge_vault`, for the same reason (proving
+// current intent/knowledge, not decrypting anything -- deriving the hash
+// doesn't need the org's own key at all).
+pub async fn delete_org(
+    sock: &mut crate::sock::Sock,
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    environment: &rbw::protocol::Environment,
+    password: Option<&rbw::locked::Password>,
+    account: &rbw::config::Account,
+    org_id: &str,
+) -> anyhow::Result<()> {
+    let mut db = load_db(account).await?;
+
+    let Some(kdf) = db.kdf else {
+        return Err(anyhow::anyhow!("failed to find kdf type in db"));
+    };
+    let Some(iterations) = db.iterations else {
+        return Err(anyhow::anyhow!(
+            "failed to find number of iterations in db"
+        ));
+    };
+    let memory = db.memory;
+    let parallelism = db.parallelism;
+    let email = account_email(account)?;
+
+    let password = if let Some(password) = password {
+        password.clone()
+    } else {
+        let description = format!(
+            "PERMANENTLY DELETE the organization {org_id} for account \
+             '{}' ({email})? Enter the master password to confirm.",
+            account.name
+        );
+        rbw::pinentry::getpin(
+            &config_pinentry().await?,
+            "Master Password",
+            &description,
+            None,
+            environment,
+            true,
+            Some(sock.inner()),
+            config_pinentry_timeout().await?,
+        )
+        .await
+        .context("failed to read password from pinentry")?
+    };
+
+    let identity = rbw::identity::Identity::new(
+        &email,
+        &password,
+        kdf,
+        iterations,
+        memory,
+        parallelism,
+    )?;
+
+    let access_token = db
+        .access_token
+        .clone()
+        .context("failed to find access token in db")?;
+    let refresh_token = db
+        .refresh_token
+        .clone()
+        .context("failed to find refresh token in db")?;
+
+    let new_access_token = rbw::actions::delete_org(
+        &access_token,
+        &refresh_token,
+        org_id,
+        &identity.master_password_hash,
+    )
+    .await
+    .context("failed to delete organization (wrong master password?)")?;
+
+    if let Some(new_access_token) = new_access_token {
+        db.access_token = Some(new_access_token);
+        save_db(account, &db).await?;
+    }
+
+    sync(None, state.clone(), account).await?;
+
+    respond_ack(sock).await?;
+
+    Ok(())
+}
+
 // Lock the account the client named explicitly (`rbw -a NAME lock`), or
 // every account when the request doesn't carry one (plain `rbw lock`,
 // `rbw lock --all`, and requests from older clients).
@@ -864,6 +1119,7 @@ pub async fn sync(
             protected_org_keys,
             entries,
             collections,
+            organizations,
         ),
     ) = match rbw::actions::sync(&access_token, &refresh_token).await {
         Ok(v) => v,
@@ -895,7 +1151,18 @@ pub async fn sync(
     db.protected_org_keys = protected_org_keys;
     db.entries = entries;
     db.collections = collections;
+    db.organizations = organizations;
     save_db(account, &db).await?;
+
+    // A newly created/joined org's key would otherwise stay undecryptable
+    // (and its collections unusable) until the next full lock+unlock --
+    // this refreshes it immediately using the private key retained from
+    // the original unlock. A no-op if the account isn't currently
+    // unlocked.
+    state
+        .lock()
+        .await
+        .refresh_org_keys(&account.name, &db.protected_org_keys);
 
     if let Err(e) = subscribe_to_notifications(state.clone(), account).await {
         eprintln!("failed to subscribe to notifications: {e}");

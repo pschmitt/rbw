@@ -91,6 +91,7 @@ pub fn unlock<S: std::hash::BuildHasher>(
 ) -> Result<(
     crate::locked::Keys,
     std::collections::HashMap<String, crate::locked::Keys>,
+    crate::locked::PrivateKey,
 )> {
     let identity = crate::identity::Identity::new(
         email,
@@ -119,17 +120,31 @@ pub fn unlock<S: std::hash::BuildHasher>(
         protected_private_key.decrypt_locked_symmetric(&key)?,
     );
 
+    let org_keys = decrypt_org_keys(&private_key, protected_org_keys)?;
+
+    Ok((key, org_keys, private_key))
+}
+
+// Decrypts every org key in `protected_org_keys` using `private_key` (the
+// account's own RSA private key, itself only decryptable with the master
+// password -- see `unlock`). Also called after every `sync`, using the
+// private key retained in the agent's in-memory state from the original
+// unlock, so a newly created/joined org's key becomes usable immediately
+// instead of only after the next full lock+unlock cycle.
+pub fn decrypt_org_keys<S: std::hash::BuildHasher>(
+    private_key: &crate::locked::PrivateKey,
+    protected_org_keys: &std::collections::HashMap<String, String, S>,
+) -> Result<std::collections::HashMap<String, crate::locked::Keys>> {
     let mut org_keys = std::collections::HashMap::new();
     for (org_id, protected_org_key) in protected_org_keys {
         let protected_org_key =
             crate::cipherstring::CipherString::new(protected_org_key)?;
         let org_key = crate::locked::Keys::new(
-            protected_org_key.decrypt_locked_asymmetric(&private_key)?,
+            protected_org_key.decrypt_locked_asymmetric(private_key)?,
         );
         org_keys.insert(org_id.clone(), org_key);
     }
-
-    Ok((key, org_keys))
+    Ok(org_keys)
 }
 
 pub async fn sync(
@@ -143,6 +158,7 @@ pub async fn sync(
         std::collections::HashMap<String, String>,
         Vec<crate::db::Entry>,
         Vec<crate::db::Collection>,
+        Vec<crate::db::Organization>,
     ),
 )> {
     with_exchange_refresh_token_async(
@@ -164,6 +180,7 @@ async fn sync_once(
     std::collections::HashMap<String, String>,
     Vec<crate::db::Entry>,
     Vec<crate::db::Collection>,
+    Vec<crate::db::Organization>,
 )> {
     let (client, _) = api_client_async().await?;
     client.sync(access_token).await
@@ -196,6 +213,93 @@ async fn purge_vault_once(
 ) -> Result<()> {
     let (client, _) = api_client_async().await?;
     client.purge_vault(access_token, master_password_hash).await
+}
+
+pub async fn delete_org(
+    access_token: &str,
+    refresh_token: &str,
+    org_id: &str,
+    master_password_hash: &crate::locked::PasswordHash,
+) -> Result<Option<String>> {
+    let hash = crate::base64::encode(master_password_hash.hash());
+    let (new_access_token, ()) = with_exchange_refresh_token_async(
+        access_token,
+        refresh_token,
+        move |access_token| {
+            let access_token = access_token.to_string();
+            let org_id = org_id.to_string();
+            let hash = hash.clone();
+            Box::pin(async move {
+                delete_org_once(&access_token, &org_id, &hash).await
+            })
+        },
+    )
+    .await?;
+    Ok(new_access_token)
+}
+
+async fn delete_org_once(
+    access_token: &str,
+    org_id: &str,
+    master_password_hash: &str,
+) -> Result<()> {
+    let (client, _) = api_client_async().await?;
+    client
+        .delete_org(access_token, org_id, master_password_hash)
+        .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn create_org(
+    access_token: &str,
+    refresh_token: &str,
+    name: &str,
+    billing_email: &str,
+    encrypted_key: &str,
+    encrypted_collection_name: &str,
+) -> Result<(Option<String>, String)> {
+    with_exchange_refresh_token_async(
+        access_token,
+        refresh_token,
+        move |access_token| {
+            let access_token = access_token.to_string();
+            let name = name.to_string();
+            let billing_email = billing_email.to_string();
+            let encrypted_key = encrypted_key.to_string();
+            let encrypted_collection_name =
+                encrypted_collection_name.to_string();
+            Box::pin(async move {
+                create_org_once(
+                    &access_token,
+                    &name,
+                    &billing_email,
+                    &encrypted_key,
+                    &encrypted_collection_name,
+                )
+                .await
+            })
+        },
+    )
+    .await
+}
+
+async fn create_org_once(
+    access_token: &str,
+    name: &str,
+    billing_email: &str,
+    encrypted_key: &str,
+    encrypted_collection_name: &str,
+) -> Result<String> {
+    let (client, _) = api_client_async().await?;
+    client
+        .create_org(
+            access_token,
+            name,
+            billing_email,
+            encrypted_key,
+            encrypted_collection_name,
+        )
+        .await
 }
 
 pub fn add(
@@ -598,6 +702,127 @@ fn org_users_once(
 ) -> Result<Vec<crate::api::OrgUser>> {
     let (client, _) = api_client()?;
     client.org_users(access_token, org_id)
+}
+
+pub fn invite_org_user(
+    access_token: &str,
+    refresh_token: &str,
+    org_id: &str,
+    email: &str,
+    role: i32,
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        invite_org_user_once(access_token, org_id, email, role)
+    })
+}
+
+fn invite_org_user_once(
+    access_token: &str,
+    org_id: &str,
+    email: &str,
+    role: i32,
+) -> Result<()> {
+    let (client, _) = api_client()?;
+    client.invite_org_user(access_token, org_id, email, role)
+}
+
+pub fn remove_org_user(
+    access_token: &str,
+    refresh_token: &str,
+    org_id: &str,
+    user_id: &str,
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        remove_org_user_once(access_token, org_id, user_id)
+    })
+}
+
+fn remove_org_user_once(
+    access_token: &str,
+    org_id: &str,
+    user_id: &str,
+) -> Result<()> {
+    let (client, _) = api_client()?;
+    client.remove_org_user(access_token, org_id, user_id)
+}
+
+pub fn accept_org_invite(
+    access_token: &str,
+    refresh_token: &str,
+    org_id: &str,
+    user_id: &str,
+    token: &str,
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        accept_org_invite_once(access_token, org_id, user_id, token)
+    })
+}
+
+fn accept_org_invite_once(
+    access_token: &str,
+    org_id: &str,
+    user_id: &str,
+    token: &str,
+) -> Result<()> {
+    let (client, _) = api_client()?;
+    client.accept_org_invite(access_token, org_id, user_id, token)
+}
+
+pub fn user_public_key(
+    access_token: &str,
+    refresh_token: &str,
+    user_id: &str,
+) -> Result<(Option<String>, String)> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        user_public_key_once(access_token, user_id)
+    })
+}
+
+fn user_public_key_once(access_token: &str, user_id: &str) -> Result<String> {
+    let (client, _) = api_client()?;
+    client.user_public_key(access_token, user_id)
+}
+
+pub async fn confirm_org_user(
+    access_token: &str,
+    refresh_token: &str,
+    org_id: &str,
+    user_id: &str,
+    encrypted_key: &str,
+) -> Result<Option<String>> {
+    let (new_access_token, ()) = with_exchange_refresh_token_async(
+        access_token,
+        refresh_token,
+        move |access_token| {
+            let access_token = access_token.to_string();
+            let org_id = org_id.to_string();
+            let user_id = user_id.to_string();
+            let encrypted_key = encrypted_key.to_string();
+            Box::pin(async move {
+                confirm_org_user_once(
+                    &access_token,
+                    &org_id,
+                    &user_id,
+                    &encrypted_key,
+                )
+                .await
+            })
+        },
+    )
+    .await?;
+    Ok(new_access_token)
+}
+
+async fn confirm_org_user_once(
+    access_token: &str,
+    org_id: &str,
+    user_id: &str,
+    encrypted_key: &str,
+) -> Result<()> {
+    let (client, _) = api_client_async().await?;
+    client
+        .confirm_org_user(access_token, org_id, user_id, encrypted_key)
+        .await
 }
 
 pub fn collections_details(

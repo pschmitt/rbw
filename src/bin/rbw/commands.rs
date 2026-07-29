@@ -9179,75 +9179,592 @@ pub fn list_collections(output: OutputMode) -> anyhow::Result<()> {
     Ok(())
 }
 
-// Set the collections an entry belongs to, addressing the entry by needle
-// and the collections by name or ID (resolved in the entry's organization).
+// Unlike `list_collections`, there's no decrypt step here -- organization
+// names are plaintext in the sync response (see `db::Organization`'s doc
+// comment), so `db.organizations` is already display-ready.
+pub fn list_organizations(output: OutputMode) -> anyhow::Result<()> {
+    unlock(None, None)?;
+
+    let db = load_db()?;
+
+    let mut organizations = db.organizations;
+    organizations.sort_by(|a, b| a.name.cmp(&b.name));
+
+    if output_is_structured(output) {
+        write_serialized_pretty(
+            &organizations,
+            output,
+            "failed to write organizations to stdout",
+        )?;
+    } else if output == OutputMode::Name {
+        for org in &organizations {
+            println!("{}", org.name);
+        }
+    } else {
+        let rows = organizations
+            .iter()
+            .map(|o| vec![o.id.clone(), o.name.clone()])
+            .collect::<Vec<_>>();
+        print_table(
+            &[
+                TableColumn {
+                    header: "id",
+                    style: TableColumnStyle::Id,
+                },
+                TableColumn {
+                    header: "name",
+                    style: TableColumnStyle::Name,
+                },
+            ],
+            &rows,
+            "",
+        )?;
+    }
+
+    Ok(())
+}
+
+// Moves an org-owned entry back into the personal vault. Bitwarden/
+// Vaultwarden's server rejects clearing `organizationId` via a plain
+// `PUT /ciphers/{id}` edit ("Organization mismatch. Please resync the
+// client before updating the cipher" -- confirmed live against
+// bw.brkn.lol), so unlike `import_create_entry`'s personal-to-org move
+// (which the server does accept via a plain edit), this direction has to
+// go through the same create-then-delete dance the official Bitwarden
+// clients use for "clone to individual vault": re-encrypt the entry with
+// the personal key, create it as a brand-new personal entry (`add` has no
+// org parameter -- it's always personal), copy over history with a
+// follow-up edit (safe now, since both sides are personal), and only then
+// permanently delete the original org-owned entry. Creating before
+// deleting means a failure here leaves a duplicate rather than losing the
+// entry. Does not touch attachments (callers must refuse entries that
+// have any, since their encryption keys aren't re-wrapped here).
+fn move_entry_to_personal(
+    entry: &rbw::db::Entry,
+    decrypted: &DecryptedCipher,
+    access_token: &mut String,
+    refresh_token: &str,
+    db: &mut rbw::db::Db,
+) -> anyhow::Result<()> {
+    let editable = decrypted_to_editable(decrypted);
+
+    let (data, fields, notes) = editable_to_encrypted(&editable, None)?;
+    let encrypted_name = crate::actions::encrypt(&editable.name, None)?;
+    let encrypted_notes = notes
+        .as_deref()
+        .map(|n| crate::actions::encrypt(n, None))
+        .transpose()?;
+
+    let before_ids: std::collections::HashSet<String> =
+        db.entries.iter().map(|e| e.id.clone()).collect();
+
+    if let (Some(new_token), ()) = rbw::actions::add(
+        access_token,
+        refresh_token,
+        &encrypted_name,
+        &data,
+        &fields,
+        encrypted_notes.as_deref(),
+        entry.folder_id.as_deref(),
+    )? {
+        access_token.clone_from(&new_token);
+        db.access_token = Some(new_token);
+        save_db(db)?;
+    }
+
+    crate::actions::sync()?;
+    *db = load_db()?;
+    access_token.clone_from(db.access_token.as_ref().unwrap());
+
+    let Some(new_entry) = db
+        .entries
+        .iter()
+        .find(|e| !before_ids.contains(&e.id))
+        .cloned()
+    else {
+        anyhow::bail!(
+            "entry was created in the personal vault but couldn't be \
+             located afterward (sync may be delayed) -- the original org \
+             entry was left untouched"
+        );
+    };
+
+    if !decrypted.history.is_empty() {
+        let history = decrypted
+            .history
+            .iter()
+            .map(|h| {
+                Ok(rbw::db::HistoryEntry {
+                    last_used_date: h.last_used_date.clone(),
+                    password: crate::actions::encrypt(&h.password, None)?,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        if let (Some(new_token), ()) = rbw::actions::edit(
+            access_token,
+            refresh_token,
+            &new_entry.id,
+            None,
+            &encrypted_name,
+            &data,
+            &fields,
+            encrypted_notes.as_deref(),
+            entry.folder_id.as_deref(),
+            &history,
+        )? {
+            access_token.clone_from(&new_token);
+            db.access_token = Some(new_token);
+            save_db(db)?;
+        }
+    }
+
+    if let (Some(new_token), ()) = rbw::actions::delete_permanently(
+        access_token,
+        refresh_token,
+        &entry.id,
+    )? {
+        access_token.clone_from(&new_token);
+        db.access_token = Some(new_token);
+        save_db(db)?;
+    }
+
+    crate::actions::sync()?;
+
+    Ok(())
+}
+
+// Set the collections one or more entries belong to, addressing entries by
+// needle(s) and the collections by name or ID (resolved per entry's own
+// organization, since different matched entries could belong to different
+// orgs under `--bulk`). Without `--bulk`, exactly one needle must resolve
+// to exactly one entry, same as `find_entry` elsewhere; with `--bulk`,
+// every needle is matched against every entry it fits (`find_entries_all`),
+// previewed, and confirmed once (unless `-y`) before any are touched --
+// same convention as `archive --bulk`/`set --bulk`.
+//
+// `personal: true` (`--personal`) takes a different path entirely: instead
+// of a `PUT /ciphers/{id}/collections` call, it fully re-encrypts the
+// entry's name/data/fields/notes/history with the account's personal key
+// and clears `organizationId` server-side via a normal `edit`, moving the
+// entry out of the organization and back into the personal vault --
+// mirroring `import_create_entry`'s personal-vault-to-org move, just in
+// the opposite direction. Entries with attachments are refused for now:
+// attachment encryption keys aren't re-wrapped by this move, so they'd be
+// left undecryptable under the new ownership.
+#[allow(clippy::too_many_arguments)]
 pub fn assign_collections(
-    needle: Needle,
+    needles: Vec<Needle>,
     user: Option<&str>,
     folder: Option<&str>,
     ignore_case: bool,
     force_exact: bool,
     collections: &[String],
+    personal: bool,
+    bulk: bool,
+    yes: bool,
 ) -> anyhow::Result<()> {
+    if !personal && collections.is_empty() {
+        anyhow::bail!(
+            "either --collection (repeatable) or --personal must be given"
+        );
+    }
+
     unlock(None, None)?;
 
     let mut db = load_db()?;
+    let c = stdout_supports_color();
 
-    let desc = format!(
-        "{}{}",
-        user.map_or_else(String::new, |s| format!("{s}@")),
-        needle
-    );
-    let (entry, decrypted) =
-        find_entry(&db, vec![needle], user, folder, ignore_case, force_exact)
-            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    let targets: Vec<(rbw::db::Entry, DecryptedCipher)> = if bulk {
+        let mut any_err = false;
+        let mut pending: Vec<(rbw::db::Entry, DecryptedCipher)> = Vec::new();
+        for needle in &needles {
+            match find_entries_all(&db, needle, user, folder, ignore_case) {
+                Err(e) => {
+                    eprintln!("{needle}: {e:#}");
+                    any_err = true;
+                }
+                Ok(entries) => pending.extend(entries),
+            }
+        }
 
-    let Some(org_id) = entry.org_id.as_deref() else {
-        anyhow::bail!(
-            "entry '{}' is not owned by an organization, so it cannot be \
-            assigned to collections",
-            decrypted.name
+        let mut seen = std::collections::HashSet::new();
+        pending.retain(|(entry, _)| seen.insert(entry.id.clone()));
+
+        if pending.is_empty() {
+            if any_err {
+                anyhow::bail!("no entries found");
+            }
+            eprintln!("No matching entries.");
+            return Ok(());
+        }
+
+        eprintln!(
+            "{}",
+            style::section(
+                if personal {
+                    "The following entries will be moved to your personal \
+                     vault:"
+                } else {
+                    "The following entries will be assigned to collections:"
+                },
+                c
+            )
         );
+        for (_, decrypted) in &pending {
+            eprintln!("  {}", style::name(&decrypted.name, c));
+        }
+        if !yes && !confirm("Continue?")? {
+            return Ok(());
+        }
+        pending
+    } else {
+        let [needle] =
+            <[Needle; 1]>::try_from(needles).map_err(|needles| {
+                anyhow::anyhow!(
+                    "expected exactly one needle without --bulk, got {}",
+                    needles.len()
+                )
+            })?;
+        let desc = format!(
+            "{}{}",
+            user.map_or_else(String::new, |s| format!("{s}@")),
+            needle
+        );
+        let entry = find_entry(
+            &db,
+            vec![needle],
+            user,
+            folder,
+            ignore_case,
+            force_exact,
+        )
+        .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+        vec![entry]
     };
 
+    let mut access_token = db.access_token.as_ref().unwrap().clone();
+    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
     let all_collections = decrypt_collections(&db)?;
-    let mut collection_ids = Vec::new();
-    let mut collection_names = Vec::new();
-    for needle in collections {
-        let collection =
-            resolve_collection(&all_collections, needle, Some(org_id))?;
-        if !collection_ids.contains(&collection.id) {
-            collection_ids.push(collection.id.clone());
-            collection_names.push(collection.name.clone());
+
+    let mut failed = 0_usize;
+    for (entry, decrypted) in &targets {
+        if entry.org_id.is_none() {
+            eprintln!(
+                "{} '{}' is {}",
+                style_error("Error:", c),
+                decrypted.name,
+                if personal {
+                    "already in your personal vault"
+                } else {
+                    "not owned by an organization, so it cannot be \
+                     assigned to collections"
+                },
+            );
+            failed += 1;
+            continue;
         }
-    }
 
-    let access_token = db.access_token.as_ref().unwrap();
-    let refresh_token = db.refresh_token.as_ref().unwrap();
+        if personal {
+            if !entry.attachments.is_empty() {
+                eprintln!(
+                    "{} '{}' has attachments, which aren't re-keyed by \
+                     this move yet -- refusing to move it to the personal \
+                     vault",
+                    style_error("Error:", c),
+                    decrypted.name,
+                );
+                failed += 1;
+                continue;
+            }
 
-    if let (Some(access_token), ()) = rbw::actions::edit_collections(
-        access_token,
-        refresh_token,
-        &entry.id,
-        &collection_ids,
-    )? {
-        db.access_token = Some(access_token);
-        save_db(&db)?;
+            match move_entry_to_personal(
+                entry,
+                decrypted,
+                &mut access_token,
+                &refresh_token,
+                &mut db,
+            ) {
+                Ok(()) => {
+                    eprintln!(
+                        "{} {} to your personal vault",
+                        style::success("Moved", c),
+                        style::name(&decrypted.name, c),
+                    );
+                }
+                Err(e) => {
+                    eprintln!(
+                        "{} failed to move '{}': {e:#}",
+                        style_error("Error:", c),
+                        decrypted.name,
+                    );
+                    failed += 1;
+                }
+            }
+            continue;
+        }
+
+        let org_id = entry.org_id.as_deref().unwrap();
+        let mut collection_ids = Vec::new();
+        let mut collection_names = Vec::new();
+        let mut resolve_failed = false;
+        for needle in collections {
+            match resolve_collection(&all_collections, needle, Some(org_id)) {
+                Ok(collection) => {
+                    if !collection_ids.contains(&collection.id) {
+                        collection_ids.push(collection.id.clone());
+                        collection_names.push(collection.name.clone());
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "{} '{}': {e:#}",
+                        style_error("Error:", c),
+                        decrypted.name,
+                    );
+                    resolve_failed = true;
+                    break;
+                }
+            }
+        }
+        if resolve_failed {
+            failed += 1;
+            continue;
+        }
+
+        match rbw::actions::edit_collections(
+            &access_token,
+            &refresh_token,
+            &entry.id,
+            &collection_ids,
+        ) {
+            Ok((new_access_token, ())) => {
+                if let Some(new_access_token) = new_access_token {
+                    access_token.clone_from(&new_access_token);
+                    db.access_token = Some(new_access_token);
+                    save_db(&db)?;
+                }
+                eprintln!(
+                    "{} {} to {}",
+                    style::success("Assigned", c),
+                    style::name(&decrypted.name, c),
+                    collection_names
+                        .iter()
+                        .map(|name| style::name(name, c))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "{} failed to assign '{}': {e:#}",
+                    style_error("Error:", c),
+                    decrypted.name,
+                );
+                failed += 1;
+            }
+        }
     }
 
     crate::actions::sync()?;
 
+    if failed > 0 {
+        anyhow::bail!(
+            "{failed} entr{} failed to be assigned",
+            if failed == 1 { "y" } else { "ies" }
+        );
+    }
+
+    Ok(())
+}
+
+// The complement to `assign_collections`: removes the given collections
+// (by name or ID, resolved per entry's own organization) from an entry
+// that stays in the organization, rather than replacing its whole
+// collection list. With no `--collection` given at all, removes every
+// collection the entry currently belongs to, leaving it org-owned but
+// unassigned to any collection -- distinct from `assign --personal`, which
+// actually moves the entry out of the organization entirely. Same
+// `--bulk`/preview/confirm convention as `assign_collections`.
+#[allow(clippy::too_many_arguments)]
+pub fn unassign_collections(
+    needles: Vec<Needle>,
+    user: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+    collections: &[String],
+    bulk: bool,
+    yes: bool,
+) -> anyhow::Result<()> {
+    unlock(None, None)?;
+
+    let mut db = load_db()?;
     let c = stdout_supports_color();
-    eprintln!(
-        "{} {} to {}",
-        style::success("Assigned", c),
-        style::name(&decrypted.name, c),
-        collection_names
-            .iter()
-            .map(|name| style::name(name, c))
-            .collect::<Vec<_>>()
-            .join(", "),
-    );
+
+    let targets: Vec<(rbw::db::Entry, DecryptedCipher)> = if bulk {
+        let mut any_err = false;
+        let mut pending: Vec<(rbw::db::Entry, DecryptedCipher)> = Vec::new();
+        for needle in &needles {
+            match find_entries_all(&db, needle, user, folder, ignore_case) {
+                Err(e) => {
+                    eprintln!("{needle}: {e:#}");
+                    any_err = true;
+                }
+                Ok(entries) => pending.extend(entries),
+            }
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        pending.retain(|(entry, _)| seen.insert(entry.id.clone()));
+
+        if pending.is_empty() {
+            if any_err {
+                anyhow::bail!("no entries found");
+            }
+            eprintln!("No matching entries.");
+            return Ok(());
+        }
+
+        eprintln!(
+            "{}",
+            style::section(
+                if collections.is_empty() {
+                    "The following entries will be removed from all their \
+                     collections:"
+                } else {
+                    "The following entries will be removed from the given \
+                     collections:"
+                },
+                c
+            )
+        );
+        for (_, decrypted) in &pending {
+            eprintln!("  {}", style::name(&decrypted.name, c));
+        }
+        if !yes && !confirm("Continue?")? {
+            return Ok(());
+        }
+        pending
+    } else {
+        let [needle] =
+            <[Needle; 1]>::try_from(needles).map_err(|needles| {
+                anyhow::anyhow!(
+                    "expected exactly one needle without --bulk, got {}",
+                    needles.len()
+                )
+            })?;
+        let desc = format!(
+            "{}{}",
+            user.map_or_else(String::new, |s| format!("{s}@")),
+            needle
+        );
+        let entry = find_entry(
+            &db,
+            vec![needle],
+            user,
+            folder,
+            ignore_case,
+            force_exact,
+        )
+        .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+        vec![entry]
+    };
+
+    let mut access_token = db.access_token.as_ref().unwrap().clone();
+    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+    let all_collections = decrypt_collections(&db)?;
+
+    let mut failed = 0_usize;
+    for (entry, decrypted) in &targets {
+        let Some(org_id) = entry.org_id.as_deref() else {
+            eprintln!(
+                "{} '{}' is not owned by an organization, so it has no \
+                 collections to remove",
+                style_error("Error:", c),
+                decrypted.name,
+            );
+            failed += 1;
+            continue;
+        };
+
+        let new_ids: Vec<String> = if collections.is_empty() {
+            Vec::new()
+        } else {
+            let mut remove_ids = Vec::new();
+            let mut resolve_failed = false;
+            for needle in collections {
+                match resolve_collection(
+                    &all_collections,
+                    needle,
+                    Some(org_id),
+                ) {
+                    Ok(collection) => remove_ids.push(collection.id.clone()),
+                    Err(e) => {
+                        eprintln!(
+                            "{} '{}': {e:#}",
+                            style_error("Error:", c),
+                            decrypted.name,
+                        );
+                        resolve_failed = true;
+                        break;
+                    }
+                }
+            }
+            if resolve_failed {
+                failed += 1;
+                continue;
+            }
+            entry
+                .collection_ids
+                .iter()
+                .filter(|id| !remove_ids.contains(id))
+                .cloned()
+                .collect()
+        };
+
+        match rbw::actions::edit_collections(
+            &access_token,
+            &refresh_token,
+            &entry.id,
+            &new_ids,
+        ) {
+            Ok((new_access_token, ())) => {
+                if let Some(new_access_token) = new_access_token {
+                    access_token.clone_from(&new_access_token);
+                    db.access_token = Some(new_access_token);
+                    save_db(&db)?;
+                }
+                eprintln!(
+                    "{} {} from {}",
+                    style::success("Removed", c),
+                    style::name(&decrypted.name, c),
+                    if collections.is_empty() {
+                        "all collections".to_string()
+                    } else {
+                        collections.join(", ")
+                    },
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "{} failed to unassign '{}': {e:#}",
+                    style_error("Error:", c),
+                    decrypted.name,
+                );
+                failed += 1;
+            }
+        }
+    }
+
+    crate::actions::sync()?;
+
+    if failed > 0 {
+        anyhow::bail!(
+            "{failed} entr{} failed to be unassigned",
+            if failed == 1 { "y" } else { "ies" }
+        );
+    }
 
     Ok(())
 }
@@ -9442,6 +9959,435 @@ fn resolve_org(
             }
         },
     )
+}
+
+fn parse_org_role(role: &str) -> anyhow::Result<i32> {
+    match role.to_lowercase().as_str() {
+        "owner" => Ok(0),
+        "admin" => Ok(1),
+        "user" => Ok(2),
+        "manager" => Ok(3),
+        _ => anyhow::bail!(
+            "invalid role '{role}' (expected owner, admin, user, or manager)"
+        ),
+    }
+}
+
+// Invites a user by email into an org. No key material changes hands here
+// Pulls organizationId/organizationUserId/token out of a pasted invite
+// link, tolerating the `#/accept-organization/?...` fragment-based query
+// string the web vault uses (a plain URL parse would treat everything
+// after `#` as an opaque fragment and miss the query params inside it).
+fn parse_accept_org_url(
+    url: &str,
+) -> anyhow::Result<(String, String, String)> {
+    let query = url.rsplit_once('?').map(|(_, q)| q).ok_or_else(|| {
+        anyhow::anyhow!("couldn't find a query string in the invite URL")
+    })?;
+
+    let mut org_id = None;
+    let mut user_id = None;
+    let mut token = None;
+    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        match key.as_ref() {
+            "organizationId" => org_id = Some(value.into_owned()),
+            "organizationUserId" => user_id = Some(value.into_owned()),
+            "token" => token = Some(value.into_owned()),
+            _ => {}
+        }
+    }
+
+    Ok((
+        org_id.context("invite URL is missing organizationId")?,
+        user_id.context("invite URL is missing organizationUserId")?,
+        token.context("invite URL is missing token")?,
+    ))
+}
+
+// Accepts an org invite, called by the invitee using either the whole
+// invite link or the org id/user id/token from it individually -- not
+// `resolve_org`, since an invited-but-unaccepted account generally has no
+// other way to know any of that (it isn't a member yet, so it doesn't
+// show up in `rbw org list`/db.protected_org_keys locally).
+pub fn accept_org_invite(
+    url: Option<&str>,
+    org_id: Option<&str>,
+    user_id: Option<&str>,
+    token: Option<&str>,
+) -> anyhow::Result<()> {
+    let (org_id, user_id, token) = if let Some(url) = url {
+        parse_accept_org_url(url)?
+    } else {
+        (
+            org_id
+                .context("--org-id is required without --url")?
+                .to_string(),
+            user_id
+                .context("--user-id is required without --url")?
+                .to_string(),
+            token
+                .context("--token is required without --url")?
+                .to_string(),
+        )
+    };
+
+    unlock(None, None)?;
+
+    let mut db = load_db()?;
+    let access_token = db.access_token.as_ref().unwrap();
+    let refresh_token = db.refresh_token.as_ref().unwrap();
+
+    let (new_access_token, ()) = rbw::actions::accept_org_invite(
+        access_token,
+        refresh_token,
+        &org_id,
+        &user_id,
+        &token,
+    )?;
+    if let Some(new_access_token) = new_access_token {
+        db.access_token = Some(new_access_token);
+        save_db(&db)?;
+    }
+
+    eprintln!(
+        "{}",
+        style::success(
+            "Accepted the organization invite.",
+            stdout_supports_color(),
+        ),
+    );
+
+    Ok(())
+}
+
+// Creates a new organization with the current account as its (initial,
+// and at creation time only) owner. Agent-mediated -- see
+// `create_org`'s comment in `rbw-agent/actions.rs` for why.
+pub fn create_org(name: &str) -> anyhow::Result<()> {
+    unlock(None, None)?;
+
+    let id = crate::actions::create_org(name)?;
+
+    eprintln!(
+        "{} organization '{name}' ({id})",
+        style::success("Created", stdout_supports_color()),
+    );
+
+    Ok(())
+}
+
+// Permanently deletes an entire organization -- same danger class as
+// `purge_vault`, so it's gated the same way: a strong confirmation
+// (`-y`/`--yes` to skip) plus the master-password re-entry itself
+// (`--stdin` to skip that too).
+pub fn delete_org(
+    org_id: Option<&str>,
+    yes: bool,
+    password: Option<String>,
+) -> anyhow::Result<()> {
+    unlock(None, None)?;
+
+    let db = load_db()?;
+    let org_id = resolve_org(&db, org_id)?;
+
+    let c = stdout_supports_color();
+    let prompt = format!(
+        "{} this will permanently delete the organization {} and \
+         everything in it. This cannot be undone! Continue?",
+        style_error("DANGER:", c),
+        style::name(&org_id, c),
+    );
+    if !yes && !confirm(&prompt)? {
+        return Ok(());
+    }
+
+    crate::actions::delete_org(&org_id, password)?;
+
+    eprintln!("{}", style::success("Organization deleted.", c));
+
+    Ok(())
+}
+
+pub fn invite_org_user(
+    org_id: Option<&str>,
+    email: &str,
+    role: &str,
+) -> anyhow::Result<()> {
+    let role = parse_org_role(role)?;
+
+    unlock(None, None)?;
+
+    let mut db = load_db()?;
+    let org_id = resolve_org(&db, org_id)?;
+
+    let access_token = db.access_token.as_ref().unwrap();
+    let refresh_token = db.refresh_token.as_ref().unwrap();
+
+    let (new_access_token, ()) = rbw::actions::invite_org_user(
+        access_token,
+        refresh_token,
+        &org_id,
+        email,
+        role,
+    )?;
+    if let Some(new_access_token) = new_access_token {
+        db.access_token = Some(new_access_token);
+        save_db(&db)?;
+    }
+
+    eprintln!(
+        "{} '{email}' to the organization",
+        style::success("Invited", stdout_supports_color()),
+    );
+
+    Ok(())
+}
+
+pub fn remove_org_user(
+    org_id: Option<&str>,
+    user: &str,
+    yes: bool,
+) -> anyhow::Result<()> {
+    unlock(None, None)?;
+
+    let mut db = load_db()?;
+    let org_id = resolve_org(&db, org_id)?;
+
+    let mut access_token = db.access_token.as_ref().unwrap().clone();
+    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+
+    let (new_access_token, users) =
+        rbw::actions::org_users(&access_token, &refresh_token, &org_id)?;
+    if let Some(new_access_token) = new_access_token {
+        access_token.clone_from(&new_access_token);
+        db.access_token = Some(new_access_token);
+        save_db(&db)?;
+    }
+
+    let target = users
+        .iter()
+        .find(|u| u.id == user)
+        .or_else(|| users.iter().find(|u| u.email.eq_ignore_ascii_case(user)))
+        .ok_or_else(|| {
+            anyhow::anyhow!("no organization member found for '{user}'")
+        })?;
+
+    let c = stdout_supports_color();
+    let prompt = format!(
+        "Remove {} from the organization?",
+        style::name(&target.email, c),
+    );
+    if !yes && !confirm(&prompt)? {
+        return Ok(());
+    }
+
+    let (new_access_token, ()) = rbw::actions::remove_org_user(
+        &access_token,
+        &refresh_token,
+        &org_id,
+        &target.id,
+    )?;
+    if let Some(new_access_token) = new_access_token {
+        db.access_token = Some(new_access_token);
+        save_db(&db)?;
+    }
+
+    eprintln!(
+        "{} '{}' from the organization",
+        style::success("Removed", c),
+        target.email,
+    );
+
+    Ok(())
+}
+
+// Confirms a member who has accepted their invite -- required before they
+// can decrypt anything in the org, since that's what actually re-encrypts
+// the org key to their now-known public key. Resolving the member and
+// fetching their public key are both plain lookups done here; only the
+// re-encryption itself is agent-mediated (needs the org key already
+// cached from unlock).
+pub fn confirm_org_user(
+    org_id: Option<&str>,
+    user: &str,
+) -> anyhow::Result<()> {
+    unlock(None, None)?;
+
+    let mut db = load_db()?;
+    let org_id = resolve_org(&db, org_id)?;
+
+    let mut access_token = db.access_token.as_ref().unwrap().clone();
+    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+
+    let (new_access_token, users) =
+        rbw::actions::org_users(&access_token, &refresh_token, &org_id)?;
+    if let Some(new_access_token) = new_access_token {
+        access_token.clone_from(&new_access_token);
+        db.access_token = Some(new_access_token);
+        save_db(&db)?;
+    }
+
+    let target = users
+        .iter()
+        .find(|u| u.id == user)
+        .or_else(|| users.iter().find(|u| u.email.eq_ignore_ascii_case(user)))
+        .ok_or_else(|| {
+            anyhow::anyhow!("no organization member found for '{user}'")
+        })?;
+    // The public-key lookup needs the account's own (global) user id --
+    // a different id than the OrganizationUser relationship id `confirm`
+    // itself uses. Only unset if they haven't registered an account for
+    // that email yet.
+    let target_user_id = target.user_id.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "'{}' hasn't registered an account for this email yet -- \
+             they need to do that before they can be confirmed",
+            target.email,
+        )
+    })?;
+
+    let (new_access_token, public_key_der_b64) =
+        rbw::actions::user_public_key(
+            &access_token,
+            &refresh_token,
+            target_user_id,
+        )?;
+    if let Some(new_access_token) = new_access_token {
+        db.access_token = Some(new_access_token);
+        save_db(&db)?;
+    }
+
+    crate::actions::confirm_org_user(
+        &org_id,
+        &target.id,
+        &public_key_der_b64,
+    )?;
+
+    eprintln!(
+        "{} '{}'",
+        style::success("Confirmed", stdout_supports_color()),
+        target.email,
+    );
+
+    Ok(())
+}
+
+// Sets one member's permissions on one collection directly, without any
+// of `propagate_collection_permissions`'s hierarchy-inference policy
+// (topmost held -> edit, descendants -> manage). That command bakes in a
+// specific naming-convention-driven policy that doesn't fit every org;
+// this is the generic primitive underneath it, for anyone who just wants
+// to set a permission on a (collection, member) pair directly.
+#[allow(clippy::fn_params_excessive_bools)]
+pub fn grant_collection_access(
+    collection: &str,
+    user: &str,
+    org_id: Option<&str>,
+    read_only: bool,
+    hide_passwords: bool,
+    manage: bool,
+) -> anyhow::Result<()> {
+    unlock(None, None)?;
+    crate::actions::sync()?;
+
+    let mut db = load_db()?;
+    let org_id = resolve_org(&db, org_id)?;
+
+    let all_collections = decrypt_collections(&db)?;
+    let resolved =
+        resolve_collection(&all_collections, collection, Some(&org_id))?;
+    let collection_id = resolved.id.clone();
+    let collection_name = resolved.name.clone();
+
+    // The still-encrypted name, needed to re-submit the PUT below --
+    // reusing it directly avoids any risk of a decrypt/re-encrypt
+    // mismatch changing it.
+    let encrypted_name = db
+        .collections
+        .iter()
+        .find(|c| c.id == collection_id)
+        .map(|c| c.name.clone())
+        .context("collection disappeared from the local db")?;
+
+    let mut access_token = db.access_token.as_ref().unwrap().clone();
+    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+
+    let (new_token, members) =
+        rbw::actions::org_users(&access_token, &refresh_token, &org_id)?;
+    if let Some(t) = new_token {
+        access_token.clone_from(&t);
+        db.access_token = Some(t);
+        save_db(&db)?;
+    }
+
+    let target = members
+        .iter()
+        .find(|m| m.id == user)
+        .or_else(|| {
+            members.iter().find(|m| m.email.eq_ignore_ascii_case(user))
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!("no organization member found for '{user}'")
+        })?;
+
+    let (new_token, details) = rbw::actions::collections_details(
+        &access_token,
+        &refresh_token,
+        &org_id,
+    )?;
+    if let Some(t) = new_token {
+        access_token.clone_from(&t);
+        db.access_token = Some(t);
+        save_db(&db)?;
+    }
+
+    let detail =
+        details
+            .iter()
+            .find(|d| d.id == collection_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "collection '{collection_name}' has no per-user \
+                 permission data from the API (accessAll members aren't \
+                 listed there)"
+                )
+            })?;
+
+    let mut users: Vec<rbw::api::CollectionUser> = detail
+        .users
+        .iter()
+        .filter(|u| u.id != target.id)
+        .cloned()
+        .collect();
+    users.push(rbw::api::CollectionUser {
+        id: target.id.clone(),
+        read_only,
+        hide_passwords,
+        manage,
+    });
+
+    let (new_token, ()) = rbw::actions::set_collection_users(
+        &access_token,
+        &refresh_token,
+        &org_id,
+        &collection_id,
+        &encrypted_name,
+        detail.external_id.as_deref(),
+        &detail.groups,
+        &users,
+    )?;
+    if let Some(t) = new_token {
+        db.access_token = Some(t);
+        save_db(&db)?;
+    }
+
+    eprintln!(
+        "{} permissions for '{}' on collection '{collection_name}'",
+        style::success("Set", stdout_supports_color()),
+        target.email,
+    );
+
+    Ok(())
 }
 
 pub fn propagate_collection_permissions(

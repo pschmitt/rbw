@@ -215,6 +215,34 @@ pub enum Action {
     PurgeVault {
         password: Option<String>,
     },
+    // Creates a new organization owned by the current account (`rbw org
+    // create`). Needs the account's own RSA key pair (to encrypt the
+    // freshly generated org key to itself as the initial owner), so this
+    // is agent-mediated like the rest of the key-material-touching
+    // actions, using the private key retained from unlock -- no
+    // additional password prompt needed.
+    CreateOrg {
+        name: String,
+    },
+    // Confirms an org member who has accepted their invite (`rbw org
+    // confirm`), re-encrypting the org's key to their now-known public
+    // key. `public_key_der_b64` is fetched client-side (a plain
+    // unauthenticated-crypto-wise lookup); only the actual re-encryption
+    // needs the agent, since that needs the org key already cached from
+    // unlock.
+    ConfirmOrgUser {
+        org_id: String,
+        user_id: String,
+        public_key_der_b64: String,
+    },
+    // Permanently deletes an entire organization (`rbw org delete`).
+    // Requires re-proving the master password, exactly like `PurgeVault`
+    // -- same `password` semantics (agent prompts via pinentry unless a
+    // caller supplies one directly).
+    DeleteOrg {
+        org_id: String,
+        password: Option<String>,
+    },
     Decrypt {
         cipherstring: String,
         entry_key: Option<String>,
@@ -275,6 +303,9 @@ pub enum Response {
     },
     Version {
         version: u32,
+    },
+    CreateOrg {
+        id: String,
     },
 }
 

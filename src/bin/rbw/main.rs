@@ -1053,6 +1053,12 @@ enum Opt {
         collection: Collection,
     },
 
+    #[command(about = "Manage organizations")]
+    Org {
+        #[command(subcommand)]
+        org: Org,
+    },
+
     #[command(about = "View the password history for a given entry")]
     History {
         #[command(flatten)]
@@ -1173,6 +1179,7 @@ impl Opt {
             Self::Collection { collection } => {
                 format!("collection {}", collection.subcommand_name())
             }
+            Self::Org { org } => format!("org {}", org.subcommand_name()),
             Self::History { .. } => "history".to_string(),
             Self::Lock { .. } => "lock".to_string(),
             Self::Purge { .. } => "purge".to_string(),
@@ -1499,20 +1506,91 @@ enum Collection {
     #[command(
         about = "Assign an entry to organization collections",
         long_about = "Assign an entry to organization collections\n\n\
-            Replaces the entry's current collection list with the given \
-            collections. Collections can be given by name or ID; names are \
-            resolved against the entry's organization."
+            Replaces the matched entry's (or, with --bulk, entries') \
+            current collection list with the given --collection values. \
+            Collections can be given by name or ID; names are resolved \
+            against each entry's own organization. Without --bulk, \
+            exactly one needle must resolve to exactly one entry (all \
+            given needles must jointly match it, same as elsewhere); \
+            with --bulk, every needle is matched independently \
+            (`archive --bulk`'s convention), previewed, and confirmed \
+            once unless -y is given. Use --personal instead of \
+            --collection to move the entry out of the organization \
+            entirely and back into your personal vault (entries with \
+            attachments aren't supported yet); see `rbw collection \
+            unassign` to remove specific collections without leaving the \
+            organization."
     )]
     Assign {
         #[arg(
-            help = "Name, URI, or UUID of the entry",
+            help = "Name, URI, or UUID of the entry (or entries, with --bulk)",
             value_parser = commands::parse_needle,
-        )]
-        needle: commands::Needle,
-        #[arg(
-            help = "Collections (name or ID) the entry should belong to",
-            num_args = 1..,
             required = true,
+        )]
+        needles: Vec<commands::Needle>,
+        #[arg(
+            long = "collection",
+            value_name = "COLLECTION",
+            help = "A collection (name or ID) the entry should belong to \
+                -- repeat for multiple",
+            conflicts_with = "personal"
+        )]
+        collections: Vec<String>,
+        #[arg(
+            long,
+            help = "Move the entry out of its organization and back into \
+                your personal vault, instead of assigning collections"
+        )]
+        personal: bool,
+        #[arg(long, help = "Username of the entry to display")]
+        user: Option<String>,
+        #[arg(long, help = "Folder name to search in")]
+        folder: Option<String>,
+        #[arg(short, long, help = "Ignore case")]
+        ignorecase: bool,
+        #[arg(
+            short = 'e',
+            long,
+            help = "Only match if needle is an exact entry name (no substring fallback)"
+        )]
+        exact: bool,
+        #[arg(
+            long,
+            help = "Treat each needle as an independent entry to assign"
+        )]
+        bulk: bool,
+        #[arg(
+            short = 'y',
+            long,
+            help = "Skip confirmation prompt (only asked with --bulk)"
+        )]
+        yes: bool,
+    },
+    #[command(
+        about = "Remove an entry from organization collections",
+        long_about = "Remove an entry from organization collections\n\n\
+            The complement to `assign`: removes the given --collection \
+            values from the matched entry's (or, with --bulk, entries') \
+            current collection list, leaving any other collections it \
+            belongs to untouched and the entry itself still owned by the \
+            organization. With no --collection given at all, removes \
+            every collection the entry currently belongs to. To move the \
+            entry out of the organization entirely, use `rbw collection \
+            assign --personal` instead. Same --bulk/preview/confirm \
+            convention as `assign`."
+    )]
+    Unassign {
+        #[arg(
+            help = "Name, URI, or UUID of the entry (or entries, with --bulk)",
+            value_parser = commands::parse_needle,
+            required = true,
+        )]
+        needles: Vec<commands::Needle>,
+        #[arg(
+            long = "collection",
+            value_name = "COLLECTION",
+            help = "A collection (name or ID) to remove the entry from \
+                -- repeat for multiple; omit to remove from all"
         )]
         collections: Vec<String>,
         #[arg(long, help = "Username of the entry to display")]
@@ -1527,6 +1605,49 @@ enum Collection {
             help = "Only match if needle is an exact entry name (no substring fallback)"
         )]
         exact: bool,
+        #[arg(
+            long,
+            help = "Treat each needle as an independent entry to unassign"
+        )]
+        bulk: bool,
+        #[arg(
+            short = 'y',
+            long,
+            help = "Skip confirmation prompt (only asked with --bulk)"
+        )]
+        yes: bool,
+    },
+    #[command(
+        about = "Grant a member access to a collection directly",
+        long_about = "Grant a member access to a collection directly\n\n\
+            The generic primitive underneath `propagate-permissions`, \
+            without that command's hierarchy-inference policy (topmost \
+            held -> edit, descendants -> manage) -- use this if you just \
+            want to set one permission on one (collection, member) pair. \
+            Replaces that member's existing permissions on this \
+            collection entirely; omit all three flags for read/write \
+            access with no restrictions."
+    )]
+    Grant {
+        #[arg(help = "Name or ID of the collection")]
+        collection: String,
+        #[arg(help = "Email or user ID of the member")]
+        user: String,
+        #[arg(
+            long = "org-id",
+            help = "Organization ID (auto-detected if the vault has a \
+                single org)"
+        )]
+        org_id: Option<String>,
+        #[arg(long, help = "Grant read-only access")]
+        read_only: bool,
+        #[arg(long, help = "Hide passwords from this member")]
+        hide_passwords: bool,
+        #[arg(
+            long,
+            help = "Grant manage access (edit/delete the collection itself)"
+        )]
+        manage: bool,
     },
     #[command(
         name = "propagate-permissions",
@@ -1553,7 +1674,178 @@ impl Collection {
             Self::Delete { .. } => "delete",
             Self::Rename { .. } => "rename",
             Self::Assign { .. } => "assign",
+            Self::Unassign { .. } => "unassign",
+            Self::Grant { .. } => "grant",
             Self::PropagatePermissions { .. } => "propagate-permissions",
+        }
+        .to_string()
+    }
+}
+
+#[derive(Debug, clap::Parser)]
+enum Org {
+    #[command(
+        about = "List all organizations this account is a member of",
+        visible_alias = "ls"
+    )]
+    List {
+        #[arg(
+            short,
+            long,
+            value_enum,
+            help = "Output mode: name, json, yaml"
+        )]
+        output: Option<OutputArg>,
+        #[arg(
+            short = 'j',
+            long,
+            visible_alias = "json",
+            help = "Display output as JSON"
+        )]
+        raw: bool,
+        #[arg(long, help = "Display output as YAML")]
+        yaml: bool,
+    },
+
+    #[command(
+        about = "Create a new organization owned by the current account"
+    )]
+    Create {
+        #[arg(help = "Name of the organization")]
+        name: String,
+    },
+
+    #[command(
+        about = "Accept an organization invite",
+        long_about = "Accept an organization invite\n\n\
+            Called by the invitee, using either the whole invite link \
+            (--url, easiest -- pasted straight from the invite email) or \
+            the organization id/member id/token from it individually \
+            (not looked up automatically -- an invited-but-not-yet-\
+            accepted account has no other way to know any of that). Does \
+            not make the org usable by itself; the inviter still needs \
+            to `rbw org confirm` afterward."
+    )]
+    Accept {
+        #[arg(
+            long,
+            help = "The full invite link/URL (from the invite email), \
+                e.g. \
+                'https://vault.example.com/#/accept-organization/?organizationId=...&organizationUserId=...&token=...'. \
+                Overrides --org-id/--user-id/--token if given."
+        )]
+        url: Option<String>,
+        #[arg(
+            long = "org-id",
+            required_unless_present = "url",
+            help = "Organization id (`organizationId` in the invite link)"
+        )]
+        org_id: Option<String>,
+        #[arg(
+            long = "user-id",
+            required_unless_present = "url",
+            help = "This account's member id in the org \
+                (`organizationUserId` in the invite link)"
+        )]
+        user_id: Option<String>,
+        #[arg(
+            long,
+            required_unless_present = "url",
+            help = "Invite token (`token` in the invite link)"
+        )]
+        token: Option<String>,
+    },
+
+    #[command(about = "Invite a user into an organization by email")]
+    Invite {
+        #[arg(help = "Email address to invite")]
+        email: String,
+        #[arg(
+            long = "org-id",
+            help = "Organization ID (auto-detected if the vault has a \
+                single org)"
+        )]
+        org_id: Option<String>,
+        #[arg(
+            long,
+            default_value = "user",
+            help = "Role to invite as: owner, admin, user, or manager"
+        )]
+        role: String,
+    },
+
+    #[command(
+        about = "Remove a user from an organization",
+        visible_aliases = ["rm", "remove", "del"]
+    )]
+    RemoveUser {
+        #[arg(help = "Email or user ID of the member to remove")]
+        user: String,
+        #[arg(
+            long = "org-id",
+            help = "Organization ID (auto-detected if the vault has a \
+                single org)"
+        )]
+        org_id: Option<String>,
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
+    },
+
+    #[command(
+        about = "PERMANENTLY delete an organization and everything in it",
+        long_about = "PERMANENTLY delete an organization and everything \
+            in it\n\n\
+            Prompts for the master password (to prove intent, like `rbw \
+            purge-vault`) and, unless --yes is given, a confirmation. \
+            This cannot be undone."
+    )]
+    Delete {
+        #[arg(
+            long = "org-id",
+            help = "Organization ID (auto-detected if the vault has a \
+                single org)"
+        )]
+        org_id: Option<String>,
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
+        #[arg(
+            long,
+            help = "Read the master password from stdin instead of \
+                prompting via pinentry"
+        )]
+        stdin: bool,
+    },
+
+    #[command(
+        about = "Confirm a member who has accepted their invite",
+        long_about = "Confirm a member who has accepted their invite\n\n\
+            Required before a newly invited member can decrypt anything \
+            in the org: this re-encrypts the org's key to their \
+            now-known public key, which only happens once they've \
+            accepted (`rbw org invite` alone isn't enough)."
+    )]
+    Confirm {
+        #[arg(help = "Email or user ID of the member to confirm")]
+        user: String,
+        #[arg(
+            long = "org-id",
+            help = "Organization ID (auto-detected if the vault has a \
+                single org)"
+        )]
+        org_id: Option<String>,
+    },
+}
+
+impl Org {
+    fn subcommand_name(&self) -> String {
+        match self {
+            Self::List { .. } => "list",
+            Self::Create { .. } => "create",
+            Self::Accept { .. } => "accept",
+            Self::Invite { .. } => "invite",
+            Self::RemoveUser { .. } => "remove-user",
+            Self::Delete { .. } => "delete",
+            Self::Confirm { .. } => "confirm",
         }
         .to_string()
     }
@@ -2144,19 +2436,59 @@ fn main() {
                 &name,
             ),
             Collection::Assign {
-                needle,
+                needles,
                 collections,
+                personal,
                 user,
                 folder,
                 ignorecase,
                 exact,
+                bulk,
+                yes,
             } => commands::assign_collections(
-                needle,
+                needles,
                 user.as_deref(),
                 folder.as_deref(),
                 ignorecase,
                 exact,
                 &collections,
+                personal,
+                bulk,
+                yes,
+            ),
+            Collection::Unassign {
+                needles,
+                collections,
+                user,
+                folder,
+                ignorecase,
+                exact,
+                bulk,
+                yes,
+            } => commands::unassign_collections(
+                needles,
+                user.as_deref(),
+                folder.as_deref(),
+                ignorecase,
+                exact,
+                &collections,
+                bulk,
+                yes,
+            ),
+            Collection::Grant {
+                collection,
+                user,
+                org_id,
+                read_only,
+                hide_passwords,
+                manage,
+            } => commands::grant_collection_access(
+                &collection,
+                &user,
+                org_id.as_deref(),
+                read_only,
+                hide_passwords,
+                manage,
             ),
             Collection::PropagatePermissions {
                 org_id,
@@ -2167,6 +2499,39 @@ fn main() {
                 apply,
                 verbose,
             ),
+        },
+        Opt::Org { org } => match org {
+            Org::List { output, raw, yaml } => (|| -> anyhow::Result<()> {
+                let output = resolve_output_mode(output, raw, yaml)?;
+                commands::list_organizations(output)
+            })(),
+            Org::Create { name } => commands::create_org(&name),
+            Org::Accept {
+                url,
+                org_id,
+                user_id,
+                token,
+            } => commands::accept_org_invite(
+                url.as_deref(),
+                org_id.as_deref(),
+                user_id.as_deref(),
+                token.as_deref(),
+            ),
+            Org::Invite {
+                email,
+                org_id,
+                role,
+            } => commands::invite_org_user(org_id.as_deref(), &email, &role),
+            Org::RemoveUser { user, org_id, yes } => {
+                commands::remove_org_user(org_id.as_deref(), &user, yes)
+            }
+            Org::Delete { org_id, yes, stdin } => {
+                let password = stdin.then(read_stdin_password);
+                commands::delete_org(org_id.as_deref(), yes, password)
+            }
+            Org::Confirm { user, org_id } => {
+                commands::confirm_org_user(org_id.as_deref(), &user)
+            }
         },
         Opt::History {
             find_args,
@@ -2358,8 +2723,75 @@ mod test {
                 "--organizationid",
                 "org",
             ][..],
-            &["rbw", "collection", "assign", "entry", "coll"][..],
-            &["rbw", "collection", "assign", "-e", "entry", "c1", "c2"][..],
+            &[
+                "rbw",
+                "collection",
+                "assign",
+                "entry",
+                "--collection",
+                "coll",
+            ][..],
+            &[
+                "rbw",
+                "collection",
+                "assign",
+                "-e",
+                "entry",
+                "--collection",
+                "c1",
+                "--collection",
+                "c2",
+            ][..],
+            &[
+                "rbw",
+                "collection",
+                "assign",
+                "--bulk",
+                "entry1",
+                "entry2",
+                "--collection",
+                "c1",
+                "-y",
+            ][..],
+            &["rbw", "collection", "assign", "entry", "--personal"][..],
+            &[
+                "rbw",
+                "collection",
+                "assign",
+                "--bulk",
+                "entry1",
+                "entry2",
+                "--personal",
+                "-y",
+            ][..],
+            &["rbw", "collection", "unassign", "entry"][..],
+            &[
+                "rbw",
+                "collection",
+                "unassign",
+                "entry",
+                "--collection",
+                "c1",
+            ][..],
+            &[
+                "rbw",
+                "collection",
+                "unassign",
+                "--bulk",
+                "entry1",
+                "entry2",
+                "-y",
+            ][..],
+            &["rbw", "collection", "grant", "coll", "user@example.com"][..],
+            &[
+                "rbw",
+                "collection",
+                "grant",
+                "coll",
+                "user@example.com",
+                "--read-only",
+                "--hide-passwords",
+            ][..],
             &["rbw", "collection", "propagate-permissions", "--apply"][..],
         ] {
             parse(args);
@@ -2367,13 +2799,46 @@ mod test {
     }
 
     #[test]
+    fn test_collection_assign_personal_conflicts_with_collection() {
+        let result = Cli::try_parse_from([
+            "rbw",
+            "collection",
+            "assign",
+            "entry",
+            "--personal",
+            "--collection",
+            "c1",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_org_group_parses() {
+        for args in [
+            &["rbw", "org", "list"][..],
+            &["rbw", "org", "ls", "-o", "json"][..],
+            &["rbw", "org", "list", "--yaml"][..],
+        ] {
+            parse(args);
+        }
+    }
+
+    #[test]
     fn test_collection_assign_splits_entry_and_collections() {
-        let cli =
-            parse(&["rbw", "collection", "assign", "entry", "c1", "c2"]);
+        let cli = parse(&[
+            "rbw",
+            "collection",
+            "assign",
+            "entry",
+            "--collection",
+            "c1",
+            "--collection",
+            "c2",
+        ]);
         let Opt::Collection {
             collection:
                 Collection::Assign {
-                    needle,
+                    needles,
                     collections,
                     ..
                 },
@@ -2381,7 +2846,8 @@ mod test {
         else {
             panic!("parsed as the wrong subcommand");
         };
-        assert_eq!(needle.to_string(), "entry");
+        assert_eq!(needles.len(), 1);
+        assert_eq!(needles[0].to_string(), "entry");
         assert_eq!(collections, vec!["c1".to_string(), "c2".to_string()]);
     }
 

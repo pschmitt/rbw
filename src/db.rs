@@ -39,6 +39,17 @@ pub struct Collection {
     pub name: String,
 }
 
+// Unlike collection names, an organization's own name is plaintext in the
+// sync response (needed to show org pickers before anything is
+// decrypted), so there's no decrypt step for `rbw org list` at all.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Eq, PartialEq,
+)]
+pub struct Organization {
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(
     serde::Serialize, serde::Deserialize, Debug, Clone, Eq, PartialEq,
 )]
@@ -221,6 +232,8 @@ pub struct Db {
     pub entries: Vec<Entry>,
     #[serde(default)]
     pub collections: Vec<Collection>,
+    #[serde(default)]
+    pub organizations: Vec<Organization>,
 }
 
 // A unique sibling path (same directory, so `rename` stays atomic) for staging

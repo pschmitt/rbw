@@ -7,6 +7,11 @@ pub struct AccountKeys {
     pub priv_key: Option<rbw::locked::Keys>,
     pub org_keys:
         Option<std::collections::HashMap<String, rbw::locked::Keys>>,
+    // Retained from unlock (never from `login`'s own re-derivation) so a
+    // later `sync` that discovers a newly created/joined org can decrypt
+    // its key immediately, without needing the master password again --
+    // see `refresh_org_keys` and its caller in `actions::sync`.
+    pub rsa_private_key: Option<rbw::locked::PrivateKey>,
     pub master_password_reprompt: std::collections::HashSet<[u8; 32]>,
     pub master_password_reprompt_initialized: bool,
 }
@@ -85,10 +90,37 @@ impl State {
         account: &str,
         keys: rbw::locked::Keys,
         org_keys: std::collections::HashMap<String, rbw::locked::Keys>,
+        rsa_private_key: rbw::locked::PrivateKey,
     ) {
         let acct = self.account_mut(account);
         acct.priv_key = Some(keys);
         acct.org_keys = Some(org_keys);
+        acct.rsa_private_key = Some(rsa_private_key);
+    }
+
+    // Re-derives `account`'s cached org keys from a freshly synced
+    // `protected_org_keys`, using the RSA private key retained from its
+    // original unlock -- so a newly created/joined org (or a rotated org
+    // key) becomes usable right after a `sync`, not just after the next
+    // full lock+unlock. A no-op if the account isn't currently unlocked
+    // (nothing retained to decrypt with).
+    pub fn refresh_org_keys(
+        &mut self,
+        account: &str,
+        protected_org_keys: &std::collections::HashMap<String, String>,
+    ) {
+        let Some(rsa_private_key) = self
+            .account(account)
+            .and_then(|a| a.rsa_private_key.clone())
+        else {
+            return;
+        };
+        if let Ok(org_keys) = rbw::actions::decrypt_org_keys(
+            &rsa_private_key,
+            protected_org_keys,
+        ) {
+            self.account_mut(account).org_keys = Some(org_keys);
+        }
     }
 
     pub fn set_timeout(&self) {

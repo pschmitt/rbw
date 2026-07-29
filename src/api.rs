@@ -786,6 +786,8 @@ struct SyncResProfile {
 struct SyncResProfileOrganization {
     #[serde(rename = "Id", alias = "id")]
     id: String,
+    #[serde(rename = "Name", alias = "name")]
+    name: String,
     #[serde(rename = "Key", alias = "key")]
     key: String,
 }
@@ -1086,12 +1088,65 @@ struct AttachmentUploadDataRes {
 
 #[derive(Debug, Clone)]
 pub struct OrgUser {
+    // The OrganizationUser relationship id -- what confirm/remove/etc (all
+    // scoped to `/organizations/{orgId}/users/{id}`) expect.
     pub id: String,
+    // The account's own (global, not org-scoped) user id -- only this one
+    // works for the general `/users/{id}/public-key` lookup `confirm`
+    // needs. `None` until the invited email actually has a registered
+    // account (confirmed against a real server: confirming too early
+    // fails with "User doesn't exist" using the *other* id instead).
+    pub user_id: Option<String>,
     pub email: String,
     pub status: i32,
     // Organization role: 0=Owner, 1=Admin, 2=User, 3=Manager.
     pub role: i32,
     pub access_all: bool,
+}
+
+#[derive(serde::Serialize, Debug)]
+struct OrgCreateReq {
+    name: String,
+    #[serde(rename = "billingEmail")]
+    billing_email: String,
+    #[serde(rename = "planType")]
+    plan_type: i32,
+    key: String,
+    #[serde(rename = "collectionName")]
+    collection_name: String,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct OrgCreateRes {
+    #[serde(rename = "Id", alias = "id")]
+    id: String,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct UserPublicKeyRes {
+    #[serde(rename = "PublicKey", alias = "publicKey")]
+    public_key: String,
+}
+
+#[derive(serde::Serialize, Debug)]
+struct OrgConfirmReq {
+    key: String,
+}
+
+#[derive(serde::Serialize, Debug)]
+struct OrgAcceptReq {
+    token: String,
+}
+
+#[derive(serde::Serialize, Debug)]
+struct OrgInviteReq {
+    emails: Vec<String>,
+    #[serde(rename = "type")]
+    ty: i32,
+    #[serde(rename = "accessAll")]
+    access_all: bool,
+    collections: Vec<serde_json::Value>,
+    groups: Vec<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -1104,6 +1159,8 @@ struct OrgUsersRes {
 struct OrgUsersResData {
     #[serde(rename = "Id", alias = "id")]
     id: String,
+    #[serde(rename = "UserId", alias = "userId", default)]
+    user_id: Option<String>,
     #[serde(rename = "Email", alias = "email")]
     email: String,
     #[serde(rename = "Status", alias = "status")]
@@ -1530,6 +1587,56 @@ impl Client {
         Ok((sso_code, sso_code_verifier, callback_url))
     }
 
+    // Creates a new organization (`rbw org create`), owned by whoever's
+    // `access_token` this is -- `encrypted_key` must already be their own
+    // org key, RSA-encrypted to their own public key, and
+    // `encrypted_collection_name` the default collection's name,
+    // symmetric-encrypted with that same (not-yet-encrypted-for-transit)
+    // org key. Both are prepared agent-side, since deriving the account's
+    // RSA key pair needs the retained private key.
+    pub async fn create_org(
+        &self,
+        access_token: &str,
+        name: &str,
+        billing_email: &str,
+        encrypted_key: &str,
+        encrypted_collection_name: &str,
+    ) -> Result<String> {
+        let req = OrgCreateReq {
+            name: name.to_string(),
+            billing_email: billing_email.to_string(),
+            plan_type: 0,
+            key: encrypted_key.to_string(),
+            collection_name: encrypted_collection_name.to_string(),
+        };
+        let client = self.reqwest_client().await?;
+        let res = client
+            .post(self.api_url("/organizations"))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&req)
+            .send()
+            .await
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => {
+                let create_res: OrgCreateRes = res.json_with_path().await?;
+                Ok(create_res.id)
+            }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => {
+                let code = res.status().as_u16();
+                let body = res.text().await.unwrap_or_default();
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
+            }
+        }
+    }
+
     pub async fn sync(
         &self,
         access_token: &str,
@@ -1539,6 +1646,7 @@ impl Client {
         std::collections::HashMap<String, String>,
         Vec<crate::db::Entry>,
         Vec<crate::db::Collection>,
+        Vec<crate::db::Organization>,
     )> {
         let client = self.reqwest_client().await?;
         let res = client
@@ -1564,6 +1672,15 @@ impl Client {
                     .iter()
                     .map(|org| (org.id.clone(), org.key.clone()))
                     .collect();
+                let organizations = sync_res
+                    .profile
+                    .organizations
+                    .iter()
+                    .map(|org| crate::db::Organization {
+                        id: org.id.clone(),
+                        name: org.name.clone(),
+                    })
+                    .collect();
                 let collections = sync_res
                     .collections
                     .iter()
@@ -1579,6 +1696,7 @@ impl Client {
                     org_keys,
                     ciphers,
                     collections,
+                    organizations,
                 ))
             }
             reqwest::StatusCode::UNAUTHORIZED => {
@@ -1613,6 +1731,42 @@ impl Client {
         let client = self.reqwest_client().await?;
         let res = client
             .post(self.api_url("/ciphers/purge"))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&req)
+            .send()
+            .await
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => {
+                let code = res.status().as_u16();
+                let body = res.text().await.unwrap_or_default();
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
+            }
+        }
+    }
+
+    // Permanently deletes an entire organization (`rbw org delete`),
+    // re-proving the master password the same way `purge_vault` does.
+    pub async fn delete_org(
+        &self,
+        access_token: &str,
+        org_id: &str,
+        master_password_hash: &str,
+    ) -> Result<()> {
+        let req = PurgeReq {
+            master_password_hash: master_password_hash.to_string(),
+        };
+        let client = self.reqwest_client().await?;
+        let res = client
+            .post(self.api_url(&format!("/organizations/{org_id}/delete")))
             .header("Authorization", format!("Bearer {access_token}"))
             .json(&req)
             .send()
@@ -2429,6 +2583,7 @@ impl Client {
                     .into_iter()
                     .map(|u| OrgUser {
                         id: u.id,
+                        user_id: u.user_id,
                         email: u.email,
                         status: u.status,
                         role: u.role,
@@ -2442,6 +2597,195 @@ impl Client {
             _ => Err(Error::RequestFailed {
                 status: res.status().as_u16(),
             }),
+        }
+    }
+
+    // Invites a user by email into an org (`rbw org invite`). No key
+    // material changes hands here -- the invitee hasn't accepted yet, so
+    // there's nothing to encrypt to them until `confirm_org_user`.
+    pub fn invite_org_user(
+        &self,
+        access_token: &str,
+        org_id: &str,
+        email: &str,
+        role: i32,
+    ) -> Result<()> {
+        let req = OrgInviteReq {
+            emails: vec![email.to_string()],
+            ty: role,
+            access_all: true,
+            collections: vec![],
+            groups: vec![],
+        };
+        let client = reqwest::blocking::Client::new();
+        let res =
+            client
+                .post(self.api_url(&format!(
+                    "/organizations/{org_id}/users/invite"
+                )))
+                .header("Authorization", format!("Bearer {access_token}"))
+                .json(&req)
+                .send()
+                .map_err(|source| Error::Reqwest { source })?;
+        let status = res.status();
+        match status {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => {
+                let code = status.as_u16();
+                let body = res.text().unwrap_or_default();
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
+            }
+        }
+    }
+
+    pub fn remove_org_user(
+        &self,
+        access_token: &str,
+        org_id: &str,
+        user_id: &str,
+    ) -> Result<()> {
+        let client = reqwest::blocking::Client::new();
+        let res =
+            client
+                .delete(self.api_url(&format!(
+                    "/organizations/{org_id}/users/{user_id}"
+                )))
+                .header("Authorization", format!("Bearer {access_token}"))
+                .send()
+                .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    // Accepts an org invite (`rbw org accept`), called by the invitee
+    // using their own token -- `org_id`/`user_id`/`token` all come
+    // straight from the invite link/email (`organizationId`,
+    // `organizationUserId`, and `token` query params respectively), since
+    // an invited-but-not-yet-accepted user generally can't look any of
+    // that up for themselves. No key material is involved; that only
+    // happens once the *inviter* confirms them afterward.
+    pub fn accept_org_invite(
+        &self,
+        access_token: &str,
+        org_id: &str,
+        user_id: &str,
+        token: &str,
+    ) -> Result<()> {
+        let req = OrgAcceptReq {
+            token: token.to_string(),
+        };
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .post(self.api_url(&format!(
+                "/organizations/{org_id}/users/{user_id}/accept"
+            )))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&req)
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => {
+                let code = res.status().as_u16();
+                let body = res.text().unwrap_or_default();
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
+            }
+        }
+    }
+
+    // Fetches a user's RSA public key (raw DER, base64-encoded), needed to
+    // encrypt the org key to them in `confirm_org_user`. Deliberately not
+    // org-scoped in the API itself -- it's a general user lookup.
+    pub fn user_public_key(
+        &self,
+        access_token: &str,
+        user_id: &str,
+    ) -> Result<String> {
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .get(self.api_url(&format!("/users/{user_id}/public-key")))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => {
+                let key_res: UserPublicKeyRes = res.json_with_path()?;
+                Ok(key_res.public_key)
+            }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => {
+                let code = res.status().as_u16();
+                let body = res.text().unwrap_or_default();
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
+            }
+        }
+    }
+
+    // Confirms a member who has accepted their invite (`rbw org confirm`),
+    // re-encrypting the org's key to their now-known public key.
+    // `encrypted_key` must already be prepared that way -- done
+    // agent-side, since it needs the org key already cached from unlock.
+    pub async fn confirm_org_user(
+        &self,
+        access_token: &str,
+        org_id: &str,
+        user_id: &str,
+        encrypted_key: &str,
+    ) -> Result<()> {
+        let req = OrgConfirmReq {
+            key: encrypted_key.to_string(),
+        };
+        let client = self.reqwest_client().await?;
+        let res = client
+            .post(self.api_url(&format!(
+                "/organizations/{org_id}/users/{user_id}/confirm"
+            )))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&req)
+            .send()
+            .await
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => {
+                let code = res.status().as_u16();
+                let body = res.text().await.unwrap_or_default();
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
+            }
         }
     }
 

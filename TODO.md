@@ -156,6 +156,85 @@
       and the encrypted-JSON file independently decrypted outside rbw
       entirely to confirm it round-trips through the real scheme.
 
+- [x] `rbw org` organization management: `list`/`ls`, `create`, `invite`,
+      `accept` (parses either the individual
+      `--org-id`/`--user-id`/`--token` flags or a single `--url` with the
+      full `.../#/accept-organization/?...` invite link -- less copy-paste
+      for the invitee), `confirm`, `remove-user`, and `delete`. Org
+      key-sharing is real RSA: `create` generates a random org key and
+      RSA-encrypts it to the creator's own public key (retained from
+      unlock); `confirm` fetches the invitee's public key
+      (`GET /users/{id}/public-key`) and RSA-encrypts the cached org key to
+      it. New `CipherString::encrypt_asymmetric` (RSA-OAEP-SHA1, using the
+      `rand_8` `OsRng` alias -- the `rsa` crate's `CryptoRngCore` bound
+      needs `rand_core` 0.6, incompatible with the `rand` 0.9 default, same
+      workaround already used in `ssh_agent.rs`). `delete` is
+      confirmation-gated exactly like `purge-vault` (`-y`/`--yes` plus
+      `--stdin` for the required password re-proof, both skippable
+      together for scripting).
+
+      Two real bugs found via live testing against a throwaway org on
+      bw.brkn.lol (created with the `bw` account, since `ai` isn't
+      Vaultwarden-policy-authorized to create orgs -- `ai` was used for
+      everything else): (1) newly-joined orgs weren't usable until a
+      lock/unlock cycle -- `sync` learns about new org memberships but
+      never re-derived the org's decryption key into the in-memory keyring,
+      fixed with `State::refresh_org_keys`, called right after `sync`; (2)
+      `org confirm` 404'd with "User doesn't exist" -- was passing the
+      org-user *relationship* id (`OrgUser.id`) to the public-key lookup,
+      which needs the invitee's *global account* id instead (`OrgUser.
+      user_id`, a separate field the sync response also returns). Also
+      confirmed live that `confirm` correctly requires the invitee's status
+      to already be `Accepted` (a real 400 "User in invalid state"
+      otherwise), which is what `org accept` is for.
+
+- [x] `rbw collection grant`: a generic "set one member's permissions on
+      one collection" primitive, added after reviewing the pre-existing
+      `propagate-permissions` and finding it very opinionated (infers
+      edit/manage from hierarchy position rather than letting you just set
+      a permission directly). `--read-only`/`--hide-passwords`/`--manage`
+      flags, replaces the member's existing permissions on that collection
+      entirely (mirrors Vaultwarden/Bitwarden's own PUT semantics --
+      there's no partial-update).
+
+- [x] `rbw collection assign --bulk`: bulk-assign the same collection list
+      to several entries at once. Needed a CLI redesign since two variadic
+      positional lists (entries, collections) can't be disambiguated by
+      clap -- `collections` became a repeatable `--collection` flag
+      (breaking change from the old trailing-positional syntax), freeing
+      `needles` to stay a plain variadic positional list. `--bulk` previews
+      every matched entry and confirms once (unless `-y`), same convention
+      as `archive --bulk`.
+
+- [x] `rbw collection assign --personal` / `rbw collection unassign`:
+      moving items between an organization and the personal vault, and
+      between collections without leaving the org. `unassign` removes the
+      given `--collection` values (or, with none given, every collection
+      the entry currently belongs to) via the same `PUT /ciphers/{id}/
+      collections` call `assign` uses, staying org-owned throughout --
+      distinct from `--personal`, which actually changes ownership.
+      `--personal` initially tried the obvious thing (re-encrypt with the
+      personal key, `PUT /ciphers/{id}` with `organizationId: null`,
+      mirroring how `import_create_entry` moves personal entries *into* an
+      org via a plain edit) but the server rejected it live: `400
+      Organization mismatch. Please resync the client before updating the
+      cipher`. Bitwarden/Vaultwarden accepts moving *into* an org through a
+      plain edit but not back out -- there's no "unshare" endpoint, only
+      the reverse of what official clients call "clone to individual
+      vault". Reimplemented to match that: re-encrypt with the personal
+      key, `add` it as a brand-new personal entry (`add` has no org
+      parameter -- always personal), copy password history over with a
+      follow-up edit (safe now that both sides are personal), and only
+      then permanently delete the original org entry -- create-before-
+      delete so a failure leaves a harmless duplicate instead of losing
+      data. Entries with attachments are refused for both operations
+      (attachment keys aren't re-wrapped by any of this yet). Live-verified
+      end-to-end against `ai@brkn.lol`/bw.brkn.lol: a fresh test entry
+      imported into `rbw-tests`/`rbw-test-import`, `unassign` (collection
+      list cleared, still org-owned), then `assign --personal` (server
+      accepted the create+delete path, entry fully personal afterward,
+      password/decrypt confirmed correct).
+
 - [ ] Deploy the `v2.6.5` release through `nixos-config`:
       `nix flake lock --update-input rbw`, `just hm fnuc`, then restart the
       deployed `rbw-agent` so it picks up the new Nix store path.

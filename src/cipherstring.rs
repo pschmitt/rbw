@@ -4,7 +4,7 @@ use aes::cipher::{
     BlockDecryptMut as _, BlockEncryptMut as _, KeyIvInit as _,
 };
 use hmac::Mac as _;
-use pkcs8::DecodePrivateKey as _;
+use pkcs8::{DecodePrivateKey as _, DecodePublicKey as _};
 use rand::RngCore as _;
 use zeroize::Zeroize as _;
 
@@ -224,6 +224,47 @@ impl CipherString {
             })
         }
     }
+
+    // RSA-encrypts `plaintext` (a raw org key, when creating or confirming
+    // into an organization -- see `rbw org create`/`rbw org confirm`) to
+    // `public_key`. The only asymmetric encrypt rbw does; everything else
+    // asymmetric is server-generated and only ever decrypted (see
+    // `decrypt_locked_asymmetric`).
+    pub fn encrypt_asymmetric(
+        public_key: &rsa::RsaPublicKey,
+        plaintext: &[u8],
+    ) -> Result<Self> {
+        // The `rsa` crate's `encrypt` needs a `rand_core` 0.6-compatible
+        // rng, not the 0.9 one `rand::rng()` gives -- same reason
+        // `ssh_agent.rs` reaches for `rand_8` instead of `rand` here.
+        let mut rng = rand_8::rngs::OsRng;
+        let ciphertext = public_key
+            .encrypt(&mut rng, rsa::Oaep::new::<sha1::Sha1>(), plaintext)
+            .map_err(|source| Error::Rsa { source })?;
+        Ok(Self::Asymmetric { ciphertext })
+    }
+}
+
+// Derives an account's RSA public key from its own (decrypted) private
+// key -- needed to encrypt a freshly generated org key to yourself when
+// creating an org (`rbw org create`), or to another member's public key
+// (fetched from the server) when confirming them (`rbw org confirm`).
+pub fn rsa_public_key_from_private(
+    private_key: &crate::locked::PrivateKey,
+) -> Result<rsa::RsaPublicKey> {
+    let privkey_data = private_key.private_key();
+    let privkey_data = pkcs7_unpad(privkey_data).ok_or(Error::Padding)?;
+    let pkey = rsa::RsaPrivateKey::from_pkcs8_der(privkey_data)
+        .map_err(|source| Error::RsaPkcs8 { source })?;
+    Ok(pkey.to_public_key())
+}
+
+// Parses another org member's RSA public key (fetched from the server as
+// raw DER bytes, `GET /users/{id}/public-key`) so `rbw org confirm` can
+// encrypt the org key to them.
+pub fn rsa_public_key_from_der(der: &[u8]) -> Result<rsa::RsaPublicKey> {
+    rsa::RsaPublicKey::from_public_key_der(der)
+        .map_err(|source| Error::RsaSpki { source })
 }
 
 pub fn encrypt_file_data(

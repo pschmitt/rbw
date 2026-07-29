@@ -50,6 +50,48 @@ pub fn purge_vault(password: Option<String>) -> anyhow::Result<()> {
     simple_action(rbw::protocol::Action::PurgeVault { password })
 }
 
+pub fn create_org(name: &str) -> anyhow::Result<String> {
+    let mut sock = connect()?;
+    sock.send(&rbw::protocol::Request::with_account(
+        get_environment(),
+        current_account(),
+        rbw::protocol::Action::CreateOrg {
+            name: name.to_string(),
+        },
+    ))?;
+
+    let res = sock.recv()?;
+    match res {
+        rbw::protocol::Response::CreateOrg { id } => Ok(id),
+        rbw::protocol::Response::Error { error } => {
+            Err(anyhow::anyhow!("failed to create organization: {error}"))
+        }
+        _ => Err(anyhow::anyhow!("unexpected message: {res:?}")),
+    }
+}
+
+pub fn delete_org(
+    org_id: &str,
+    password: Option<String>,
+) -> anyhow::Result<()> {
+    simple_action(rbw::protocol::Action::DeleteOrg {
+        org_id: org_id.to_string(),
+        password,
+    })
+}
+
+pub fn confirm_org_user(
+    org_id: &str,
+    user_id: &str,
+    public_key_der_b64: &str,
+) -> anyhow::Result<()> {
+    simple_action(rbw::protocol::Action::ConfirmOrgUser {
+        org_id: org_id.to_string(),
+        user_id: user_id.to_string(),
+        public_key_der_b64: public_key_der_b64.to_string(),
+    })
+}
+
 pub fn unlocked() -> anyhow::Result<()> {
     match crate::sock::Sock::connect() {
         Ok(mut sock) => {
