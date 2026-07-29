@@ -9157,6 +9157,7 @@ pub fn mirror_vault(
     to: &str,
     collection: Option<&str>,
     org_id: Option<&str>,
+    dest_collection: Option<&str>,
     attachments: bool,
     overwrite: bool,
     purge_dest: bool,
@@ -9209,6 +9210,9 @@ pub fn mirror_vault(
         eprintln!("  scope: organization '{org}'");
     } else {
         eprintln!("  scope: entire vault");
+    }
+    if let Some(needle) = dest_collection {
+        eprintln!("  destination collection: '{needle}'");
     }
     eprintln!(
         "  entries to copy: {entry_count} ({collection_count} \
@@ -9284,7 +9288,7 @@ pub fn mirror_vault(
 
     let imported = bw_vault_to_imported(bw, attachments_map);
 
-    import_vault(imported, None, overwrite)
+    import_vault(imported, dest_collection, overwrite)
 }
 
 // A collection from the synced database, with its name decrypted.
@@ -18983,7 +18987,7 @@ mod test {
     #[test]
     fn test_mirror_vault_rejects_identical_from_and_to() {
         let err = mirror_vault(
-            "same", "same", None, None, false, false, false, true, None,
+            "same", "same", None, None, None, false, false, false, true, None,
         )
         .unwrap_err()
         .to_string();
@@ -18996,6 +19000,7 @@ mod test {
             "a",
             "b",
             Some("some-collection"),
+            None,
             None,
             false,
             false,
@@ -19013,6 +19018,7 @@ mod test {
             "b",
             None,
             Some("org-id"),
+            None,
             false,
             false,
             true,

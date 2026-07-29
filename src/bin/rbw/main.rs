@@ -1145,11 +1145,15 @@ enum Opt {
             with copying between accounts).\n\n\
             By default the entire source vault is copied; --collection or \
             --org-id scopes it to just one collection or organization \
-            instead. Entries that already exist at the destination \
-            (matched by name, and username for logins) are left untouched \
-            unless --overwrite is given -- identical semantics to `rbw \
-            import`. --attachments also downloads and re-uploads \
-            attachment contents (slower, and considerably more data).\n\n\
+            instead. --dest-collection redirects every copied entry into \
+            one existing collection at the destination, ignoring whatever \
+            organization/collection metadata the source carries -- the \
+            same semantics as `rbw import --collection`. Entries that \
+            already exist at the destination (matched by name, and \
+            username for logins) are left untouched unless --overwrite is \
+            given -- identical semantics to `rbw import`. --attachments \
+            also downloads and re-uploads attachment contents (slower, and \
+            considerably more data).\n\n\
             --purge-dest permanently wipes the destination's personal \
             vault before copying, via the same server-side purge endpoint \
             `rbw purge-vault` uses -- only supported for a whole-vault \
@@ -1190,6 +1194,14 @@ enum Opt {
                 instead of the entire source vault"
         )]
         org_id: Option<String>,
+        #[arg(
+            long = "dest-collection",
+            value_name = "COLLECTION",
+            help = "Import every copied entry into this existing \
+                collection at the destination, instead of whatever \
+                organization/collection metadata the source carries"
+        )]
+        dest_collection: Option<String>,
         #[arg(
             long,
             help = "Also copy attachment contents (downloaded from the \
@@ -2653,6 +2665,7 @@ fn main() {
             to,
             collection,
             org_id,
+            dest_collection,
             attachments,
             overwrite,
             purge_dest,
@@ -2665,6 +2678,7 @@ fn main() {
                 &to,
                 collection.as_deref(),
                 org_id.as_deref(),
+                dest_collection.as_deref(),
                 attachments,
                 overwrite,
                 purge_dest,
@@ -2962,6 +2976,8 @@ mod test {
             "some-collection",
             "--org-id",
             "some-org",
+            "--dest-collection",
+            "some-dest-collection",
             "--attachments",
             "--overwrite",
             "--purge-dest",
@@ -2973,6 +2989,7 @@ mod test {
             to,
             collection,
             org_id,
+            dest_collection,
             attachments,
             overwrite,
             purge_dest,
@@ -2986,6 +3003,7 @@ mod test {
         assert_eq!(to, "bw");
         assert_eq!(collection.as_deref(), Some("some-collection"));
         assert_eq!(org_id.as_deref(), Some("some-org"));
+        assert_eq!(dest_collection.as_deref(), Some("some-dest-collection"));
         assert!(attachments);
         assert!(overwrite);
         assert!(purge_dest);
