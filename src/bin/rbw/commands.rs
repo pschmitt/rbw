@@ -6739,6 +6739,32 @@ fn export_attachments(
     Ok(out)
 }
 
+// Whether an entry belongs in `export`/`mirror`'s output: never a trashed
+// entry (matches `find_entry`/`find_entries_all`'s exclusion elsewhere --
+// otherwise export/mirror would resurrect a trashed entry as live at the
+// destination instead of leaving it trashed), and within the given
+// collection/org scope, if any.
+fn export_entry_in_scope(
+    entry: &rbw::db::Entry,
+    scope_collection_id: Option<&str>,
+    scope_org_id: Option<&str>,
+) -> bool {
+    if entry.deleted {
+        return false;
+    }
+    if let Some(cid) = scope_collection_id {
+        if !entry.collection_ids.iter().any(|c| c == cid) {
+            return false;
+        }
+    }
+    if let Some(oid) = scope_org_id {
+        if entry.org_id.as_deref() != Some(oid) {
+            return false;
+        }
+    }
+    true
+}
+
 // Builds rbw's own decrypted `ExportedVault` shape from the currently
 // active account (see `crate::actions::set_active_account`) -- shared by
 // `export` (whole vault, no scoping) and `mirror_vault` (which additionally
@@ -6773,17 +6799,11 @@ fn build_exported_vault(
         .entries
         .iter()
         .filter(|entry| {
-            if let Some(cid) = &scope_collection_id {
-                if !entry.collection_ids.iter().any(|c| c == cid) {
-                    return false;
-                }
-            }
-            if let Some(oid) = &scope_org_id {
-                if entry.org_id.as_deref() != Some(oid.as_str()) {
-                    return false;
-                }
-            }
-            true
+            export_entry_in_scope(
+                entry,
+                scope_collection_id.as_deref(),
+                scope_org_id.as_deref(),
+            )
         })
         .cloned()
         .collect();
@@ -15328,6 +15348,44 @@ mod test {
         let out = fit_to_width("字字字字字", 6);
         assert_eq!(unicode_width::UnicodeWidthStr::width(out.as_str()), 6);
         assert!(out.contains("..."), "{out:?}");
+    }
+
+    // `export`/`mirror` must never resurrect a trashed entry as live at the
+    // destination -- this was a real bug: `build_exported_vault` had no
+    // trashed filter at all, unlike `find_entry`/`find_entries_all`.
+    #[test]
+    fn test_export_entry_in_scope_excludes_trashed_entries() {
+        let trashed = rbw::db::Entry {
+            deleted: true,
+            ..placeholder_entry("id".to_string())
+        };
+        assert!(!export_entry_in_scope(&trashed, None, None));
+    }
+
+    #[test]
+    fn test_export_entry_in_scope_includes_everything_when_unscoped() {
+        let entry = placeholder_entry("id".to_string());
+        assert!(export_entry_in_scope(&entry, None, None));
+    }
+
+    #[test]
+    fn test_export_entry_in_scope_filters_by_collection() {
+        let entry = rbw::db::Entry {
+            collection_ids: vec!["c1".to_string()],
+            ..placeholder_entry("id".to_string())
+        };
+        assert!(export_entry_in_scope(&entry, Some("c1"), None));
+        assert!(!export_entry_in_scope(&entry, Some("other"), None));
+    }
+
+    #[test]
+    fn test_export_entry_in_scope_filters_by_org() {
+        let entry = rbw::db::Entry {
+            org_id: Some("org1".to_string()),
+            ..placeholder_entry("id".to_string())
+        };
+        assert!(export_entry_in_scope(&entry, None, Some("org1")));
+        assert!(!export_entry_in_scope(&entry, None, Some("other")));
     }
 
     // `Always` unlocks regardless of `--all`/`all` -- the bug this guards
