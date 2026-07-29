@@ -57,6 +57,105 @@
 
 ## Pending ship work
 
+- [x] `rbw import`: accept upstream Bitwarden export dumps directly, not
+      just `rbw export`'s own JSON shape. New `src/bin/rbw/import_bitwarden.rs`
+      parses Bitwarden's own "JSON" export, password-protected "Encrypted
+      JSON" export, and "zip (with attachments)" (new `zip` crate
+      dependency). `--format <auto|rbw|bitwarden-json|
+      bitwarden-encrypted-json|bitwarden-zip>` (aliased `--type`, default
+      auto-detected from magic bytes/JSON shape) selects the parser;
+      `--decrypt`/`--decrypt-passphrase` now also supply the Bitwarden
+      export password. `--collection DEST` redirects every imported entry
+      into one existing collection (resolved via the same
+      `resolve_collection` lookup as elsewhere), overriding whatever
+      org/collection/folder metadata the export carries. CSV wasn't
+      implemented (many fields -- TOTP, custom fields, SSH keys -- don't
+      round-trip cleanly through Bitwarden's CSV shape); left as a
+      possible follow-up.
+
+      Verified against 4 real exports from the user's own vault (2026-07-29,
+      `bw export --format {json,encrypted_json,zip}` and the web vault's
+      CSV export) -- this caught two real bugs a synthetic round-trip
+      couldn't have:
+      - The encrypted-JSON export's PBKDF2 salt is the `salt` field's raw
+        *string* bytes, not that string base64-decoded (confirmed by
+        brute-forcing candidate derivations against the real file's
+        `encKeyValidation_DO_NOT_EDIT` field until one MAC-verified).
+        Decoding it first makes every decrypt fail. The overall KDF +
+        HKDF-expand("enc"/"mac") + AES-256-CBC-HMAC scheme itself matches
+        `Identity::new`'s login-unlock math exactly, salt handling aside.
+      - The zip export lays attachments out as `attachments/<sanitized
+        item display name>/<file name>` (illegal path characters like `/`
+        and `:` replaced with `_`, confirmed against real folder names),
+        *not* `attachments/<item id>/<attachment id>-<file name>` as
+        originally assumed -- and an item's `attachments` metadata array
+        is always empty in every real export, including inside a zip
+        export's own `data.json`, so the sanitized name is the *only*
+        association available in the archive at all. Matching is now
+        `sanitize_zip_folder_name(item.name)` -> attach everything found
+        under that folder; two items sharing an identical name are
+        inherently ambiguous (whichever converts first claims the shared
+        folder) since the format itself has no id-based mapping to
+        disambiguate them.
+      Both fixes are covered by unit tests; the encrypted-JSON test
+      exercises a real encrypt-then-decrypt round trip through the actual
+      derive/decrypt code (not a mock), and the zip test uses the
+      confirmed real path layout. Live-verified end to end against a
+      dedicated test account (`ai@brkn.lol` on bw.brkn.lol, set up
+      specifically for this): plain JSON, `--collection`, zip-with-
+      attachments (attachment bytes hash-verified byte-for-byte against
+      the source zip), and encrypted JSON (a hand-crafted envelope using
+      the same confirmed derivation) all created real entries correctly,
+      with `--collection` entries landing in the right org/collection and
+      personal-vault entries not.
+
+- [x] `rbw purge-vault`: permanently wipe every entry in the current
+      account's personal vault via the server's own `POST /ciphers/purge`
+      endpoint (one call, not a client loop of deletes) -- named apart
+      from the pre-existing `rbw purge` (which only clears the local
+      db.json cache, unrelated). Needed a real master-password-hash
+      proof, so it's agent-mediated like `login`/`unlock`: new
+      `protocol::Action::PurgeVault { password }`, an agent handler that
+      derives `Identity::new(...).master_password_hash` from a freshly
+      entered (or `--stdin`-supplied) password and calls the new async
+      `Client::purge_vault`, never reusing the agent's already-cached
+      unlock keys. Gated behind a `This cannot be undone!`-style
+      confirmation (`-y`/`--yes` to skip) plus the password re-entry
+      itself (`--stdin` to skip that too, for scripted resets --
+      `--yes --stdin` together purge fully non-interactively). Live-
+      verified against the `ai@brkn.lol` test account: wiped exactly the
+      10 personal-vault entries, left the 5 org-collection entries
+      untouched, matching the documented scope (org-owned entries need
+      org owner/admin privileges to purge, not implemented here).
+
+- [x] `rbw export --format`: produce upstream Bitwarden export shapes, not
+      just rbw's own -- the export-side mirror of the `rbw import` work
+      above, reusing the same `BwVault`/`BwItem`/etc. types (now
+      `Serialize` as well as `Deserialize`) via a new `exported_vault_to_bw`
+      conversion (the inverse of `bw_vault_to_imported`). `--format
+      <rbw|bitwarden-json|bitwarden-encrypted-json|bitwarden-zip|
+      bitwarden-csv>` (aliased `--type`, default `rbw`, unchanged
+      behavior). `--format bitwarden-encrypted-json` always prompts for a
+      password on its own (from $RBW_EXPORT_PASSPHRASE or the tty, like
+      rbw's own `--encrypt`) even without `--encrypt` -- that flag is only
+      needed there to supply it inline instead of prompting; new
+      `encrypt_encrypted_json` builds the envelope with the real KDF
+      quirks already confirmed on the import side. `--format bitwarden-csv`
+      only emits Login/SecureNote rows (with a skipped-count warning) since
+      real Bitwarden CSV exports have no columns for Card/Identity/SSH-key
+      items either (confirmed against a real CSV export: rows for those
+      types are silently absent even though the source vault has them).
+      New `csv` crate dependency for correct RFC4180 quoting (custom
+      fields/notes can contain anything). Unit-tested (encrypted-json
+      round trip through the real derive/encrypt/decrypt code, zip
+      write/parse round trip, CSV column/skip-count checks, and the
+      `exported_vault_to_bw` conversion itself) plus live-verified against
+      the `ai@brkn.lol` account for all four formats: JSON structure,
+      zip layout (`unzip -l`), CSV parsed with Python's `csv` module
+      (correct record count despite multi-line quoted `fields` values),
+      and the encrypted-JSON file independently decrypted outside rbw
+      entirely to confirm it round-trips through the real scheme.
+
 - [ ] Deploy the `v2.6.5` release through `nixos-config`:
       `nix flake lock --update-input rbw`, `just hm fnuc`, then restart the
       deployed `rbw-agent` so it picks up the new Nix store path.

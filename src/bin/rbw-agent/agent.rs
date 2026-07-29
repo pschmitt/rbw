@@ -234,6 +234,27 @@ async fn dispatch(
             crate::actions::sync(Some(sock), state.clone(), account).await?;
             false
         }
+        rbw::protocol::Action::PurgeVault { mut password } => {
+            // Same locked-memory + zeroize treatment as `Unlock`'s password.
+            let locked_password = password.as_deref().map(|p| {
+                let mut v = rbw::locked::Vec::new();
+                v.extend(p.as_bytes().iter().copied());
+                rbw::locked::Password::new(v)
+            });
+            if let Some(ref mut p) = password {
+                zeroize::Zeroize::zeroize(p);
+            }
+
+            crate::actions::purge_vault(
+                sock,
+                state.clone(),
+                environment,
+                locked_password.as_ref(),
+                account,
+            )
+            .await?;
+            true
+        }
         rbw::protocol::Action::Decrypt {
             cipherstring,
             entry_key,

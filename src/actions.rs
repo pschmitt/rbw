@@ -169,6 +169,35 @@ async fn sync_once(
     client.sync(access_token).await
 }
 
+pub async fn purge_vault(
+    access_token: &str,
+    refresh_token: &str,
+    master_password_hash: &crate::locked::PasswordHash,
+) -> Result<Option<String>> {
+    let hash = crate::base64::encode(master_password_hash.hash());
+    let (new_access_token, ()) = with_exchange_refresh_token_async(
+        access_token,
+        refresh_token,
+        move |access_token| {
+            let access_token = access_token.to_string();
+            let hash = hash.clone();
+            Box::pin(
+                async move { purge_vault_once(&access_token, &hash).await },
+            )
+        },
+    )
+    .await?;
+    Ok(new_access_token)
+}
+
+async fn purge_vault_once(
+    access_token: &str,
+    master_password_hash: &str,
+) -> Result<()> {
+    let (client, _) = api_client_async().await?;
+    client.purge_vault(access_token, master_password_hash).await
+}
+
 pub fn add(
     access_token: &str,
     refresh_token: &str,

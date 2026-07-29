@@ -4592,6 +4592,36 @@ pub fn remove(
     Ok(())
 }
 
+// Permanently, irrecoverably deletes every entry in the current account's
+// personal vault via the server's single-call purge endpoint -- not a loop
+// of individual deletes. Named distinctly from the existing `rbw purge`
+// (which only clears the *local* db.json cache). Org-owned entries
+// (assigned to a collection) aren't touched; purging those needs org
+// owner/admin privileges and isn't what this is for (resetting a personal
+// test account between imports).
+pub fn purge_vault(
+    yes: bool,
+    password: Option<String>,
+) -> anyhow::Result<()> {
+    unlock(None, None)?;
+
+    let c = stdout_supports_color();
+    let prompt = format!(
+        "{} this will permanently delete EVERY entry in this account's \
+         personal vault. This cannot be undone! Continue?",
+        style_error("DANGER:", c),
+    );
+    if !yes && !confirm(&prompt)? {
+        return Ok(());
+    }
+
+    crate::actions::purge_vault(password)?;
+
+    eprintln!("{}", style::success("Vault purged.", c));
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn archive(
     needles: Vec<Needle>,
@@ -6631,14 +6661,31 @@ fn export_attachments(
 }
 
 pub fn export(
+    format: crate::import_bitwarden::ExportFormat,
     attachments: bool,
     encrypt: Option<&str>,
     output: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
+    use crate::import_bitwarden::ExportFormat;
+
     // Resolve the passphrase up front (from $RBW_EXPORT_PASSPHRASE or an
     // interactive prompt when `--encrypt` was given without a value), so a
     // mistyped confirmation fails before any decryption work happens.
+    // `--encrypt` means two different things depending on `--format`: rbw's
+    // own gpg passphrase for the default format, or the Bitwarden
+    // "Encrypted JSON" export's password for `bitwarden-encrypted-json`.
+    // That format always needs *some* password, so unlike rbw's own
+    // (optionally encrypted) format, choosing it prompts on its own even
+    // without `--encrypt` -- `--encrypt` only still matters there to
+    // supply the password inline and skip the prompt.
     let passphrase = resolve_export_passphrase(encrypt)?;
+    let passphrase = if matches!(format, ExportFormat::BitwardenEncryptedJson)
+        && passphrase.is_none()
+    {
+        Some(resolve_env_or_prompted_passphrase(true)?)
+    } else {
+        passphrase
+    };
 
     unlock(None, None)?;
 
@@ -6690,21 +6737,92 @@ pub fn export(
         collections,
     };
 
-    if let Some(passphrase) = passphrase {
-        let archive = build_export_tar_gz(&vault)?;
-        let encrypted = gpg_symmetric_encrypt(&passphrase, &archive)?;
-        write_export_bytes(
-            output,
-            &encrypted,
-            "failed to write encrypted export",
-        )
-    } else if let Some(path) = output {
-        let mut json = serde_json::to_vec_pretty(&vault)
-            .context("failed to serialize export to JSON")?;
-        json.push(b'\n');
-        write_export_bytes(Some(path), &json, "failed to write export JSON")
-    } else {
-        write_json_pretty(&vault, "failed to write export to stdout")
+    match format {
+        ExportFormat::Rbw => {
+            if let Some(passphrase) = passphrase {
+                let archive = build_export_tar_gz(&vault)?;
+                let encrypted = gpg_symmetric_encrypt(&passphrase, &archive)?;
+                write_export_bytes(
+                    output,
+                    &encrypted,
+                    "failed to write encrypted export",
+                )
+            } else if let Some(path) = output {
+                let mut json = serde_json::to_vec_pretty(&vault)
+                    .context("failed to serialize export to JSON")?;
+                json.push(b'\n');
+                write_export_bytes(
+                    Some(path),
+                    &json,
+                    "failed to write export JSON",
+                )
+            } else {
+                write_json_pretty(&vault, "failed to write export to stdout")
+            }
+        }
+        ExportFormat::BitwardenJson => {
+            let (bw, _attachments) = exported_vault_to_bw(&vault);
+            let mut json = serde_json::to_vec_pretty(&bw)
+                .context("failed to serialize Bitwarden JSON export")?;
+            json.push(b'\n');
+            write_export_bytes(
+                output,
+                &json,
+                "failed to write Bitwarden JSON export",
+            )
+        }
+        ExportFormat::BitwardenEncryptedJson => {
+            let (bw, _attachments) = exported_vault_to_bw(&vault);
+            let json_text = serde_json::to_string(&bw)
+                .context("failed to serialize Bitwarden JSON export")?;
+            // Checked above: this format requires --encrypt.
+            let passphrase = passphrase.unwrap();
+            let encrypted = crate::import_bitwarden::encrypt_encrypted_json(
+                &json_text,
+                &passphrase,
+                db.kdf.unwrap_or(rbw::api::KdfType::Pbkdf2),
+                db.iterations.unwrap_or(600_000),
+                db.memory,
+                db.parallelism,
+            )?;
+            write_export_bytes(
+                output,
+                encrypted.as_bytes(),
+                "failed to write encrypted Bitwarden export",
+            )
+        }
+        ExportFormat::BitwardenZip => {
+            let (bw, zip_attachments) = exported_vault_to_bw(&vault);
+            let json_text = serde_json::to_string_pretty(&bw)
+                .context("failed to serialize Bitwarden JSON export")?;
+            let zip_bytes = crate::import_bitwarden::write_zip(
+                &json_text,
+                &zip_attachments,
+            )?;
+            write_export_bytes(
+                output,
+                &zip_bytes,
+                "failed to write zip export",
+            )
+        }
+        ExportFormat::BitwardenCsv => {
+            let (bw, _attachments) = exported_vault_to_bw(&vault);
+            let (csv_text, skipped) =
+                crate::import_bitwarden::write_csv(&bw)?;
+            if skipped > 0 {
+                eprintln!(
+                    "{} {skipped} entr{} of a type Bitwarden's CSV export \
+                     doesn't support (Card/Identity/SSH key) were skipped",
+                    style::warning("Warning:", stdout_supports_color()),
+                    if skipped == 1 { "y" } else { "ies" },
+                );
+            }
+            write_export_bytes(
+                output,
+                csv_text.as_bytes(),
+                "failed to write CSV export",
+            )
+        }
     }
 }
 
@@ -7191,6 +7309,452 @@ struct ImportedVault {
     entries: Vec<ImportedEntry>,
     #[serde(default)]
     collections: Vec<ImportedCollection>,
+}
+
+// Converts a parsed Bitwarden vault export into the same `ImportedVault`
+// shape `rbw export`'s own JSON deserializes into, so the rest of `import`
+// (collection creation, entry create/overwrite, attachment upload) doesn't
+// need to know which kind of export it came from. `attachments` is only
+// `Some` for a "zip (with attachments)" export; the plain/encrypted JSON
+// formats never carry attachment bytes at all (confirmed against real
+// exports: their items have no `attachments` field, populated or
+// otherwise), so entries from those formats never get an `attachments`
+// list.
+fn bw_vault_to_imported(
+    bw: crate::import_bitwarden::BwVault,
+    mut attachments: Option<
+        std::collections::HashMap<
+            String,
+            Vec<crate::import_bitwarden::ZipAttachment>,
+        >,
+    >,
+) -> ImportedVault {
+    let c = stdout_supports_color();
+
+    let folder_names: std::collections::HashMap<String, String> = bw
+        .folders
+        .iter()
+        .filter_map(|f| f.id.clone().map(|id| (id, f.name.clone())))
+        .collect();
+
+    let collections = bw
+        .collections
+        .into_iter()
+        .filter_map(|col| {
+            let Some(org_id) = col.organization_id else {
+                eprintln!(
+                    "{} skipped collection '{}' (no organization id)",
+                    style::warning("Warning:", c),
+                    col.name,
+                );
+                return None;
+            };
+            Some(ImportedCollection {
+                id: col.id,
+                org_id,
+                name: col.name,
+            })
+        })
+        .collect();
+
+    let entries = bw
+        .items
+        .into_iter()
+        .filter_map(|item| {
+            let name = item.name.clone();
+            let Some(data) = bw_item_data(&item) else {
+                eprintln!(
+                    "{} skipped '{name}' (unrecognized item type {})",
+                    style::warning("Warning:", c),
+                    item.ty,
+                );
+                return None;
+            };
+
+            let fields = item
+                .fields
+                .iter()
+                .map(|f| ImportedField {
+                    name: f.name.clone(),
+                    value: f.value.clone(),
+                    ty: f.ty.map(|ty| field_type_str(ty).to_string()),
+                })
+                .collect();
+
+            let history = item
+                .password_history
+                .iter()
+                .map(|h| ImportedHistoryEntry {
+                    last_used_date: h.last_used_date.clone(),
+                    password: h.password.clone(),
+                })
+                .collect();
+
+            let entry_attachments = attachments
+                .as_mut()
+                .map_or_else(Vec::new, |all| bw_item_attachments(&name, all));
+
+            Some(ImportedEntry {
+                id: item.id,
+                org_id: item.organization_id,
+                folder: item
+                    .folder_id
+                    .as_deref()
+                    .and_then(|id| folder_names.get(id).cloned()),
+                name,
+                data,
+                fields,
+                notes: item.notes,
+                history,
+                collection_ids: item.collection_ids,
+                attachments: entry_attachments,
+            })
+        })
+        .collect();
+
+    if let Some(leftover) = &attachments {
+        if !leftover.is_empty() {
+            eprintln!(
+                "{} {} attachment folder(s) in the zip archive didn't \
+                 match any item name and were skipped: {}",
+                style::warning("Warning:", c),
+                leftover.len(),
+                leftover.keys().cloned().collect::<Vec<_>>().join(", "),
+            );
+        }
+    }
+
+    ImportedVault {
+        entries,
+        collections,
+    }
+}
+
+fn bw_item_data(
+    item: &crate::import_bitwarden::BwItem,
+) -> Option<ImportedData> {
+    match item.ty {
+        1 => {
+            let login = item.login.as_ref();
+            Some(ImportedData::Login {
+                username: login.and_then(|l| l.username.clone()),
+                password: login.and_then(|l| l.password.clone()),
+                totp: login.and_then(|l| l.totp.clone()),
+                uris: login.map(|l| {
+                    l.uris
+                        .iter()
+                        .filter_map(|u| {
+                            u.uri.clone().map(|uri| ImportedUri {
+                                uri,
+                                match_type: u.match_type,
+                            })
+                        })
+                        .collect()
+                }),
+            })
+        }
+        2 => Some(ImportedData::SecureNote),
+        3 => {
+            let card = item.card.as_ref();
+            Some(ImportedData::Card {
+                cardholder_name: card
+                    .and_then(|card| card.cardholder_name.clone()),
+                number: card.and_then(|card| card.number.clone()),
+                brand: card.and_then(|card| card.brand.clone()),
+                exp_month: card.and_then(|card| card.exp_month.clone()),
+                exp_year: card.and_then(|card| card.exp_year.clone()),
+                code: card.and_then(|card| card.code.clone()),
+            })
+        }
+        4 => {
+            let identity = item.identity.as_ref();
+            Some(ImportedData::Identity {
+                title: identity.and_then(|i| i.title.clone()),
+                first_name: identity.and_then(|i| i.first_name.clone()),
+                middle_name: identity.and_then(|i| i.middle_name.clone()),
+                last_name: identity.and_then(|i| i.last_name.clone()),
+                address1: identity.and_then(|i| i.address1.clone()),
+                address2: identity.and_then(|i| i.address2.clone()),
+                address3: identity.and_then(|i| i.address3.clone()),
+                city: identity.and_then(|i| i.city.clone()),
+                state: identity.and_then(|i| i.state.clone()),
+                postal_code: identity.and_then(|i| i.postal_code.clone()),
+                country: identity.and_then(|i| i.country.clone()),
+                phone: identity.and_then(|i| i.phone.clone()),
+                email: identity.and_then(|i| i.email.clone()),
+                ssn: identity.and_then(|i| i.ssn.clone()),
+                license_number: identity
+                    .and_then(|i| i.license_number.clone()),
+                passport_number: identity
+                    .and_then(|i| i.passport_number.clone()),
+                username: identity.and_then(|i| i.username.clone()),
+            })
+        }
+        5 => {
+            let ssh_key = item.ssh_key.as_ref();
+            Some(ImportedData::SshKey {
+                public_key: ssh_key.and_then(|k| k.public_key.clone()),
+                fingerprint: ssh_key.and_then(|k| k.fingerprint.clone()),
+                private_key: ssh_key.and_then(|k| k.private_key.clone()),
+            })
+        }
+        _ => None,
+    }
+}
+
+// Pulls every attachment the zip archive has under `item_name`'s (sanitized)
+// folder -- see `import_bitwarden::sanitize_zip_folder_name` -- since a
+// real export's per-item `attachments` metadata is always empty even
+// inside a zip export, leaving the sanitized display name as the only
+// association between a folder and the item that owns it. Two items
+// sharing an identical name are therefore inherently ambiguous; whichever
+// is converted first claims the shared folder.
+fn bw_item_attachments(
+    item_name: &str,
+    all: &mut std::collections::HashMap<
+        String,
+        Vec<crate::import_bitwarden::ZipAttachment>,
+    >,
+) -> Vec<serde_json::Value> {
+    let key = crate::import_bitwarden::sanitize_zip_folder_name(item_name);
+    let Some(candidates) = all.remove(&key) else {
+        return Vec::new();
+    };
+
+    candidates
+        .into_iter()
+        .map(|za| {
+            serde_json::json!({
+                "file_name": za.file_name,
+                "data_base64": rbw::base64::encode(&za.data),
+            })
+        })
+        .collect()
+}
+
+// Converts rbw's own decrypted export vault into a Bitwarden `BwVault` --
+// the inverse of `bw_vault_to_imported` -- so `rbw export --format
+// bitwarden-*` can reuse the same schema plumbing `rbw import` uses. Also
+// returns every attachment as (item name, file name, decrypted bytes),
+// keyed by name (not id) since that's the only association a zip export
+// preserves; only the `bitwarden-zip` format actually embeds these.
+fn exported_vault_to_bw(
+    vault: &ExportedVault,
+) -> (
+    crate::import_bitwarden::BwVault,
+    Vec<(String, String, Vec<u8>)>,
+) {
+    let mut folder_ids: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for entry in &vault.entries {
+        if let Some(name) = &entry.folder {
+            folder_ids
+                .entry(name.clone())
+                .or_insert_with(|| uuid::Uuid::new_v4().to_string());
+        }
+    }
+    let folders = folder_ids
+        .iter()
+        .map(|(name, id)| crate::import_bitwarden::BwFolder {
+            id: Some(id.clone()),
+            name: name.clone(),
+        })
+        .collect();
+
+    let collections = vault
+        .collections
+        .iter()
+        .map(|c| crate::import_bitwarden::BwCollection {
+            id: Some(c.id.clone()),
+            organization_id: Some(c.org_id.clone()),
+            name: c.name.clone(),
+        })
+        .collect();
+
+    let mut attachments_out = Vec::new();
+    let items = vault
+        .entries
+        .iter()
+        .map(|entry| {
+            for attachment in &entry.attachments {
+                if let Ok(data) = rbw::base64::decode(&attachment.data_base64)
+                {
+                    attachments_out.push((
+                        entry.name.clone(),
+                        attachment.file_name.clone(),
+                        data,
+                    ));
+                }
+            }
+
+            let (ty, login, card, identity, ssh_key) =
+                bw_data_from_decrypted(&entry.data);
+
+            crate::import_bitwarden::BwItem {
+                id: Some(entry.id.clone()),
+                organization_id: entry.org_id.clone(),
+                folder_id: entry
+                    .folder
+                    .as_ref()
+                    .and_then(|name| folder_ids.get(name).cloned()),
+                ty,
+                name: entry.name.clone(),
+                notes: entry.notes.clone(),
+                login,
+                card,
+                identity,
+                ssh_key,
+                fields: entry
+                    .fields
+                    .iter()
+                    .map(|f| crate::import_bitwarden::BwField {
+                        name: f.name.clone(),
+                        value: f.value.clone(),
+                        ty: f.ty,
+                    })
+                    .collect(),
+                password_history: entry
+                    .history
+                    .iter()
+                    .map(|h| crate::import_bitwarden::BwPasswordHistory {
+                        last_used_date: h.last_used_date.clone(),
+                        password: h.password.clone(),
+                    })
+                    .collect(),
+                collection_ids: entry.collection_ids.clone(),
+            }
+        })
+        .collect();
+
+    (
+        crate::import_bitwarden::BwVault {
+            folders,
+            collections,
+            items,
+        },
+        attachments_out,
+    )
+}
+
+#[allow(clippy::type_complexity)]
+fn bw_data_from_decrypted(
+    data: &DecryptedData,
+) -> (
+    u16,
+    Option<crate::import_bitwarden::BwLogin>,
+    Option<crate::import_bitwarden::BwCard>,
+    Option<crate::import_bitwarden::BwIdentity>,
+    Option<crate::import_bitwarden::BwSshKey>,
+) {
+    match data {
+        DecryptedData::Login {
+            username,
+            password,
+            totp,
+            uris,
+        } => (
+            1,
+            Some(crate::import_bitwarden::BwLogin {
+                username: username.clone(),
+                password: password.clone(),
+                totp: totp.clone(),
+                uris: uris
+                    .as_ref()
+                    .map(|us| {
+                        us.iter()
+                            .map(|u| crate::import_bitwarden::BwUri {
+                                uri: Some(u.uri.clone()),
+                                match_type: u.match_type,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            }),
+            None,
+            None,
+            None,
+        ),
+        DecryptedData::Card {
+            cardholder_name,
+            number,
+            brand,
+            exp_month,
+            exp_year,
+            code,
+        } => (
+            3,
+            None,
+            Some(crate::import_bitwarden::BwCard {
+                cardholder_name: cardholder_name.clone(),
+                brand: brand.clone(),
+                number: number.clone(),
+                exp_month: exp_month.clone(),
+                exp_year: exp_year.clone(),
+                code: code.clone(),
+            }),
+            None,
+            None,
+        ),
+        DecryptedData::Identity {
+            title,
+            first_name,
+            middle_name,
+            last_name,
+            address1,
+            address2,
+            address3,
+            city,
+            state,
+            postal_code,
+            country,
+            phone,
+            email,
+            ssn,
+            license_number,
+            passport_number,
+            username,
+        } => (
+            4,
+            None,
+            None,
+            Some(crate::import_bitwarden::BwIdentity {
+                title: title.clone(),
+                first_name: first_name.clone(),
+                middle_name: middle_name.clone(),
+                last_name: last_name.clone(),
+                address1: address1.clone(),
+                address2: address2.clone(),
+                address3: address3.clone(),
+                city: city.clone(),
+                state: state.clone(),
+                postal_code: postal_code.clone(),
+                country: country.clone(),
+                phone: phone.clone(),
+                email: email.clone(),
+                ssn: ssn.clone(),
+                license_number: license_number.clone(),
+                passport_number: passport_number.clone(),
+                username: username.clone(),
+            }),
+            None,
+        ),
+        DecryptedData::SecureNote => (2, None, None, None, None),
+        DecryptedData::SshKey {
+            public_key,
+            fingerprint,
+            private_key,
+        } => (
+            5,
+            None,
+            None,
+            None,
+            Some(crate::import_bitwarden::BwSshKey {
+                private_key: private_key.clone(),
+                public_key: public_key.clone(),
+                fingerprint: fingerprint.clone(),
+            }),
+        ),
+    }
 }
 
 fn imported_data_to_editable(data: &ImportedData) -> EditableData {
@@ -8143,8 +8707,10 @@ fn import_overwrite_entry(
 
 pub fn import(
     file: Option<&std::path::Path>,
+    format: crate::import_bitwarden::ImportFormat,
     decrypt: bool,
     decrypt_passphrase: Option<&str>,
+    collection: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
     // Resolve the passphrase up front so `--decrypt`'s prompt happens
@@ -8153,12 +8719,56 @@ pub fn import(
     let decrypt_passphrase =
         resolve_import_passphrase(decrypt, decrypt_passphrase)?;
     let raw = read_import_input(file)?;
-    let json_text = load_import_json(&raw, decrypt_passphrase.as_deref())?;
 
-    let vault: ImportedVault = serde_json::from_str(&json_text).context(
-        "failed to parse import data (expected the JSON shape produced by \
-         `rbw export`)",
-    )?;
+    let detected = match format {
+        crate::import_bitwarden::ImportFormat::Auto => {
+            crate::import_bitwarden::detect_format(&raw)?
+        }
+        crate::import_bitwarden::ImportFormat::Rbw => {
+            crate::import_bitwarden::DetectedFormat::Rbw
+        }
+        crate::import_bitwarden::ImportFormat::BitwardenJson => {
+            crate::import_bitwarden::DetectedFormat::BitwardenJson
+        }
+        crate::import_bitwarden::ImportFormat::BitwardenEncryptedJson => {
+            crate::import_bitwarden::DetectedFormat::BitwardenEncryptedJson
+        }
+        crate::import_bitwarden::ImportFormat::BitwardenZip => {
+            crate::import_bitwarden::DetectedFormat::BitwardenZip
+        }
+    };
+
+    let mut vault: ImportedVault = match detected {
+        crate::import_bitwarden::DetectedFormat::Rbw => {
+            let json_text =
+                load_import_json(&raw, decrypt_passphrase.as_deref())?;
+            serde_json::from_str(&json_text).context(
+                "failed to parse import data (expected the JSON shape \
+                 produced by `rbw export`)",
+            )?
+        }
+        crate::import_bitwarden::DetectedFormat::BitwardenJson => {
+            let text = std::str::from_utf8(&raw)
+                .context("Bitwarden JSON export is not valid UTF-8")?;
+            let bw = crate::import_bitwarden::parse_bitwarden_json(text)?;
+            bw_vault_to_imported(bw, None)
+        }
+        crate::import_bitwarden::DetectedFormat::BitwardenEncryptedJson => {
+            let passphrase = decrypt_passphrase.as_deref().context(
+                "this looks like a Bitwarden \"Encrypted JSON\" export; \
+                 pass --decrypt or --decrypt-passphrase",
+            )?;
+            let text = crate::import_bitwarden::decrypt_encrypted_json(
+                &raw, passphrase,
+            )?;
+            let bw = crate::import_bitwarden::parse_bitwarden_json(&text)?;
+            bw_vault_to_imported(bw, None)
+        }
+        crate::import_bitwarden::DetectedFormat::BitwardenZip => {
+            let (bw, attachments) = crate::import_bitwarden::parse_zip(&raw)?;
+            bw_vault_to_imported(bw, Some(attachments))
+        }
+    };
 
     unlock(None, None)?;
 
@@ -8167,6 +8777,26 @@ pub fn import(
     let mut refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
     let c = stdout_supports_color();
+
+    // `--collection` redirects every entry into one existing collection,
+    // ignoring whatever organization/collection/folder metadata the export
+    // carries -- so none of the export's own collections need to be
+    // created, and every entry's destination is the same fixed org/
+    // collection pair.
+    let dest_collection = if let Some(needle) = collection {
+        let decrypted = decrypt_collections(&db)?;
+        let found = resolve_collection(&decrypted, needle, None)?;
+        Some((found.id.clone(), found.org_id.clone()))
+    } else {
+        None
+    };
+    if let Some((dest_id, dest_org_id)) = &dest_collection {
+        vault.collections.clear();
+        for entry in &mut vault.entries {
+            entry.org_id = Some(dest_org_id.clone());
+            entry.collection_ids = vec![dest_id.clone()];
+        }
+    }
 
     let mut collections_created = 0usize;
     let mut collections_reused = 0usize;
@@ -8189,6 +8819,13 @@ pub fn import(
     // vault.
     let mut collection_id_map: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
+
+    // `vault.collections` is empty when `--collection` was given (nothing
+    // to create/reuse), so seed the map directly with the one destination
+    // collection every entry now points at.
+    if let Some((dest_id, _)) = &dest_collection {
+        collection_id_map.insert(dest_id.clone(), dest_id.clone());
+    }
 
     for imported_col in &vault.collections {
         if !db.protected_org_keys.contains_key(&imported_col.org_id) {
@@ -16795,6 +17432,244 @@ mod test {
 
         let vault: ImportedVault = serde_json::from_str(json).unwrap();
         assert!(matches!(vault.entries[0].data, ImportedData::SshKey { .. }));
+    }
+
+    #[test]
+    fn test_bw_vault_to_imported_converts_bitwarden_json_shape() {
+        // A Bitwarden "JSON" export: different field names/casing and a
+        // numeric `type` than rbw's own export, plus a folder referenced by
+        // id rather than by name.
+        let json = r#"{
+            "folders": [
+                { "id": "f1", "name": "Work" }
+            ],
+            "collections": [
+                { "id": "c1", "organizationId": "org1", "name": "Engineering" }
+            ],
+            "items": [
+                {
+                    "id": "1",
+                    "organizationId": "org1",
+                    "folderId": "f1",
+                    "type": 1,
+                    "name": "example",
+                    "notes": "some notes",
+                    "login": {
+                        "username": "user@example.com",
+                        "password": "hunter2",
+                        "totp": null,
+                        "uris": [
+                            { "uri": "https://example.com", "match": 0 }
+                        ]
+                    },
+                    "fields": [
+                        { "name": "custom", "value": "val", "type": 0 }
+                    ],
+                    "passwordHistory": [
+                        { "lastUsedDate": "2024-01-01T00:00:00Z", "password": "old" }
+                    ],
+                    "collectionIds": ["c1"]
+                },
+                {
+                    "id": "2",
+                    "type": 2,
+                    "name": "a note",
+                    "notes": "shh"
+                }
+            ]
+        }"#;
+
+        let bw = crate::import_bitwarden::parse_bitwarden_json(json).unwrap();
+        let vault = bw_vault_to_imported(bw, None);
+
+        assert_eq!(vault.collections.len(), 1);
+        assert_eq!(vault.collections[0].org_id, "org1");
+        assert_eq!(vault.collections[0].name, "Engineering");
+
+        assert_eq!(vault.entries.len(), 2);
+
+        let login = &vault.entries[0];
+        assert_eq!(login.name, "example");
+        assert_eq!(login.folder.as_deref(), Some("Work"));
+        assert_eq!(login.org_id.as_deref(), Some("org1"));
+        assert_eq!(login.collection_ids, vec!["c1".to_string()]);
+        assert_eq!(login.history.len(), 1);
+        assert_eq!(login.history[0].password, "old");
+        assert_eq!(login.fields.len(), 1);
+        assert_eq!(login.fields[0].ty.as_deref(), Some("text"));
+        match &login.data {
+            ImportedData::Login {
+                username,
+                password,
+                uris,
+                ..
+            } => {
+                assert_eq!(username.as_deref(), Some("user@example.com"));
+                assert_eq!(password.as_deref(), Some("hunter2"));
+                let uris = uris.as_ref().unwrap();
+                assert_eq!(uris[0].uri, "https://example.com");
+            }
+            other => panic!("expected Login variant, got {other:?}"),
+        }
+
+        let note = &vault.entries[1];
+        assert_eq!(note.name, "a note");
+        assert!(note.folder.is_none());
+        assert!(matches!(note.data, ImportedData::SecureNote));
+    }
+
+    #[test]
+    fn test_exported_vault_to_bw_converts_rbw_export_shape() {
+        let vault = ExportedVault {
+            entries: vec![
+                ExportedEntry {
+                    id: "1".to_string(),
+                    org_id: Some("org1".to_string()),
+                    folder: Some("Work".to_string()),
+                    name: "example".to_string(),
+                    data: DecryptedData::Login {
+                        username: Some("user@example.com".to_string()),
+                        password: Some("hunter2".to_string()),
+                        totp: None,
+                        uris: Some(vec![DecryptedUri {
+                            uri: "https://example.com".to_string(),
+                            match_type: None,
+                        }]),
+                    },
+                    fields: vec![DecryptedField {
+                        name: Some("custom".to_string()),
+                        value: Some("val".to_string()),
+                        ty: Some(rbw::api::FieldType::Text),
+                    }],
+                    notes: Some("some notes".to_string()),
+                    history: vec![DecryptedHistoryEntry {
+                        last_used_date: "2024-01-01T00:00:00Z".to_string(),
+                        password: "old".to_string(),
+                    }],
+                    collection_ids: vec!["c1".to_string()],
+                    attachments: vec![],
+                },
+                ExportedEntry {
+                    id: "2".to_string(),
+                    org_id: None,
+                    folder: None,
+                    name: "a note".to_string(),
+                    data: DecryptedData::SecureNote,
+                    fields: vec![],
+                    notes: None,
+                    history: vec![],
+                    collection_ids: vec![],
+                    attachments: vec![],
+                },
+            ],
+            collections: vec![ExportedCollection {
+                id: "c1".to_string(),
+                org_id: "org1".to_string(),
+                name: "Engineering".to_string(),
+            }],
+        };
+
+        let (bw, attachments) = exported_vault_to_bw(&vault);
+        assert!(attachments.is_empty());
+
+        assert_eq!(bw.collections.len(), 1);
+        assert_eq!(
+            bw.collections[0].organization_id.as_deref(),
+            Some("org1")
+        );
+        assert_eq!(bw.collections[0].name, "Engineering");
+
+        assert_eq!(bw.folders.len(), 1);
+        assert_eq!(bw.folders[0].name, "Work");
+        let work_folder_id = bw.folders[0].id.clone().unwrap();
+
+        assert_eq!(bw.items.len(), 2);
+        let login = &bw.items[0];
+        assert_eq!(login.ty, 1);
+        assert_eq!(login.organization_id.as_deref(), Some("org1"));
+        assert_eq!(login.folder_id.as_deref(), Some(work_folder_id.as_str()));
+        assert_eq!(login.collection_ids, vec!["c1".to_string()]);
+        assert_eq!(login.fields.len(), 1);
+        let login_data = login.login.as_ref().unwrap();
+        assert_eq!(login_data.username.as_deref(), Some("user@example.com"));
+        assert_eq!(
+            login_data.uris[0].uri.as_deref(),
+            Some("https://example.com")
+        );
+
+        let note = &bw.items[1];
+        assert_eq!(note.ty, 2);
+        assert!(note.folder_id.is_none());
+        assert!(note.login.is_none());
+    }
+
+    #[test]
+    fn test_bw_vault_to_imported_skips_unrecognized_item_type() {
+        let json = r#"{
+            "items": [
+                { "id": "1", "type": 99, "name": "mystery" }
+            ]
+        }"#;
+
+        let bw = crate::import_bitwarden::parse_bitwarden_json(json).unwrap();
+        let vault = bw_vault_to_imported(bw, None);
+        assert!(vault.entries.is_empty());
+    }
+
+    #[test]
+    fn test_detect_format_recognizes_rbw_and_bitwarden_shapes() {
+        use crate::import_bitwarden::{detect_format, DetectedFormat};
+
+        assert_eq!(
+            detect_format(br#"{"entries": [], "collections": []}"#).unwrap(),
+            DetectedFormat::Rbw
+        );
+        assert_eq!(
+            detect_format(br#"{"folders": [], "items": []}"#).unwrap(),
+            DetectedFormat::BitwardenJson
+        );
+        assert_eq!(
+            detect_format(br#"{"encrypted": true, "data": "2.iv|ct|mac"}"#)
+                .unwrap(),
+            DetectedFormat::BitwardenEncryptedJson
+        );
+        assert_eq!(
+            detect_format(b"PK\x03\x04rest-of-the-zip").unwrap(),
+            DetectedFormat::BitwardenZip
+        );
+    }
+
+    #[test]
+    fn test_bw_item_attachments_matches_by_sanitized_item_name() {
+        let mut all = std::collections::HashMap::new();
+        all.insert(
+            // The real zip layout sanitizes illegal path characters in the
+            // item name (see `sanitize_zip_folder_name`) -- this key is
+            // what `email: p@x.dev` becomes.
+            "email_ p@x.dev".to_string(),
+            vec![
+                crate::import_bitwarden::ZipAttachment {
+                    file_name: "photo.png".to_string(),
+                    data: b"pngbytes".to_vec(),
+                },
+                crate::import_bitwarden::ZipAttachment {
+                    file_name: "notes.txt".to_string(),
+                    data: b"hello".to_vec(),
+                },
+            ],
+        );
+
+        let out = bw_item_attachments("email: p@x.dev", &mut all);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["file_name"], "photo.png");
+        assert_eq!(out[0]["data_base64"], rbw::base64::encode(b"pngbytes"));
+        assert_eq!(out[1]["file_name"], "notes.txt");
+        assert_eq!(out[1]["data_base64"], rbw::base64::encode(b"hello"));
+        // The whole per-item bucket is consumed in one pass.
+        assert!(!all.contains_key("email_ p@x.dev"));
+
+        // An item with no matching folder just gets no attachments.
+        assert!(bw_item_attachments("nothing here", &mut all).is_empty());
     }
 
     // Builds an in-memory tar.gz containing the given (name, contents)

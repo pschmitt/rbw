@@ -715,6 +715,95 @@ async fn unlock_success(
     Ok(())
 }
 
+// Permanently, irrecoverably deletes every entry in the account's personal
+// vault (`rbw purge-vault`). Re-derives the master password hash from a
+// freshly entered password -- like `Login`/`Unlock`, this never reuses the
+// agent's already-unlocked key material, since a hash proving current
+// knowledge of the password is what the server's purge endpoint requires,
+// and deriving it doesn't need decrypting anything the unlocked state
+// holds.
+pub async fn purge_vault(
+    sock: &mut crate::sock::Sock,
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    environment: &rbw::protocol::Environment,
+    password: Option<&rbw::locked::Password>,
+    account: &rbw::config::Account,
+) -> anyhow::Result<()> {
+    let mut db = load_db(account).await?;
+
+    let Some(kdf) = db.kdf else {
+        return Err(anyhow::anyhow!("failed to find kdf type in db"));
+    };
+    let Some(iterations) = db.iterations else {
+        return Err(anyhow::anyhow!(
+            "failed to find number of iterations in db"
+        ));
+    };
+    let memory = db.memory;
+    let parallelism = db.parallelism;
+    let email = account_email(account)?;
+
+    let password = if let Some(password) = password {
+        password.clone()
+    } else {
+        let description = format!(
+            "PERMANENTLY PURGE the entire vault for account '{}' ({email})? \
+             Enter the master password to confirm.",
+            account.name
+        );
+        rbw::pinentry::getpin(
+            &config_pinentry().await?,
+            "Master Password",
+            &description,
+            None,
+            environment,
+            true,
+            Some(sock.inner()),
+            config_pinentry_timeout().await?,
+        )
+        .await
+        .context("failed to read password from pinentry")?
+    };
+
+    let identity = rbw::identity::Identity::new(
+        &email,
+        &password,
+        kdf,
+        iterations,
+        memory,
+        parallelism,
+    )?;
+
+    let access_token = db
+        .access_token
+        .clone()
+        .context("failed to find access token in db")?;
+    let refresh_token = db
+        .refresh_token
+        .clone()
+        .context("failed to find refresh token in db")?;
+
+    let new_access_token = rbw::actions::purge_vault(
+        &access_token,
+        &refresh_token,
+        &identity.master_password_hash,
+    )
+    .await
+    .context("failed to purge vault (wrong master password?)")?;
+
+    if let Some(new_access_token) = new_access_token {
+        db.access_token = Some(new_access_token);
+        save_db(account, &db).await?;
+    }
+
+    // Refresh local state to reflect the now-empty vault.
+    sync(None, state.clone(), account).await?;
+
+    respond_ack(sock).await?;
+
+    Ok(())
+}
+
 // Lock the account the client named explicitly (`rbw -a NAME lock`), or
 // every account when the request doesn't carry one (plain `rbw lock`,
 // `rbw lock --all`, and requests from older clients).

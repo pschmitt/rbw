@@ -1037,6 +1037,12 @@ struct CipherIdsReq {
 }
 
 #[derive(serde::Serialize, Debug)]
+struct PurgeReq {
+    #[serde(rename = "masterPasswordHash")]
+    master_password_hash: String,
+}
+
+#[derive(serde::Serialize, Debug)]
 struct CollectionPutReq {
     name: String,
     #[serde(rename = "organizationId")]
@@ -1575,6 +1581,45 @@ impl Client {
                     collections,
                 ))
             }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => {
+                let code = res.status().as_u16();
+                let body = res.text().await.unwrap_or_default();
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
+            }
+        }
+    }
+
+    // Permanently deletes every entry in the caller's personal vault in a
+    // single server-side call (`rbw purge`), rather than a client-driven
+    // loop of individual deletes. `master_password_hash` re-proves
+    // knowledge of the master password, matching how `login` re-proves it
+    // to authenticate -- both send the same base64-encoded PBKDF2/Argon2
+    // hash, never the password itself.
+    pub async fn purge_vault(
+        &self,
+        access_token: &str,
+        master_password_hash: &str,
+    ) -> Result<()> {
+        let req = PurgeReq {
+            master_password_hash: master_password_hash.to_string(),
+        };
+        let client = self.reqwest_client().await?;
+        let res = client
+            .post(self.api_url("/ciphers/purge"))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&req)
+            .send()
+            .await
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
             reqwest::StatusCode::UNAUTHORIZED => {
                 Err(Error::RequestUnauthorized)
             }

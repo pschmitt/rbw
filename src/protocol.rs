@@ -204,6 +204,17 @@ pub enum Action {
     CheckLock,
     Lock,
     Sync,
+    // Permanently, irrecoverably deletes every entry in the account's
+    // personal vault via the server's dedicated purge endpoint (a single
+    // call, not a loop of individual deletes). Named distinctly from `rbw
+    // purge` (which only clears the *local* db.json cache and has no
+    // protocol action of its own). Requires re-proving the master
+    // password (like `Login`/`Unlock`, `password` lets a
+    // `credential_source`/`--stdin` caller supply it directly instead of
+    // the agent prompting via pinentry).
+    PurgeVault {
+        password: Option<String>,
+    },
     Decrypt {
         cipherstring: String,
         entry_key: Option<String>,

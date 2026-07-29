@@ -46,6 +46,10 @@ pub fn unlock(password: Option<String>) -> anyhow::Result<()> {
     simple_action(rbw::protocol::Action::Unlock { password })
 }
 
+pub fn purge_vault(password: Option<String>) -> anyhow::Result<()> {
+    simple_action(rbw::protocol::Action::PurgeVault { password })
+}
+
 pub fn unlocked() -> anyhow::Result<()> {
     match crate::sock::Sock::connect() {
         Ok(mut sock) => {

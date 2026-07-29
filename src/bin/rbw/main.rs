@@ -11,6 +11,7 @@ use clap::{CommandFactory as _, Parser as _};
 
 mod actions;
 mod commands;
+mod import_bitwarden;
 mod sock;
 mod tui;
 
@@ -370,14 +371,35 @@ enum Opt {
             Outputs all entries (with full details) and collections \
             to stdout, or to a file given -o/--output. Suitable for \
             backup or migration to another instance via `rbw import`.\n\n\
-            With --encrypt, the export is written as a symmetrically \
-            gpg-encrypted tar.gz archive instead of raw JSON. The \
-            passphrase is read from $RBW_EXPORT_PASSPHRASE if set, and \
-            prompted for on the terminal (with confirmation) otherwise; \
-            it can also be passed inline as `--encrypt PASSPHRASE`, but \
-            that exposes it to `ps` and shell history."
+            --format selects the output shape: rbw's own (the default), \
+            or one of Bitwarden's own \"JSON\", \"Encrypted JSON\", \"zip \
+            (with attachments)\", and CSV export formats -- for migrating \
+            to the official Bitwarden clients, or anything else that \
+            reads their export shapes. Bitwarden's CSV format has no \
+            columns for Card/Identity/SSH key entries, so \
+            --format bitwarden-csv skips them (with a warning), matching \
+            what the official clients do.\n\n\
+            With --encrypt, rbw's own format is written as a \
+            symmetrically gpg-encrypted tar.gz archive instead of raw \
+            JSON. --format bitwarden-encrypted-json always needs a \
+            password and prompts for one on its own even without \
+            --encrypt; --encrypt there just supplies it inline instead, \
+            skipping the prompt. Either way, the passphrase is read from \
+            $RBW_EXPORT_PASSPHRASE if set, and prompted for on the \
+            terminal (with confirmation) otherwise; it can also be passed \
+            inline as `--encrypt PASSPHRASE`, but that exposes it to `ps` \
+            and shell history."
     )]
     Export {
+        #[arg(
+            long,
+            alias = "type",
+            value_enum,
+            default_value = "rbw",
+            help = "Export format to produce (default: rbw's own)"
+        )]
+        format: crate::import_bitwarden::ExportFormat,
+
         #[arg(
             long,
             help = "Also download and embed decrypted attachment \
@@ -392,10 +414,14 @@ enum Opt {
             default_missing_value = "",
             value_name = "PASSPHRASE",
             help = "Symmetrically gpg-encrypt the export as a tar.gz \
-                archive. If PASSPHRASE is omitted, rbw reads it from \
+                archive (rbw's own format). Optional with --format \
+                bitwarden-encrypted-json (which prompts on its own \
+                either way) to supply that format's password inline \
+                instead. If PASSPHRASE is omitted, rbw reads it from \
                 RBW_EXPORT_PASSPHRASE or prompts on the controlling tty \
                 (twice, to confirm); passing it inline exposes it to `ps` \
-                and shell history. Requires `gpg` to be available on PATH."
+                and shell history. rbw's own gpg format requires `gpg` \
+                on PATH."
         )]
         encrypt: Option<String>,
 
@@ -410,42 +436,70 @@ enum Opt {
     },
 
     #[command(
-        about = "Import data produced by `rbw export`",
-        long_about = "Import data produced by `rbw export`\n\n\
-            Reads a JSON export (or a gpg-encrypted tar.gz produced by \
-            `rbw export --encrypt`, given --decrypt or \
-            --decrypt-passphrase) and \
-            recreates its entries and collections in the target account's \
-            vault (see the global --account/-a flag). Reads from stdin if \
-            no file is given.\n\n\
-            With --decrypt, the passphrase is read from \
-            $RBW_EXPORT_PASSPHRASE if set, and prompted for on the \
-            terminal otherwise; --decrypt-passphrase takes it inline, but \
-            that exposes it to `ps` and shell history.\n\n\
+        about = "Import data produced by `rbw export` or a Bitwarden vault \
+            export",
+        long_about = "Import data produced by `rbw export` or a Bitwarden \
+            vault export\n\n\
+            Reads an export file and recreates its entries and collections \
+            in the target account's vault (see the global --account/-a \
+            flag). Reads from stdin if no file is given.\n\n\
+            --format selects how the file is parsed; it defaults to \
+            auto-detecting between rbw's own export (JSON, or a \
+            gpg-encrypted tar.gz produced by `rbw export --encrypt`) and \
+            Bitwarden's own \"JSON\", \"Encrypted JSON\", and \"zip (with \
+            attachments)\" export formats. Pass it explicitly if \
+            auto-detection guesses wrong.\n\n\
+            --decrypt/--decrypt-passphrase supplies the passphrase needed \
+            for either an rbw gpg-encrypted archive or a Bitwarden \
+            password-protected \"Encrypted JSON\" export: with --decrypt, \
+            it's read from $RBW_EXPORT_PASSPHRASE if set, and prompted for \
+            on the terminal otherwise; --decrypt-passphrase takes it \
+            inline, but that exposes it to `ps` and shell history.\n\n\
+            --collection redirects every imported entry into a single \
+            existing collection, ignoring whatever \
+            organization/collection/folder metadata the export carries.\n\n\
             Entries that already exist (matched by name, and username for \
             logins) are left untouched and reported as skipped; pass \
             --overwrite to update them in place instead. Entries belonging \
             to an organization this account isn't a member of are imported \
-            into the personal vault instead."
+            into the personal vault instead (unless --collection is given)."
     )]
     Import {
         #[arg(help = "Export file to import (defaults to stdin if omitted)")]
         file: Option<std::path::PathBuf>,
         #[arg(
             long,
+            alias = "type",
+            value_enum,
+            default_value = "auto",
+            help = "Export format to expect (default: auto-detect)"
+        )]
+        format: crate::import_bitwarden::ImportFormat,
+        #[arg(
+            long,
             conflicts_with = "decrypt_passphrase",
-            help = "Decrypt a gpg-encrypted export archive using \
-                RBW_EXPORT_PASSPHRASE or a tty prompt"
+            help = "Decrypt a passphrase-protected export (an rbw \
+                gpg-encrypted archive, or a Bitwarden \"Encrypted JSON\" \
+                export) using RBW_EXPORT_PASSPHRASE or a tty prompt"
         )]
         decrypt: bool,
         #[arg(
             long,
             value_name = "PASSPHRASE",
-            help = "Passphrase to decrypt a gpg-encrypted export archive \
-                (produced by `rbw export --encrypt`). Prefer --decrypt, \
-                which keeps the passphrase out of `ps` and shell history"
+            help = "Passphrase to decrypt a passphrase-protected export \
+                (produced by `rbw export --encrypt`, or Bitwarden's \
+                \"Encrypted JSON\" export). Prefer --decrypt, which keeps \
+                the passphrase out of `ps` and shell history"
         )]
         decrypt_passphrase: Option<String>,
+        #[arg(
+            long,
+            value_name = "COLLECTION",
+            help = "Import every entry into this existing collection \
+                instead of whatever organization/collection/folder \
+                metadata the export carries"
+        )]
+        collection: Option<String>,
         #[arg(
             long,
             help = "Overwrite entries that already exist (matched by \
@@ -1042,6 +1096,33 @@ enum Opt {
         yes: bool,
     },
 
+    #[command(
+        name = "purge-vault",
+        about = "PERMANENTLY delete every entry in this account's vault",
+        long_about = "PERMANENTLY delete every entry in this account's \
+            personal vault via the server's own purge endpoint (a single \
+            call, not a loop of individual deletes). This is not the \
+            same as `rbw purge`, which only clears the local database \
+            cache -- this command deletes the actual data on the server \
+            and cannot be undone. Prompts for the master password (to \
+            prove intent, mirroring `rbw login`/`rbw unlock`) and, unless \
+            --yes is given, a confirmation; --stdin supplies the password \
+            without a pinentry prompt, so `--yes --stdin` (with the \
+            password piped in) purges fully non-interactively. Entries \
+            assigned to an organization collection aren't touched; \
+            purging those needs org owner/admin privileges."
+    )]
+    PurgeVault {
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
+        #[arg(
+            long,
+            help = "Read the master password from stdin instead of \
+                prompting via pinentry"
+        )]
+        stdin: bool,
+    },
+
     #[command(name = "stop-agent", about = "Terminate the background agent")]
     StopAgent,
 
@@ -1095,6 +1176,7 @@ impl Opt {
             Self::History { .. } => "history".to_string(),
             Self::Lock { .. } => "lock".to_string(),
             Self::Purge { .. } => "purge".to_string(),
+            Self::PurgeVault { .. } => "purge-vault".to_string(),
             Self::StopAgent => "stop-agent".to_string(),
             Self::Completions { .. } => "completions".to_string(),
         }
@@ -1616,23 +1698,29 @@ fn main() {
             write,
         } => tui::run(term.as_deref(), all, from_file.as_deref(), write),
         Opt::Export {
+            format,
             attachments,
             encrypt,
             output,
         } => commands::export(
+            format,
             attachments,
             encrypt.as_deref(),
             output.as_deref(),
         ),
         Opt::Import {
             file,
+            format,
             decrypt,
             decrypt_passphrase,
+            collection,
             overwrite,
         } => commands::import(
             file.as_deref(),
+            format,
             decrypt,
             decrypt_passphrase.as_deref(),
+            collection.as_deref(),
             overwrite,
         ),
         Opt::List {
@@ -2098,6 +2186,10 @@ fn main() {
         })(),
         Opt::Lock { all } => commands::lock(all),
         Opt::Purge { yes } => commands::purge(yes),
+        Opt::PurgeVault { yes, stdin } => {
+            let password = stdin.then(read_stdin_password);
+            commands::purge_vault(yes, password)
+        }
         Opt::StopAgent => commands::stop_agent(),
         Opt::Completions { shell } => {
             match shell {
