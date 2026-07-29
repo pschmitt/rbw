@@ -328,6 +328,44 @@ fn add_once(
     client.add(access_token, name, data, fields, notes, folder_id)
 }
 
+// One cipher to bulk-create via `import_ciphers`/`import_organization_ciphers`.
+// `folder_id`/`collection_ids` must already be existing, resolved-or-
+// created ids -- neither bulk endpoint is asked to create a new folder or
+// collection, since that needs the caller's own dedup/reuse bookkeeping
+// (and, for a new collection, elevated org permissions rbw doesn't assume).
+pub struct ImportCipherEntry {
+    pub name: String,
+    pub data: crate::db::EntryData,
+    pub fields: Vec<crate::db::Field>,
+    pub notes: Option<String>,
+    pub history: Vec<crate::db::HistoryEntry>,
+    pub folder_id: Option<String>,
+    pub collection_ids: Vec<String>,
+}
+
+pub fn import_ciphers(
+    access_token: &str,
+    refresh_token: &str,
+    entries: &[ImportCipherEntry],
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        let (client, _) = api_client()?;
+        client.import_ciphers(access_token, entries)
+    })
+}
+
+pub fn import_organization_ciphers(
+    access_token: &str,
+    refresh_token: &str,
+    org_id: &str,
+    entries: &[ImportCipherEntry],
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        let (client, _) = api_client()?;
+        client.import_organization_ciphers(access_token, org_id, entries)
+    })
+}
+
 pub fn edit(
     access_token: &str,
     refresh_token: &str,

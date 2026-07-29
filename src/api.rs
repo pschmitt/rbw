@@ -979,6 +979,133 @@ struct SyncResPasswordHistory {
     password: Option<String>,
 }
 
+// The cipher type code, and the type-specific sub-object, for the wire
+// format every cipher-create/edit/import request shares -- factored out of
+// `Client::add` (and reused by `Client::import_ciphers`/
+// `import_organization_ciphers`) so the five-way match isn't duplicated.
+#[allow(clippy::type_complexity)]
+fn cipher_type_and_fields(
+    data: &crate::db::EntryData,
+) -> (
+    u32,
+    Option<CipherLogin>,
+    Option<CipherCard>,
+    Option<CipherIdentity>,
+    Option<CipherSecureNote>,
+    Option<CipherSshKey>,
+) {
+    let ty = match data {
+        crate::db::EntryData::Login { .. } => 1,
+        crate::db::EntryData::SecureNote => 2,
+        crate::db::EntryData::Card { .. } => 3,
+        crate::db::EntryData::Identity { .. } => 4,
+        crate::db::EntryData::SshKey { .. } => 5,
+    };
+    let mut login = None;
+    let mut card = None;
+    let mut identity = None;
+    let mut secure_note = None;
+    let mut ssh_key = None;
+    match data {
+        crate::db::EntryData::Login {
+            username,
+            password,
+            totp,
+            uris,
+        } => {
+            let uris = if uris.is_empty() {
+                None
+            } else {
+                Some(
+                    uris.iter()
+                        .map(|s| CipherLoginUri {
+                            uri: Some(s.uri.clone()),
+                            match_type: s.match_type,
+                        })
+                        .collect(),
+                )
+            };
+            login = Some(CipherLogin {
+                username: username.clone(),
+                password: password.clone(),
+                totp: totp.clone(),
+                uris,
+            });
+        }
+        crate::db::EntryData::Card {
+            cardholder_name,
+            number,
+            brand,
+            exp_month,
+            exp_year,
+            code,
+        } => {
+            card = Some(CipherCard {
+                cardholder_name: cardholder_name.clone(),
+                number: number.clone(),
+                brand: brand.clone(),
+                exp_month: exp_month.clone(),
+                exp_year: exp_year.clone(),
+                code: code.clone(),
+            });
+        }
+        crate::db::EntryData::Identity {
+            title,
+            first_name,
+            middle_name,
+            last_name,
+            address1,
+            address2,
+            address3,
+            city,
+            state,
+            postal_code,
+            country,
+            phone,
+            email,
+            ssn,
+            license_number,
+            passport_number,
+            username,
+        } => {
+            identity = Some(CipherIdentity {
+                title: title.clone(),
+                first_name: first_name.clone(),
+                middle_name: middle_name.clone(),
+                last_name: last_name.clone(),
+                address1: address1.clone(),
+                address2: address2.clone(),
+                address3: address3.clone(),
+                city: city.clone(),
+                state: state.clone(),
+                postal_code: postal_code.clone(),
+                country: country.clone(),
+                phone: phone.clone(),
+                email: email.clone(),
+                ssn: ssn.clone(),
+                license_number: license_number.clone(),
+                passport_number: passport_number.clone(),
+                username: username.clone(),
+            });
+        }
+        crate::db::EntryData::SecureNote => {
+            secure_note = Some(CipherSecureNote {});
+        }
+        crate::db::EntryData::SshKey {
+            private_key,
+            public_key,
+            fingerprint,
+        } => {
+            ssh_key = Some(CipherSshKey {
+                private_key: private_key.clone(),
+                public_key: public_key.clone(),
+                fingerprint: fingerprint.clone(),
+            });
+        }
+    }
+    (ty, login, card, identity, secure_note, ssh_key)
+}
+
 #[derive(serde::Serialize, Debug)]
 struct CiphersPostReq {
     #[serde(rename = "type")]
@@ -1031,6 +1158,82 @@ struct CiphersPutReqHistory {
 struct CiphersCollectionsPutReq {
     #[serde(rename = "collectionIds")]
     collection_ids: Vec<String>,
+}
+
+// The wire format for `POST /ciphers/import` and `/ciphers/import-
+// organization` shares one per-cipher shape (Vaultwarden/Bitwarden both
+// reuse their single-cipher `CipherData` struct for it) -- `organization_id`
+// is always `None` for the personal-vault endpoint and always `Some` for
+// the org-scoped one, and `folder_id` is the reverse (org imports never
+// carry a personal folder).
+#[derive(serde::Serialize, Debug)]
+struct ImportCipherReq {
+    #[serde(rename = "type")]
+    ty: u32,
+    #[serde(rename = "folderId")]
+    folder_id: Option<String>,
+    #[serde(rename = "organizationId")]
+    organization_id: Option<String>,
+    name: String,
+    notes: Option<String>,
+    login: Option<CipherLogin>,
+    card: Option<CipherCard>,
+    identity: Option<CipherIdentity>,
+    fields: Vec<CipherField>,
+    #[serde(rename = "secureNote")]
+    secure_note: Option<CipherSecureNote>,
+    #[serde(rename = "sshKey")]
+    ssh_key: Option<CipherSshKey>,
+    #[serde(rename = "passwordHistory")]
+    password_history: Vec<CiphersPutReqHistory>,
+}
+
+// An entry in `ImportCipherReq`/`ImportOrganizationCiphersReq`'s
+// `folders`/`collections` array: `id: Some(existing_id)` means "reuse this
+// existing one" (its `name`/`groups`/`users` are then ignored server-side),
+// `id: None` means "create a new one with this name" -- rbw only ever uses
+// the reuse form, since folders/collections are already resolved-or-
+// created by the caller before building the bulk request.
+#[derive(serde::Serialize, Debug)]
+struct ImportFolderReq {
+    id: Option<String>,
+    name: String,
+}
+
+#[derive(serde::Serialize, Debug)]
+struct ImportCollectionReq {
+    id: Option<String>,
+    name: String,
+    #[serde(rename = "externalId")]
+    external_id: Option<String>,
+    // Only consulted when creating a *new* collection (`id: None`); always
+    // empty here since rbw always reuses an existing, already-resolved one.
+    groups: Vec<serde_json::Value>,
+    users: Vec<serde_json::Value>,
+}
+
+// One `(cipher index, folder/collection index)` pair, each index into the
+// sibling `ciphers`/`folders`-or-`collections` arrays in the same request.
+#[derive(serde::Serialize, Debug)]
+struct ImportKvpReq {
+    key: usize,
+    value: usize,
+}
+
+#[derive(serde::Serialize, Debug)]
+struct ImportCiphersReq {
+    ciphers: Vec<ImportCipherReq>,
+    folders: Vec<ImportFolderReq>,
+    #[serde(rename = "folderRelationships")]
+    folder_relationships: Vec<ImportKvpReq>,
+}
+
+#[derive(serde::Serialize, Debug)]
+struct ImportOrganizationCiphersReq {
+    ciphers: Vec<ImportCipherReq>,
+    collections: Vec<ImportCollectionReq>,
+    #[serde(rename = "collectionRelationships")]
+    collection_relationships: Vec<ImportKvpReq>,
 }
 
 #[derive(serde::Serialize, Debug)]
@@ -1804,20 +2007,16 @@ impl Client {
         notes: Option<&str>,
         folder_id: Option<&str>,
     ) -> Result<String> {
-        let mut req = CiphersPostReq {
-            ty: match data {
-                crate::db::EntryData::Login { .. } => 1,
-                crate::db::EntryData::SecureNote => 2,
-                crate::db::EntryData::Card { .. } => 3,
-                crate::db::EntryData::Identity { .. } => 4,
-                crate::db::EntryData::SshKey { .. } => 5,
-            },
+        let (ty, login, card, identity, secure_note, ssh_key) =
+            cipher_type_and_fields(data);
+        let req = CiphersPostReq {
+            ty,
             folder_id: folder_id.map(std::string::ToString::to_string),
             name: name.to_string(),
             notes: notes.map(std::string::ToString::to_string),
-            login: None,
-            card: None,
-            identity: None,
+            login,
+            card,
+            identity,
             fields: fields
                 .iter()
                 .map(|field| CipherField {
@@ -1827,106 +2026,9 @@ impl Client {
                     linked_id: field.linked_id,
                 })
                 .collect(),
-            secure_note: None,
-            ssh_key: None,
+            secure_note,
+            ssh_key,
         };
-        match data {
-            crate::db::EntryData::Login {
-                username,
-                password,
-                totp,
-                uris,
-            } => {
-                let uris = if uris.is_empty() {
-                    None
-                } else {
-                    Some(
-                        uris.iter()
-                            .map(|s| CipherLoginUri {
-                                uri: Some(s.uri.clone()),
-                                match_type: s.match_type,
-                            })
-                            .collect(),
-                    )
-                };
-                req.login = Some(CipherLogin {
-                    username: username.clone(),
-                    password: password.clone(),
-                    totp: totp.clone(),
-                    uris,
-                });
-            }
-            crate::db::EntryData::Card {
-                cardholder_name,
-                number,
-                brand,
-                exp_month,
-                exp_year,
-                code,
-            } => {
-                req.card = Some(CipherCard {
-                    cardholder_name: cardholder_name.clone(),
-                    number: number.clone(),
-                    brand: brand.clone(),
-                    exp_month: exp_month.clone(),
-                    exp_year: exp_year.clone(),
-                    code: code.clone(),
-                });
-            }
-            crate::db::EntryData::Identity {
-                title,
-                first_name,
-                middle_name,
-                last_name,
-                address1,
-                address2,
-                address3,
-                city,
-                state,
-                postal_code,
-                country,
-                phone,
-                email,
-                ssn,
-                license_number,
-                passport_number,
-                username,
-            } => {
-                req.identity = Some(CipherIdentity {
-                    title: title.clone(),
-                    first_name: first_name.clone(),
-                    middle_name: middle_name.clone(),
-                    last_name: last_name.clone(),
-                    address1: address1.clone(),
-                    address2: address2.clone(),
-                    address3: address3.clone(),
-                    city: city.clone(),
-                    state: state.clone(),
-                    postal_code: postal_code.clone(),
-                    country: country.clone(),
-                    phone: phone.clone(),
-                    email: email.clone(),
-                    ssn: ssn.clone(),
-                    license_number: license_number.clone(),
-                    passport_number: passport_number.clone(),
-                    username: username.clone(),
-                });
-            }
-            crate::db::EntryData::SecureNote => {
-                req.secure_note = Some(CipherSecureNote {});
-            }
-            crate::db::EntryData::SshKey {
-                private_key,
-                public_key,
-                fingerprint,
-            } => {
-                req.ssh_key = Some(CipherSshKey {
-                    private_key: private_key.clone(),
-                    public_key: public_key.clone(),
-                    fingerprint: fingerprint.clone(),
-                });
-            }
-        }
         let client = reqwest::blocking::Client::new();
         let res = client
             .post(self.api_url("/ciphers"))
@@ -1940,6 +2042,190 @@ impl Client {
                 let cipher_res: CipherCreateRes = res.json_with_path()?;
                 Ok(cipher_res.id)
             }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => {
+                let code = status.as_u16();
+                let body = res.text().unwrap_or_default();
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
+            }
+        }
+    }
+
+    // One cipher's create/edit `/ciphers/{id}` request, minus the id/org/
+    // folder placement, into an `ImportCipherReq` -- shared by
+    // `import_ciphers`/`import_organization_ciphers` below.
+    fn import_cipher_req(
+        entry: &crate::actions::ImportCipherEntry,
+        organization_id: Option<String>,
+        folder_id: Option<String>,
+    ) -> ImportCipherReq {
+        let (ty, login, card, identity, secure_note, ssh_key) =
+            cipher_type_and_fields(&entry.data);
+        ImportCipherReq {
+            ty,
+            folder_id,
+            organization_id,
+            name: entry.name.clone(),
+            notes: entry.notes.clone(),
+            login,
+            card,
+            identity,
+            fields: entry
+                .fields
+                .iter()
+                .map(|field| CipherField {
+                    ty: field.ty,
+                    name: field.name.clone(),
+                    value: field.value.clone(),
+                    linked_id: field.linked_id,
+                })
+                .collect(),
+            secure_note,
+            ssh_key,
+            password_history: entry
+                .history
+                .iter()
+                .map(|h| CiphersPutReqHistory {
+                    last_used_date: h.last_used_date.clone(),
+                    password: h.password.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    // Bulk-creates every entry in the account's personal vault in a single
+    // request -- the same `POST /ciphers/import` the official clients'
+    // importer uses (confirmed against both the Bitwarden and Vaultwarden
+    // server source). Each entry's (already resolved-or-created)
+    // `folder_id` is deduplicated into the shared `folders` array with
+    // index-based `folderRelationships`, exactly matching the wire format;
+    // entries with no folder simply have no relationship entry.
+    pub fn import_ciphers(
+        &self,
+        access_token: &str,
+        entries: &[crate::actions::ImportCipherEntry],
+    ) -> Result<()> {
+        let mut folder_ids: Vec<String> = Vec::new();
+        let mut folder_relationships = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            if let Some(folder_id) = &entry.folder_id {
+                let folder_index = folder_ids
+                    .iter()
+                    .position(|id| id == folder_id)
+                    .unwrap_or_else(|| {
+                        folder_ids.push(folder_id.clone());
+                        folder_ids.len() - 1
+                    });
+                folder_relationships.push(ImportKvpReq {
+                    key: index,
+                    value: folder_index,
+                });
+            }
+        }
+
+        let req = ImportCiphersReq {
+            ciphers: entries
+                .iter()
+                .map(|entry| Self::import_cipher_req(entry, None, None))
+                .collect(),
+            folders: folder_ids
+                .into_iter()
+                .map(|id| ImportFolderReq {
+                    id: Some(id),
+                    name: String::new(),
+                })
+                .collect(),
+            folder_relationships,
+        };
+
+        self.post_import(access_token, "/ciphers/import", &req)
+    }
+
+    // Bulk-creates every entry directly into one organization (optionally
+    // across several of its collections at once) in a single request --
+    // `POST /ciphers/import-organization`, the org-scoped sibling of
+    // `import_ciphers` the official clients' org-level import feature
+    // uses. Every `collection_id` an entry names is expected to already
+    // exist (resolved by the caller) -- this never asks the server to
+    // create a new collection, so it never needs the elevated permissions
+    // that path requires.
+    pub fn import_organization_ciphers(
+        &self,
+        access_token: &str,
+        org_id: &str,
+        entries: &[crate::actions::ImportCipherEntry],
+    ) -> Result<()> {
+        let mut collection_ids: Vec<String> = Vec::new();
+        let mut collection_relationships = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            for collection_id in &entry.collection_ids {
+                let collection_index = collection_ids
+                    .iter()
+                    .position(|id| id == collection_id)
+                    .unwrap_or_else(|| {
+                        collection_ids.push(collection_id.clone());
+                        collection_ids.len() - 1
+                    });
+                collection_relationships.push(ImportKvpReq {
+                    key: index,
+                    value: collection_index,
+                });
+            }
+        }
+
+        let req = ImportOrganizationCiphersReq {
+            ciphers: entries
+                .iter()
+                .map(|entry| {
+                    Self::import_cipher_req(
+                        entry,
+                        Some(org_id.to_string()),
+                        None,
+                    )
+                })
+                .collect(),
+            collections: collection_ids
+                .into_iter()
+                .map(|id| ImportCollectionReq {
+                    id: Some(id),
+                    name: String::new(),
+                    external_id: None,
+                    groups: Vec::new(),
+                    users: Vec::new(),
+                })
+                .collect(),
+            collection_relationships,
+        };
+
+        self.post_import(
+            access_token,
+            &format!("/ciphers/import-organization?organizationId={org_id}"),
+            &req,
+        )
+    }
+
+    fn post_import(
+        &self,
+        access_token: &str,
+        path: &str,
+        req: &impl serde::Serialize,
+    ) -> Result<()> {
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .post(self.api_url(path))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(req)
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        let status = res.status();
+        match status {
+            reqwest::StatusCode::OK => Ok(()),
             reqwest::StatusCode::UNAUTHORIZED => {
                 Err(Error::RequestUnauthorized)
             }
