@@ -309,3 +309,107 @@
       in the trash) so that capability isn't lost -- with a stronger
       confirmation prompt ("This cannot be undone!") than the plain
       soft-delete path.
+
+- [x] `rbw mirror --from A --to B`: copy vault contents from one
+      configured account to another, natively -- replacing the standalone
+      `bw-backup.git`/`bw-sync.sh` script, which drove two separate `bw`
+      CLI logins via client-id/secret env vars, temp files on disk, and a
+      Python helper (`bw.py match`) to map attachment ids between the two
+      accounts by re-listing items after import. None of that machinery
+      exists here: `rbw` already has multi-account config and a
+      per-process "active account" switch used internally by the
+      multi-account TUI (`crate::actions::set_active_account`, wrapping
+      both the CLI-level account selector and the direct-api-call
+      selector) -- `mirror` just calls it twice, once per side, in the
+      same process.
+
+      Deliberately named `mirror`, not `sync`: `rbw sync` already exists
+      and means "pull the latest vault from the server for the active
+      account" (unrelated to copying between two accounts), so reusing
+      the name would have shadowed a real command.
+
+      Implementation reuses the existing export/import conversion
+      machinery instead of re-deriving it: `build_exported_vault` (a new
+      function factored out of `export`'s body, export's own behavior
+      unchanged) builds rbw's own decrypted `ExportedVault` shape from the
+      source account, now with optional `--collection`/`--org-id`
+      scoping (resolved via the same `resolve_collection` lookup
+      `import --collection` already uses -- passing `--org-id` alone
+      filters directly, passing `--collection` restricts the search to
+      that org first so a same-named collection in a different org can't
+      collide). That vault is converted through the exact same
+      `exported_vault_to_bw` -> `bw_vault_to_imported` pipeline
+      `rbw export --format bitwarden-json`/`rbw import` already use --
+      entirely in memory, no temp file -- and fed into a new
+      `import_vault` function (the tail of `import` after it finishes
+      parsing whatever format the input came from, extracted verbatim so
+      both callers get identical create-vs-update-vs-skip matching,
+      collection creation/reuse, the "organization not available locally
+      -> falls back to the personal vault" behavior, and the per-entry
+      summary output). `--attachments` downloads and decrypts source
+      attachments the same way `export --attachments` does, then feeds
+      them through the same zip-attachment map (`ZipAttachment`,
+      `sanitize_zip_folder_name`) `bw_vault_to_imported` already knows how
+      to consume, rather than adding a second attachment-matching scheme.
+
+      Flags: `--from`/`--to` (both must already be configured accounts,
+      unlocked exactly like any other named-account command),
+      `--collection`/`--org-id` (source-side scoping, mutually
+      compatible), `--attachments`, `--overwrite` (same semantics as
+      `import --overwrite`), `--purge-dest`, `-y`/`--yes`, `--stdin`.
+      `--purge-dest` only supports a whole-vault mirror in this version --
+      combined with `--collection`/`--org-id` it's refused outright with
+      an explanatory error rather than attempting a scoped delete-
+      everything-in-a-collection loop under time pressure (there was no
+      way to build and live-verify that safely in the time available, and
+      a safe refusal beats a half-built scoped purge). This also answers
+      the "do we even support purging collections yet?" question that
+      prompted this feature: no, only whole-vault (`purge-vault`) and
+      whole-org (`org delete`) destructive operations exist right now;
+      scoped collection/org purging is a real gap, left as a follow-up.
+      When `--purge-dest` *is* given (whole-vault only), it calls the
+      exact same `purge_vault` function `rbw purge-vault` uses (so the
+      same `POST /ciphers/purge` server call, not a client loop of
+      deletes), passing `yes: true` since `mirror`'s own preview/
+      confirmation already covers it -- but it still requires the
+      destination's master password re-proof, `--stdin`-suppliable the
+      same way.
+
+      Destructive-adjacent (can overwrite entries; with `--purge-dest` can
+      wipe the destination entirely), so it prints a preview -- source/
+      destination account + email, scope, entry/collection counts,
+      attachment/overwrite/purge-dest flags -- and confirms unless
+      `-y`/`--yes`, matching `purge-vault`/`org delete`'s gating
+      convention.
+
+      Verified: `cargo test` (198 passed, up from 194 -- four new tests:
+      two guard-clause tests for `mirror_vault` itself -- rejecting
+      `--from`/`--to` naming the same account, and refusing
+      `--purge-dest` combined with `--collection`/`--org-id` -- plus two
+      CLI-parsing tests for the new `rbw mirror` subcommand, one checking
+      `--from`/`--to` are required and one exercising every flag) and
+      `cargo clippy --all-targets` (clean) on `rofl-13`, then `cargo fmt
+      --all` there before syncing back. Both guard clauses were also
+      live-verified with the built binary (`rbw mirror --from ai --to ai`
+      and `rbw mirror --from ai --to bw --collection x --purge-dest`,
+      each failing immediately with the expected error, no account/agent
+      touched) -- these don't need an unlocked account since they run
+      before any config/agent access.
+
+      Full end-to-end live verification (actually copying entries between
+      the `ai`/`bw` test accounts on bw.brkn.lol) could *not* be completed
+      in this session: no agent was running for either account, and the
+      sandboxed environment this was built in has no controlling TTY and
+      no `DISPLAY`/`WAYLAND_DISPLAY`, so pinentry has no way to prompt for
+      either account's master password and there's no safe way to guess
+      or bypass that. A built `v2.12.0` binary is staged for whoever picks
+      this up to finish that check by hand: unlock `ai` and `bw` (each
+      needs its own real pinentry prompt -- `bw`'s configured
+      `credential_source` chain pulls from the `default` account, which is
+      off limits for this feature entirely, so it needs its actual master
+      password entered directly, not the chained shortcut), create one or
+      two fresh disposable entries in a brand-new test collection in one
+      account, then run `rbw mirror --from ai --to bw --collection
+      <that-collection> -y` (or the reverse direction) and confirm they
+      land correctly on the other side -- and clean up the test collection
+      and entries afterward either way.

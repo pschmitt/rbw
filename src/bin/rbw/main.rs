@@ -1129,6 +1129,98 @@ enum Opt {
         stdin: bool,
     },
 
+    #[command(
+        about = "Copy vault contents from one configured account to another",
+        long_about = "Copy vault contents from one configured account to \
+            another\n\n\
+            Reads every entry (and collection) from --from's vault and \
+            recreates it in --to's vault, using the exact same conversion \
+            and entry-creation machinery `rbw export`/`rbw import` use \
+            internally -- no file ever touches disk. Both accounts must \
+            already be configured (see `rbw account add`) and are unlocked \
+            the same way any other command unlocks a named account.\n\n\
+            Named `mirror` rather than `sync` to avoid colliding with the \
+            pre-existing `rbw sync` (which means \"pull the latest vault \
+            from the server for the active account\" and has nothing to do \
+            with copying between accounts).\n\n\
+            By default the entire source vault is copied; --collection or \
+            --org-id scopes it to just one collection or organization \
+            instead. Entries that already exist at the destination \
+            (matched by name, and username for logins) are left untouched \
+            unless --overwrite is given -- identical semantics to `rbw \
+            import`. --attachments also downloads and re-uploads \
+            attachment contents (slower, and considerably more data).\n\n\
+            --purge-dest permanently wipes the destination's personal \
+            vault before copying, via the same server-side purge endpoint \
+            `rbw purge-vault` uses -- only supported for a whole-vault \
+            mirror (no --collection/--org-id); combining them is refused \
+            with an explanatory error rather than attempting a partial \
+            scoped purge.\n\n\
+            This is destructive-adjacent (can overwrite entries, and with \
+            --purge-dest can wipe the destination entirely), so it prints \
+            a preview and asks for confirmation unless -y/--yes is given. \
+            --purge-dest additionally needs the destination's master \
+            password re-proved, exactly like `rbw purge-vault` \
+            (`--stdin` supplies it non-interactively); plain mirroring \
+            (without --purge-dest) needs no fresh password beyond having \
+            both accounts unlocked."
+    )]
+    Mirror {
+        #[arg(
+            long,
+            help = "Account to copy from (must already be configured)"
+        )]
+        from: String,
+        #[arg(
+            long,
+            help = "Account to copy into (must already be configured)"
+        )]
+        to: String,
+        #[arg(
+            long,
+            value_name = "COLLECTION",
+            help = "Only copy entries in this collection (name or ID) \
+                instead of the entire source vault"
+        )]
+        collection: Option<String>,
+        #[arg(
+            long = "org-id",
+            value_name = "ID",
+            help = "Only copy entries belonging to this organization \
+                instead of the entire source vault"
+        )]
+        org_id: Option<String>,
+        #[arg(
+            long,
+            help = "Also copy attachment contents (downloaded from the \
+                source, re-uploaded to the destination)"
+        )]
+        attachments: bool,
+        #[arg(
+            long,
+            help = "Overwrite entries that already exist at the \
+                destination (matched by name/username) instead of \
+                skipping them"
+        )]
+        overwrite: bool,
+        #[arg(
+            long,
+            help = "Permanently wipe the destination's personal vault \
+                before copying (whole-vault mirrors only -- refused \
+                together with --collection/--org-id)"
+        )]
+        purge_dest: bool,
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
+        #[arg(
+            long,
+            help = "Read the destination account's master password from \
+                stdin instead of prompting via pinentry (only meaningful \
+                with --purge-dest)"
+        )]
+        stdin: bool,
+    },
+
     #[command(name = "stop-agent", about = "Terminate the background agent")]
     StopAgent,
 
@@ -1184,6 +1276,7 @@ impl Opt {
             Self::Lock { .. } => "lock".to_string(),
             Self::Purge { .. } => "purge".to_string(),
             Self::PurgeVault { .. } => "purge-vault".to_string(),
+            Self::Mirror { .. } => "mirror".to_string(),
             Self::StopAgent => "stop-agent".to_string(),
             Self::Completions { .. } => "completions".to_string(),
         }
@@ -2555,6 +2648,30 @@ fn main() {
             let password = stdin.then(read_stdin_password);
             commands::purge_vault(yes, password)
         }
+        Opt::Mirror {
+            from,
+            to,
+            collection,
+            org_id,
+            attachments,
+            overwrite,
+            purge_dest,
+            yes,
+            stdin,
+        } => {
+            let password = stdin.then(read_stdin_password);
+            commands::mirror_vault(
+                &from,
+                &to,
+                collection.as_deref(),
+                org_id.as_deref(),
+                attachments,
+                overwrite,
+                purge_dest,
+                yes,
+                password,
+            )
+        }
         Opt::StopAgent => commands::stop_agent(),
         Opt::Completions { shell } => {
             match shell {
@@ -2821,6 +2938,59 @@ mod test {
         ] {
             parse(args);
         }
+    }
+
+    #[test]
+    fn test_mirror_requires_from_and_to() {
+        assert!(Cli::try_parse_from(["rbw", "mirror"]).is_err());
+        assert!(
+            Cli::try_parse_from(["rbw", "mirror", "--from", "a"]).is_err()
+        );
+        parse(&["rbw", "mirror", "--from", "a", "--to", "b"]);
+    }
+
+    #[test]
+    fn test_mirror_parses_every_flag() {
+        let cli = parse(&[
+            "rbw",
+            "mirror",
+            "--from",
+            "ai",
+            "--to",
+            "bw",
+            "--collection",
+            "some-collection",
+            "--org-id",
+            "some-org",
+            "--attachments",
+            "--overwrite",
+            "--purge-dest",
+            "-y",
+            "--stdin",
+        ]);
+        let Opt::Mirror {
+            from,
+            to,
+            collection,
+            org_id,
+            attachments,
+            overwrite,
+            purge_dest,
+            yes,
+            stdin,
+        } = cli.command
+        else {
+            panic!("expected Opt::Mirror");
+        };
+        assert_eq!(from, "ai");
+        assert_eq!(to, "bw");
+        assert_eq!(collection.as_deref(), Some("some-collection"));
+        assert_eq!(org_id.as_deref(), Some("some-org"));
+        assert!(attachments);
+        assert!(overwrite);
+        assert!(purge_dest);
+        assert!(yes);
+        assert!(stdin);
     }
 
     #[test]
