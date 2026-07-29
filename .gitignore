@@ -1,4 +1,5 @@
 /pkg
 /target
 /target-ra
+/result
 .claude/
