@@ -1616,11 +1616,43 @@ fn item_progress_bar(len: u64) -> indicatif::ProgressBar {
     let pb = indicatif::ProgressBar::new(len);
     pb.set_draw_target(indicatif::ProgressDrawTarget::stderr());
     if let Ok(style) = indicatif::ProgressStyle::with_template(
-        "{spinner} {msg} [{bar:30}] {pos}/{len} items",
+        "{spinner} {msg} [{bar:30}] {pos:>5}/{len:5} items",
     ) {
         pb.set_style(style.progress_chars("=> "));
     }
     pb
+}
+
+// The fixed display width `item_progress_bar`'s `{msg}` is held to (via
+// `fit_to_width` below) -- otherwise everything after it (the bar, the
+// counter) visibly shifts left/right as different items' names scroll
+// through at different lengths.
+const PROGRESS_MSG_WIDTH: usize = 40;
+
+// Truncates (with a trailing "...") or space-pads `text` to exactly `width`
+// display columns, measuring with `unicode_width` so multi-byte/wide
+// characters don't throw off a fixed-width single-line progress message.
+fn fit_to_width(text: &str, width: usize) -> String {
+    let text_width = unicode_width::UnicodeWidthStr::width(text);
+    if text_width <= width {
+        return format!("{text}{}", " ".repeat(width - text_width));
+    }
+
+    let mut out = String::new();
+    let mut out_width = 0;
+    for ch in text.chars() {
+        let ch_width =
+            unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if out_width + ch_width > width.saturating_sub(3) {
+            break;
+        }
+        out.push(ch);
+        out_width += ch_width;
+    }
+    out.push_str("...");
+    out_width += 3;
+    out.push_str(&" ".repeat(width.saturating_sub(out_width)));
+    out
 }
 
 // Ask for confirmation before a destructive operation. Only prompts when
@@ -9020,7 +9052,7 @@ fn import_vault(
         u64::try_from(vault.entries.len()).unwrap_or(u64::MAX),
     );
     for imported in &vault.entries {
-        pb.set_message(imported.name.clone());
+        pb.set_message(fit_to_width(&imported.name, PROGRESS_MSG_WIDTH));
 
         let username = match &imported.data {
             ImportedData::Login { username, .. } => username.clone(),
@@ -15130,6 +15162,38 @@ pub fn generate_totp(secret: &str) -> anyhow::Result<String> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    // `item_progress_bar`'s `{msg}` field must stay a fixed display width,
+    // otherwise the bar/counter after it visibly shifts left/right as
+    // different items' names scroll through at different lengths.
+    #[test]
+    fn test_fit_to_width_pads_short_text() {
+        let out = fit_to_width("abc", 6);
+        assert_eq!(out, "abc   ");
+        assert_eq!(unicode_width::UnicodeWidthStr::width(out.as_str()), 6);
+    }
+
+    #[test]
+    fn test_fit_to_width_leaves_exact_width_text_untouched() {
+        let out = fit_to_width("abcdef", 6);
+        assert_eq!(out, "abcdef");
+    }
+
+    #[test]
+    fn test_fit_to_width_truncates_long_text_with_ellipsis() {
+        let out = fit_to_width("abcdefghij", 6);
+        assert_eq!(out, "abc...");
+        assert_eq!(unicode_width::UnicodeWidthStr::width(out.as_str()), 6);
+    }
+
+    #[test]
+    fn test_fit_to_width_measures_wide_characters_not_bytes() {
+        // Each "字" is 2 display columns wide but 3 bytes -- a naive
+        // byte-length truncation would cut a multi-byte character in half.
+        let out = fit_to_width("字字字字字", 6);
+        assert_eq!(unicode_width::UnicodeWidthStr::width(out.as_str()), 6);
+        assert!(out.contains("..."), "{out:?}");
+    }
 
     // `Always` unlocks regardless of `--all`/`all` -- the bug this guards
     // against had `tui_open_with_progress` gating it behind `all` too, so an
