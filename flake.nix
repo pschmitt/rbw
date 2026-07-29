@@ -119,6 +119,8 @@
                   exclude_from = [ ];
                 }
               ];
+              hide_archived = true;
+              hide_trashed = true;
               tui_keybindings = { };
             }
             + "\n";
