@@ -5585,8 +5585,13 @@ pub fn set(
         }
 
         let c = stdout_supports_color();
+        let pb = item_progress_bar(
+            u64::try_from(pending.len()).unwrap_or(u64::MAX),
+        );
         for pu in pending {
-            if let Err(e) = apply_entry_update(
+            pb.set_message(fit_to_width(&pu.entry_name, PROGRESS_MSG_WIDTH));
+
+            let result = apply_entry_update(
                 &mut db,
                 &pu.entry,
                 new_name,
@@ -5597,19 +5602,31 @@ pub fn set(
                 new_totp,
                 !pu.changes.is_empty(),
                 new_attachments,
-            ) {
-                eprintln!("{}: {e:#}", pu.entry_name);
-                any_err = true;
-            } else {
-                println!(
-                    "Item {} was updated",
-                    style::name(&pu.entry_name, c)
-                );
-                if diff {
-                    print_entry_diff(&pu.changes);
+            );
+            // `apply_entry_update`'s existing output is a mix of println!
+            // (stdout) and eprintln! (stderr) -- suspend the bar around it
+            // rather than routing through `pb.println` (which always
+            // targets the bar's own stream), so neither stream's output
+            // changes.
+            pb.suspend(|| {
+                if let Err(e) = &result {
+                    eprintln!("{}: {e:#}", pu.entry_name);
+                } else {
+                    println!(
+                        "Item {} was updated",
+                        style::name(&pu.entry_name, c)
+                    );
+                    if diff {
+                        print_entry_diff(&pu.changes);
+                    }
                 }
+            });
+            if result.is_err() {
+                any_err = true;
             }
+            pb.inc(1);
         }
+        pb.finish_and_clear();
 
         return if any_err {
             Err(anyhow::anyhow!("one or more entries failed to update"))
@@ -6215,7 +6232,13 @@ fn apply_entry_update(
         }
     }
 
-    crate::actions::sync()?;
+    // Nothing after this call in any caller depends on a freshly-synced
+    // `db` -- only skip when there were no attachments uploaded above,
+    // since that's the one thing here the local cache doesn't already
+    // reflect (same reasoning as `import_create_entry`'s sync-skip).
+    if !new_attachments.is_empty() {
+        crate::actions::sync()?;
+    }
     Ok(())
 }
 
@@ -6766,8 +6789,12 @@ fn build_exported_vault(
         .collect();
 
     let mut entries: Vec<ExportedEntry> = Vec::new();
+    let pb = item_progress_bar(
+        u64::try_from(entries_snapshot.len()).unwrap_or(u64::MAX),
+    );
     for entry in &entries_snapshot {
         let decrypted = decrypt_cipher(entry)?;
+        pb.set_message(fit_to_width(&decrypted.name, PROGRESS_MSG_WIDTH));
 
         let exported_attachments =
             if attachments && !entry.attachments.is_empty() {
@@ -6788,7 +6815,9 @@ fn build_exported_vault(
             collection_ids: entry.collection_ids.clone(),
             attachments: exported_attachments,
         });
+        pb.inc(1);
     }
+    pb.finish_and_clear();
 
     let mut collections: Vec<ExportedCollection> = db
         .collections
@@ -9858,9 +9887,13 @@ pub fn assign_collections(
     let all_collections = decrypt_collections(&db)?;
 
     let mut failed = 0_usize;
+    let pb =
+        item_progress_bar(u64::try_from(targets.len()).unwrap_or(u64::MAX));
     for (entry, decrypted) in &targets {
+        pb.set_message(fit_to_width(&decrypted.name, PROGRESS_MSG_WIDTH));
+
         if entry.org_id.is_none() {
-            eprintln!(
+            pb.println(format!(
                 "{} '{}' is {}",
                 style_error("Error:", c),
                 decrypted.name,
@@ -9870,21 +9903,23 @@ pub fn assign_collections(
                     "not owned by an organization, so it cannot be \
                      assigned to collections"
                 },
-            );
+            ));
             failed += 1;
+            pb.inc(1);
             continue;
         }
 
         if personal {
             if !entry.attachments.is_empty() {
-                eprintln!(
+                pb.println(format!(
                     "{} '{}' has attachments, which aren't re-keyed by \
                      this move yet -- refusing to move it to the personal \
                      vault",
                     style_error("Error:", c),
                     decrypted.name,
-                );
+                ));
                 failed += 1;
+                pb.inc(1);
                 continue;
             }
 
@@ -9896,21 +9931,22 @@ pub fn assign_collections(
                 &mut db,
             ) {
                 Ok(()) => {
-                    eprintln!(
+                    pb.println(format!(
                         "{} {} to your personal vault",
                         style::success("Moved", c),
                         style::name(&decrypted.name, c),
-                    );
+                    ));
                 }
                 Err(e) => {
-                    eprintln!(
+                    pb.println(format!(
                         "{} failed to move '{}': {e:#}",
                         style_error("Error:", c),
                         decrypted.name,
-                    );
+                    ));
                     failed += 1;
                 }
             }
+            pb.inc(1);
             continue;
         }
 
@@ -9927,11 +9963,11 @@ pub fn assign_collections(
                     }
                 }
                 Err(e) => {
-                    eprintln!(
+                    pb.println(format!(
                         "{} '{}': {e:#}",
                         style_error("Error:", c),
                         decrypted.name,
-                    );
+                    ));
                     resolve_failed = true;
                     break;
                 }
@@ -9939,6 +9975,7 @@ pub fn assign_collections(
         }
         if resolve_failed {
             failed += 1;
+            pb.inc(1);
             continue;
         }
 
@@ -9954,7 +9991,7 @@ pub fn assign_collections(
                     db.access_token = Some(new_access_token);
                     save_db(&db)?;
                 }
-                eprintln!(
+                pb.println(format!(
                     "{} {} to {}",
                     style::success("Assigned", c),
                     style::name(&decrypted.name, c),
@@ -9963,18 +10000,20 @@ pub fn assign_collections(
                         .map(|name| style::name(name, c))
                         .collect::<Vec<_>>()
                         .join(", "),
-                );
+                ));
             }
             Err(e) => {
-                eprintln!(
+                pb.println(format!(
                     "{} failed to assign '{}': {e:#}",
                     style_error("Error:", c),
                     decrypted.name,
-                );
+                ));
                 failed += 1;
             }
         }
+        pb.inc(1);
     }
+    pb.finish_and_clear();
 
     crate::actions::sync()?;
 
@@ -10086,15 +10125,20 @@ pub fn unassign_collections(
     let all_collections = decrypt_collections(&db)?;
 
     let mut failed = 0_usize;
+    let pb =
+        item_progress_bar(u64::try_from(targets.len()).unwrap_or(u64::MAX));
     for (entry, decrypted) in &targets {
+        pb.set_message(fit_to_width(&decrypted.name, PROGRESS_MSG_WIDTH));
+
         let Some(org_id) = entry.org_id.as_deref() else {
-            eprintln!(
+            pb.println(format!(
                 "{} '{}' is not owned by an organization, so it has no \
                  collections to remove",
                 style_error("Error:", c),
                 decrypted.name,
-            );
+            ));
             failed += 1;
+            pb.inc(1);
             continue;
         };
 
@@ -10111,11 +10155,11 @@ pub fn unassign_collections(
                 ) {
                     Ok(collection) => remove_ids.push(collection.id.clone()),
                     Err(e) => {
-                        eprintln!(
+                        pb.println(format!(
                             "{} '{}': {e:#}",
                             style_error("Error:", c),
                             decrypted.name,
-                        );
+                        ));
                         resolve_failed = true;
                         break;
                     }
@@ -10123,6 +10167,7 @@ pub fn unassign_collections(
             }
             if resolve_failed {
                 failed += 1;
+                pb.inc(1);
                 continue;
             }
             entry
@@ -10145,7 +10190,7 @@ pub fn unassign_collections(
                     db.access_token = Some(new_access_token);
                     save_db(&db)?;
                 }
-                eprintln!(
+                pb.println(format!(
                     "{} {} from {}",
                     style::success("Removed", c),
                     style::name(&decrypted.name, c),
@@ -10154,18 +10199,20 @@ pub fn unassign_collections(
                     } else {
                         collections.join(", ")
                     },
-                );
+                ));
             }
             Err(e) => {
-                eprintln!(
+                pb.println(format!(
                     "{} failed to unassign '{}': {e:#}",
                     style_error("Error:", c),
                     decrypted.name,
-                );
+                ));
                 failed += 1;
             }
         }
+        pb.inc(1);
     }
+    pb.finish_and_clear();
 
     crate::actions::sync()?;
 
@@ -10249,6 +10296,60 @@ pub fn delete_collection(
     crate::actions::sync()?;
 
     Ok(())
+}
+
+// Permanently deletes every entry in a collection, leaving the (now empty)
+// collection itself and everything outside it untouched -- the standalone,
+// user-facing counterpart to `purge_collection_entries` (which `mirror
+// --purge-dest --dest-collection` already calls, under its own whole-
+// mirror confirmation). Confirms here instead, matching `purge-vault`/
+// `collection delete`'s gating convention, since this has no other prompt
+// covering it.
+pub fn purge_collection(
+    collection: &str,
+    org_id: Option<&str>,
+    yes: bool,
+) -> anyhow::Result<()> {
+    unlock(None, None)?;
+
+    let db = load_db()?;
+    let org_id = resolve_org(&db, org_id)?;
+    let all_collections = decrypt_collections(&db)?;
+    let resolved =
+        resolve_collection(&all_collections, collection, Some(&org_id))?;
+    let collection_id = resolved.id.clone();
+    let collection_name = resolved.name.clone();
+
+    let count = db
+        .entries
+        .iter()
+        .filter(|e| e.collection_ids.contains(&collection_id))
+        .count();
+
+    let c = stdout_supports_color();
+    if count == 0 {
+        eprintln!(
+            "{} no entries currently in '{collection_name}' -- nothing to \
+             purge",
+            style::warning("Note:", c)
+        );
+        return Ok(());
+    }
+
+    if !yes {
+        let prompt = format!(
+            "{} this will permanently delete {count} entr{} from \
+             collection '{collection_name}'. This cannot be undone! \
+             Continue?",
+            style_error("DANGER:", c),
+            if count == 1 { "y" } else { "ies" }
+        );
+        if !confirm(&prompt)? {
+            return Ok(());
+        }
+    }
+
+    purge_collection_entries(&collection_id)
 }
 
 pub fn rename_collection(

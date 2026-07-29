@@ -1598,6 +1598,28 @@ enum Collection {
         #[arg(short = 'y', long, help = "Skip confirmation prompt")]
         yes: bool,
     },
+    #[command(
+        about = "PERMANENTLY delete every entry in a collection",
+        long_about = "PERMANENTLY delete every entry in a collection\n\n\
+            The collection itself (and everything outside it) is left \
+            untouched -- only its member entries are permanently deleted, \
+            via the same per-cipher delete `rbw remove --force` uses (not \
+            a soft/trash-recoverable delete). This cannot be undone.\n\n\
+            Prompts for confirmation unless -y/--yes is given, matching \
+            `rbw purge-vault`/`rbw collection delete`'s gating convention."
+    )]
+    Purge {
+        #[arg(help = "Name or ID of the collection")]
+        collection: String,
+        #[arg(
+            long = "org-id",
+            help = "Organization ID (auto-detected if the vault has a \
+                single org)"
+        )]
+        org_id: Option<String>,
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
+    },
     #[command(about = "Rename an organization collection")]
     Rename {
         #[arg(help = "Name or ID of the collection")]
@@ -1781,6 +1803,7 @@ impl Collection {
             Self::List { .. } => "list",
             Self::Create { .. } => "create",
             Self::Delete { .. } => "delete",
+            Self::Purge { .. } => "purge",
             Self::Rename { .. } => "rename",
             Self::Assign { .. } => "assign",
             Self::Unassign { .. } => "unassign",
@@ -2535,6 +2558,15 @@ fn main() {
                 org_id.as_deref(),
                 yes,
             ),
+            Collection::Purge {
+                collection,
+                org_id,
+                yes,
+            } => commands::purge_collection(
+                &collection,
+                org_id.as_deref(),
+                yes,
+            ),
             Collection::Rename {
                 collection,
                 name,
@@ -2839,6 +2871,16 @@ mod test {
             &["rbw", "collection", "rm", "name"][..],
             &["rbw", "collection", "remove", "name"][..],
             &["rbw", "collection", "del", "name"][..],
+            &["rbw", "collection", "purge", "name"][..],
+            &[
+                "rbw",
+                "collection",
+                "purge",
+                "name",
+                "--org-id",
+                "org",
+                "-y",
+            ][..],
             &["rbw", "collection", "rename", "old", "new"][..],
             &[
                 "rbw",
@@ -3052,6 +3094,7 @@ mod test {
             &["rbw", "attachment", "rm", "-y", "name"][..],
             &["rbw", "purge", "-y"][..],
             &["rbw", "collection", "delete", "name", "--yes"][..],
+            &["rbw", "collection", "purge", "name", "-y"][..],
         ] {
             parse(args);
         }
