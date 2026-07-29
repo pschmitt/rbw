@@ -1,0 +1,8 @@
+.git
+.github
+.claude
+target
+target-ra
+result
+*.tar.gz
+/pkg
