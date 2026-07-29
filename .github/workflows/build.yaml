@@ -17,6 +17,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --all-targets --all-features
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rbw-x86_64-unknown-linux-gnu-debug
+          path: |
+            target/debug/rbw
+            target/debug/rbw-agent
+          if-no-files-found: error
   build-musl:
     runs-on: ubuntu-latest
     steps:
