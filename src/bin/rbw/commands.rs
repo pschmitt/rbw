@@ -8880,6 +8880,13 @@ fn create_entries_individually(
     refresh_token: &mut String,
     collection_id_map: &std::collections::HashMap<String, String>,
     entries: &[&ImportedEntry],
+    // Appended to each success line (e.g. " (recovered from a dropped bulk-
+    // import entry -- already counted, not additional)") -- empty for
+    // callers where an individually-created entry isn't otherwise
+    // surprising, non-empty for the post-bulk-import retry, where it isn't
+    // obvious without this that the entry was already part of the batch
+    // total rather than an extra one.
+    note: &str,
 ) -> (usize, Vec<(String, String)>, usize, usize) {
     if entries.is_empty() {
         return (0, Vec::new(), 0, 0);
@@ -8907,7 +8914,7 @@ fn create_entries_individually(
                 attachments_restored += restored;
                 attachments_failed += failed;
                 pb.println(format!(
-                    "{} '{}'",
+                    "{} '{}'{note}",
                     style::success("Created", c),
                     imported.name,
                 ));
@@ -9013,6 +9020,7 @@ fn bulk_create_batch(
             refresh_token,
             collection_id_map,
             &individual_entries,
+            "",
         );
         created += c2;
         failed_names.extend(f2);
@@ -9176,6 +9184,7 @@ fn bulk_create_batch(
                 refresh_token,
                 collection_id_map,
                 &bulk_entries,
+                "",
             );
             return Ok((
                 created + c2,
@@ -9290,11 +9299,14 @@ fn bulk_create_batch(
 
     if !retry.is_empty() {
         eprintln!(
-            "{} {} entr{} weren't found after the bulk import -- retrying \
-             individually",
+            "{} {} of the {} entr{} above weren't found after the bulk \
+             import -- retrying {} individually (already counted in the \
+             total, not additional)",
             style::warning("Note:", c),
             retry.len(),
-            if retry.len() == 1 { "y" } else { "ies" },
+            bulk_entries.len(),
+            if bulk_entries.len() == 1 { "y" } else { "ies" },
+            if retry.len() == 1 { "it" } else { "them" },
         );
         let (c2, f2, ar2, af2) = create_entries_individually(
             db,
@@ -9302,6 +9314,7 @@ fn bulk_create_batch(
             refresh_token,
             collection_id_map,
             &retry,
+            " (recovered)",
         );
         created += c2;
         failed_names.extend(f2);
