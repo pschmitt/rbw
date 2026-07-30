@@ -152,6 +152,11 @@ fn run_loop(
                     Action::AutoUnlockAndSyncAccount(name) => {
                         auto_unlock_and_sync_account(terminal, app, &name)?;
                     }
+                    Action::LockScreen => {
+                        if let Err(e) = app.lock_screen() {
+                            app.set_error(format!("{e:#}"));
+                        }
+                    }
                 }
             }
             Event::Mouse(mouse) => {

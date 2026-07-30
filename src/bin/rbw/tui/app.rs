@@ -34,6 +34,10 @@ pub enum Action {
     SyncAccount(String),
     // Auto-unlock a linked account and sync it entirely inside the TUI.
     AutoUnlockAndSyncAccount(String),
+    // Lock the active account and show the TUI lock screen. The subsequent
+    // unlock is bounced to the event loop because pinentry needs the real
+    // terminal.
+    LockScreen,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -71,6 +75,9 @@ pub enum Mode {
     // `App::poll_agent_lock`. Blocks normal interaction until the user
     // re-unlocks (or quits), same as the other modal overlays.
     LockedPrompt(String),
+    // The user manually locked the TUI. Unlike `LockedPrompt`, this modal
+    // cannot be dismissed without re-entering the master password.
+    ScreenLocked(String),
     // A sync for the named account failed because its refresh token was
     // rejected by the server (`Error::SessionExpired`) -- the local vault
     // is still unlocked and readable, but talking to the server again
@@ -1605,8 +1612,11 @@ impl App {
         self.refresh_accounts_view();
         // Resolves the lock-detection modal, if that's what triggered this
         // unlock.
-        if matches!(&self.mode, Mode::LockedPrompt(locked) if locked == name)
-        {
+        if matches!(
+            &self.mode,
+            Mode::LockedPrompt(locked) | Mode::ScreenLocked(locked)
+                if locked == name
+        ) {
             self.mode = Mode::Normal;
         }
         Ok(())
@@ -1683,7 +1693,8 @@ impl App {
 
         // Already showing the prompt for a lock we detected on an earlier
         // tick; nothing new to do until the user resolves it.
-        if matches!(self.mode, Mode::LockedPrompt(_)) {
+        if matches!(self.mode, Mode::LockedPrompt(_) | Mode::ScreenLocked(_))
+        {
             return;
         }
 
@@ -1719,6 +1730,33 @@ impl App {
         // Force anything currently displayed unmasked back to hidden.
         self.reveal = false;
         self.mode = Mode::LockedPrompt(name);
+    }
+
+    // Hide the TUI behind a password gate after the agent has locked the
+    // selected account. Kept separate from `handle_agent_locked`: that path
+    // reacts to an external/automatic agent lock and deliberately permits a
+    // dismiss-and-retry flow, while a manual screen lock must stay blocking.
+    fn handle_screen_locked(&mut self, name: String) {
+        self.detail_cache.clear();
+        self.reveal = false;
+        self.mode = Mode::ScreenLocked(name);
+    }
+
+    // Lock the account owning the current selection. The agent lock is
+    // important here: calling the normal unlock path while the agent remains
+    // unlocked would skip pinentry entirely.
+    pub fn lock_screen(&mut self) -> anyhow::Result<()> {
+        let Some(name) = self
+            .current_account_name()
+            .or_else(|| self.vaults.first().map(|v| v.name.clone()))
+        else {
+            self.set_status(Level::Warn, "no unlocked account to lock");
+            return Ok(());
+        };
+        crate::actions::set_active_account(Some(name.clone()))?;
+        commands::lock(false)?;
+        self.handle_screen_locked(name);
+        Ok(())
     }
 
     // A sync error's message is the only thing that survives the round
@@ -1764,6 +1802,22 @@ impl App {
                 self.mode = Mode::Normal;
                 Action::None
             }
+        }
+    }
+
+    // The manually requested screen lock is a true gate: only the explicit
+    // unlock keys or quitting are accepted. In particular, an accidental
+    // keypress must not expose the vault again without authentication.
+    fn handle_screen_locked(&mut self, key: KeyEvent) -> Action {
+        let Mode::ScreenLocked(name) = &self.mode else {
+            return Action::None;
+        };
+        match key.code {
+            KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+                Action::UnlockAccount(name.clone())
+            }
+            KeyCode::Char('q' | 'Q') => Action::Quit,
+            _ => Action::None,
         }
     }
 
@@ -2275,6 +2329,7 @@ impl App {
                 Action::None
             }
             Mode::LockedPrompt(_) => self.handle_locked_prompt(key),
+            Mode::ScreenLocked(_) => self.handle_screen_locked(key),
             Mode::SessionExpiredPrompt(_) => {
                 self.handle_session_expired_prompt(key)
             }
@@ -2364,6 +2419,7 @@ impl App {
             Some(TuiAction::CycleArchivedFilter) => {
                 self.cycle_archived_filter();
             }
+            Some(TuiAction::LockScreen) => return Action::LockScreen,
             Some(TuiAction::Sync) => self.sync(),
             Some(TuiAction::Help) => self.mode = Mode::Help,
             _ => {}
@@ -3562,6 +3618,43 @@ mod test {
             a.mode = Mode::LockedPrompt("default".to_string());
             assert!(matches!(a.handle_key(key(k)), Action::Quit));
         }
+    }
+
+    #[test]
+    fn lock_key_requests_a_screen_lock() {
+        let mut a = app_with_entries(1);
+        assert!(matches!(
+            a.handle_key(key(KeyCode::Char('l'))),
+            Action::LockScreen
+        ));
+    }
+
+    #[test]
+    fn screen_lock_is_blocking_until_unlock_or_quit() {
+        let mut a = app_with_entries(1);
+        a.reveal = true;
+        a.handle_screen_locked("default".to_string());
+        assert!(!a.reveal);
+        assert!(matches!(
+            a.mode,
+            Mode::ScreenLocked(ref name) if name == "default"
+        ));
+
+        assert!(matches!(
+            a.handle_key(key(KeyCode::Char('n'))),
+            Action::None
+        ));
+        assert!(matches!(a.mode, Mode::ScreenLocked(_)));
+
+        assert!(matches!(
+            a.handle_key(key(KeyCode::Enter)),
+            Action::UnlockAccount(name) if name == "default"
+        ));
+        a.mode = Mode::ScreenLocked("default".to_string());
+        assert!(matches!(
+            a.handle_key(key(KeyCode::Char('q'))),
+            Action::Quit
+        ));
     }
 
     // Same accept/dismiss keybinds as the lock-detection modal, but reached

@@ -230,6 +230,7 @@ pub enum TuiAction {
     // Cycles the main list's archived-visibility filter: Hide (default) ->
     // Only -> Include -> Hide.
     CycleArchivedFilter,
+    LockScreen,
     Sync,
     Help,
     AttachmentClose,
@@ -284,6 +285,7 @@ impl TuiAction {
         Self::DeleteEntry,
         Self::ToggleArchived,
         Self::CycleArchivedFilter,
+        Self::LockScreen,
         Self::Sync,
         Self::Help,
         Self::AttachmentClose,
@@ -361,6 +363,7 @@ impl TuiAction {
             Self::DeleteEntry => "delete",
             Self::ToggleArchived => "toggle_archived",
             Self::CycleArchivedFilter => "cycle_archived_filter",
+            Self::LockScreen => "lock_screen",
             Self::Sync => "sync",
             Self::Help => "help",
             Self::AttachmentClose => "attachment_close",
@@ -427,6 +430,7 @@ impl TuiAction {
             Self::AttachmentDelete | Self::DeleteEntry => &["d"],
             Self::ToggleArchived => &["x"],
             Self::CycleArchivedFilter => &["X"],
+            Self::LockScreen => &["l"],
             Self::AccountUnlock => &["enter", "u"],
             Self::AccountSync => &["s"],
             Self::AccountSetPrimary => &["p"],

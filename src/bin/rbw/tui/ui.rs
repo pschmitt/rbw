@@ -132,6 +132,11 @@ pub fn render(f: &mut Frame, app: &App) {
         render_locked_prompt(f, name, f.area());
         return;
     }
+    if let Mode::ScreenLocked(name) = &app.mode {
+        f.render_widget(Clear, f.area());
+        render_screen_locked(f, name, f.area());
+        return;
+    }
     if let Mode::SessionExpiredPrompt(name) = &app.mode {
         f.render_widget(Clear, f.area());
         render_session_expired_prompt(f, name, f.area());
@@ -165,7 +170,9 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::Settings(view) => render_settings(f, view, main),
         Mode::Help => render_help(f, app, main),
         Mode::Normal | Mode::Search => {}
-        Mode::LockedPrompt(_) | Mode::SessionExpiredPrompt(_) => {
+        Mode::LockedPrompt(_)
+        | Mode::ScreenLocked(_)
+        | Mode::SessionExpiredPrompt(_) => {
             unreachable!()
         }
     }
@@ -931,11 +938,12 @@ fn status_hint(app: &App) -> String {
         Mode::LockedPrompt(_) => {
             "⏎/y unlock · q quit · any other key dismiss".to_string()
         }
+        Mode::ScreenLocked(_) => "⏎/y unlock · q quit".to_string(),
         Mode::SessionExpiredPrompt(_) => {
             "⏎/y log in · q quit · any other key dismiss".to_string()
         }
         Mode::Normal => format!(
-            "{} search · {} edit · {} add · {} delete · {} archive · {}/{}/{} copy · {} open · {} attach · {} accounts · {} settings · {} sync · {} reveal · {} help · {} quit",
+            "{} search · {} edit · {} add · {} delete · {} archive · {}/{}/{} copy · {} open · {} attach · {} accounts · {} settings · {} sync · {} lock · {} reveal · {} help · {} quit",
             km.primary_chord(TuiAction::ToggleSearch),
             km.primary_chord(TuiAction::StartEdit),
             km.primary_chord(TuiAction::StartAdd),
@@ -949,6 +957,7 @@ fn status_hint(app: &App) -> String {
             km.primary_chord(TuiAction::OpenAccounts),
             km.primary_chord(TuiAction::OpenSettings),
             km.primary_chord(TuiAction::Sync),
+            km.primary_chord(TuiAction::LockScreen),
             km.primary_chord(TuiAction::ToggleReveal),
             km.primary_chord(TuiAction::Help),
             km.primary_chord(TuiAction::Quit),
@@ -1353,6 +1362,39 @@ fn render_locked_prompt(f: &mut Frame, name: &str, area: Rect) {
     f.render_widget(Paragraph::new(text).alignment(Alignment::Center), inner);
 }
 
+// A manually requested screen lock. Unlike the agent-lock recovery prompt,
+// this cannot be dismissed: Enter/y drops out to pinentry, and q quits.
+fn render_screen_locked(f: &mut Frame, name: &str, area: Rect) {
+    let rect = centered(56, 6, area);
+    let b = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(Span::styled(
+            " screen locked ",
+            Style::default().fg(Color::Yellow).bold(),
+        ));
+    let inner = b.inner(rect);
+    f.render_widget(b, rect);
+    let text = Text::from(vec![
+        Line::from(vec![
+            Span::raw("The TUI for "),
+            Span::styled(
+                format!("'{name}'"),
+                Style::default().fg(Color::White).bold(),
+            ),
+            Span::raw(" is locked."),
+        ]),
+        Line::raw("Enter the master password to continue."),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "⏎/y unlock · q quit",
+            Style::default().fg(DIM),
+        )),
+    ]);
+    f.render_widget(Paragraph::new(text).alignment(Alignment::Center), inner);
+}
+
 // A sync discovered the account's refresh token is dead (`Error::
 // SessionExpired`) -- the local vault is still unlocked and browsable, but
 // talking to the server again needs a fresh interactive login rather than
@@ -1583,7 +1625,7 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
     let km = &app.keymap;
     let dc = |action: TuiAction| km.display_chords(action).join(" · ");
 
-    let entries: [(String, &str); 23] = [
+    let entries: [(String, &str); 24] = [
         (
             "type".to_string(),
             "filter the list (search is always live)",
@@ -1627,6 +1669,10 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
             "browse / download attachments",
         ),
         (dc(TuiAction::Sync), "sync with the server (any focus)"),
+        (
+            dc(TuiAction::LockScreen),
+            "lock the TUI and require the master password",
+        ),
         (dc(TuiAction::StartEdit), "edit item (inline form)"),
         (
             dc(TuiAction::OpenEditor),
@@ -1809,6 +1855,10 @@ mod test {
 
         // Agent lock-detection modal.
         app.mode = Mode::LockedPrompt("personal".to_string());
+        draw(&app);
+
+        // Manual screen-lock modal.
+        app.mode = Mode::ScreenLocked("personal".to_string());
         draw(&app);
 
         // Expired-session modal.
