@@ -451,7 +451,20 @@ Entries that belonged to an organization the target account isn't a member
 of are imported into the personal vault instead of failing. Pass
 `--collection <name-or-id>` to redirect every imported entry into one
 existing collection instead, ignoring whatever organization/collection/
-folder metadata the export carries.
+folder metadata the export carries; add `--org <name-or-id>` to disambiguate
+`--collection`'s name when it exists in more than one organization (it has
+no effect without `--collection`).
+
+By default `rbw export` writes the entire vault (personal vault plus
+everything in every organization the account belongs to). Pass
+`--collection <name-or-id>` and/or `--org <name-or-id>` to export just one
+collection or organization instead -- the same name-or-ID resolution (and
+`--org`-to-disambiguate-`--collection`) as `rbw list`/`rbw search`:
+
+```sh
+rbw export --org acme --output acme-backup.json
+rbw export --collection Infra --org acme --output infra-backup.json
+```
 
 Pass `--attachments` on export to also download and embed decrypted
 attachment contents (base64-encoded) in the export; this makes the export

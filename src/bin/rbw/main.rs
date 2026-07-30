@@ -455,6 +455,21 @@ enum Opt {
                 is created with mode 0600."
         )]
         output: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "COLLECTION",
+            help = "Only export entries in this collection (name or ID) \
+                instead of the entire vault"
+        )]
+        collection: Option<String>,
+        #[arg(
+            long,
+            value_name = "ORG",
+            help = "Only export entries in this organization (name or ID); \
+                combine with --collection to disambiguate a collection \
+                name that exists in more than one org"
+        )]
+        org: Option<String>,
     },
 
     #[command(
@@ -479,7 +494,10 @@ enum Opt {
             inline, but that exposes it to `ps` and shell history.\n\n\
             --collection redirects every imported entry into a single \
             existing collection, ignoring whatever \
-            organization/collection/folder metadata the export carries.\n\n\
+            organization/collection/folder metadata the export carries; \
+            --org disambiguates --collection's name when it exists in more \
+            than one organization (it has no effect without \
+            --collection).\n\n\
             Entries that already exist (matched by name, and username for \
             logins) are left untouched and reported as skipped; pass \
             --overwrite to update them in place instead. Entries belonging \
@@ -522,6 +540,14 @@ enum Opt {
                 metadata the export carries"
         )]
         collection: Option<String>,
+        #[arg(
+            long,
+            value_name = "ORG",
+            help = "Resolve --collection's name against only this \
+                organization (name or ID), for when the same collection \
+                name exists in more than one org"
+        )]
+        org: Option<String>,
         #[arg(
             long,
             help = "Overwrite entries that already exist (matched by \
@@ -2225,11 +2251,15 @@ fn main() {
             attachments,
             encrypt,
             output,
+            collection,
+            org,
         } => commands::export(
             format,
             attachments,
             encrypt.as_deref(),
             output.as_deref(),
+            collection.as_deref(),
+            org.as_deref(),
         ),
         Opt::Import {
             file,
@@ -2237,6 +2267,7 @@ fn main() {
             decrypt,
             decrypt_passphrase,
             collection,
+            org,
             overwrite,
         } => commands::import(
             file.as_deref(),
@@ -2244,6 +2275,7 @@ fn main() {
             decrypt,
             decrypt_passphrase.as_deref(),
             collection.as_deref(),
+            org.as_deref(),
             overwrite,
         ),
         Opt::List {
@@ -3057,6 +3089,57 @@ mod test {
         };
         assert_eq!(find_args.collection.as_deref(), Some("Infra"));
         assert_eq!(find_args.org.as_deref(), Some("acme"));
+    }
+
+    #[test]
+    fn test_export_and_import_accept_collection_and_org() {
+        let cli = parse(&[
+            "rbw",
+            "export",
+            "--collection",
+            "Infra",
+            "--org",
+            "acme",
+        ]);
+        let Opt::Export {
+            collection, org, ..
+        } = cli.command
+        else {
+            panic!("expected Opt::Export");
+        };
+        assert_eq!(collection.as_deref(), Some("Infra"));
+        assert_eq!(org.as_deref(), Some("acme"));
+
+        let cli = parse(&["rbw", "export"]);
+        let Opt::Export {
+            collection, org, ..
+        } = cli.command
+        else {
+            panic!("expected Opt::Export");
+        };
+        assert_eq!(collection, None);
+        assert_eq!(org, None);
+
+        let cli = parse(&[
+            "rbw",
+            "import",
+            "--collection",
+            "Infra",
+            "--org",
+            "acme",
+        ]);
+        let Opt::Import {
+            collection, org, ..
+        } = cli.command
+        else {
+            panic!("expected Opt::Import");
+        };
+        assert_eq!(collection.as_deref(), Some("Infra"));
+        assert_eq!(org.as_deref(), Some("acme"));
+
+        // --org without --collection parses fine too (it's a no-op without
+        // --collection, not an error -- same as --dest-org on `mirror`).
+        parse(&["rbw", "import", "--org", "acme"]);
     }
 
     #[test]

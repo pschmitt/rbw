@@ -7115,33 +7115,24 @@ fn entry_in_collection_org_scope(
 
 // Builds rbw's own decrypted `ExportedVault` shape from the currently
 // active account (see `crate::actions::set_active_account`) -- shared by
-// `export` (whole vault, no scoping) and `mirror_vault` (which additionally
-// scopes to a single `--collection` and/or `--org-id`, since a cross-account
-// copy shouldn't have to mean "the entire source vault"). Assumes the
+// `export` and `mirror_vault`, both of which can additionally scope to a
+// single `--collection` and/or `--org`, since neither an export nor a
+// cross-account copy should have to mean "the entire vault". Assumes the
 // account is already unlocked.
 fn build_exported_vault(
     attachments: bool,
     collection: Option<&str>,
-    org_id: Option<&str>,
+    org: Option<&str>,
 ) -> anyhow::Result<ExportedVault> {
     let mut db = load_db()?;
 
-    // Resolve `--collection` against the decrypted collection list up
-    // front (restricted to `--org-id` when both are given, so a collection
-    // name that only matches within that org doesn't need to be globally
-    // unique). `--org-id` alone (no `--collection`) just filters by
-    // organization directly.
-    let (scope_collection_id, scope_org_id): (
-        Option<String>,
-        Option<String>,
-    ) = match collection {
-        Some(needle) => {
-            let decrypted = decrypt_collections(&db)?;
-            let found = resolve_collection(&decrypted, needle, org_id)?;
-            (Some(found.id.clone()), Some(found.org_id.clone()))
-        }
-        None => (None, org_id.map(std::string::ToString::to_string)),
-    };
+    // Same name-or-ID `--collection`/`--org` resolution the find-family
+    // commands (get/show/list/search/...) use: `--org` alone filters by
+    // organization directly, `--collection` (optionally combined with
+    // `--org` to disambiguate a name shared across orgs) resolves to one
+    // specific collection.
+    let (scope_collection_id, scope_org_id) =
+        resolve_entry_scope(&db, collection, org)?;
 
     let entries_snapshot: Vec<rbw::db::Entry> = db
         .entries
@@ -7214,6 +7205,8 @@ pub fn export(
     attachments: bool,
     encrypt: Option<&str>,
     output: Option<&std::path::Path>,
+    collection: Option<&str>,
+    org: Option<&str>,
 ) -> anyhow::Result<()> {
     use crate::import_bitwarden::ExportFormat;
 
@@ -7238,7 +7231,7 @@ pub fn export(
 
     unlock(None, None)?;
 
-    let vault = build_exported_vault(attachments, None, None)?;
+    let vault = build_exported_vault(attachments, collection, org)?;
     // Reloaded (rather than threaded through `build_exported_vault`) purely
     // for the KDF settings the `BitwardenEncryptedJson` branch below needs;
     // cheap, since it's just the local db.json cache, and none of those
@@ -9795,6 +9788,7 @@ pub fn import(
     decrypt: bool,
     decrypt_passphrase: Option<&str>,
     collection: Option<&str>,
+    org: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
     // Resolve the passphrase up front so `--decrypt`'s prompt happens
@@ -9854,7 +9848,7 @@ pub fn import(
         }
     };
 
-    import_vault(vault, collection, None, overwrite)
+    import_vault(vault, collection, org, overwrite)
 }
 
 // Creates/updates entries and collections in the currently active account

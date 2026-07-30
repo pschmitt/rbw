@@ -646,3 +646,29 @@
           unrelated to this fix.
         No lingering `rbw-agent` processes after cleanup; temp export
         files shredded.
+
+## `export`/`import` collection and org scoping
+
+54. [x] `rbw export` previously always exported the entire vault; added
+        `--collection <name-or-id>` and `--org <name-or-id>` (same
+        name-or-ID resolution as `list`/`search`/`get`/`show`/`edit`/...,
+        via the shared `resolve_entry_scope` helper) to scope it to one
+        collection and/or organization instead. `build_exported_vault`
+        (shared by `export` and `mirror_vault`) now delegates its
+        `--collection`/`--org` resolution to `resolve_entry_scope`
+        instead of its own bespoke, ID-only `--org-id` matching --
+        `mirror --org-id` transparently gained name-or-ID support too as
+        a side effect (strictly backward compatible: `resolve_organization`
+        tries an exact ID match first).
+55. [x] `rbw import --collection` redirects every imported entry into one
+        existing collection, but a collection name shared across more
+        than one organization was ambiguous with no way to disambiguate
+        from the CLI (unlike `mirror`'s `--dest-collection`/`--dest-org`,
+        which already supported this via `import_vault`'s existing
+        `dest_org` parameter -- `import`'s own CLI just never exposed
+        it). Added `--org <name-or-id>` to `import`, wired straight
+        through to that same existing parameter; --org has no effect
+        without --collection, matching --dest-org's behavior on mirror.
+        Added CLI-parse tests for both commands' new flags (`cargo test`:
+        216 passed, up from 215) alongside the existing `cargo clippy
+        --all-targets`/`cargo fmt` checks, all clean.
