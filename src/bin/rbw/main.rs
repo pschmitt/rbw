@@ -1178,7 +1178,11 @@ enum Opt {
             destination's master password re-proved, exactly like `rbw \
             purge-vault` (`--stdin` supplies it non-interactively); plain \
             mirroring, and --purge-dest combined with --dest-collection, \
-            need no fresh password beyond having both accounts unlocked."
+            need no fresh password beyond having both accounts unlocked.\n\n\
+            --dry-run prints that same preview and stops there -- no \
+            confirmation prompt, no destination account touched at all -- \
+            for previewing what a mirror would do (including how many \
+            entries it would find) without risking it."
     )]
     Mirror {
         #[arg(
@@ -1243,6 +1247,13 @@ enum Opt {
                 with --purge-dest)"
         )]
         stdin: bool,
+        #[arg(
+            long,
+            help = "Print the plan (accounts, scope, entry/collection \
+                counts, flags) and exit without touching the destination \
+                or prompting for confirmation"
+        )]
+        dry_run: bool,
     },
 
     #[command(name = "stop-agent", about = "Terminate the background agent")]
@@ -2723,6 +2734,7 @@ fn main() {
             purge_dest,
             yes,
             stdin,
+            dry_run,
         } => {
             let password = stdin.then(read_stdin_password);
             commands::mirror_vault(
@@ -2736,6 +2748,7 @@ fn main() {
                 purge_dest,
                 yes,
                 password,
+                dry_run,
             )
         }
         Opt::StopAgent => commands::stop_agent(),
@@ -3045,6 +3058,7 @@ mod test {
             "--purge-dest",
             "-y",
             "--stdin",
+            "--dry-run",
         ]);
         let Opt::Mirror {
             from,
@@ -3057,6 +3071,7 @@ mod test {
             purge_dest,
             yes,
             stdin,
+            dry_run,
         } = cli.command
         else {
             panic!("expected Opt::Mirror");
@@ -3071,6 +3086,7 @@ mod test {
         assert!(purge_dest);
         assert!(yes);
         assert!(stdin);
+        assert!(dry_run);
     }
 
     #[test]

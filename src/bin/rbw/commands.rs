@@ -9909,6 +9909,7 @@ pub fn mirror_vault(
     purge_dest: bool,
     yes: bool,
     password: Option<String>,
+    dry_run: bool,
 ) -> anyhow::Result<()> {
     if from == to {
         anyhow::bail!("--from and --to must name different accounts");
@@ -9988,6 +9989,15 @@ pub fn mirror_vault(
                 style_error("Purge:", c)
             );
         }
+    }
+
+    if dry_run {
+        eprintln!(
+            "\n{} no changes made; the destination account was never \
+             touched.",
+            style::success("Dry run:", c)
+        );
+        return Ok(());
     }
 
     if !yes {
@@ -19925,7 +19935,8 @@ mod test {
     #[test]
     fn test_mirror_vault_rejects_identical_from_and_to() {
         let err = mirror_vault(
-            "same", "same", None, None, None, false, false, false, true, None,
+            "same", "same", None, None, None, false, false, false, true,
+            None, false,
         )
         .unwrap_err()
         .to_string();
@@ -19945,6 +19956,7 @@ mod test {
             true,
             true,
             None,
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -19962,6 +19974,7 @@ mod test {
             true,
             true,
             None,
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -19987,6 +20000,7 @@ mod test {
             true,
             true,
             None,
+            false,
         )
         .unwrap_err()
         .to_string();

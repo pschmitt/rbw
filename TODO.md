@@ -413,3 +413,19 @@
       <that-collection> -y` (or the reverse direction) and confirm they
       land correctly on the other side -- and clean up the test collection
       and entries afterward either way.
+
+- [x] `rbw mirror --dry-run`: print the same plan (accounts/emails, scope,
+      entry/collection counts, attachments/overwrite/purge-dest flags) and
+      stop there -- no confirmation prompt, destination account never
+      unlocked or touched. Requested from `bw-backup.git` after it started
+      relying on `mirror` for both its sync jobs, to preview a run
+      (particularly the entry counts, which need the real source vault
+      decrypted to be accurate) without any risk of the purge-dest paths
+      firing. Guard clauses (`--from`/`--to` identical, `--purge-dest` with
+      source-side `--collection`/`--org-id`) still run before `--dry-run`
+      is even checked, same as before. Verified: `cargo test` (still 210
+      passed -- extended the existing CLI-parsing and guard-clause tests
+      rather than adding new ones) and `cargo clippy --all-targets` (clean)
+      on `rofl-13`, `cargo fmt --all` there before syncing back. Not live-
+      verified against a real account for the same sandbox reasons as
+      `mirror` itself above (no pinentry/TTY here).
