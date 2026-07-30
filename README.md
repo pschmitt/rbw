@@ -537,6 +537,63 @@ and `rbw import --decrypt-passphrase PASSPHRASE`), but that exposes it to
 `ps` output and shell history, so prefer the prompt or the environment
 variable.
 
+#### Working with an export file directly
+
+This fork can use an `rbw export` file as a temporary, already-decrypted
+vault. The commands do not contact Bitwarden, use the configured account, or
+start the agent. Plain JSON and gpg-encrypted exports are both accepted. For
+encrypted input, prefer `RBW_EXPORT_PASSPHRASE`; `--from-file-passphrase` is
+available for automation where an inline argument is acceptable:
+
+```sh
+export RBW_EXPORT_PASSPHRASE='correct horse battery staple'
+
+rbw list --from-file backup.tar.gz.gpg
+rbw search --from-file backup.tar.gz.gpg github
+rbw get --from-file backup.tar.gz.gpg github
+rbw show --from-file backup.tar.gz.gpg github
+rbw code --from-file backup.tar.gz.gpg github
+rbw history --from-file backup.tar.gz.gpg github
+```
+
+The same option is available for `add`, `edit`, `set`, `remove`/`delete`,
+`archive`, `unarchive`, `restore`, and the attachment commands (`list`, `get`,
+`create`, and `rm`). Write operations update the export in place and leave a
+`FILE.bak` copy of the original. Use `--attachments` when creating the
+original export if attachment contents need to be available to
+`attachment get`, `attachment create`, or the TUI.
+
+The TUI can browse an export without touching the live vault, or edit it with
+`--write`:
+
+```sh
+rbw tui --from-file backup.tar.gz.gpg
+rbw tui --from-file backup.tar.gz.gpg --write
+```
+
+An export can also be converted to an upstream Bitwarden format without
+logging in. This is useful for producing JSON, CSV, zip-with-attachments, or
+Bitwarden's password-protected Encrypted JSON export:
+
+```sh
+rbw export --from-file backup.tar.gz.gpg \
+  --format bitwarden-json --output vault.json
+rbw export --from-file backup.tar.gz.gpg \
+  --format bitwarden-csv --output vault.csv
+rbw export --from-file backup.tar.gz.gpg \
+  --format bitwarden-zip --output vault.zip
+rbw export --from-file backup.tar.gz.gpg \
+  --from-file-passphrase 'old password' \
+  --format bitwarden-encrypted-json --encrypt 'new password' \
+  --output vault.json
+```
+
+The `--from-file-passphrase` value is only for decrypting the input file;
+`--encrypt` (or `RBW_EXPORT_PASSPHRASE` when the target format requires it)
+controls encryption of the output. Inline passphrases can be visible in
+process listings and shell history, so environment variables or a terminal
+prompt are safer.
+
 `rbw import` prints a summary when it's done (entries created/updated/
 skipped, attachments restored, collections created) and exits non-zero if
 any entry failed to import.

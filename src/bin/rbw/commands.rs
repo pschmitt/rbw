@@ -1615,6 +1615,11 @@ fn is_zero(value: &usize) -> bool {
     *value == 0
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 fn stdout_supports_color() -> bool {
     stdout_is_terminal() && std::env::var_os("NO_COLOR").is_none()
 }
@@ -3203,8 +3208,9 @@ fn list_from_file(
     with_attachments: bool,
     insecure: bool,
     output: OutputMode,
+    passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
-    let vault = load_from_file(path)?;
+    let vault = load_from_file(path, passphrase)?;
     let mut entries = vault.entries;
     if with_attachments {
         entries.retain(|entry| entry.attachment_metadata.has_attachments());
@@ -3255,6 +3261,7 @@ pub fn list(
     archived_filter: ArchivedFilter,
     trash_filter: TrashFilter,
     from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
     if let Some(path) = from_file {
         return list_from_file(
@@ -3263,6 +3270,7 @@ pub fn list(
             with_attachments,
             insecure,
             output,
+            from_file_passphrase,
         );
     }
 
@@ -3392,6 +3400,62 @@ pub fn list(
 
 #[allow(clippy::fn_params_excessive_bools)]
 #[allow(clippy::too_many_arguments)]
+// `get --from-file`: same needle matching/display shape as the
+// live-account path below (`DecryptedCipher` carries the same display
+// methods either way), against an already-decrypted in-memory vault
+// instead of an unlocked agent/account.
+fn get_from_file(
+    path: &std::path::Path,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    field: Option<&str>,
+    output: OutputMode,
+    clipboard: bool,
+    ignore_case: bool,
+    list_fields: bool,
+    force_exact: bool,
+    passphrase: Option<&str>,
+) -> anyhow::Result<()> {
+    let vault = load_from_file(path, passphrase)?;
+
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle_str
+    );
+
+    let decrypted = find_entry_in_file(
+        &vault.entries,
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    if list_fields {
+        decrypted.display_fields_list();
+    } else if output_is_structured(output) {
+        decrypted.display_structured(&desc, output)?;
+    } else if output == OutputMode::Name {
+        println!("{}", decrypted.name);
+    } else if let Some(field) = field {
+        decrypted.display_field(&desc, field, clipboard);
+    } else {
+        decrypted.display_short(&desc, clipboard);
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn get(
     needles: Vec<Needle>,
     user: Option<&str>,
@@ -3406,7 +3470,25 @@ pub fn get(
     verbose: bool,
     force_exact: bool,
     all: bool,
+    from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        return get_from_file(
+            path,
+            &needles,
+            user,
+            folder,
+            field,
+            output,
+            clipboard,
+            ignore_case,
+            list_fields,
+            force_exact,
+            from_file_passphrase,
+        );
+    }
+
     let target_accounts =
         list_target_accounts(all, rbw::config::ExcludeContext::Get)?;
     let tag_account = target_accounts.len() > 1;
@@ -3475,6 +3557,53 @@ pub fn get(
     Ok(())
 }
 
+// `show --from-file`: mirrors `get_from_file` but always uses
+// `display_show`/`display_structured` (no field/clipboard support, matching
+// the live-account `show` command's own limited output shape).
+fn show_from_file(
+    path: &std::path::Path,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    output: OutputMode,
+    force_exact: bool,
+    passphrase: Option<&str>,
+) -> anyhow::Result<()> {
+    let vault = load_from_file(path, passphrase)?;
+
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle_str
+    );
+
+    let decrypted = find_entry_in_file(
+        &vault.entries,
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    if output_is_structured(output) {
+        decrypted.display_structured(&desc, output)?;
+    } else if output == OutputMode::Name {
+        println!("{}", decrypted.name);
+    } else {
+        decrypted.display_show();
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     needles: Vec<Needle>,
     user: Option<&str>,
@@ -3485,7 +3614,22 @@ pub fn show(
     output: OutputMode,
     force_exact: bool,
     all: bool,
+    from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        return show_from_file(
+            path,
+            &needles,
+            user,
+            folder,
+            ignore_case,
+            output,
+            force_exact,
+            from_file_passphrase,
+        );
+    }
+
     let target_accounts =
         list_target_accounts(all, rbw::config::ExcludeContext::Show)?;
 
@@ -3520,6 +3664,97 @@ pub fn show(
     Ok(())
 }
 
+// `attachment list --from-file`: same output shape as the live-account
+// path, listing `decrypted.attachments` off an in-memory `DecryptedCipher`.
+fn attachment_list_from_file(
+    path: &std::path::Path,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    output: OutputMode,
+    force_exact: bool,
+    passphrase: Option<&str>,
+) -> anyhow::Result<()> {
+    let vault = load_from_file(path, passphrase)?;
+
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle_str
+    );
+
+    let decrypted = find_entry_in_file(
+        &vault.entries,
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    if output_is_structured(output) {
+        write_serialized_pretty(
+            &decrypted.attachments,
+            output,
+            "failed to write attachments to stdout",
+        )?;
+    } else if output == OutputMode::Name {
+        for attachment in &decrypted.attachments {
+            println!(
+                "{}",
+                attachment
+                    .file_name
+                    .clone()
+                    .unwrap_or_else(|| attachment.id.clone())
+            );
+        }
+    } else {
+        let rows = decrypted
+            .attachments
+            .iter()
+            .map(|attachment| {
+                vec![
+                    attachment.id.clone(),
+                    attachment.file_name.clone().unwrap_or_default(),
+                    attachment
+                        .size_name
+                        .clone()
+                        .or_else(|| attachment.size.clone())
+                        .unwrap_or_default(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        print_table(
+            &[
+                TableColumn {
+                    header: "id",
+                    style: TableColumnStyle::Id,
+                },
+                TableColumn {
+                    header: "name",
+                    style: TableColumnStyle::Name,
+                },
+                TableColumn {
+                    header: "size",
+                    style: TableColumnStyle::Size,
+                },
+            ],
+            &rows,
+            "",
+        )?;
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn attachment_list(
     needles: Vec<Needle>,
     user: Option<&str>,
@@ -3529,7 +3764,22 @@ pub fn attachment_list(
     ignore_case: bool,
     output: OutputMode,
     force_exact: bool,
+    from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        return attachment_list_from_file(
+            path,
+            &needles,
+            user,
+            folder,
+            ignore_case,
+            output,
+            force_exact,
+            from_file_passphrase,
+        );
+    }
+
     unlock(None, None)?;
     let db = load_db()?;
     let (_, decrypted) = find_entry(
@@ -3599,6 +3849,94 @@ pub fn attachment_list(
 }
 
 #[allow(clippy::too_many_arguments)]
+// `attachment get --from-file`: reads the attachment bytes directly from
+// `vault.attachment_data` (populated by `rbw export --attachments`/`add
+// --attachment`, keyed by attachment id) instead of downloading and
+// decrypting them over the network.
+fn attachment_get_from_file(
+    path: &std::path::Path,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    attachment: Option<&str>,
+    output: Option<&std::path::Path>,
+    raw: bool,
+    force_exact: bool,
+    passphrase: Option<&str>,
+) -> anyhow::Result<()> {
+    let vault = load_from_file(path, passphrase)?;
+
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle_str
+    );
+
+    let decrypted = find_entry_in_file(
+        &vault.entries,
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    let decrypted_attachment =
+        resolve_attachment_in_file(&decrypted, attachment)?;
+
+    let data = vault
+        .attachment_data
+        .get(&decrypted_attachment.id)
+        .cloned()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "attachment data for '{}' is not present in {}",
+                decrypted_attachment.id,
+                path.display()
+            )
+        })?;
+
+    let output_to_stdout = raw
+        || output.is_some_and(|output| output == std::path::Path::new("-"));
+
+    if output_to_stdout {
+        std::io::stdout()
+            .write_all(&data)
+            .context("failed to write attachment to stdout")?;
+        return Ok(());
+    }
+
+    let file_name = decrypted_attachment
+        .file_name
+        .as_deref()
+        .and_then(|name| std::path::Path::new(name).file_name())
+        .and_then(std::ffi::OsStr::to_str)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("BitwardenAttachment");
+    let out_path = output.map_or_else(
+        || std::path::PathBuf::from(file_name),
+        |output| {
+            if output.is_dir() {
+                output.join(file_name)
+            } else {
+                output.to_path_buf()
+            }
+        },
+    );
+    std::fs::write(&out_path, data)
+        .with_context(|| format!("failed to write {}", out_path.display()))?;
+    println!("{}", out_path.display());
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn attachment_get(
     needles: Vec<Needle>,
     user: Option<&str>,
@@ -3610,7 +3948,24 @@ pub fn attachment_get(
     output: Option<&std::path::Path>,
     raw: bool,
     force_exact: bool,
+    from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        return attachment_get_from_file(
+            path,
+            &needles,
+            user,
+            folder,
+            ignore_case,
+            attachment,
+            output,
+            raw,
+            force_exact,
+            from_file_passphrase,
+        );
+    }
+
     unlock(None, None)?;
     let mut db = load_db()?;
     let (entry, decrypted) = find_entry(
@@ -3694,6 +4049,95 @@ pub fn attachment_get(
     Ok(())
 }
 
+// `attachment create --from-file`: mirrors `set --attachment --from-file`'s
+// attachment-adding logic (new random id, raw bytes into
+// `vault.attachment_data`), but for the dedicated `attachment create`
+// command instead of as a side effect of `set`.
+fn attachment_create_from_file(
+    path: &std::path::Path,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    file: &std::path::Path,
+    force_exact: bool,
+    passphrase: Option<&str>,
+) -> anyhow::Result<()> {
+    let mut vault = load_from_file(path, passphrase)?;
+
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle_str
+    );
+
+    let mut decrypted = find_entry_in_file(
+        &vault.entries,
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    let filename = file
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or_else(|| anyhow::anyhow!("invalid filename"))?
+        .to_string();
+    let data = std::fs::read(file)
+        .with_context(|| format!("failed to read {}", file.display()))?;
+
+    let id = uuid::Uuid::new_v4().to_string();
+    decrypted.attachments.push(DecryptedAttachment {
+        id: id.clone(),
+        file_name: Some(filename.clone()),
+        size: None,
+        size_name: None,
+    });
+    decrypted.attachment_metadata =
+        AttachmentMetadata::new(&decrypted.id, decrypted.attachments.len());
+    vault.attachment_data.insert(id, data);
+
+    let entry_name = decrypted.name.clone();
+    if let Some(pos) = vault.entries.iter().position(|e| e.id == decrypted.id)
+    {
+        vault.entries[pos] = decrypted;
+    }
+
+    backup_file(path)?;
+    let exported = vault
+        .entries
+        .iter()
+        .map(|e| {
+            to_exported_entry(e, &vault.attachment_data, &vault.entry_extra)
+        })
+        .collect();
+    save_to_file(
+        path,
+        exported,
+        vault.collections,
+        vault.passphrase.as_deref(),
+    )?;
+
+    let c = stdout_supports_color();
+    eprintln!(
+        "{} {} \u{2192} {}",
+        style::success("Attached", c),
+        style::name(&filename, c),
+        style::name(&entry_name, c),
+    );
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn attachment_create(
     needles: Vec<Needle>,
     username: Option<&str>,
@@ -3701,7 +4145,22 @@ pub fn attachment_create(
     ignore_case: bool,
     file: &std::path::Path,
     force_exact: bool,
+    from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        return attachment_create_from_file(
+            path,
+            &needles,
+            username,
+            folder,
+            ignore_case,
+            file,
+            force_exact,
+            from_file_passphrase,
+        );
+    }
+
     unlock(None, None)?;
     let mut db = load_db()?;
     let access_token = db.access_token.as_ref().unwrap().clone();
@@ -3759,6 +4218,100 @@ pub fn attachment_create(
     Ok(())
 }
 
+// `attachment rm --from-file`: same resolution/confirmation shape as the
+// live-account path, then drops the attachment (and its raw bytes) from
+// the in-memory vault and writes back.
+#[allow(clippy::too_many_arguments)]
+fn attachment_rm_from_file(
+    path: &std::path::Path,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    attachment: Option<&str>,
+    force_exact: bool,
+    yes: bool,
+    passphrase: Option<&str>,
+) -> anyhow::Result<()> {
+    let mut vault = load_from_file(path, passphrase)?;
+
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle_str
+    );
+
+    let mut decrypted = find_entry_in_file(
+        &vault.entries,
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    let decrypted_attachment =
+        resolve_attachment_in_file(&decrypted, attachment)?;
+
+    let attachment_id = decrypted_attachment.id.clone();
+    let file_name = decrypted_attachment
+        .file_name
+        .clone()
+        .unwrap_or_else(|| attachment_id.clone());
+
+    if !yes {
+        let c = stdout_supports_color();
+        if !confirm(&format!(
+            "Delete attachment {} from {}?",
+            style::name(&file_name, c),
+            style::name(&decrypted.name, c)
+        ))? {
+            return Ok(());
+        }
+    }
+
+    decrypted.attachments.retain(|a| a.id != attachment_id);
+    decrypted.attachment_metadata =
+        AttachmentMetadata::new(&decrypted.id, decrypted.attachments.len());
+    vault.attachment_data.remove(&attachment_id);
+
+    let entry_name = decrypted.name.clone();
+    if let Some(pos) = vault.entries.iter().position(|e| e.id == decrypted.id)
+    {
+        vault.entries[pos] = decrypted;
+    }
+
+    backup_file(path)?;
+    let exported = vault
+        .entries
+        .iter()
+        .map(|e| {
+            to_exported_entry(e, &vault.attachment_data, &vault.entry_extra)
+        })
+        .collect();
+    save_to_file(
+        path,
+        exported,
+        vault.collections,
+        vault.passphrase.as_deref(),
+    )?;
+
+    let c = stdout_supports_color();
+    eprintln!(
+        "{} {} from {}",
+        style::success("Deleted", c),
+        style::name(&file_name, c),
+        style::name(&entry_name, c),
+    );
+
+    Ok(())
+}
+
 // Delete an attachment from an entry and sync. Shares the entry/attachment
 // resolution behavior of `attachment_get`, including the only-attachment
 // fallback when --attachment is omitted.
@@ -3773,7 +4326,23 @@ pub fn attachment_rm(
     attachment: Option<&str>,
     force_exact: bool,
     yes: bool,
+    from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        return attachment_rm_from_file(
+            path,
+            &needles,
+            user,
+            folder,
+            ignore_case,
+            attachment,
+            force_exact,
+            yes,
+            from_file_passphrase,
+        );
+    }
+
     unlock(None, None)?;
     let mut db = load_db()?;
     let (entry, decrypted) = find_entry(
@@ -3979,8 +4548,9 @@ fn search_from_file(
     with_attachments: bool,
     insecure: bool,
     output: OutputMode,
+    passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
-    let vault = load_from_file(path)?;
+    let vault = load_from_file(path, passphrase)?;
 
     if output_is_structured(output) {
         let mut entries: Vec<DecryptedCipher> = vault
@@ -4057,6 +4627,7 @@ pub fn search(
     archived_filter: ArchivedFilter,
     trash_filter: TrashFilter,
     from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
     if let Some(path) = from_file {
         return search_from_file(
@@ -4067,6 +4638,7 @@ pub fn search(
             with_attachments,
             insecure,
             output,
+            from_file_passphrase,
         );
     }
 
@@ -4218,6 +4790,58 @@ pub fn search(
 }
 
 #[allow(clippy::fn_params_excessive_bools)]
+// `code --from-file`: same TOTP-generation logic as the live-account path,
+// against a `DecryptedCipher` found in-memory instead of via an unlocked
+// account.
+fn code_from_file(
+    path: &std::path::Path,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    clipboard: bool,
+    ignore_case: bool,
+    force_exact: bool,
+    passphrase: Option<&str>,
+) -> anyhow::Result<()> {
+    let vault = load_from_file(path, passphrase)?;
+
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle_str
+    );
+
+    let decrypted = find_entry_in_file(
+        &vault.entries,
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    if let DecryptedData::Login { totp, .. } = decrypted.data {
+        if let Some(totp) = totp {
+            val_display_or_store(clipboard, &generate_totp(&totp)?);
+        } else {
+            return Err(anyhow::anyhow!(
+                "entry does not contain a totp secret"
+            ));
+        }
+    } else {
+        return Err(anyhow::anyhow!("not a login entry"));
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn code(
     needles: Vec<Needle>,
     user: Option<&str>,
@@ -4228,7 +4852,22 @@ pub fn code(
     ignore_case: bool,
     force_exact: bool,
     all: bool,
+    from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        return code_from_file(
+            path,
+            &needles,
+            user,
+            folder,
+            clipboard,
+            ignore_case,
+            force_exact,
+            from_file_passphrase,
+        );
+    }
+
     let target_accounts =
         list_target_accounts(all, rbw::config::ExcludeContext::Code)?;
 
@@ -4282,6 +4921,7 @@ pub fn add(
     gen_len: usize,
     gen_ty: rbw::pwgen::Type,
     from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
     if generate && !std::io::stdin().is_terminal() {
         // The editor ignores its template entirely and reads the entry
@@ -4303,6 +4943,7 @@ pub fn add(
             folder,
             json,
             generated.as_deref(),
+            from_file_passphrase,
         );
     }
     add_structured(name, username, uris, folder, json, generated.as_deref())
@@ -4321,8 +4962,9 @@ fn add_from_file(
     folder: Option<&str>,
     json: bool,
     generated_password: Option<&str>,
+    passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
-    let mut vault = load_from_file(path)?;
+    let mut vault = load_from_file(path, passphrase)?;
 
     let editable_uris: Vec<EditableUri> = if uris.is_empty() {
         vec![EditableUri {
@@ -4547,6 +5189,7 @@ pub fn edit(
     _yaml: bool,
     force_exact: bool,
     from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
     if let Some(path) = from_file {
         return edit_from_file(
@@ -4557,6 +5200,7 @@ pub fn edit(
             ignore_case,
             json,
             force_exact,
+            from_file_passphrase,
         );
     }
     edit_structured(
@@ -4585,8 +5229,9 @@ fn edit_from_file(
     ignore_case: bool,
     json: bool,
     force_exact: bool,
+    passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
-    let mut vault = load_from_file(path)?;
+    let mut vault = load_from_file(path, passphrase)?;
 
     let needle_str = needles
         .iter()
@@ -4719,8 +5364,9 @@ fn remove_from_file(
     ignore_case: bool,
     force_exact: bool,
     yes: bool,
+    passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
-    let mut vault = load_from_file(path)?;
+    let mut vault = load_from_file(path, passphrase)?;
 
     let needle_str = needles
         .iter()
@@ -4782,6 +5428,7 @@ pub fn remove(
     force: bool,
     yes: bool,
     from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
     if let Some(path) = from_file {
         return remove_from_file(
@@ -4792,6 +5439,7 @@ pub fn remove(
             ignore_case,
             force_exact,
             yes,
+            from_file_passphrase,
         );
     }
 
@@ -4929,7 +5577,23 @@ pub fn archive(
     force_exact: bool,
     bulk: bool,
     yes: bool,
+    from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        return archive_or_unarchive_from_file(
+            path,
+            &needles,
+            username,
+            folder,
+            ignore_case,
+            force_exact,
+            bulk,
+            yes,
+            true,
+            from_file_passphrase,
+        );
+    }
     archive_or_unarchive(
         needles,
         username,
@@ -4955,7 +5619,23 @@ pub fn unarchive(
     force_exact: bool,
     bulk: bool,
     yes: bool,
+    from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        return archive_or_unarchive_from_file(
+            path,
+            &needles,
+            username,
+            folder,
+            ignore_case,
+            force_exact,
+            bulk,
+            yes,
+            false,
+            from_file_passphrase,
+        );
+    }
     archive_or_unarchive(
         needles,
         username,
@@ -4967,6 +5647,146 @@ pub fn unarchive(
         bulk,
         yes,
         false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn archive_or_unarchive_from_file(
+    path: &std::path::Path,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+    bulk: bool,
+    yes: bool,
+    archive: bool,
+    passphrase: Option<&str>,
+) -> anyhow::Result<()> {
+    use std::io::Write as _;
+
+    let mut vault = load_from_file(path, passphrase)?;
+    let verb = if archive { "archive" } else { "unarchive" };
+    let mut ids = Vec::new();
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    if bulk {
+        for needle in needles {
+            let matches = find_entries_all_in_file(
+                &vault.entries,
+                needle,
+                username,
+                folder,
+                ignore_case,
+            );
+            if matches.is_empty() {
+                eprintln!("{needle}: no entry found");
+                continue;
+            }
+            for entry in matches {
+                if entry.archived == archive || !seen.insert(entry.id.clone())
+                {
+                    continue;
+                }
+                ids.push(entry.id);
+                names.push(entry.name);
+            }
+        }
+    } else {
+        let needle_str = needles
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let desc = format!(
+            "{}{}",
+            username.map_or_else(String::new, |s| format!("{s}@")),
+            needle_str
+        );
+        let entry = find_entry_in_file(
+            &vault.entries,
+            needles,
+            username,
+            folder,
+            ignore_case,
+            force_exact,
+        )
+        .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+        if entry.archived == archive {
+            println!(
+                "{} is already {}",
+                style::name(&entry.name, stdout_supports_color()),
+                if archive { "archived" } else { "unarchived" }
+            );
+            return Ok(());
+        }
+        ids.push(entry.id);
+        names.push(entry.name);
+    }
+
+    if ids.is_empty() {
+        anyhow::bail!("no entries to {verb}");
+    }
+
+    if bulk && !yes {
+        let c = stdout_supports_color();
+        eprintln!(
+            "About to {verb} {} {}:",
+            style::name(&ids.len().to_string(), c),
+            if ids.len() == 1 { "entry" } else { "entries" }
+        );
+        for name in &names {
+            eprintln!("  {}", style::name(name, c));
+        }
+        eprintln!();
+        eprint!("Apply to all ({})? [y/N] ", ids.len());
+        let _ = std::io::stderr().flush();
+        let mut answer = String::new();
+        std::io::stdin()
+            .read_line(&mut answer)
+            .context("failed to read confirmation")?;
+        if !matches!(answer.trim(), "y" | "Y") {
+            eprintln!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    for entry in &mut vault.entries {
+        if ids.iter().any(|id| id == &entry.id) {
+            entry.archived = archive;
+        }
+    }
+    save_loaded_file_vault(path, &vault)?;
+
+    let c = stdout_supports_color();
+    for name in names {
+        println!("Item {} was {verb}d", style::name(&name, c));
+    }
+    Ok(())
+}
+
+fn save_loaded_file_vault(
+    path: &std::path::Path,
+    vault: &FileVault,
+) -> anyhow::Result<()> {
+    backup_file(path)?;
+    let entries = vault
+        .entries
+        .iter()
+        .map(|entry| {
+            to_exported_entry(
+                entry,
+                &vault.attachment_data,
+                &vault.entry_extra,
+            )
+        })
+        .collect();
+    save_to_file(
+        path,
+        entries,
+        vault.collections.clone(),
+        vault.passphrase.as_deref(),
     )
 }
 
@@ -5304,9 +6124,24 @@ pub fn restore(
     force_exact: bool,
     bulk: bool,
     yes: bool,
+    from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
     use std::io::Write as _;
 
+    if let Some(path) = from_file {
+        return restore_from_file(
+            path,
+            needles,
+            username,
+            folder,
+            ignore_case,
+            force_exact,
+            bulk,
+            yes,
+            from_file_passphrase,
+        );
+    }
     if bulk {
         unlock(None, None)?;
         let mut db = load_db()?;
@@ -5439,6 +6274,114 @@ pub fn restore(
 
     println!("Item {} was restored", style::name(&decrypted.name, c));
 
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn restore_from_file(
+    path: &std::path::Path,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+    bulk: bool,
+    yes: bool,
+    passphrase: Option<&str>,
+) -> anyhow::Result<()> {
+    use std::io::Write as _;
+
+    let mut vault = load_from_file(path, passphrase)?;
+    let mut ids = Vec::new();
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    if bulk {
+        for needle in needles {
+            let matches = find_entries_all_in_file(
+                &vault.entries,
+                needle,
+                username,
+                folder,
+                ignore_case,
+            );
+            if matches.is_empty() {
+                eprintln!("{needle}: no entry found");
+                continue;
+            }
+            for entry in matches {
+                if !entry.deleted || !seen.insert(entry.id.clone()) {
+                    continue;
+                }
+                ids.push(entry.id);
+                names.push(entry.name);
+            }
+        }
+    } else {
+        let needle_str = needles
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let desc = format!(
+            "{}{}",
+            username.map_or_else(String::new, |s| format!("{s}@")),
+            needle_str
+        );
+        let entry = find_entry_in_file(
+            &vault.entries,
+            needles,
+            username,
+            folder,
+            ignore_case,
+            force_exact,
+        )
+        .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+        if !entry.deleted {
+            anyhow::bail!("entry '{}' is not in the trash", entry.name);
+        }
+        ids.push(entry.id);
+        names.push(entry.name);
+    }
+
+    if ids.is_empty() {
+        anyhow::bail!("no trashed entries to restore");
+    }
+
+    if bulk && !yes {
+        let c = stdout_supports_color();
+        eprintln!(
+            "About to restore {} {}:",
+            style::name(&ids.len().to_string(), c),
+            if ids.len() == 1 { "entry" } else { "entries" }
+        );
+        for name in &names {
+            eprintln!("  {}", style::name(name, c));
+        }
+        eprintln!();
+        eprint!("Apply to all ({})? [y/N] ", ids.len());
+        let _ = std::io::stderr().flush();
+        let mut answer = String::new();
+        std::io::stdin()
+            .read_line(&mut answer)
+            .context("failed to read confirmation")?;
+        if !matches!(answer.trim(), "y" | "Y") {
+            eprintln!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    for entry in &mut vault.entries {
+        if ids.iter().any(|id| id == &entry.id) {
+            entry.deleted = false;
+        }
+    }
+    save_loaded_file_vault(path, &vault)?;
+
+    let c = stdout_supports_color();
+    for name in names {
+        println!("Item {} was restored", style::name(&name, c));
+    }
     Ok(())
 }
 
@@ -5746,6 +6689,7 @@ pub fn set(
     yes: bool,
     force_exact: bool,
     from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
     use std::io::Write as _;
 
@@ -5772,6 +6716,7 @@ pub fn set(
                 diff,
                 new_attachments,
                 yes,
+                from_file_passphrase,
             );
         }
         return set_from_file(
@@ -5790,6 +6735,7 @@ pub fn set(
             new_attachments,
             yes,
             force_exact,
+            from_file_passphrase,
         );
     }
 
@@ -6084,6 +7030,7 @@ fn set_from_file_bulk(
     diff: bool,
     new_attachments: &[std::path::PathBuf],
     yes: bool,
+    passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
     use std::io::Write as _;
 
@@ -6093,7 +7040,7 @@ fn set_from_file_bulk(
         changes: Vec<(&'static str, String, String)>,
     }
 
-    let mut vault = load_from_file(path)?;
+    let mut vault = load_from_file(path, passphrase)?;
     let mut any_err = false;
     let mut pending: Vec<BulkPending> = Vec::new();
 
@@ -6743,8 +7690,9 @@ fn set_from_file(
     new_attachments: &[std::path::PathBuf],
     yes: bool,
     force_exact: bool,
+    passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
-    let mut vault = load_from_file(path)?;
+    let mut vault = load_from_file(path, passphrase)?;
 
     let needle_str = needles
         .iter()
@@ -6996,6 +7944,10 @@ struct ExportedEntry {
     notes: Option<String>,
     history: Vec<DecryptedHistoryEntry>,
     collection_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    archived: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    deleted: bool,
     // empty unless `--attachments` was passed, so exports produced
     // without that flag are byte-for-byte identical to before it
     // existed
@@ -7181,6 +8133,8 @@ fn build_exported_vault(
             notes: decrypted.notes,
             history: decrypted.history,
             collection_ids: entry.collection_ids.clone(),
+            archived: entry.archived,
+            deleted: entry.deleted,
             attachments: exported_attachments,
         });
         pb.inc(1);
@@ -7216,6 +8170,8 @@ pub fn export(
     output: Option<&std::path::Path>,
     collection: Option<&str>,
     org: Option<&str>,
+    from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
     use crate::import_bitwarden::ExportFormat;
 
@@ -7238,6 +8194,14 @@ pub fn export(
         passphrase
     };
 
+    if let Some(path) = from_file {
+        let file_vault = load_from_file(path, from_file_passphrase)?;
+        let vault = exported_vault_from_file(&file_vault, collection, org)?;
+        return write_exported_vault(
+            format, passphrase, output, &vault, None,
+        );
+    }
+
     unlock(None, None)?;
 
     let vault = build_exported_vault(attachments, collection, org)?;
@@ -7247,10 +8211,92 @@ pub fn export(
     // fields change as a side effect of building the vault.
     let db = load_db()?;
 
+    write_exported_vault(format, passphrase, output, &vault, Some(&db))
+}
+
+fn exported_vault_from_file(
+    file_vault: &FileVault,
+    collection: Option<&str>,
+    org: Option<&str>,
+) -> anyhow::Result<ExportedVault> {
+    let collection_id = collection
+        .map(|wanted| {
+            file_vault
+                .collections
+                .iter()
+                .find(|c| {
+                    (c.id == wanted || c.name == wanted)
+                        && org.is_none_or(|org_id| c.org_id == org_id)
+                })
+                .map(|c| c.id.clone())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "collection '{wanted}' not found in export"
+                    )
+                })
+        })
+        .transpose()?;
+
+    let entries = file_vault
+        .entries
+        .iter()
+        .filter(|entry| !entry.deleted)
+        .filter(|entry| {
+            let extra = file_vault.entry_extra.get(&entry.id);
+            org.is_none_or(|org_id| {
+                extra.and_then(|extra| extra.org_id.as_deref())
+                    == Some(org_id)
+            })
+        })
+        .filter(|entry| {
+            collection_id.as_deref().is_none_or(|collection_id| {
+                file_vault.entry_extra.get(&entry.id).is_some_and(|extra| {
+                    extra.collection_ids.iter().any(|id| id == collection_id)
+                })
+            })
+        })
+        .map(|entry| {
+            to_exported_entry(
+                entry,
+                &file_vault.attachment_data,
+                &file_vault.entry_extra,
+            )
+        })
+        .collect();
+
+    let collections = file_vault
+        .collections
+        .iter()
+        .filter(|collection| {
+            org.is_none_or(|org_id| collection.org_id == org_id)
+        })
+        .filter(|collection| {
+            collection_id
+                .as_deref()
+                .is_none_or(|collection_id| collection.id == collection_id)
+        })
+        .cloned()
+        .collect();
+
+    Ok(ExportedVault {
+        entries,
+        collections,
+    })
+}
+
+fn write_exported_vault(
+    format: crate::import_bitwarden::ExportFormat,
+    passphrase: Option<String>,
+    output: Option<&std::path::Path>,
+    vault: &ExportedVault,
+    db: Option<&rbw::db::Db>,
+) -> anyhow::Result<()> {
+    use crate::import_bitwarden::ExportFormat;
+
     match format {
         ExportFormat::Rbw => {
             if let Some(passphrase) = passphrase {
-                let archive = build_export_tar_gz(&vault)?;
+                let archive = build_export_tar_gz(vault)?;
                 let encrypted = gpg_symmetric_encrypt(&passphrase, &archive)?;
                 write_export_bytes(
                     output,
@@ -7258,7 +8304,7 @@ pub fn export(
                     "failed to write encrypted export",
                 )
             } else if let Some(path) = output {
-                let mut json = serde_json::to_vec_pretty(&vault)
+                let mut json = serde_json::to_vec_pretty(vault)
                     .context("failed to serialize export to JSON")?;
                 json.push(b'\n');
                 write_export_bytes(
@@ -7267,11 +8313,11 @@ pub fn export(
                     "failed to write export JSON",
                 )
             } else {
-                write_json_pretty(&vault, "failed to write export to stdout")
+                write_json_pretty(vault, "failed to write export to stdout")
             }
         }
         ExportFormat::BitwardenJson => {
-            let (bw, _attachments) = exported_vault_to_bw(&vault);
+            let (bw, _attachments) = exported_vault_to_bw(vault);
             let mut json = serde_json::to_vec_pretty(&bw)
                 .context("failed to serialize Bitwarden JSON export")?;
             json.push(b'\n');
@@ -7282,18 +8328,29 @@ pub fn export(
             )
         }
         ExportFormat::BitwardenEncryptedJson => {
-            let (bw, _attachments) = exported_vault_to_bw(&vault);
+            let (bw, _attachments) = exported_vault_to_bw(vault);
             let json_text = serde_json::to_string(&bw)
                 .context("failed to serialize Bitwarden JSON export")?;
-            // Checked above: this format requires --encrypt.
-            let passphrase = passphrase.unwrap();
+            let passphrase = passphrase
+                .context("Bitwarden encrypted JSON requires a passphrase")?;
+            let (kdf, iterations, memory, parallelism) = db.map_or(
+                (rbw::api::KdfType::Pbkdf2, 600_000, None, None),
+                |db| {
+                    (
+                        db.kdf.unwrap_or(rbw::api::KdfType::Pbkdf2),
+                        db.iterations.unwrap_or(600_000),
+                        db.memory,
+                        db.parallelism,
+                    )
+                },
+            );
             let encrypted = crate::import_bitwarden::encrypt_encrypted_json(
                 &json_text,
                 &passphrase,
-                db.kdf.unwrap_or(rbw::api::KdfType::Pbkdf2),
-                db.iterations.unwrap_or(600_000),
-                db.memory,
-                db.parallelism,
+                kdf,
+                iterations,
+                memory,
+                parallelism,
             )?;
             write_export_bytes(
                 output,
@@ -7302,7 +8359,7 @@ pub fn export(
             )
         }
         ExportFormat::BitwardenZip => {
-            let (bw, zip_attachments) = exported_vault_to_bw(&vault);
+            let (bw, zip_attachments) = exported_vault_to_bw(vault);
             let json_text = serde_json::to_string_pretty(&bw)
                 .context("failed to serialize Bitwarden JSON export")?;
             let zip_bytes = crate::import_bitwarden::write_zip(
@@ -7316,7 +8373,7 @@ pub fn export(
             )
         }
         ExportFormat::BitwardenCsv => {
-            let (bw, _attachments) = exported_vault_to_bw(&vault);
+            let (bw, _attachments) = exported_vault_to_bw(vault);
             let (csv_text, skipped) =
                 crate::import_bitwarden::write_csv(&bw)?;
             if skipped > 0 {
@@ -7836,6 +8893,10 @@ struct ImportedEntry {
     #[serde(default)]
     collection_ids: Vec<String>,
     #[serde(default)]
+    archived: bool,
+    #[serde(default)]
+    deleted: bool,
+    #[serde(default)]
     attachments: Vec<serde_json::Value>,
 }
 
@@ -7951,6 +9012,8 @@ fn bw_vault_to_imported(
                 notes: item.notes,
                 history,
                 collection_ids: item.collection_ids,
+                archived: false,
+                deleted: false,
                 attachments: entry_attachments,
             })
         })
@@ -8728,19 +9791,29 @@ pub struct FileEntryExtra {
 // no agent, no account touched at all. Reuses the same JSON/gpg-tar.gz
 // parsing `rbw import` uses, but -- unlike `import` -- doesn't require an
 // explicit `--decrypt` flag up front: plain JSON is tried first, and a
-// passphrase is only resolved (from $RBW_EXPORT_PASSPHRASE, then an
-// interactive prompt) if that fails.
-pub fn load_from_file(path: &std::path::Path) -> anyhow::Result<FileVault> {
+// passphrase is only resolved if that fails.
+//
+// `passphrase` is the explicit, non-interactive override from a
+// `--from-file-passphrase` flag (if any); when `None`, the passphrase falls
+// back to `$RBW_EXPORT_PASSPHRASE`, then an interactive `/dev/tty` prompt,
+// same as before this parameter existed.
+pub fn load_from_file(
+    path: &std::path::Path,
+    passphrase: Option<&str>,
+) -> anyhow::Result<FileVault> {
     let raw = read_import_input(Some(path))?;
 
     let is_plain_json = std::str::from_utf8(&raw).is_ok_and(|text| {
         serde_json::from_str::<serde_json::Value>(text).is_ok()
     });
-    let mut passphrase = None;
+    let mut passphrase = passphrase.map(std::string::ToString::to_string);
     let json_text = if is_plain_json {
         String::from_utf8(raw).unwrap()
     } else {
-        let resolved = resolve_env_or_prompted_passphrase(false)?;
+        let resolved = match &passphrase {
+            Some(p) if !p.is_empty() => p.clone(),
+            _ => resolve_env_or_prompted_passphrase(false)?,
+        };
         let text = decrypt_import_archive(&raw, &resolved)?;
         passphrase = Some(resolved);
         text
@@ -8827,8 +9900,8 @@ pub fn load_from_file(path: &std::path::Path) -> anyhow::Result<FileVault> {
                     })
                     .collect(),
                 attachments,
-                archived: false,
-                deleted: false,
+                archived: imported.archived,
+                deleted: imported.deleted,
                 account: None,
             }
         })
@@ -8956,6 +10029,8 @@ fn to_exported_entry(
         notes: decrypted.notes.clone(),
         history: decrypted.history.clone(),
         collection_ids: extra.collection_ids,
+        archived: decrypted.archived,
+        deleted: decrypted.deleted,
         attachments: decrypted
             .attachments
             .iter()
@@ -12325,6 +13400,61 @@ pub fn propagate_collection_permissions(
     Ok(())
 }
 
+// `history --from-file`: same output shape as the live-account path,
+// reading `decrypted.history` from an in-memory `DecryptedCipher`.
+fn history_from_file(
+    path: &std::path::Path,
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    ignore_case: bool,
+    output: OutputMode,
+    force_exact: bool,
+    passphrase: Option<&str>,
+) -> anyhow::Result<()> {
+    let vault = load_from_file(path, passphrase)?;
+
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle_str
+    );
+
+    let decrypted = find_entry_in_file(
+        &vault.entries,
+        needles,
+        username,
+        folder,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    if output_is_structured(output) {
+        write_serialized_pretty(
+            &decrypted.history,
+            output,
+            "failed to write history to stdout",
+        )?;
+    } else if output == OutputMode::Name {
+        for history in decrypted.history {
+            println!("{}", history.password);
+        }
+    } else {
+        for history in decrypted.history {
+            println!("{}: {}", history.last_used_date, history.password);
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn history(
     needles: Vec<Needle>,
     username: Option<&str>,
@@ -12334,7 +13464,22 @@ pub fn history(
     ignore_case: bool,
     output: OutputMode,
     force_exact: bool,
+    from_file: Option<&std::path::Path>,
+    from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
+    if let Some(path) = from_file {
+        return history_from_file(
+            path,
+            &needles,
+            username,
+            folder,
+            ignore_case,
+            output,
+            force_exact,
+            from_file_passphrase,
+        );
+    }
+
     unlock(None, None)?;
 
     let db = load_db()?;
@@ -12776,6 +13921,86 @@ fn find_attachment<'a>(
             matches
                 .iter()
                 .map(|(attachment, _)| attachment.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+// `resolve_attachment`'s from-file counterpart: same only-attachment
+// fallback and needle matching, but against a `DecryptedCipher`'s own
+// `attachments` list (no separate `rbw::db::Entry` exists for
+// `--from-file`, and none of the matching logic needs one).
+fn resolve_attachment_in_file<'a>(
+    decrypted: &'a DecryptedCipher,
+    needle: Option<&str>,
+) -> anyhow::Result<&'a DecryptedAttachment> {
+    needle
+        .map_or_else(
+            || match decrypted.attachments.as_slice() {
+                [] => Err(anyhow::anyhow!(
+                    "no attachments available for this item"
+                )),
+                [attachment] => Ok(attachment),
+                _ => Err(anyhow::anyhow!(
+                    "attachment id or filename is required"
+                )),
+            },
+            |needle| find_attachment_in_file(decrypted, needle),
+        )
+        .map_err(|err| {
+            available_attachments_error(
+                &decrypted.name,
+                &decrypted.attachments,
+                &err.to_string(),
+            )
+        })
+}
+
+fn find_attachment_in_file<'a>(
+    decrypted: &'a DecryptedCipher,
+    needle: &str,
+) -> anyhow::Result<&'a DecryptedAttachment> {
+    if decrypted.attachments.is_empty() {
+        return Err(anyhow::anyhow!(
+            "no attachments available for this item"
+        ));
+    }
+
+    let needle = needle.to_lowercase();
+    let mut matches: Vec<_> = decrypted
+        .attachments
+        .iter()
+        .filter(|attachment| {
+            attachment.id.to_lowercase() == needle
+                || attachment.file_name.as_ref().is_some_and(|file_name| {
+                    file_name.to_lowercase().contains(&needle)
+                })
+        })
+        .collect();
+
+    let exact_matches: Vec<_> = matches
+        .iter()
+        .copied()
+        .filter(|attachment| {
+            attachment
+                .file_name
+                .as_ref()
+                .is_some_and(|file_name| file_name.to_lowercase() == needle)
+        })
+        .collect();
+    if exact_matches.len() == 1 {
+        matches = exact_matches;
+    }
+
+    match matches.as_slice() {
+        [] => Err(anyhow::anyhow!("attachment '{needle}' was not found")),
+        [attachment] => Ok(attachment),
+        _ => Err(anyhow::anyhow!(
+            "multiple attachments found: {}",
+            matches
+                .iter()
+                .map(|attachment| attachment.id.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
         )),
@@ -14637,8 +15862,9 @@ pub struct TuiFileVault {
 pub fn tui_vault_from_file(
     path: &std::path::Path,
     write: bool,
+    passphrase: Option<&str>,
 ) -> anyhow::Result<TuiFileVault> {
-    let vault = load_from_file(path)?;
+    let vault = load_from_file(path, passphrase)?;
     if write {
         backup_file(path)?;
     }
@@ -16650,6 +17876,8 @@ mod test {
             notes: None,
             history: Vec::new(),
             collection_ids: Vec::new(),
+            archived: false,
+            deleted: false,
             attachments: Vec::new(),
         }
     }
@@ -18727,6 +19955,8 @@ mod test {
                 notes: Some("note text".to_string()),
                 history: vec![],
                 collection_ids: vec![],
+                archived: false,
+                deleted: false,
                 attachments: vec![ExportedAttachment {
                     id: "att-1".to_string(),
                     file_name: "secret.txt".to_string(),
@@ -18740,7 +19970,7 @@ mod test {
         file.write_all(json.as_bytes()).unwrap();
         file.flush().unwrap();
 
-        let loaded = load_from_file(file.path()).unwrap();
+        let loaded = load_from_file(file.path(), None).unwrap();
         assert_eq!(loaded.entries.len(), 1);
         let entry = &loaded.entries[0];
         assert_eq!(entry.id, "entry-id");
@@ -18773,7 +20003,7 @@ mod test {
         file.write_all(json.as_bytes()).unwrap();
         file.flush().unwrap();
 
-        let loaded = load_from_file(file.path()).unwrap();
+        let loaded = load_from_file(file.path(), None).unwrap();
         assert_eq!(loaded.entries.len(), 1);
         assert_eq!(loaded.entries[0].id, "from-file-0");
     }
@@ -18889,6 +20119,8 @@ mod test {
             notes: None,
             history: vec![],
             collection_ids: vec!["col-1".to_string()],
+            archived: false,
+            deleted: false,
             attachments: vec![],
         }];
         let collections = vec![ExportedCollection {
@@ -18899,7 +20131,7 @@ mod test {
 
         save_to_file(file.path(), exported, collections, None).unwrap();
 
-        let loaded = load_from_file(file.path()).unwrap();
+        let loaded = load_from_file(file.path(), None).unwrap();
         assert_eq!(loaded.entries.len(), 1);
         assert_eq!(loaded.entries[0].name, "Example");
         assert_eq!(loaded.collections.len(), 1);
@@ -19977,6 +21209,8 @@ mod test {
             notes: None,
             history: vec![],
             collection_ids: vec![],
+            archived: false,
+            deleted: false,
             attachments,
         }
     }
@@ -20597,6 +21831,8 @@ mod test {
                         password: "old".to_string(),
                     }],
                     collection_ids: vec!["c1".to_string()],
+                    archived: false,
+                    deleted: false,
                     attachments: vec![],
                 },
                 ExportedEntry {
@@ -20609,6 +21845,8 @@ mod test {
                     notes: None,
                     history: vec![],
                     collection_ids: vec![],
+                    archived: false,
+                    deleted: false,
                     attachments: vec![],
                 },
             ],

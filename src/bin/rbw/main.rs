@@ -386,6 +386,13 @@ enum Opt {
                 copy of the pre-edit file is made once, at startup)"
         )]
         write: bool,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(
@@ -471,6 +478,19 @@ enum Opt {
                 name that exists in more than one org"
         )]
         org: Option<String>,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Read an rbw export file directly instead of a configured account"
+        )]
+        from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted input export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(
@@ -662,6 +682,13 @@ enum Opt {
                 (`rbw export --encrypt`)."
         )]
         from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(about = "Get the primary value (password) of a given entry")]
@@ -700,6 +727,20 @@ enum Opt {
                 already-unlocked ones"
         )]
         all: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            conflicts_with = "all",
+            help = "Read a `rbw export` file directly instead of a configured account"
+        )]
+        from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(about = "Show all details of a given entry")]
@@ -729,6 +770,20 @@ enum Opt {
                 already-unlocked ones"
         )]
         all: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            conflicts_with = "all",
+            help = "Read a `rbw export` file directly instead of a configured account"
+        )]
+        from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(about = "Search for entries")]
@@ -835,6 +890,13 @@ enum Opt {
                 (`rbw export --encrypt`)."
         )]
         from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(about = "List or download file attachments")]
@@ -860,6 +922,20 @@ enum Opt {
                 already-unlocked ones"
         )]
         all: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            conflicts_with = "all",
+            help = "Read a `rbw export` file directly instead of a configured account"
+        )]
+        from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(about = "Inject secrets into a template")]
@@ -936,6 +1012,13 @@ enum Opt {
                 gpg-encrypted (`rbw export --encrypt`)."
         )]
         from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(
@@ -988,6 +1071,13 @@ enum Opt {
                 gpg-encrypted (`rbw export --encrypt`)."
         )]
         from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(about = "Set specific fields of an existing entry")]
@@ -1035,6 +1125,13 @@ enum Opt {
                 --encrypt`)."
         )]
         from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(
@@ -1064,6 +1161,13 @@ enum Opt {
                 gpg-encrypted (`rbw export --encrypt`)."
         )]
         from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(
@@ -1084,6 +1188,19 @@ enum Opt {
             help = "Skip confirmation prompt (only asked with --bulk)"
         )]
         yes: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Read and update a `rbw export` file directly"
+        )]
+        from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(about = "Unarchive a given entry")]
@@ -1102,6 +1219,19 @@ enum Opt {
             help = "Skip confirmation prompt (only asked with --bulk)"
         )]
         yes: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Read and update a `rbw export` file directly"
+        )]
+        from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(
@@ -1122,6 +1252,19 @@ enum Opt {
             help = "Skip confirmation prompt (only asked with --bulk)"
         )]
         yes: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Read and update a `rbw export` file directly"
+        )]
+        from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(about = "Manage organization collections")]
@@ -1156,6 +1299,19 @@ enum Opt {
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Read a `rbw export` file directly instead of a configured account"
+        )]
+        from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 
     #[command(
@@ -1553,6 +1709,19 @@ enum Attachment {
         raw: bool,
         #[arg(long, help = "Display output as YAML")]
         yaml: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Read a `rbw export` file directly instead of a configured account"
+        )]
+        from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
     #[command(
         about = "Download and decrypt an attachment by id or filename"
@@ -1578,6 +1747,19 @@ enum Attachment {
             help = "Write attachment content to stdout"
         )]
         raw: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Read a `rbw export` file directly instead of a configured account"
+        )]
+        from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
     #[command(
         about = "Upload a file as an attachment",
@@ -1609,6 +1791,19 @@ enum Attachment {
             help = "Only match if needle is an exact entry name (no substring fallback)"
         )]
         exact: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Read and update a `rbw export` file directly"
+        )]
+        from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
     #[command(
         about = "Delete an attachment from an entry",
@@ -1625,6 +1820,19 @@ enum Attachment {
         attachment: Option<String>,
         #[arg(short = 'y', long, help = "Skip confirmation prompt")]
         yes: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Read and update a `rbw export` file directly"
+        )]
+        from_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            requires = "from_file",
+            help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
+        )]
+        from_file_passphrase: Option<String>,
     },
 }
 
@@ -2246,7 +2454,14 @@ fn main() {
             all,
             from_file,
             write,
-        } => tui::run(term.as_deref(), all, from_file.as_deref(), write),
+            from_file_passphrase,
+        } => tui::run(
+            term.as_deref(),
+            all,
+            from_file.as_deref(),
+            write,
+            from_file_passphrase.as_deref(),
+        ),
         Opt::Export {
             format,
             attachments,
@@ -2254,6 +2469,8 @@ fn main() {
             output,
             collection,
             org,
+            from_file,
+            from_file_passphrase,
         } => commands::export(
             format,
             attachments,
@@ -2261,6 +2478,8 @@ fn main() {
             output.as_deref(),
             collection.as_deref(),
             org.as_deref(),
+            from_file.as_deref(),
+            from_file_passphrase.as_deref(),
         ),
         Opt::Import {
             file,
@@ -2295,6 +2514,7 @@ fn main() {
             include_trashed,
             all,
             from_file,
+            from_file_passphrase,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             let archived_filter =
@@ -2313,6 +2533,7 @@ fn main() {
                         archived_filter,
                         trash_filter,
                         from_file.as_deref(),
+                        from_file_passphrase.as_deref(),
                     )
                 },
                 |term| {
@@ -2329,6 +2550,7 @@ fn main() {
                         archived_filter,
                         trash_filter,
                         from_file.as_deref(),
+                        from_file_passphrase.as_deref(),
                     )
                 },
             )
@@ -2339,6 +2561,8 @@ fn main() {
                 output,
                 raw,
                 yaml,
+                from_file,
+                from_file_passphrase,
             } => (|| -> anyhow::Result<()> {
                 let output = resolve_output_mode(output, raw, yaml)?;
                 commands::attachment_list(
@@ -2350,6 +2574,8 @@ fn main() {
                     find_args.ignorecase,
                     output,
                     find_args.exact,
+                    from_file.as_deref(),
+                    from_file_passphrase.as_deref(),
                 )
             })(),
             Attachment::Get {
@@ -2357,6 +2583,8 @@ fn main() {
                 attachment,
                 output,
                 raw,
+                from_file,
+                from_file_passphrase,
             } => commands::attachment_get(
                 find_args.needles,
                 find_args.user.as_deref(),
@@ -2368,6 +2596,8 @@ fn main() {
                 output.as_deref(),
                 raw,
                 find_args.exact,
+                from_file.as_deref(),
+                from_file_passphrase.as_deref(),
             ),
             Attachment::Create {
                 needles,
@@ -2376,6 +2606,8 @@ fn main() {
                 folder,
                 ignorecase,
                 exact,
+                from_file,
+                from_file_passphrase,
             } => commands::attachment_create(
                 needles,
                 user.as_deref(),
@@ -2383,11 +2615,15 @@ fn main() {
                 ignorecase,
                 &file,
                 exact,
+                from_file.as_deref(),
+                from_file_passphrase.as_deref(),
             ),
             Attachment::Rm {
                 find_args,
                 attachment,
                 yes,
+                from_file,
+                from_file_passphrase,
             } => commands::attachment_rm(
                 find_args.needles,
                 find_args.user.as_deref(),
@@ -2398,6 +2634,8 @@ fn main() {
                 attachment.as_deref(),
                 find_args.exact,
                 yes,
+                from_file.as_deref(),
+                from_file_passphrase.as_deref(),
             ),
         },
         Opt::Get {
@@ -2411,6 +2649,8 @@ fn main() {
             list_fields,
             verbose,
             all,
+            from_file,
+            from_file_passphrase,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             commands::get(
@@ -2430,6 +2670,8 @@ fn main() {
                 verbose,
                 find_args.exact,
                 all,
+                from_file.as_deref(),
+                from_file_passphrase.as_deref(),
             )
         })(),
         Opt::Show {
@@ -2438,6 +2680,8 @@ fn main() {
             raw,
             yaml,
             all,
+            from_file,
+            from_file_passphrase,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             commands::show(
@@ -2450,6 +2694,8 @@ fn main() {
                 output,
                 find_args.exact,
                 all,
+                from_file.as_deref(),
+                from_file_passphrase.as_deref(),
             )
         })(),
         Opt::Search {
@@ -2469,6 +2715,7 @@ fn main() {
             include_trashed,
             all,
             from_file,
+            from_file_passphrase,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             let archived_filter =
@@ -2487,6 +2734,7 @@ fn main() {
                 archived_filter,
                 trash_filter,
                 from_file.as_deref(),
+                from_file_passphrase.as_deref(),
             )
         })(),
         Opt::Code {
@@ -2494,6 +2742,8 @@ fn main() {
             #[cfg(feature = "clipboard")]
             clipboard,
             all,
+            from_file,
+            from_file_passphrase,
         } => commands::code(
             find_args.needles,
             find_args.user.as_deref(),
@@ -2507,6 +2757,8 @@ fn main() {
             find_args.ignorecase,
             find_args.exact,
             all,
+            from_file.as_deref(),
+            from_file_passphrase.as_deref(),
         ),
         Opt::Inject { input, output } => {
             commands::inject(input.as_deref(), output.as_deref())
@@ -2531,6 +2783,7 @@ fn main() {
             generate,
             pwgen,
             from_file,
+            from_file_passphrase,
         } => {
             // Password-gen flags imply --generate, so `rbw create name -g
             // -l 24` and `rbw create name -l 24` both work as expected.
@@ -2556,6 +2809,7 @@ fn main() {
                 len,
                 ty,
                 from_file.as_deref(),
+                from_file_passphrase.as_deref(),
             )
         }
         Opt::Generate {
@@ -2598,6 +2852,7 @@ fn main() {
             json,
             yaml,
             from_file,
+            from_file_passphrase,
         } => commands::edit(
             find_args.needles,
             find_args.user.as_deref(),
@@ -2609,6 +2864,7 @@ fn main() {
             yaml,
             find_args.exact,
             from_file.as_deref(),
+            from_file_passphrase.as_deref(),
         ),
         Opt::Set {
             find_args,
@@ -2623,6 +2879,7 @@ fn main() {
             bulk,
             yes,
             from_file,
+            from_file_passphrase,
         } => commands::set(
             find_args.needles,
             find_args.user.as_deref(),
@@ -2642,12 +2899,14 @@ fn main() {
             yes,
             find_args.exact,
             from_file.as_deref(),
+            from_file_passphrase.as_deref(),
         ),
         Opt::Remove {
             find_args,
             force,
             yes,
             from_file,
+            from_file_passphrase,
         } => commands::remove(
             find_args.needles,
             find_args.user.as_deref(),
@@ -2659,11 +2918,14 @@ fn main() {
             force,
             yes,
             from_file.as_deref(),
+            from_file_passphrase.as_deref(),
         ),
         Opt::Archive {
             find_args,
             bulk,
             yes,
+            from_file,
+            from_file_passphrase,
         } => commands::archive(
             find_args.needles,
             find_args.user.as_deref(),
@@ -2674,11 +2936,15 @@ fn main() {
             find_args.exact,
             bulk,
             yes,
+            from_file.as_deref(),
+            from_file_passphrase.as_deref(),
         ),
         Opt::Unarchive {
             find_args,
             bulk,
             yes,
+            from_file,
+            from_file_passphrase,
         } => commands::unarchive(
             find_args.needles,
             find_args.user.as_deref(),
@@ -2689,11 +2955,15 @@ fn main() {
             find_args.exact,
             bulk,
             yes,
+            from_file.as_deref(),
+            from_file_passphrase.as_deref(),
         ),
         Opt::Restore {
             find_args,
             bulk,
             yes,
+            from_file,
+            from_file_passphrase,
         } => commands::restore(
             &find_args.needles,
             find_args.user.as_deref(),
@@ -2704,6 +2974,8 @@ fn main() {
             find_args.exact,
             bulk,
             yes,
+            from_file.as_deref(),
+            from_file_passphrase.as_deref(),
         ),
         Opt::Collection { collection } => match collection {
             Collection::List { output, raw, yaml } => {
@@ -2848,6 +3120,8 @@ fn main() {
             output,
             raw,
             yaml,
+            from_file,
+            from_file_passphrase,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             commands::history(
@@ -2859,6 +3133,8 @@ fn main() {
                 find_args.ignorecase,
                 output,
                 find_args.exact,
+                from_file.as_deref(),
+                from_file_passphrase.as_deref(),
             )
         })(),
         Opt::Lock { all } => commands::lock(all),
