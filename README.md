@@ -121,8 +121,10 @@ Available configuration options:
   `osc52` writes an OSC 52 terminal escape sequence to the client's own
   stdout instead (with tmux/GNU screen passthrough handled automatically),
   which works over SSH and in terminals without display-server access,
-  provided the terminal supports it. `auto` tries both and succeeds if
-  either one does.
+  provided the terminal supports it. This also works with non-interactive
+  SSH commands such as `ssh host rbw get example.com --clipboard`, which do
+  not allocate a remote PTY. `auto` tries both and succeeds if either one
+  does.
 
 ### Profiles
 

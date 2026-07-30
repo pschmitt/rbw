@@ -134,16 +134,17 @@ impl PasswordGenPolicy {
 #[serde(rename_all = "kebab-case")]
 pub enum ClipboardMechanism {
     // Best-effort: try both. OSC 52 is skipped silently whenever it
-    // wouldn't make sense (stdout isn't a terminal); only the system
-    // clipboard's result is reported back to the caller, matching the
-    // behavior from before this option existed.
+    // wouldn't make sense (stdout isn't a terminal or SSH session); only
+    // the system clipboard's result is reported back to the caller,
+    // matching the behavior from before this option existed.
     #[default]
     Auto,
     // Only the system clipboard (`arboard`, via the agent) -- disables OSC
     // 52 entirely.
     System,
     // Only the OSC 52 escape sequence -- never touches the system
-    // clipboard, and fails outright if stdout isn't a terminal.
+    // clipboard, and fails outright if stdout isn't a terminal or SSH
+    // session.
     Osc52,
 }
 

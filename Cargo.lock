@@ -2643,7 +2643,7 @@ dependencies = [
 
 [[package]]
 name = "rbw"
-version = "2.13.9"
+version = "2.13.10"
 dependencies = [
  "aes",
  "anyhow",

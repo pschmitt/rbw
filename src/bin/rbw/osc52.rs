@@ -9,11 +9,10 @@
 // and both tmux and GNU screen once passed through). See
 // `rbw::config::ClipboardMechanism`.
 //
-// Terminals that don't understand OSC 52 simply ignore the escape sequence,
-// so it's safe to attempt whenever stdout is a real terminal; the only
-// thing worth guarding against is polluting *piped* output (stdout
-// redirected to a file or another process) with a stray escape sequence
-// nobody asked for.
+// Terminals that don't understand OSC 52 simply ignore the escape sequence.
+// Keep ordinary redirected output clean, but allow it for SSH sessions: an
+// `ssh host rbw get ... --clipboard` command commonly has no remote PTY even
+// though its stdout still goes directly to the local terminal emulator.
 
 use std::io::Write as _;
 
@@ -25,9 +24,9 @@ use is_terminal::IsTerminal as _;
 const SCREEN_CHUNK_LIMIT: usize = 750;
 
 pub fn copy(text: &str) -> anyhow::Result<()> {
-    if !std::io::stdout().is_terminal() {
+    if !std::io::stdout().is_terminal() && !is_ssh_session() {
         return Err(anyhow::anyhow!(
-            "stdout is not a terminal, can't use OSC 52 to set the clipboard"
+            "stdout is not a terminal or SSH session, can't use OSC 52 to set the clipboard"
         ));
     }
 
@@ -41,6 +40,14 @@ pub fn copy(text: &str) -> anyhow::Result<()> {
     stdout.flush()?;
 
     Ok(())
+}
+
+fn is_ssh_session() -> bool {
+    ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]
+        .into_iter()
+        .any(|name| {
+            std::env::var_os(name).is_some_and(|value| !value.is_empty())
+        })
 }
 
 // tmux and GNU screen both intercept escape sequences from the programs
@@ -83,7 +90,7 @@ fn wrap_for_multiplexer(sequence: &str) -> String {
 
 #[cfg(test)]
 mod test {
-    use super::wrap_for_multiplexer;
+    use super::{is_ssh_session, wrap_for_multiplexer};
 
     // Serializes tests that mutate `$TMUX`/`$STY`, since env vars are
     // process-global and `cargo test` runs tests in parallel by default.
@@ -116,6 +123,50 @@ mod test {
         std::env::remove_var("STY");
 
         result
+    }
+
+    fn with_ssh_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap();
+        let old_values = [
+            ("SSH_CONNECTION", std::env::var_os("SSH_CONNECTION")),
+            ("SSH_CLIENT", std::env::var_os("SSH_CLIENT")),
+            ("SSH_TTY", std::env::var_os("SSH_TTY")),
+        ];
+
+        for (name, _) in &old_values {
+            std::env::remove_var(name);
+        }
+        if let Some(value) = value {
+            std::env::set_var("SSH_CONNECTION", value);
+        }
+
+        let result = f();
+
+        for (name, value) in old_values {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+
+        result
+    }
+
+    #[test]
+    fn ssh_session_is_detected_without_a_pty() {
+        with_ssh_env(Some("192.0.2.1 192.0.2.2 22 54321"), || {
+            assert!(is_ssh_session());
+        });
+    }
+
+    #[test]
+    fn empty_ssh_environment_is_not_a_session() {
+        with_ssh_env(None, || {
+            assert!(!is_ssh_session());
+        });
     }
 
     // With no multiplexer detected, the sequence passes through unchanged.
