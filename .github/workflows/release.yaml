@@ -5,6 +5,9 @@ on:
   workflow_dispatch: {}
 env:
   RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+  LC_ALL: C
+  TZ: UTC
 permissions:
   contents: read
 concurrency:
@@ -29,11 +32,19 @@ jobs:
             os: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Read the declared Rust toolchain
+        id: rust
+        run: echo "version=$(sed -n 's/^rust-version = \"\(.*\)\"$/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - name: Set reproducible build environment
+        run: |
+          echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct \"$GITHUB_SHA\")" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=--remap-path-prefix=${GITHUB_WORKSPACE}=." >> "$GITHUB_ENV"
       - name: Install musl build dependencies
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y clang-18
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.rust.outputs.version }}
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
@@ -56,15 +67,15 @@ jobs:
         run: cargo binstall --no-confirm --force cargo-ndk
       - name: Build (musl)
         if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: TARGET_CC=clang-18 TARGET_AR=llvm-ar-18 cargo build --release --target x86_64-unknown-linux-musl
+        run: TARGET_CC=clang-18 TARGET_AR=llvm-ar-18 cargo build --locked --release --target x86_64-unknown-linux-musl
       - name: Build (android)
         if: matrix.target == 'aarch64-linux-android'
-        run: cargo ndk --target aarch64-linux-android --platform 24 -- build --release --no-default-features
+        run: cargo ndk --target aarch64-linux-android --platform 24 -- build --locked --release --no-default-features
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
       - name: Build
         if: matrix.target != 'x86_64-unknown-linux-musl' && matrix.target != 'aarch64-linux-android'
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --locked --release --target ${{ matrix.target }}
       # The android binary can't run directly on this (x86_64) runner. Give
       # it a real bionic linker/libc (an actual Android system image; the
       # NDK only ships link-time stub .so's and no linker64 at all) and run
@@ -116,7 +127,9 @@ jobs:
           run_bin completions bash > "$pkg/completions/bash/rbw"
           run_bin completions zsh > "$pkg/completions/zsh/_rbw"
           run_bin completions fish > "$pkg/completions/fish/rbw.fish"
-          tar czf "$pkg.tar.gz" "$pkg"
+          tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" \
+            --owner=0 --group=0 --numeric-owner -cf - "$pkg" |
+            gzip -n -9 > "$pkg.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
           name: tarball-${{ matrix.target }}
@@ -128,6 +141,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -136,6 +151,11 @@ jobs:
           path: dist
       - name: Generate checksums
         run: cd dist && sha256sum -- *.tar.gz > SHA256SUMS
+      - name: Verify checksums
+        run: cd dist && sha256sum --check SHA256SUMS
+      - uses: actions/attest@v4
+        with:
+          subject-path: '${{ github.workspace }}/dist/*.tar.gz'
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
