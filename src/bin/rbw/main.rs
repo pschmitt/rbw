@@ -12,6 +12,7 @@ use clap::{CommandFactory as _, Parser as _};
 mod actions;
 mod commands;
 mod import_bitwarden;
+mod osc52;
 mod sock;
 mod tui;
 

@@ -111,6 +111,42 @@ impl PasswordGenPolicy {
     }
 }
 
+// Which mechanism(s) `-c`/`--clipboard` and the TUI's copy actions use to
+// set the clipboard. The system clipboard (`arboard`, via the agent, in
+// `rbw-agent`'s `state::clipboard`) needs direct X11/Wayland/pasteboard
+// access and doesn't work over a plain SSH session. OSC 52 instead writes a
+// terminal escape sequence to the *client's* own stdout, asking whatever
+// terminal emulator is on the other end to set its clipboard -- which works
+// over SSH, in containers, and anywhere else there's no display server, as
+// long as that terminal emulator supports OSC 52 (most modern ones do; see
+// `src/bin/rbw/osc52.rs`). Unsupported terminals just ignore the escape
+// sequence, so it's harmless to attempt even when support is unknown.
+#[derive(
+    serde::Serialize,
+    serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClipboardMechanism {
+    // Best-effort: try both. OSC 52 is skipped silently whenever it
+    // wouldn't make sense (stdout isn't a terminal); only the system
+    // clipboard's result is reported back to the caller, matching the
+    // behavior from before this option existed.
+    #[default]
+    Auto,
+    // Only the system clipboard (`arboard`, via the agent) -- disables OSC
+    // 52 entirely.
+    System,
+    // Only the OSC 52 escape sequence -- never touches the system
+    // clipboard, and fails outright if stdout isn't a terminal.
+    Osc52,
+}
+
 // Points at a Login item, in another configured account's vault, that holds
 // this account's master password. Used by the agent's unlock flow to skip
 // the pinentry prompt: the source account is unlocked (recursively, if it
@@ -234,6 +270,10 @@ pub struct Config {
     // view.
     #[serde(default, skip_serializing_if = "PasswordGenPolicy::is_default")]
     pub password_gen: PasswordGenPolicy,
+    // Which mechanism(s) `-c`/`--clipboard` and the TUI's copy actions use
+    // to set the clipboard; see `ClipboardMechanism`.
+    #[serde(default)]
+    pub clipboard: ClipboardMechanism,
     // backcompat, no longer generated in new configs
     #[serde(skip_serializing)]
     pub device_id: Option<String>,
@@ -259,6 +299,7 @@ impl Default for Config {
             hide_trashed: default_hide_trashed(),
             tui_keybindings: std::collections::HashMap::new(),
             password_gen: PasswordGenPolicy::default(),
+            clipboard: ClipboardMechanism::default(),
             device_id: None,
         }
     }
@@ -688,7 +729,10 @@ pub async fn device_id(config: &Config) -> Result<String> {
 
 #[cfg(test)]
 mod test {
-    use super::{Account, Config, CredentialSource, Error, ExcludeContext};
+    use super::{
+        Account, ClipboardMechanism, Config, CredentialSource, Error,
+        ExcludeContext,
+    };
 
     fn named(name: &str, email: &str) -> Account {
         Account {
@@ -901,6 +945,32 @@ mod test {
             ExcludeContext::Tui,
         ] {
             assert!(a.excluded_from(ctx));
+        }
+    }
+
+    // A config with no `clipboard` key at all (e.g. one written before this
+    // option existed) still deserializes, defaulting to `Auto`.
+    #[test]
+    fn clipboard_mechanism_defaults_to_auto_when_absent() {
+        let c: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(c.clipboard, ClipboardMechanism::Auto);
+    }
+
+    // Each variant round-trips through its documented kebab-case JSON
+    // spelling (what `config.json` actually contains, and what `rbw config
+    // edit` shows/accepts).
+    #[test]
+    fn clipboard_mechanism_json_round_trips() {
+        for (mechanism, json) in [
+            (ClipboardMechanism::Auto, "\"auto\""),
+            (ClipboardMechanism::System, "\"system\""),
+            (ClipboardMechanism::Osc52, "\"osc52\""),
+        ] {
+            assert_eq!(serde_json::to_string(&mechanism).unwrap(), json);
+            assert_eq!(
+                serde_json::from_str::<ClipboardMechanism>(json).unwrap(),
+                mechanism
+            );
         }
     }
 }

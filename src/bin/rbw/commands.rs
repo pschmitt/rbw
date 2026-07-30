@@ -2542,6 +2542,9 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
         "pinentry_timeout" => Some(config.pinentry_timeout.to_string()),
         "hide_archived" => Some(config.hide_archived.to_string()),
         "hide_trashed" => Some(config.hide_trashed.to_string()),
+        "clipboard" => {
+            Some(clipboard_mechanism_str(config.clipboard).to_string())
+        }
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     };
     let Some(value) = value else {
@@ -2640,6 +2643,9 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
                 .parse()
                 .context("failed to parse value for hide_trashed")?;
         }
+        "clipboard" => {
+            config.clipboard = parse_clipboard_mechanism(value)?;
+        }
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     }
     config.save()?;
@@ -2677,6 +2683,9 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
         }
         "hide_trashed" => {
             config.hide_trashed = rbw::config::default_hide_trashed();
+        }
+        "clipboard" => {
+            config.clipboard = rbw::config::ClipboardMechanism::default();
         }
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     }
@@ -14080,6 +14089,29 @@ fn parse_uri_match_type(s: &str) -> anyhow::Result<rbw::api::UriMatchType> {
         "regular_expression" => Ok(rbw::api::UriMatchType::RegularExpression),
         "never" => Ok(rbw::api::UriMatchType::Never),
         other => Err(anyhow::anyhow!("unknown uri match type: '{other}'")),
+    }
+}
+
+fn clipboard_mechanism_str(
+    m: rbw::config::ClipboardMechanism,
+) -> &'static str {
+    match m {
+        rbw::config::ClipboardMechanism::Auto => "auto",
+        rbw::config::ClipboardMechanism::System => "system",
+        rbw::config::ClipboardMechanism::Osc52 => "osc52",
+    }
+}
+
+fn parse_clipboard_mechanism(
+    s: &str,
+) -> anyhow::Result<rbw::config::ClipboardMechanism> {
+    match s {
+        "auto" => Ok(rbw::config::ClipboardMechanism::Auto),
+        "system" => Ok(rbw::config::ClipboardMechanism::System),
+        "osc52" => Ok(rbw::config::ClipboardMechanism::Osc52),
+        other => {
+            Err(anyhow::anyhow!("unknown clipboard mechanism: '{other}'"))
+        }
     }
 }
 

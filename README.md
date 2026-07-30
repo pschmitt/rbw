@@ -115,6 +115,14 @@ Available configuration options:
   `diceware` -- same fields as those commands' flags). Not settable via `rbw
   config set`; edit `config.json` directly, or use the TUI's settings view
   (`S` from the main screen).
+* `clipboard`: Which mechanism `-c`/`--clipboard` and the TUI's copy actions
+  use to copy text. One of `auto` (default), `system`, or `osc52`. `system`
+  copies via the system clipboard (X11/Wayland/macOS, through `rbw-agent`).
+  `osc52` writes an OSC 52 terminal escape sequence to the client's own
+  stdout instead (with tmux/GNU screen passthrough handled automatically),
+  which works over SSH and in terminals without display-server access,
+  provided the terminal supports it. `auto` tries both and succeeds if
+  either one does.
 
 ### Profiles
 

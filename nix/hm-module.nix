@@ -350,6 +350,19 @@ let
           the full action list and defaults.
         '';
       };
+      clipboard = mkOption {
+        type = types.enum [ "auto" "system" "osc52" ];
+        default = "auto";
+        description = ''
+          Which mechanism `-c`/`--clipboard` and the TUI's copy actions use
+          to copy text: `system` copies via the system clipboard (X11/
+          Wayland/macOS, through the `rbw-agent`); `osc52` writes an OSC 52
+          terminal escape sequence to the client's own stdout instead,
+          which works over SSH and in terminals without display-server
+          access, provided the terminal (or multiplexer) supports it;
+          `auto` tries both and succeeds if either one does.
+        '';
+      };
       # Mirrors `PasswordGenPolicy` in `src/config.rs`.
       password_gen = mkOption {
         type = types.submodule {

@@ -315,7 +315,35 @@ pub fn encrypt(
     }
 }
 
+// Dispatches to the OSC 52 escape sequence (`crate::osc52`), the system
+// clipboard (`arboard`, via the agent), or both -- per
+// `rbw::config::ClipboardMechanism`. In `Auto` (the default), OSC 52 is a
+// best-effort supplement: its failure (e.g. stdout isn't a terminal) is
+// only surfaced if the system clipboard *also* fails, so the reported
+// error stays the same as before this option existed.
 pub fn clipboard_store(text: &str) -> anyhow::Result<()> {
+    let mechanism = rbw::config::Config::load()
+        .map(|config| config.clipboard)
+        .unwrap_or_default();
+
+    match mechanism {
+        rbw::config::ClipboardMechanism::Osc52 => crate::osc52::copy(text),
+        rbw::config::ClipboardMechanism::System => {
+            system_clipboard_store(text)
+        }
+        rbw::config::ClipboardMechanism::Auto => {
+            let osc52_result = crate::osc52::copy(text);
+            let system_result = system_clipboard_store(text);
+            if osc52_result.is_ok() || system_result.is_ok() {
+                Ok(())
+            } else {
+                system_result
+            }
+        }
+    }
+}
+
+fn system_clipboard_store(text: &str) -> anyhow::Result<()> {
     simple_action(rbw::protocol::Action::ClipboardStore {
         text: text.to_string(),
     })
