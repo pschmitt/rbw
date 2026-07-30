@@ -203,6 +203,19 @@ delete one, `rbw attachment rm <entry> --attachment <attachment-id-or-filename>`
 to write the attachment to stdout instead of a file. Using the entry UUID is
 the most precise option and avoids shell quoting issues for names with spaces.
 
+### Passkeys
+
+Passkeys (WebAuthn/FIDO2 credentials) synced onto a login item are fully
+supported: `rbw sync`/decrypt, `rbw show`/the TUI detail pane (a `Passkey`
+row showing the relying party and account, never the raw key material),
+`rbw export`/`rbw import`, and `rbw mirror` all carry them through
+end-to-end, the same way a password or TOTP secret does. `rbw edit`/`rbw
+set` never expose the raw credential fields for editing (there's nothing
+meaningful to hand-edit in opaque key material) but always preserve
+whatever passkeys an entry already has -- important given the destination
+server stores an item's `login` object as one unit, so a request that
+omitted this field entirely would otherwise silently delete the passkey.
+
 For commands that support formatted output, use `-o name`, `-o json`, or
 `-o yaml`. `-o json` is equivalent to `--json`, and `-o yaml` emits YAML.
 

@@ -1154,6 +1154,7 @@ impl App {
                 password: Some(String::new()),
                 uris: Vec::new(),
                 totp: None,
+                fido2_credentials: Vec::new(),
             },
             fields: Vec::new(),
         };
@@ -2672,6 +2673,7 @@ fn build_fields(base: &EditableCipher) -> Vec<FormField> {
             password,
             uris,
             totp,
+            ..
         } => {
             f.push(FormField::text(
                 "Username",
@@ -3151,6 +3153,7 @@ mod test {
                     password: None,
                     totp: None,
                     uris: vec![],
+                    fido2_credentials: vec![],
                 },
                 fields: vec![],
                 notes: None,
@@ -3489,6 +3492,7 @@ mod test {
                     password: Some("hunter2".to_string()),
                     totp: None,
                     uris: None,
+                    fido2_credentials: Vec::new(),
                 },
                 fields: Vec::new(),
                 notes: None,

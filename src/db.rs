@@ -153,6 +153,29 @@ impl<'de> serde::Deserialize<'de> for Uri {
     }
 }
 
+// A synced passkey. Every field except `creation_date` is an individually
+// encrypted CipherString, exactly like `password`/`username` on `Login` --
+// `creation_date` is the one plain (unencrypted) field Bitwarden stores on
+// a fido2 credential.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Eq, PartialEq, Default,
+)]
+pub struct Fido2Credential {
+    pub credential_id: Option<String>,
+    pub key_type: Option<String>,
+    pub key_algorithm: Option<String>,
+    pub key_curve: Option<String>,
+    pub key_value: Option<String>,
+    pub rp_id: Option<String>,
+    pub user_handle: Option<String>,
+    pub user_name: Option<String>,
+    pub counter: Option<String>,
+    pub rp_name: Option<String>,
+    pub user_display_name: Option<String>,
+    pub discoverable: Option<String>,
+    pub creation_date: Option<String>,
+}
+
 #[derive(
     serde::Serialize, serde::Deserialize, Debug, Clone, Eq, PartialEq,
 )]
@@ -162,6 +185,8 @@ pub enum EntryData {
         password: Option<String>,
         totp: Option<String>,
         uris: Vec<Uri>,
+        #[serde(default)]
+        fido2_credentials: Vec<Fido2Credential>,
     },
     Card {
         cardholder_name: Option<String>,

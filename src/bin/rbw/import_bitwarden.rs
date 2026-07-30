@@ -160,6 +160,46 @@ pub struct BwLogin {
     pub totp: Option<String>,
     #[serde(default, deserialize_with = "null_as_default")]
     pub uris: Vec<BwUri>,
+    #[serde(
+        rename = "fido2Credentials",
+        default,
+        deserialize_with = "null_as_default"
+    )]
+    pub fido2_credentials: Vec<BwFido2Credential>,
+}
+
+// Bitwarden's own JSON export is already fully decrypted client-side, so
+// (unlike `db::Fido2Credential`/`api::CipherFido2Credential`) every field
+// here is a plain value, not a CipherString -- same as `BwLogin`'s other
+// fields.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct BwFido2Credential {
+    #[serde(rename = "credentialId", default)]
+    pub credential_id: Option<String>,
+    #[serde(rename = "keyType", default)]
+    pub key_type: Option<String>,
+    #[serde(rename = "keyAlgorithm", default)]
+    pub key_algorithm: Option<String>,
+    #[serde(rename = "keyCurve", default)]
+    pub key_curve: Option<String>,
+    #[serde(rename = "keyValue", default)]
+    pub key_value: Option<String>,
+    #[serde(rename = "rpId", default)]
+    pub rp_id: Option<String>,
+    #[serde(rename = "userHandle", default)]
+    pub user_handle: Option<String>,
+    #[serde(rename = "userName", default)]
+    pub user_name: Option<String>,
+    #[serde(default)]
+    pub counter: Option<String>,
+    #[serde(rename = "rpName", default)]
+    pub rp_name: Option<String>,
+    #[serde(rename = "userDisplayName", default)]
+    pub user_display_name: Option<String>,
+    #[serde(default)]
+    pub discoverable: Option<String>,
+    #[serde(rename = "creationDate", default)]
+    pub creation_date: Option<String>,
 }
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -950,6 +990,7 @@ mod test {
                             uri: Some("https://example.com".to_string()),
                             match_type: None,
                         }],
+                        fido2_credentials: vec![],
                     }),
                     card: None,
                     identity: None,

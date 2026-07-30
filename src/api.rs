@@ -518,6 +518,31 @@ impl SyncResCipher {
                             .collect()
                     },
                 ),
+                fido2_credentials: login
+                    .fido2_credentials
+                    .as_ref()
+                    .map_or_else(std::vec::Vec::new, |creds| {
+                        creds
+                            .iter()
+                            .map(|c| crate::db::Fido2Credential {
+                                credential_id: c.credential_id.clone(),
+                                key_type: c.key_type.clone(),
+                                key_algorithm: c.key_algorithm.clone(),
+                                key_curve: c.key_curve.clone(),
+                                key_value: c.key_value.clone(),
+                                rp_id: c.rp_id.clone(),
+                                user_handle: c.user_handle.clone(),
+                                user_name: c.user_name.clone(),
+                                counter: c.counter.clone(),
+                                rp_name: c.rp_name.clone(),
+                                user_display_name: c
+                                    .user_display_name
+                                    .clone(),
+                                discoverable: c.discoverable.clone(),
+                                creation_date: c.creation_date.clone(),
+                            })
+                            .collect()
+                    }),
             }
         } else if let Some(card) = &self.card {
             crate::db::EntryData::Card {
@@ -810,6 +835,8 @@ struct CipherLogin {
     totp: Option<String>,
     #[serde(rename = "Uris", alias = "uris")]
     uris: Option<Vec<CipherLoginUri>>,
+    #[serde(rename = "Fido2Credentials", alias = "fido2Credentials")]
+    fido2_credentials: Option<Vec<CipherFido2Credential>>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -818,6 +845,40 @@ struct CipherLoginUri {
     uri: Option<String>,
     #[serde(rename = "Match", alias = "match")]
     match_type: Option<UriMatchType>,
+}
+
+// A synced passkey. Every field except `creation_date` is an individually
+// encrypted CipherString, exactly like `password`/`username` above --
+// `creation_date` is the one plain (unencrypted) field Bitwarden stores on
+// a fido2 credential.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+struct CipherFido2Credential {
+    #[serde(rename = "CredentialId", alias = "credentialId")]
+    credential_id: Option<String>,
+    #[serde(rename = "KeyType", alias = "keyType")]
+    key_type: Option<String>,
+    #[serde(rename = "KeyAlgorithm", alias = "keyAlgorithm")]
+    key_algorithm: Option<String>,
+    #[serde(rename = "KeyCurve", alias = "keyCurve")]
+    key_curve: Option<String>,
+    #[serde(rename = "KeyValue", alias = "keyValue")]
+    key_value: Option<String>,
+    #[serde(rename = "RpId", alias = "rpId")]
+    rp_id: Option<String>,
+    #[serde(rename = "UserHandle", alias = "userHandle")]
+    user_handle: Option<String>,
+    #[serde(rename = "UserName", alias = "userName")]
+    user_name: Option<String>,
+    #[serde(rename = "Counter", alias = "counter")]
+    counter: Option<String>,
+    #[serde(rename = "RpName", alias = "rpName")]
+    rp_name: Option<String>,
+    #[serde(rename = "UserDisplayName", alias = "userDisplayName")]
+    user_display_name: Option<String>,
+    #[serde(rename = "Discoverable", alias = "discoverable")]
+    discoverable: Option<String>,
+    #[serde(rename = "CreationDate", alias = "creationDate")]
+    creation_date: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -1012,6 +1073,7 @@ fn cipher_type_and_fields(
             password,
             totp,
             uris,
+            fido2_credentials,
         } => {
             let uris = if uris.is_empty() {
                 None
@@ -1025,11 +1087,36 @@ fn cipher_type_and_fields(
                         .collect(),
                 )
             };
+            let fido2_credentials = if fido2_credentials.is_empty() {
+                None
+            } else {
+                Some(
+                    fido2_credentials
+                        .iter()
+                        .map(|c| CipherFido2Credential {
+                            credential_id: c.credential_id.clone(),
+                            key_type: c.key_type.clone(),
+                            key_algorithm: c.key_algorithm.clone(),
+                            key_curve: c.key_curve.clone(),
+                            key_value: c.key_value.clone(),
+                            rp_id: c.rp_id.clone(),
+                            user_handle: c.user_handle.clone(),
+                            user_name: c.user_name.clone(),
+                            counter: c.counter.clone(),
+                            rp_name: c.rp_name.clone(),
+                            user_display_name: c.user_display_name.clone(),
+                            discoverable: c.discoverable.clone(),
+                            creation_date: c.creation_date.clone(),
+                        })
+                        .collect(),
+                )
+            };
             login = Some(CipherLogin {
                 username: username.clone(),
                 password: password.clone(),
                 totp: totp.clone(),
                 uris,
+                fido2_credentials,
             });
         }
         crate::db::EntryData::Card {
@@ -2300,6 +2387,7 @@ impl Client {
                 password,
                 totp,
                 uris,
+                fido2_credentials,
             } => {
                 let uris = if uris.is_empty() {
                     None
@@ -2313,11 +2401,38 @@ impl Client {
                             .collect(),
                     )
                 };
+                let fido2_credentials = if fido2_credentials.is_empty() {
+                    None
+                } else {
+                    Some(
+                        fido2_credentials
+                            .iter()
+                            .map(|c| CipherFido2Credential {
+                                credential_id: c.credential_id.clone(),
+                                key_type: c.key_type.clone(),
+                                key_algorithm: c.key_algorithm.clone(),
+                                key_curve: c.key_curve.clone(),
+                                key_value: c.key_value.clone(),
+                                rp_id: c.rp_id.clone(),
+                                user_handle: c.user_handle.clone(),
+                                user_name: c.user_name.clone(),
+                                counter: c.counter.clone(),
+                                rp_name: c.rp_name.clone(),
+                                user_display_name: c
+                                    .user_display_name
+                                    .clone(),
+                                discoverable: c.discoverable.clone(),
+                                creation_date: c.creation_date.clone(),
+                            })
+                            .collect(),
+                    )
+                };
                 req.login = Some(CipherLogin {
                     username: username.clone(),
                     password: password.clone(),
                     totp: totp.clone(),
                     uris,
+                    fido2_credentials,
                 });
             }
             crate::db::EntryData::Card {

@@ -76,6 +76,7 @@ enum Field {
     Password,
     Totp,
     Uris,
+    Fido2Credential,
     IdentityName,
     City,
     State,
@@ -160,6 +161,7 @@ impl Field {
             Self::Password => "password",
             Self::Totp => "totp",
             Self::Uris => "uris",
+            Self::Fido2Credential => "fido2_credential",
             Self::IdentityName => "identityname",
             Self::City => "city",
             Self::State => "state",
@@ -1412,6 +1414,7 @@ impl DecryptedCipher {
                 password,
                 totp,
                 uris,
+                fido2_credentials,
             } => {
                 if let Some(u) = username {
                     println!("{} {}", lbl("Username"), style::user(u, c));
@@ -1433,6 +1436,26 @@ impl DecryptedCipher {
                             print!("  {}", dim(&format!("[{mt}]")));
                         }
                         println!();
+                    }
+                }
+                // Never prints the raw key material -- just enough to
+                // confirm a passkey is present and which relying party/
+                // account it's for.
+                for (i, cred) in fido2_credentials.iter().enumerate() {
+                    let label = if i == 0 {
+                        lbl("Passkey")
+                    } else {
+                        " ".repeat(12)
+                    };
+                    let rp =
+                        cred.rp_name.as_deref().unwrap_or("(unknown rp)");
+                    let user = cred
+                        .user_display_name
+                        .as_deref()
+                        .or(cred.user_name.as_deref());
+                    match user {
+                        Some(user) => println!("{label} {rp} ({user})"),
+                        None => println!("{label} {rp}"),
                     }
                 }
             }
@@ -2117,6 +2140,8 @@ pub enum DecryptedData {
         password: Option<String>,
         totp: Option<String>,
         uris: Option<Vec<DecryptedUri>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        fido2_credentials: Vec<DecryptedFido2Credential>,
     },
     Card {
         cardholder_name: Option<String>,
@@ -2198,6 +2223,27 @@ pub struct DecryptedUri {
     pub match_type: Option<rbw::api::UriMatchType>,
 }
 
+// A decrypted passkey. `creation_date` is never encrypted to begin with
+// (see `rbw::db::Fido2Credential`); every other field was decrypted the
+// same way `password`/`username` are.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+#[cfg_attr(test, derive(Eq, PartialEq))]
+pub struct DecryptedFido2Credential {
+    pub credential_id: Option<String>,
+    pub key_type: Option<String>,
+    pub key_algorithm: Option<String>,
+    pub key_curve: Option<String>,
+    pub key_value: Option<String>,
+    pub rp_id: Option<String>,
+    pub user_handle: Option<String>,
+    pub user_name: Option<String>,
+    pub counter: Option<String>,
+    pub rp_name: Option<String>,
+    pub user_display_name: Option<String>,
+    pub discoverable: Option<String>,
+    pub creation_date: Option<String>,
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct EditableCipher {
     pub name: String,
@@ -2222,6 +2268,13 @@ pub enum EditableData {
         uris: Vec<EditableUri>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         totp: Option<String>,
+        // Round-trips unchanged if left untouched in the editor -- not
+        // meant to be hand-edited (it's opaque key material), just carried
+        // through so editing an entry can never destroy its passkey the
+        // way an absent field on the outgoing request would (Vaultwarden
+        // stores the whole `login` object wholesale, no per-field merge).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        fido2_credentials: Vec<EditableFido2Credential>,
     },
     Card {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2289,6 +2342,36 @@ pub struct EditableUri {
     pub uri: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub match_type: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct EditableFido2Credential {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_algorithm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_curve: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rp_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_handle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rp_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discoverable: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creation_date: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -4257,6 +4340,7 @@ fn add_from_file(
             ),
             uris: editable_uris,
             totp: None,
+            fido2_credentials: Vec::new(),
         },
         fields: Vec::new(),
     };
@@ -4426,6 +4510,7 @@ pub fn generate(
                 password: Some(password),
                 uris,
                 totp: None,
+                fido2_credentials: Vec::new(),
             },
             &[],
             None,
@@ -5532,6 +5617,7 @@ fn add_structured(
             ),
             uris: editable_uris,
             totp: None,
+            fido2_credentials: Vec::new(),
         },
         fields: Vec::new(),
     };
@@ -6270,6 +6356,7 @@ fn compute_entry_changes(
         password: cur_pw,
         uris: cur_uris,
         totp: cur_totp,
+        ..
     } = &decrypted.data
     {
         if let Some(u) = new_username {
@@ -6364,6 +6451,7 @@ fn apply_entry_update(
             password: entry_password,
             uris: entry_uris,
             totp: entry_totp,
+            fido2_credentials: entry_fido2_credentials,
         } => {
             let enc_user = if new_username.is_some() {
                 new_username
@@ -6416,6 +6504,13 @@ fn apply_entry_update(
                 password: enc_pw,
                 uris: enc_uris,
                 totp: enc_totp,
+                // `rbw set` never touches passkeys -- always carried over
+                // unchanged from the entry being updated, exactly like
+                // `password_history` above, so this can never destroy a
+                // fido2 credential the way an absent field on the outgoing
+                // request would (Vaultwarden stores the whole `login`
+                // object wholesale, no per-field merge).
+                fido2_credentials: entry_fido2_credentials.clone(),
             }
         }
         other => other.clone(),
@@ -6557,6 +6652,7 @@ fn apply_entry_update_decrypted(
         password,
         uris,
         totp,
+        ..
     } = &mut updated.data
     {
         if new_username.is_some() {
@@ -7570,6 +7666,38 @@ struct ImportedUri {
     match_type: Option<rbw::api::UriMatchType>,
 }
 
+// Deserialize-only mirror of `DecryptedFido2Credential`, same reasoning as
+// `ImportedUri` above.
+#[derive(Debug, Default, serde::Deserialize)]
+struct ImportedFido2Credential {
+    #[serde(default)]
+    credential_id: Option<String>,
+    #[serde(default)]
+    key_type: Option<String>,
+    #[serde(default)]
+    key_algorithm: Option<String>,
+    #[serde(default)]
+    key_curve: Option<String>,
+    #[serde(default)]
+    key_value: Option<String>,
+    #[serde(default)]
+    rp_id: Option<String>,
+    #[serde(default)]
+    user_handle: Option<String>,
+    #[serde(default)]
+    user_name: Option<String>,
+    #[serde(default)]
+    counter: Option<String>,
+    #[serde(default)]
+    rp_name: Option<String>,
+    #[serde(default)]
+    user_display_name: Option<String>,
+    #[serde(default)]
+    discoverable: Option<String>,
+    #[serde(default)]
+    creation_date: Option<String>,
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct ImportedField {
     #[serde(default)]
@@ -7600,6 +7728,8 @@ enum ImportedData {
         totp: Option<String>,
         #[serde(default)]
         uris: Option<Vec<ImportedUri>>,
+        #[serde(default)]
+        fido2_credentials: Vec<ImportedFido2Credential>,
     },
     Card {
         #[serde(default)]
@@ -7863,6 +7993,26 @@ fn bw_item_data(
                         })
                         .collect()
                 }),
+                fido2_credentials: login.map_or_else(Vec::new, |l| {
+                    l.fido2_credentials
+                        .iter()
+                        .map(|c| ImportedFido2Credential {
+                            credential_id: c.credential_id.clone(),
+                            key_type: c.key_type.clone(),
+                            key_algorithm: c.key_algorithm.clone(),
+                            key_curve: c.key_curve.clone(),
+                            key_value: c.key_value.clone(),
+                            rp_id: c.rp_id.clone(),
+                            user_handle: c.user_handle.clone(),
+                            user_name: c.user_name.clone(),
+                            counter: c.counter.clone(),
+                            rp_name: c.rp_name.clone(),
+                            user_display_name: c.user_display_name.clone(),
+                            discoverable: c.discoverable.clone(),
+                            creation_date: c.creation_date.clone(),
+                        })
+                        .collect()
+                }),
             })
         }
         2 => Some(ImportedData::SecureNote),
@@ -8064,6 +8214,7 @@ fn bw_data_from_decrypted(
             password,
             totp,
             uris,
+            fido2_credentials,
         } => (
             1,
             Some(crate::import_bitwarden::BwLogin {
@@ -8081,6 +8232,24 @@ fn bw_data_from_decrypted(
                             .collect()
                     })
                     .unwrap_or_default(),
+                fido2_credentials: fido2_credentials
+                    .iter()
+                    .map(|c| crate::import_bitwarden::BwFido2Credential {
+                        credential_id: c.credential_id.clone(),
+                        key_type: c.key_type.clone(),
+                        key_algorithm: c.key_algorithm.clone(),
+                        key_curve: c.key_curve.clone(),
+                        key_value: c.key_value.clone(),
+                        rp_id: c.rp_id.clone(),
+                        user_handle: c.user_handle.clone(),
+                        user_name: c.user_name.clone(),
+                        counter: c.counter.clone(),
+                        rp_name: c.rp_name.clone(),
+                        user_display_name: c.user_display_name.clone(),
+                        discoverable: c.discoverable.clone(),
+                        creation_date: c.creation_date.clone(),
+                    })
+                    .collect(),
             }),
             None,
             None,
@@ -8176,6 +8345,7 @@ fn imported_data_to_editable(data: &ImportedData) -> EditableData {
             password,
             totp,
             uris,
+            fido2_credentials,
         } => EditableData::Login {
             username: username.clone(),
             password: password.clone(),
@@ -8193,6 +8363,24 @@ fn imported_data_to_editable(data: &ImportedData) -> EditableData {
                 })
                 .unwrap_or_default(),
             totp: totp.clone(),
+            fido2_credentials: fido2_credentials
+                .iter()
+                .map(|c| EditableFido2Credential {
+                    credential_id: c.credential_id.clone(),
+                    key_type: c.key_type.clone(),
+                    key_algorithm: c.key_algorithm.clone(),
+                    key_curve: c.key_curve.clone(),
+                    key_value: c.key_value.clone(),
+                    rp_id: c.rp_id.clone(),
+                    user_handle: c.user_handle.clone(),
+                    user_name: c.user_name.clone(),
+                    counter: c.counter.clone(),
+                    rp_name: c.rp_name.clone(),
+                    user_display_name: c.user_display_name.clone(),
+                    discoverable: c.discoverable.clone(),
+                    creation_date: c.creation_date.clone(),
+                })
+                .collect(),
         },
         ImportedData::Card {
             cardholder_name,
@@ -8289,6 +8477,7 @@ fn imported_data_to_decrypted(data: &ImportedData) -> DecryptedData {
             password,
             totp,
             uris,
+            fido2_credentials,
         } => DecryptedData::Login {
             username: username.clone(),
             password: password.clone(),
@@ -8301,6 +8490,24 @@ fn imported_data_to_decrypted(data: &ImportedData) -> DecryptedData {
                     })
                     .collect()
             }),
+            fido2_credentials: fido2_credentials
+                .iter()
+                .map(|c| DecryptedFido2Credential {
+                    credential_id: c.credential_id.clone(),
+                    key_type: c.key_type.clone(),
+                    key_algorithm: c.key_algorithm.clone(),
+                    key_curve: c.key_curve.clone(),
+                    key_value: c.key_value.clone(),
+                    rp_id: c.rp_id.clone(),
+                    user_handle: c.user_handle.clone(),
+                    user_name: c.user_name.clone(),
+                    counter: c.counter.clone(),
+                    rp_name: c.rp_name.clone(),
+                    user_display_name: c.user_display_name.clone(),
+                    discoverable: c.discoverable.clone(),
+                    creation_date: c.creation_date.clone(),
+                })
+                .collect(),
         },
         ImportedData::Card {
             cardholder_name,
@@ -13575,6 +13782,7 @@ pub fn decrypt_cipher(
             password,
             totp,
             uris,
+            fido2_credentials,
         } => DecryptedData::Login {
             username: decrypt_field(
                 Field::Username,
@@ -13607,6 +13815,37 @@ pub fn decrypt_cipher(
                         uri,
                         match_type: s.match_type,
                     })
+                })
+                .collect(),
+            fido2_credentials: fido2_credentials
+                .iter()
+                .map(|c| {
+                    let dec = |field: Option<&str>| {
+                        decrypt_field(
+                            Field::Fido2Credential,
+                            field,
+                            entry.key.as_deref(),
+                            entry.org_id.as_deref(),
+                        )
+                    };
+                    DecryptedFido2Credential {
+                        credential_id: dec(c.credential_id.as_deref()),
+                        key_type: dec(c.key_type.as_deref()),
+                        key_algorithm: dec(c.key_algorithm.as_deref()),
+                        key_curve: dec(c.key_curve.as_deref()),
+                        key_value: dec(c.key_value.as_deref()),
+                        rp_id: dec(c.rp_id.as_deref()),
+                        user_handle: dec(c.user_handle.as_deref()),
+                        user_name: dec(c.user_name.as_deref()),
+                        counter: dec(c.counter.as_deref()),
+                        rp_name: dec(c.rp_name.as_deref()),
+                        user_display_name: dec(c
+                            .user_display_name
+                            .as_deref()),
+                        discoverable: dec(c.discoverable.as_deref()),
+                        // never encrypted to begin with
+                        creation_date: c.creation_date.clone(),
+                    }
                 })
                 .collect(),
         },
@@ -13876,6 +14115,7 @@ pub fn decrypted_to_editable(decrypted: &DecryptedCipher) -> EditableCipher {
             password,
             totp,
             uris,
+            fido2_credentials,
         } => EditableData::Login {
             username: username.clone(),
             password: password.clone(),
@@ -13893,6 +14133,24 @@ pub fn decrypted_to_editable(decrypted: &DecryptedCipher) -> EditableCipher {
                 })
                 .unwrap_or_default(),
             totp: totp.clone(),
+            fido2_credentials: fido2_credentials
+                .iter()
+                .map(|c| EditableFido2Credential {
+                    credential_id: c.credential_id.clone(),
+                    key_type: c.key_type.clone(),
+                    key_algorithm: c.key_algorithm.clone(),
+                    key_curve: c.key_curve.clone(),
+                    key_value: c.key_value.clone(),
+                    rp_id: c.rp_id.clone(),
+                    user_handle: c.user_handle.clone(),
+                    user_name: c.user_name.clone(),
+                    counter: c.counter.clone(),
+                    rp_name: c.rp_name.clone(),
+                    user_display_name: c.user_display_name.clone(),
+                    discoverable: c.discoverable.clone(),
+                    creation_date: c.creation_date.clone(),
+                })
+                .collect(),
         },
         DecryptedData::Card {
             cardholder_name,
@@ -13988,17 +14246,16 @@ fn editable_to_encrypted(
             password,
             uris,
             totp,
+            fido2_credentials,
         } => {
-            let username = username
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .map(|u| crate::actions::encrypt(u, org_id))
-                .transpose()?;
-            let password = password
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .map(|p| crate::actions::encrypt(p, org_id))
-                .transpose()?;
+            let enc = |s: &Option<String>| {
+                s.as_deref()
+                    .filter(|v| !v.is_empty())
+                    .map(|v| crate::actions::encrypt(v, org_id))
+                    .transpose()
+            };
+            let username = enc(username)?;
+            let password = enc(password)?;
             let uris = uris
                 .iter()
                 .filter(|u| !u.uri.is_empty())
@@ -14014,16 +14271,34 @@ fn editable_to_encrypted(
                     })
                 })
                 .collect::<anyhow::Result<_>>()?;
-            let totp = totp
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .map(|t| crate::actions::encrypt(t, org_id))
-                .transpose()?;
+            let totp = enc(totp)?;
+            let fido2_credentials = fido2_credentials
+                .iter()
+                .map(|c| {
+                    Ok(rbw::db::Fido2Credential {
+                        credential_id: enc(&c.credential_id)?,
+                        key_type: enc(&c.key_type)?,
+                        key_algorithm: enc(&c.key_algorithm)?,
+                        key_curve: enc(&c.key_curve)?,
+                        key_value: enc(&c.key_value)?,
+                        rp_id: enc(&c.rp_id)?,
+                        user_handle: enc(&c.user_handle)?,
+                        user_name: enc(&c.user_name)?,
+                        counter: enc(&c.counter)?,
+                        rp_name: enc(&c.rp_name)?,
+                        user_display_name: enc(&c.user_display_name)?,
+                        discoverable: enc(&c.discoverable)?,
+                        // never encrypted to begin with
+                        creation_date: c.creation_date.clone(),
+                    })
+                })
+                .collect::<anyhow::Result<_>>()?;
             rbw::db::EntryData::Login {
                 username,
                 password,
                 uris,
                 totp,
+                fido2_credentials,
             }
         }
         EditableData::Card {
@@ -14165,6 +14440,7 @@ fn editable_to_decrypted(
             password,
             uris,
             totp,
+            fido2_credentials,
         } => DecryptedData::Login {
             username: unset_if_empty(username),
             password: unset_if_empty(password),
@@ -14181,6 +14457,24 @@ fn editable_to_decrypted(
                     .collect()
             }),
             totp: unset_if_empty(totp),
+            fido2_credentials: fido2_credentials
+                .iter()
+                .map(|c| DecryptedFido2Credential {
+                    credential_id: c.credential_id.clone(),
+                    key_type: c.key_type.clone(),
+                    key_algorithm: c.key_algorithm.clone(),
+                    key_curve: c.key_curve.clone(),
+                    key_value: c.key_value.clone(),
+                    rp_id: c.rp_id.clone(),
+                    user_handle: c.user_handle.clone(),
+                    user_name: c.user_name.clone(),
+                    counter: c.counter.clone(),
+                    rp_name: c.rp_name.clone(),
+                    user_display_name: c.user_display_name.clone(),
+                    discoverable: c.discoverable.clone(),
+                    creation_date: c.creation_date.clone(),
+                })
+                .collect(),
         },
         EditableData::Card {
             cardholder_name,
@@ -14569,6 +14863,7 @@ fn placeholder_entry(id: String) -> rbw::db::Entry {
             password: None,
             totp: None,
             uris: Vec::new(),
+            fido2_credentials: Vec::new(),
         },
         fields: Vec::new(),
         notes: None,
@@ -16323,6 +16618,7 @@ mod test {
                 password: None,
                 totp: None,
                 uris: None,
+                fido2_credentials: Vec::new(),
             },
             fields: Vec::new(),
             notes: None,
@@ -17044,6 +17340,7 @@ mod test {
             password: password.map(std::string::ToString::to_string),
             totp: None,
             uris: None,
+            fido2_credentials: Vec::new(),
         };
         let resolved = |c: &DecryptedCipher| {
             c.default_secret().map(|(v, s)| (v, s.label()))
@@ -18163,6 +18460,7 @@ mod test {
                 password: password.map(std::string::ToString::to_string),
                 totp: totp.map(std::string::ToString::to_string),
                 uris: None,
+                fido2_credentials: Vec::new(),
             },
             fields: vec![],
             notes: None,
@@ -18238,12 +18536,14 @@ mod test {
                 uri: "https://example.com".to_string(),
                 match_type: Some(rbw::api::UriMatchType::Domain),
             }]),
+            fido2_credentials: Vec::new(),
         };
         let DecryptedData::Login {
             username,
             password,
             totp,
             uris,
+            ..
         } = imported_data_to_decrypted(&imported)
         else {
             panic!("expected DecryptedData::Login");
@@ -18255,6 +18555,128 @@ mod test {
         assert_eq!(uris.len(), 1);
         assert_eq!(uris[0].uri, "https://example.com");
         assert_eq!(uris[0].match_type, Some(rbw::api::UriMatchType::Domain));
+    }
+
+    fn sample_imported_fido2_credential() -> ImportedFido2Credential {
+        ImportedFido2Credential {
+            credential_id: Some("cred-1".to_string()),
+            key_type: Some("public-key".to_string()),
+            key_algorithm: Some("ECDSA".to_string()),
+            key_curve: Some("P-256".to_string()),
+            key_value: Some("base64-key-material".to_string()),
+            rp_id: Some("example.com".to_string()),
+            user_handle: Some("user-handle".to_string()),
+            user_name: Some("alice".to_string()),
+            counter: Some("0".to_string()),
+            rp_name: Some("Example".to_string()),
+            user_display_name: Some("Alice".to_string()),
+            discoverable: Some("true".to_string()),
+            creation_date: Some("2024-01-01T00:00:00.000Z".to_string()),
+        }
+    }
+
+    // The exact bug this feature fixes: `rbw mirror` previously dropped
+    // passkeys silently because none of `ImportedData`/`DecryptedData`/
+    // `BwLogin` carried a fido2Credentials field at all, so it never
+    // reached the decrypt/import layer regardless of what the source
+    // account actually had.
+    #[test]
+    fn test_imported_data_to_decrypted_login_carries_fido2_credentials() {
+        let imported = ImportedData::Login {
+            username: Some("alice".to_string()),
+            password: None,
+            totp: None,
+            uris: None,
+            fido2_credentials: vec![sample_imported_fido2_credential()],
+        };
+        let DecryptedData::Login {
+            fido2_credentials, ..
+        } = imported_data_to_decrypted(&imported)
+        else {
+            panic!("expected DecryptedData::Login");
+        };
+        assert_eq!(fido2_credentials.len(), 1);
+        let cred = &fido2_credentials[0];
+        assert_eq!(cred.credential_id.as_deref(), Some("cred-1"));
+        assert_eq!(cred.rp_id.as_deref(), Some("example.com"));
+        assert_eq!(cred.rp_name.as_deref(), Some("Example"));
+        assert_eq!(cred.user_name.as_deref(), Some("alice"));
+        assert_eq!(cred.user_display_name.as_deref(), Some("Alice"));
+        assert_eq!(cred.key_value.as_deref(), Some("base64-key-material"));
+        assert_eq!(
+            cred.creation_date.as_deref(),
+            Some("2024-01-01T00:00:00.000Z")
+        );
+    }
+
+    // `rbw mirror`'s own critical path: source `DecryptedData` -> `BwLogin`
+    // (`bw_data_from_decrypted`) -> back into `ImportedData`
+    // (`bw_item_data`), the exact two hops a mirror run makes between
+    // exporting from the source account and importing into the
+    // destination. A passkey must survive both hops unchanged.
+    #[test]
+    fn test_mirror_round_trip_carries_fido2_credentials() {
+        let decrypted = DecryptedData::Login {
+            username: Some("alice".to_string()),
+            password: None,
+            totp: None,
+            uris: None,
+            fido2_credentials: vec![DecryptedFido2Credential {
+                credential_id: Some("cred-1".to_string()),
+                key_type: Some("public-key".to_string()),
+                key_algorithm: Some("ECDSA".to_string()),
+                key_curve: Some("P-256".to_string()),
+                key_value: Some("base64-key-material".to_string()),
+                rp_id: Some("example.com".to_string()),
+                user_handle: Some("user-handle".to_string()),
+                user_name: Some("alice".to_string()),
+                counter: Some("0".to_string()),
+                rp_name: Some("Example".to_string()),
+                user_display_name: Some("Alice".to_string()),
+                discoverable: Some("true".to_string()),
+                creation_date: Some("2024-01-01T00:00:00.000Z".to_string()),
+            }],
+        };
+
+        let (ty, login, _, _, _) = bw_data_from_decrypted(&decrypted);
+        assert_eq!(ty, 1);
+        let bw_login = login.expect("expected a BwLogin");
+        assert_eq!(bw_login.fido2_credentials.len(), 1);
+        assert_eq!(
+            bw_login.fido2_credentials[0].credential_id.as_deref(),
+            Some("cred-1")
+        );
+
+        let item = crate::import_bitwarden::BwItem {
+            id: None,
+            organization_id: None,
+            folder_id: None,
+            ty: 1,
+            name: "example".to_string(),
+            notes: None,
+            login: Some(bw_login),
+            card: None,
+            identity: None,
+            ssh_key: None,
+            fields: vec![],
+            password_history: vec![],
+            collection_ids: vec![],
+        };
+        let Some(ImportedData::Login {
+            fido2_credentials, ..
+        }) = bw_item_data(&item)
+        else {
+            panic!("expected ImportedData::Login");
+        };
+        assert_eq!(fido2_credentials.len(), 1);
+        let cred = &fido2_credentials[0];
+        assert_eq!(cred.credential_id.as_deref(), Some("cred-1"));
+        assert_eq!(cred.rp_id.as_deref(), Some("example.com"));
+        assert_eq!(cred.key_value.as_deref(), Some("base64-key-material"));
+        assert_eq!(
+            cred.creation_date.as_deref(),
+            Some("2024-01-01T00:00:00.000Z")
+        );
     }
 
     // `--from-file`'s core path (no gpg/passphrase involved): a plain JSON
@@ -18273,6 +18695,7 @@ mod test {
                     password: Some("hunter2".to_string()),
                     totp: None,
                     uris: None,
+                    fido2_credentials: Vec::new(),
                 },
                 fields: vec![],
                 notes: Some("note text".to_string()),
@@ -18343,6 +18766,7 @@ mod test {
                     match_type: Some("domain".to_string()),
                 }],
                 totp: None,
+                fido2_credentials: Vec::new(),
             },
             fields: vec![],
         };
@@ -18433,6 +18857,7 @@ mod test {
                 password: Some("hunter2".to_string()),
                 totp: None,
                 uris: None,
+                fido2_credentials: Vec::new(),
             },
             fields: vec![],
             notes: None,
@@ -18562,6 +18987,7 @@ mod test {
                         })
                         .collect(),
                     totp: None,
+                    fido2_credentials: Vec::new(),
                 },
                 fields: vec![],
                 notes: None,
@@ -19337,6 +19763,7 @@ mod test {
                     password: Some("hunter2".to_string()),
                     totp: None,
                     uris: None,
+                    fido2_credentials: Vec::new(),
                 },
                 fields: [("api-token", "xyz"), ("deployment", "prod")]
                     .iter()
@@ -19485,6 +19912,7 @@ mod test {
                     match_type: Some("domain".to_string()),
                 }],
                 totp: None,
+                fido2_credentials: Vec::new(),
             },
             fields: vec![],
         };
@@ -19517,6 +19945,7 @@ mod test {
                 password: Some("hunter2".to_string()),
                 totp: None,
                 uris: None,
+                fido2_credentials: Vec::new(),
             },
             fields: vec![],
             notes: None,
@@ -19936,6 +20365,7 @@ mod test {
                 uri: "https://example.com".to_string(),
                 match_type: Some(rbw::api::UriMatchType::Domain),
             }]),
+            fido2_credentials: Vec::new(),
         };
 
         let editable = imported_data_to_editable(&data);
@@ -19945,6 +20375,7 @@ mod test {
                 password,
                 totp,
                 uris,
+                ..
             } => {
                 assert_eq!(username.as_deref(), Some("user@example.com"));
                 assert_eq!(password.as_deref(), Some("hunter2"));
@@ -19964,6 +20395,7 @@ mod test {
             password: None,
             totp: None,
             uris: None,
+            fido2_credentials: Vec::new(),
         };
         match imported_data_to_editable(&data) {
             EditableData::Login { uris, .. } => assert!(uris.is_empty()),
@@ -20126,6 +20558,7 @@ mod test {
                             uri: "https://example.com".to_string(),
                             match_type: None,
                         }]),
+                        fido2_credentials: Vec::new(),
                     },
                     fields: vec![DecryptedField {
                         name: Some("custom".to_string()),

@@ -612,6 +612,7 @@ fn detail_lines(
             password,
             totp,
             uris,
+            fido2_credentials,
         } => {
             if let Some(username) = username {
                 lines.push(highlighted_row(
@@ -646,6 +647,22 @@ fn detail_lines(
                         "",
                     ));
                 }
+            }
+            // Never renders the raw key material -- just enough to confirm
+            // a passkey is present and which relying party/account it's
+            // for.
+            for (i, cred) in fido2_credentials.iter().enumerate() {
+                let label = if i == 0 { "passkey" } else { "" };
+                let rp = cred.rp_name.as_deref().unwrap_or("(unknown rp)");
+                let user = cred
+                    .user_display_name
+                    .as_deref()
+                    .or(cred.user_name.as_deref());
+                let value = user.map_or_else(
+                    || rp.to_string(),
+                    |user| format!("{rp} ({user})"),
+                );
+                lines.push(row(label, value));
             }
         }
         DecryptedData::Card {
@@ -1813,6 +1830,7 @@ mod test {
                     uri: "https://github.com".to_string(),
                     match_type: None,
                 }]),
+                fido2_credentials: Vec::new(),
             },
             fields: vec![DecryptedField {
                 name: Some("api-token".to_string()),
@@ -1874,6 +1892,7 @@ mod test {
                     uri: "https://github.com".to_string(),
                     match_type: None,
                 }]),
+                fido2_credentials: Vec::new(),
             },
             fields: vec![DecryptedField {
                 name: Some("scope".to_string()),
@@ -1933,6 +1952,7 @@ mod test {
                 password: Some("correct-horse-battery".to_string()),
                 totp: None,
                 uris: None,
+                fido2_credentials: Vec::new(),
             },
             fields: vec![],
             notes: None,

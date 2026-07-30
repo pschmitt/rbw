@@ -555,3 +555,74 @@
       completion trigger tested (would need a live account), but all three
       scripts at least parse and the logic mirrors the already-working
       `--folder` patterns closely enough to trust it.
+
+## Passkey (fido2Credentials) support
+
+49. [x] **Real, confirmed data-loss bug found and fixed**: passkeys synced
+        onto a login item were entirely absent from every layer of
+        rbw -- `CipherLogin` (the wire-format struct used for both
+        `/sync` deserialization and outgoing create/update requests) only
+        ever had `username`/`password`/`totp`/`uris`, no
+        `fido2Credentials` field, and there was no catch-all/flatten field
+        anywhere to preserve unknown JSON either. Consequence, confirmed
+        by reading Vaultwarden's own `update_cipher_from_data` source: it
+        stores a cipher's whole `login` object as one opaque blob with no
+        per-field merge, so any `rbw edit`/`rbw set`/`rbw mirror
+        --overwrite` on a login item that had a passkey didn't just fail
+        to copy it -- it *destroyed* the passkey server-side, since the
+        outgoing request's `login` object simply omitted the field
+        entirely. This affected `rbw mirror` (the reported symptom: "why
+        aren't passkeys transferred") and, independently, plain `rbw
+        edit`/`rbw set` on any passkey-bearing entry.
+50. [x] Added full fido2Credentials support at every layer, following the
+        exact same pattern already used for TOTP/URIs (each field an
+        individually-encrypted CipherString except `creation_date`, which
+        Bitwarden stores unencrypted): `api::CipherFido2Credential`
+        (wire format, both directions -- `SyncResCipher`'s login arm and
+        both outgoing-request builders, `cipher_type_and_fields` and the
+        separate hand-rolled one in the PUT path), `db::Fido2Credential`
+        (local sync-db storage, `#[serde(default)]` so an existing
+        on-disk `db.json` from before this change still parses),
+        `commands::DecryptedFido2Credential`/`EditableFido2Credential`/
+        `ImportedFido2Credential` (decrypt/edit/import layers), and
+        `import_bitwarden::BwFido2Credential` (the Bitwarden-JSON
+        interchange shape `rbw mirror` itself round-trips through
+        between export and import). Schema confirmed against
+        `bitwarden/clients`' own TypeScript models
+        (`fido2-credential.api.ts`/`fido2-credential.ts`) rather than
+        guessed -- 13 fields, all `EncString` except `creationDate`.
+51. [x] `rbw set`'s direct field-update path (`apply_entry_update`) now
+        explicitly carries the entry's existing (encrypted)
+        `fido2_credentials` through unchanged, exactly like it already
+        does for `password_history` -- `rbw set` never touches passkeys,
+        so this can never destroy one. `rbw edit`'s $EDITOR-based path
+        shows passkeys in the YAML/JSON (there's nothing meaningful to
+        hand-edit in opaque key material, but hiding them would mean an
+        editor session that doesn't touch them still round-trips them
+        correctly, same principle as SSH private keys already being shown
+        there) and re-encrypts them like any other field if left alone.
+52. [x] `rbw show` and the TUI detail pane both gained a `Passkey` summary
+        row (relying party + account name) -- never the raw key
+        material, just enough to confirm one is present, same spirit as
+        how `password` is masked unless revealed.
+53. [x] Added two dedicated tests (existing ones were extended to cover
+        an empty-fido2 case where the field was newly required, but
+        these two actually exercise real passkey data):
+        `test_imported_data_to_decrypted_login_carries_fido2_credentials`
+        and `test_mirror_round_trip_carries_fido2_credentials` -- the
+        latter specifically exercises `rbw mirror`'s own two-hop
+        internal conversion (`DecryptedData` -> `BwLogin` ->
+        `ImportedData`, the exact path a mirror run takes between
+        exporting the source and importing into the destination) with
+        real (fake but correctly-shaped) credential data, confirming the
+        original reported bug is fixed at the level that's testable
+        without a live account's real encryption keys.
+        Verified: `cargo build --all-targets`/`cargo test` (215 passed,
+        up from 213) /`cargo clippy --all-targets` (all clean) on
+        `rofl-13`, `cargo fmt --all` there before syncing back. Full
+        live verification (an actual passkey round-tripping through a
+        real `rbw mirror` run against production accounts) deferred to
+        `bw-auto.git`'s redeploy on rofl-10, where source/destination
+        accounts and their real rbw-agent instances already exist
+        without needing any ad-hoc local account isolation (the kind
+        that caused a prior incident this session).
