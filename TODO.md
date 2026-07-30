@@ -475,3 +475,83 @@
       on `rofl-13`, `cargo fmt --all` there before syncing back. Not live-
       verified against a real account for the same sandbox reasons as
       `mirror` itself above (no pinentry/TTY here).
+
+- [x] `rbw mirror --dest-org`: a production `bw-sync-collections` run
+      (`bw-backup.git`) hit `rbw mirror: multiple collections found for
+      'Default collection': ... use the collection ID instead` -- two
+      different destination orgs each had a same-named collection (one
+      real, one leftover test-org cruft from earlier live-testing of this
+      fork). `--dest-collection`'s name resolution had no way to scope by
+      org. Added `--dest-org <name-or-id>` to restrict that lookup to one
+      destination org, resolved via a new `resolve_organization` (mirrors
+      `resolve_collection`: exact ID, then exact name, then case-
+      insensitive substring, erroring with candidates listed on
+      ambiguity) against `db.organizations` (plaintext, no decrypt
+      needed). Threaded through `import_vault`/`purge_collection_entries`
+      (both previously hardcoded `None` for collection org-scoping) and
+      `mirror_vault`'s own plan preview.
+- [x] `--collection <name-or-id>`/`--org <name-or-id>` on every entry-
+      lookup command (`get`, `show`, `code`, `edit`, `set`, `rm`,
+      `archive`, `unarchive`, `restore`, `history`, `list`, `search`, and
+      `attachment list`/`get`/`rm`), not just `mirror` -- same disambiguation
+      problem, just as likely to bite `rbw get some-name` directly once an
+      account has entries with the same name in more than one
+      collection/org. Implementation:
+      - `entry_in_collection_org_scope` (renamed/generalized from what was
+        `export_entry_in_scope`'s inline body) filters raw `db.entries` by
+        `collection_ids`/`org_id` -- both plain IDs on every synced entry,
+        no decryption needed, so this runs *before* the batch-decrypt step
+        in `find_entry`/`find_entry_multi`/`find_entries_all`/
+        `find_deleted_entry`/`find_deleted_entries_all`/`list`/`search`.
+      - `resolve_entry_scope` resolves the CLI's `--collection`/`--org`
+        needles (name or ID) into concrete IDs once per account, reusing
+        `resolve_organization`/`resolve_collection`.
+      - Multi-account (`--all`) lookups: a needle that doesn't resolve in
+        one particular account (name not found there, or ambiguous there)
+        just means that account contributes nothing, rather than aborting
+        the whole search -- matches how `--folder` already behaves loosely
+        there, and keeps `--all` usable when only one of several accounts
+        actually has the given collection/org.
+      - Deliberately *not* wired into `--from-file` variants (`edit
+        --from-file`, `set --from-file`, `list --from-file`, `search
+        --from-file`) or the collection-reassignment commands
+        (`assign-collections`/`unassign-collections`, which already have
+        their own differently-scoped `--collection` meaning) -- out of
+        scope for this pass.
+      Verified: `cargo test` (213 passed, up from 210 -- two new
+      `resolve_organization` unit tests plus a CLI-parsing test covering
+      `--collection`/`--org` across all the commands above, including
+      asserting the parsed values on `get`/`list`/`search`), `cargo clippy
+      --all-targets` (clean after removing two accidentally-duplicated
+      `#[allow(clippy::too_many_arguments)]` attributes), `cargo fmt --all`
+      -- all on `rofl-13`. Not live-verified against a real account in this
+      session (no pinentry/TTY here, same constraint as above); the
+      `--dest-org` fix specifically *is* live-verified indirectly, since
+      it's what unblocked the real `bw-sync-collections` run that
+      surfaced the bug in the first place.
+- [x] Shell completions updated for both of the above:
+      - bash/zsh: `--collection`/`--org` value completion added
+        unconditionally (any subcommand), dynamically listing real
+        collection/org names via `rbw collection list --output name`/`rbw
+        org list --output name`. `rbw mirror` gets its own more precise
+        version: `--collection`/`--dest-collection`/`--dest-org` complete
+        against whichever account was already typed for `--from`/`--to`
+        respectively (not the default account), and `--from`/`--to`
+        themselves complete configured account names via `rbw account
+        list`. `--org-id` (mirror's source-side flag) is deliberately left
+        uncompleted -- it takes a raw ID, never resolved by name anywhere,
+        so completing it with names would be misleading.
+      - fish: added `--collection`/`--org` to the existing `get`/
+        `attachment` dynamic-completion functions' `argparse` calls (their
+        flag allowlists would otherwise reject the new flags outright,
+        breaking existing name completion the moment either is typed),
+        plus new `--collection`/`--dest-collection`/`--dest-org`/`--from`/
+        `--to` completions for `mirror` mirroring the bash/zsh behavior.
+        `get`'s entry-name completion also now scopes its `rbw list` call
+        by `--collection`/`--org` when either is already typed, same as it
+        already did for `--folder`.
+      Verified: `bash -n`/`zsh -n` on both scripts (clean), `fish -n`
+      against a `fish 4.8.1` shell on `rofl-13` (clean) -- no interactive
+      completion trigger tested (would need a live account), but all three
+      scripts at least parse and the logic mirrors the already-working
+      `--folder` patterns closely enough to trust it.

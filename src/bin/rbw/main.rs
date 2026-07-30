@@ -27,6 +27,20 @@ struct FindArgs {
     user: Option<String>,
     #[arg(long, help = "Folder name to search in")]
     folder: Option<String>,
+    #[arg(
+        long,
+        value_name = "COLLECTION",
+        help = "Only match entries in this collection (name or ID)"
+    )]
+    collection: Option<String>,
+    #[arg(
+        long,
+        value_name = "ORG",
+        help = "Only match entries in this organization (name or ID); \
+            combine with --collection to disambiguate a collection name \
+            that exists in more than one org"
+    )]
+    org: Option<String>,
     #[arg(short, long, help = "Ignore case")]
     ignorecase: bool,
     #[arg(
@@ -561,6 +575,20 @@ enum Opt {
         insecure: bool,
         #[arg(
             long,
+            value_name = "COLLECTION",
+            help = "Only list entries in this collection (name or ID)"
+        )]
+        collection: Option<String>,
+        #[arg(
+            long,
+            value_name = "ORG",
+            help = "Only list entries in this organization (name or ID); \
+                combine with --collection to disambiguate a collection \
+                name that exists in more than one org"
+        )]
+        org: Option<String>,
+        #[arg(
+            long,
             help = "Show only archived entries",
             conflicts_with = "include_archived"
         )]
@@ -691,6 +719,20 @@ enum Opt {
         fields: Vec<String>,
         #[arg(long, help = "Folder name to search in")]
         folder: Option<String>,
+        #[arg(
+            long,
+            value_name = "COLLECTION",
+            help = "Only search entries in this collection (name or ID)"
+        )]
+        collection: Option<String>,
+        #[arg(
+            long,
+            value_name = "ORG",
+            help = "Only search entries in this organization (name or ID); \
+                combine with --collection to disambiguate a collection \
+                name that exists in more than one org"
+        )]
+        org: Option<String>,
         #[arg(
             short = 'A',
             long,
@@ -1217,6 +1259,14 @@ enum Opt {
                 organization/collection metadata the source carries"
         )]
         dest_collection: Option<String>,
+        #[arg(
+            long = "dest-org",
+            value_name = "ORG",
+            help = "Resolve --dest-collection's name against only this \
+                destination organization (name or ID), for when the same \
+                collection name exists in more than one destination org"
+        )]
+        dest_org: Option<String>,
         #[arg(
             long,
             help = "Also copy attachment contents (downloaded from the \
@@ -2204,6 +2254,8 @@ fn main() {
             raw,
             yaml,
             insecure,
+            collection,
+            org,
             archived,
             include_archived,
             trashed,
@@ -2221,6 +2273,8 @@ fn main() {
                         &fields,
                         with_attachments,
                         insecure,
+                        collection.as_deref(),
+                        org.as_deref(),
                         output,
                         all,
                         archived_filter,
@@ -2233,6 +2287,8 @@ fn main() {
                         &term,
                         &fields,
                         None,
+                        collection.as_deref(),
+                        org.as_deref(),
                         with_attachments,
                         insecure,
                         output,
@@ -2256,6 +2312,8 @@ fn main() {
                     find_args.needles,
                     find_args.user.as_deref(),
                     find_args.folder.as_deref(),
+                    find_args.collection.as_deref(),
+                    find_args.org.as_deref(),
                     find_args.ignorecase,
                     output,
                     find_args.exact,
@@ -2270,6 +2328,8 @@ fn main() {
                 find_args.needles,
                 find_args.user.as_deref(),
                 find_args.folder.as_deref(),
+                find_args.collection.as_deref(),
+                find_args.org.as_deref(),
                 find_args.ignorecase,
                 attachment.as_deref(),
                 output.as_deref(),
@@ -2299,6 +2359,8 @@ fn main() {
                 find_args.needles,
                 find_args.user.as_deref(),
                 find_args.folder.as_deref(),
+                find_args.collection.as_deref(),
+                find_args.org.as_deref(),
                 find_args.ignorecase,
                 attachment.as_deref(),
                 find_args.exact,
@@ -2322,6 +2384,8 @@ fn main() {
                 find_args.needles.clone(),
                 find_args.user.as_deref(),
                 find_args.folder.as_deref(),
+                find_args.collection.as_deref(),
+                find_args.org.as_deref(),
                 field.as_deref(),
                 output,
                 #[cfg(feature = "clipboard")]
@@ -2347,6 +2411,8 @@ fn main() {
                 find_args.needles,
                 find_args.user.as_deref(),
                 find_args.folder.as_deref(),
+                find_args.collection.as_deref(),
+                find_args.org.as_deref(),
                 find_args.ignorecase,
                 output,
                 find_args.exact,
@@ -2357,6 +2423,8 @@ fn main() {
             term,
             fields,
             folder,
+            collection,
+            org,
             with_attachments,
             output,
             raw,
@@ -2377,6 +2445,8 @@ fn main() {
                 &term,
                 &fields,
                 folder.as_deref(),
+                collection.as_deref(),
+                org.as_deref(),
                 with_attachments,
                 insecure,
                 output,
@@ -2395,6 +2465,8 @@ fn main() {
             find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
+            find_args.collection.as_deref(),
+            find_args.org.as_deref(),
             #[cfg(feature = "clipboard")]
             clipboard,
             #[cfg(not(feature = "clipboard"))]
@@ -2497,6 +2569,8 @@ fn main() {
             find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
+            find_args.collection.as_deref(),
+            find_args.org.as_deref(),
             find_args.ignorecase,
             json,
             yaml,
@@ -2520,6 +2594,8 @@ fn main() {
             find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
+            find_args.collection.as_deref(),
+            find_args.org.as_deref(),
             find_args.ignorecase,
             name.as_deref(),
             username.as_deref(),
@@ -2543,6 +2619,8 @@ fn main() {
             find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
+            find_args.collection.as_deref(),
+            find_args.org.as_deref(),
             find_args.ignorecase,
             find_args.exact,
             force,
@@ -2557,6 +2635,8 @@ fn main() {
             find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
+            find_args.collection.as_deref(),
+            find_args.org.as_deref(),
             find_args.ignorecase,
             find_args.exact,
             bulk,
@@ -2570,6 +2650,8 @@ fn main() {
             find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
+            find_args.collection.as_deref(),
+            find_args.org.as_deref(),
             find_args.ignorecase,
             find_args.exact,
             bulk,
@@ -2583,6 +2665,8 @@ fn main() {
             &find_args.needles,
             find_args.user.as_deref(),
             find_args.folder.as_deref(),
+            find_args.collection.as_deref(),
+            find_args.org.as_deref(),
             find_args.ignorecase,
             find_args.exact,
             bulk,
@@ -2737,6 +2821,8 @@ fn main() {
                 find_args.needles,
                 find_args.user.as_deref(),
                 find_args.folder.as_deref(),
+                find_args.collection.as_deref(),
+                find_args.org.as_deref(),
                 find_args.ignorecase,
                 output,
                 find_args.exact,
@@ -2754,6 +2840,7 @@ fn main() {
             collection,
             org_id,
             dest_collection,
+            dest_org,
             attachments,
             overwrite,
             purge_dest,
@@ -2768,6 +2855,7 @@ fn main() {
                 collection.as_deref(),
                 org_id.as_deref(),
                 dest_collection.as_deref(),
+                dest_org.as_deref(),
                 attachments,
                 overwrite,
                 purge_dest,
@@ -2885,6 +2973,90 @@ mod test {
         ] {
             parse(args);
         }
+    }
+
+    #[test]
+    fn test_find_args_accept_collection_and_org() {
+        for args in [
+            &[
+                "rbw",
+                "get",
+                "--collection",
+                "Infra",
+                "--org",
+                "acme",
+                "name",
+            ][..],
+            &["rbw", "show", "--collection", "Infra", "name"][..],
+            &["rbw", "code", "--org", "acme", "name"][..],
+            &["rbw", "edit", "--collection", "Infra", "name"][..],
+            &["rbw", "set", "--collection", "Infra", "name"][..],
+            &["rbw", "rm", "--collection", "Infra", "name"][..],
+            &["rbw", "archive", "--collection", "Infra", "name"][..],
+            &["rbw", "unarchive", "--collection", "Infra", "name"][..],
+            &["rbw", "restore", "--collection", "Infra", "name"][..],
+            &["rbw", "history", "--collection", "Infra", "name"][..],
+            &["rbw", "attachment", "list", "--collection", "Infra", "name"][..],
+            &["rbw", "attachment", "get", "--collection", "Infra", "name"][..],
+            &["rbw", "attachment", "rm", "--collection", "Infra", "name"][..],
+            &["rbw", "list", "--collection", "Infra", "--org", "acme"][..],
+            &["rbw", "list", "--collection", "Infra", "term"][..],
+            &[
+                "rbw",
+                "search",
+                "--collection",
+                "Infra",
+                "--org",
+                "acme",
+                "term",
+            ][..],
+        ] {
+            parse(args);
+        }
+
+        let cli =
+            parse(&["rbw", "list", "--collection", "Infra", "--org", "acme"]);
+        let Opt::List {
+            collection, org, ..
+        } = cli.command
+        else {
+            panic!("expected Opt::List");
+        };
+        assert_eq!(collection.as_deref(), Some("Infra"));
+        assert_eq!(org.as_deref(), Some("acme"));
+
+        let cli = parse(&[
+            "rbw",
+            "search",
+            "--collection",
+            "Infra",
+            "--org",
+            "acme",
+            "term",
+        ]);
+        let Opt::Search {
+            collection, org, ..
+        } = cli.command
+        else {
+            panic!("expected Opt::Search");
+        };
+        assert_eq!(collection.as_deref(), Some("Infra"));
+        assert_eq!(org.as_deref(), Some("acme"));
+
+        let cli = parse(&[
+            "rbw",
+            "get",
+            "--collection",
+            "Infra",
+            "--org",
+            "acme",
+            "name",
+        ]);
+        let Opt::Get { find_args, .. } = cli.command else {
+            panic!("expected Opt::Get");
+        };
+        assert_eq!(find_args.collection.as_deref(), Some("Infra"));
+        assert_eq!(find_args.org.as_deref(), Some("acme"));
     }
 
     #[test]
@@ -3080,6 +3252,8 @@ mod test {
             "some-org",
             "--dest-collection",
             "some-dest-collection",
+            "--dest-org",
+            "some-dest-org",
             "--attachments",
             "--overwrite",
             "--purge-dest",
@@ -3093,6 +3267,7 @@ mod test {
             collection,
             org_id,
             dest_collection,
+            dest_org,
             attachments,
             overwrite,
             purge_dest,
@@ -3108,6 +3283,7 @@ mod test {
         assert_eq!(collection.as_deref(), Some("some-collection"));
         assert_eq!(org_id.as_deref(), Some("some-org"));
         assert_eq!(dest_collection.as_deref(), Some("some-dest-collection"));
+        assert_eq!(dest_org.as_deref(), Some("some-dest-org"));
         assert!(attachments);
         assert!(overwrite);
         assert!(purge_dest);

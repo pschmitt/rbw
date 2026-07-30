@@ -2,6 +2,74 @@ _rbw_wrapper() {
   local -a opts
   local cur prev folder attachment res name user start mode
 
+  # --collection/--org take a collection/org name, regardless of which
+  # subcommand they're used on -- checked unconditionally, ahead of the
+  # get/attachment-specific dynamic completion below, which only ever
+  # covers those two commands.
+  cur="${words[CURRENT]}"
+  prev="${words[CURRENT-1]}"
+
+  # `rbw mirror --from A --to B ...`: --collection/--org-id scope the
+  # source (account A), --dest-collection/--dest-org scope the
+  # destination (account B) -- so these complete against whichever
+  # account was already typed for --from/--to, not the default account
+  # the generic case below would use. --org-id takes a raw ID (not
+  # resolved by name anywhere), so it's left uncompleted.
+  if [[ "${(Q)words[2]}" == "mirror" ]]; then
+    local from_acct="" to_acct=""
+    for (( i=3; i <= ${#words}; i++ )); do
+      case "${(Q)words[i-1]}" in
+        --from) from_acct="${(Q)words[i]}" ;;
+        --to) to_acct="${(Q)words[i]}" ;;
+      esac
+    done
+
+    case "$prev" in
+      --from|--to)
+        res=$(rbw account list 2>/dev/null | cut -f1 | sed 's/ \*$//')
+        opts=("${(@f)${res}}")
+        compadd -- "${opts[@]}"
+        return 0
+        ;;
+      --collection)
+        [[ -n "$from_acct" ]] && res=$(rbw --account "$from_acct" collection list --output name 2>/dev/null)
+        opts=("${(@f)${res}}")
+        compadd -- "${opts[@]}"
+        return 0
+        ;;
+      --dest-collection)
+        [[ -n "$to_acct" ]] && res=$(rbw --account "$to_acct" collection list --output name 2>/dev/null)
+        opts=("${(@f)${res}}")
+        compadd -- "${opts[@]}"
+        return 0
+        ;;
+      --dest-org)
+        [[ -n "$to_acct" ]] && res=$(rbw --account "$to_acct" org list --output name 2>/dev/null)
+        opts=("${(@f)${res}}")
+        compadd -- "${opts[@]}"
+        return 0
+        ;;
+    esac
+
+    _rbw
+    return
+  fi
+
+  case "$prev" in
+    --collection)
+      res=$(rbw collection list --output name 2>/dev/null)
+      opts=("${(@f)${res}}")
+      compadd -- "${opts[@]}"
+      return 0
+      ;;
+    --org)
+      res=$(rbw org list --output name 2>/dev/null)
+      opts=("${(@f)${res}}")
+      compadd -- "${opts[@]}"
+      return 0
+      ;;
+  esac
+
   if [[ "${(Q)words[2]}" == "get" ]]; then
     start=3
     mode=get
@@ -101,9 +169,9 @@ _rbw_wrapper() {
             [ -z "$attachment" ] && res=$'--attachment\n'"$res"
             ;;
         esac
-        res=$'--user\n-i\n--ignorecase\n-e\n--exact\n'"$res"
+        res=$'--user\n--collection\n--org\n-i\n--ignorecase\n-e\n--exact\n'"$res"
       else
-        res=$'-f\n--field\n--full\n--raw\n--clipboard\n-i\n--ignorecase\n--all\n-h\n--help\n'"$res"
+        res=$'-f\n--field\n--full\n--raw\n--clipboard\n--collection\n--org\n-i\n--ignorecase\n--all\n-h\n--help\n'"$res"
       fi
       if [ -z "$folder" ]; then
         res=$'--folder\n'"$res"

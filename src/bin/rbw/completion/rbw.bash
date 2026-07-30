@@ -2,6 +2,75 @@ _rbw_wrapper() {
   local cur prev folder attachment opts res name user start mode
   COMPREPLY=()
 
+  # --collection/--org take a collection/org name, regardless of which
+  # subcommand they're used on (get/show/code/edit/set/rm/archive/
+  # unarchive/restore/history/list/search all accept them) -- so this is
+  # checked unconditionally, ahead of the get/attachment-specific dynamic
+  # completion below, which only ever covers those two commands.
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+  # `rbw mirror --from A --to B ...`: --collection/--org-id scope the
+  # source (account A), --dest-collection/--dest-org scope the
+  # destination (account B) -- so these complete against whichever
+  # account was already typed for --from/--to, not the default account
+  # the generic case below would use. --org-id takes a raw ID (not
+  # resolved by name anywhere), so it's left uncompleted.
+  if [[ "${COMP_WORDS[1]}" == "mirror" ]]; then
+    local from_acct="" to_acct=""
+    for (( i=2; i < ${#COMP_WORDS[@]}; i++ )); do
+      case "${COMP_WORDS[i]}" in
+        --from) from_acct="${COMP_WORDS[i+1]}" ;;
+        --to) to_acct="${COMP_WORDS[i+1]}" ;;
+      esac
+    done
+
+    case "$prev" in
+      --from|--to)
+        res=$(rbw account list 2>/dev/null | cut -f1 | sed 's/ \*$//')
+        mapfile -t opts <<< "$res"
+        COMPREPLY=( $(compgen -W "${opts[*]}" -- "$cur") )
+        return 0
+        ;;
+      --collection)
+        [[ -n "$from_acct" ]] && res=$(rbw --account "$from_acct" collection list --output name 2>/dev/null)
+        mapfile -t opts <<< "$res"
+        COMPREPLY=( $(compgen -W "${opts[*]}" -- "$cur") )
+        return 0
+        ;;
+      --dest-collection)
+        [[ -n "$to_acct" ]] && res=$(rbw --account "$to_acct" collection list --output name 2>/dev/null)
+        mapfile -t opts <<< "$res"
+        COMPREPLY=( $(compgen -W "${opts[*]}" -- "$cur") )
+        return 0
+        ;;
+      --dest-org)
+        [[ -n "$to_acct" ]] && res=$(rbw --account "$to_acct" org list --output name 2>/dev/null)
+        mapfile -t opts <<< "$res"
+        COMPREPLY=( $(compgen -W "${opts[*]}" -- "$cur") )
+        return 0
+        ;;
+    esac
+
+    _rbw "$@"
+    return
+  fi
+
+  case "$prev" in
+    --collection)
+      res=$(rbw collection list --output name 2>/dev/null)
+      mapfile -t opts <<< "$res"
+      COMPREPLY=( $(compgen -W "${opts[*]}" -- "$cur") )
+      return 0
+      ;;
+    --org)
+      res=$(rbw org list --output name 2>/dev/null)
+      mapfile -t opts <<< "$res"
+      COMPREPLY=( $(compgen -W "${opts[*]}" -- "$cur") )
+      return 0
+      ;;
+  esac
+
   if [[ "${COMP_WORDS[1]}" == "get" ]]; then
     start=2
     mode=get
@@ -120,9 +189,9 @@ _rbw_wrapper() {
             [ -z "$attachment" ] && res="--attachment $res"
             ;;
         esac
-        res="--user -i --ignorecase -e --exact $res"
+        res="--user --collection --org -i --ignorecase -e --exact $res"
       else
-        res="-f --field --full --raw --clipboard -i --ignorecase --all -h --help $res"
+        res="-f --field --full --raw --clipboard --collection --org -i --ignorecase --all -h --help $res"
       fi
       if [ -z "$folder" ]; then
         res="--folder $res"

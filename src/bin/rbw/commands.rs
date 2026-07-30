@@ -2984,20 +2984,25 @@ fn resolve_from_credential_source(
     let (decrypted, item_desc) = if let Some(item) = source.item.as_deref() {
         // parse_needle is Infallible -- it always returns Ok.
         let needle = parse_needle(item).unwrap();
-        let (_, decrypted) =
-            find_entry(&db, vec![needle], None, None, false, false)
-                .with_context(|| {
-                    format!(
-                        "item '{item}' not found in account '{}'",
-                        source.account
-                    )
-                })?;
+        let (_, decrypted) = find_entry(
+            &db,
+            vec![needle],
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .with_context(|| {
+            format!("item '{item}' not found in account '{}'", source.account)
+        })?;
         (decrypted, item.to_string())
     } else {
         let target_uri = target_account.ui_url();
         let needle = parse_needle(&target_uri).unwrap();
         let (_, decrypted) =
-            find_entry(&db, vec![needle], None, None, false, false)
+            find_entry(&db, vec![needle], None, None, None, None, false, false)
                 .with_context(|| {
                     format!(
                         "no unique item in account '{}' matched '{target_name}' by URI ({target_uri})",
@@ -3151,6 +3156,8 @@ pub fn list(
     fields: &[String],
     with_attachments: bool,
     insecure: bool,
+    collection: Option<&str>,
+    org: Option<&str>,
     output: OutputMode,
     all: bool,
     archived_filter: ArchivedFilter,
@@ -3180,9 +3187,24 @@ pub fn list(
         for account in &target_accounts {
             crate::actions::set_active_account(Some(account.clone()))?;
             let db = load_db()?;
+            // Same as `find_entry_multi`'s `--all` loop: a `--collection`/
+            // `--org` needle that doesn't resolve in this particular
+            // account just means it contributes nothing.
+            let Ok((collection_id, org_id)) =
+                resolve_entry_scope(&db, collection, org)
+            else {
+                continue;
+            };
             let mut account_entries: Vec<DecryptedCipher> = db
                 .entries
                 .iter()
+                .filter(|entry| {
+                    entry_in_collection_org_scope(
+                        entry,
+                        collection_id.as_deref(),
+                        org_id.as_deref(),
+                    )
+                })
                 .map(decrypt_cipher)
                 .collect::<anyhow::Result<_>>()?;
             if tag_account {
@@ -3223,6 +3245,11 @@ pub fn list(
     for account in &target_accounts {
         crate::actions::set_active_account(Some(account.clone()))?;
         let db = load_db()?;
+        let Ok((collection_id, org_id)) =
+            resolve_entry_scope(&db, collection, org)
+        else {
+            continue;
+        };
 
         // Gather every cipherstring that needs decrypting across all entries,
         // then decrypt them in a single batch request to the agent. This
@@ -3232,6 +3259,13 @@ pub fn list(
         let plans: Vec<ListCipherPlan> = db
             .entries
             .iter()
+            .filter(|entry| {
+                entry_in_collection_org_scope(
+                    entry,
+                    collection_id.as_deref(),
+                    org_id.as_deref(),
+                )
+            })
             .map(|entry| ListCipherPlan::build(entry, &fields, &mut requests))
             .collect();
 
@@ -3270,6 +3304,8 @@ pub fn get(
     needles: Vec<Needle>,
     user: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     field: Option<&str>,
     output: OutputMode,
     clipboard: bool,
@@ -3299,6 +3335,8 @@ pub fn get(
         needles,
         user,
         folder,
+        collection,
+        org,
         ignore_case,
         force_exact,
     )
@@ -3349,6 +3387,8 @@ pub fn show(
     needles: Vec<Needle>,
     user: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     output: OutputMode,
     force_exact: bool,
@@ -3372,6 +3412,8 @@ pub fn show(
         needles,
         user,
         folder,
+        collection,
+        org,
         ignore_case,
         force_exact,
     )
@@ -3390,14 +3432,24 @@ pub fn attachment_list(
     needles: Vec<Needle>,
     user: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     output: OutputMode,
     force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None, None)?;
     let db = load_db()?;
-    let (_, decrypted) =
-        find_entry(&db, needles, user, folder, ignore_case, force_exact)?;
+    let (_, decrypted) = find_entry(
+        &db,
+        needles,
+        user,
+        folder,
+        collection,
+        org,
+        ignore_case,
+        force_exact,
+    )?;
 
     if output_is_structured(output) {
         write_serialized_pretty(
@@ -3459,6 +3511,8 @@ pub fn attachment_get(
     needles: Vec<Needle>,
     user: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     attachment: Option<&str>,
     output: Option<&std::path::Path>,
@@ -3467,8 +3521,16 @@ pub fn attachment_get(
 ) -> anyhow::Result<()> {
     unlock(None, None)?;
     let mut db = load_db()?;
-    let (entry, decrypted) =
-        find_entry(&db, needles, user, folder, ignore_case, force_exact)?;
+    let (entry, decrypted) = find_entry(
+        &db,
+        needles,
+        user,
+        folder,
+        collection,
+        org,
+        ignore_case,
+        force_exact,
+    )?;
     let (attachment, decrypted_attachment) =
         resolve_attachment(&entry, &decrypted, attachment)?;
 
@@ -3553,8 +3615,16 @@ pub fn attachment_create(
     let access_token = db.access_token.as_ref().unwrap().clone();
     let refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
-    let (entry, decrypted) =
-        find_entry(&db, needles, username, folder, ignore_case, force_exact)?;
+    let (entry, decrypted) = find_entry(
+        &db,
+        needles,
+        username,
+        folder,
+        None,
+        None,
+        ignore_case,
+        force_exact,
+    )?;
 
     let filename = file
         .file_name()
@@ -3600,10 +3670,13 @@ pub fn attachment_create(
 // Delete an attachment from an entry and sync. Shares the entry/attachment
 // resolution behavior of `attachment_get`, including the only-attachment
 // fallback when --attachment is omitted.
+#[allow(clippy::too_many_arguments)]
 pub fn attachment_rm(
     needles: Vec<Needle>,
     user: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     attachment: Option<&str>,
     force_exact: bool,
@@ -3611,8 +3684,16 @@ pub fn attachment_rm(
 ) -> anyhow::Result<()> {
     unlock(None, None)?;
     let mut db = load_db()?;
-    let (entry, decrypted) =
-        find_entry(&db, needles, user, folder, ignore_case, force_exact)?;
+    let (entry, decrypted) = find_entry(
+        &db,
+        needles,
+        user,
+        folder,
+        collection,
+        org,
+        ignore_case,
+        force_exact,
+    )?;
     let (attachment, decrypted_attachment) =
         resolve_attachment(&entry, &decrypted, attachment)?;
 
@@ -3875,6 +3956,8 @@ pub fn search(
     term: &str,
     fields: &[String],
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     with_attachments: bool,
     insecure: bool,
     output: OutputMode,
@@ -3908,9 +3991,24 @@ pub fn search(
         for account in &target_accounts {
             crate::actions::set_active_account(Some(account.clone()))?;
             let db = load_db()?;
+            // Same as `find_entry_multi`'s `--all` loop: a `--collection`/
+            // `--org` needle that doesn't resolve in this particular
+            // account just means it contributes nothing.
+            let Ok((collection_id, org_id)) =
+                resolve_entry_scope(&db, collection, org)
+            else {
+                continue;
+            };
             let mut account_entries: Vec<DecryptedCipher> = db
                 .entries
                 .iter()
+                .filter(|entry| {
+                    entry_in_collection_org_scope(
+                        entry,
+                        collection_id.as_deref(),
+                        org_id.as_deref(),
+                    )
+                })
                 .filter_map(|entry| match decrypt_search_cipher(entry) {
                     Ok(searchable)
                         if searchable.search_match(
@@ -3964,6 +4062,11 @@ pub fn search(
     for account in &target_accounts {
         crate::actions::set_active_account(Some(account.clone()))?;
         let db = load_db()?;
+        let Ok((collection_id, org_id)) =
+            resolve_entry_scope(&db, collection, org)
+        else {
+            continue;
+        };
 
         // As in `list`, decrypt every entry's searchable fields in a single
         // batch request rather than one socket round-trip per field per
@@ -3972,6 +4075,13 @@ pub fn search(
         let plans: Vec<SearchCipherPlan> = db
             .entries
             .iter()
+            .filter(|entry| {
+                entry_in_collection_org_scope(
+                    entry,
+                    collection_id.as_deref(),
+                    org_id.as_deref(),
+                )
+            })
             .map(|entry| SearchCipherPlan::build(entry, &mut requests))
             .collect();
 
@@ -4020,6 +4130,8 @@ pub fn code(
     needles: Vec<Needle>,
     user: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     clipboard: bool,
     ignore_case: bool,
     force_exact: bool,
@@ -4044,6 +4156,8 @@ pub fn code(
         needles,
         user,
         folder,
+        collection,
+        org,
         ignore_case,
         force_exact,
     )
@@ -4332,6 +4446,8 @@ pub fn edit(
     needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     json: bool,
     _yaml: bool,
@@ -4349,7 +4465,16 @@ pub fn edit(
             force_exact,
         );
     }
-    edit_structured(needles, username, folder, ignore_case, json, force_exact)
+    edit_structured(
+        needles,
+        username,
+        folder,
+        collection,
+        org,
+        ignore_case,
+        json,
+        force_exact,
+    )
 }
 
 // `edit --from-file`'s counterpart to `edit_structured`: same
@@ -4556,6 +4681,8 @@ pub fn remove(
     needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     force_exact: bool,
     force: bool,
@@ -4598,6 +4725,8 @@ pub fn remove(
             needles.clone(),
             username,
             folder,
+            collection,
+            org,
             ignore_case,
             force_exact,
         )
@@ -4607,14 +4736,25 @@ pub fn remove(
                 &needles,
                 username,
                 folder,
+                collection,
+                org,
                 ignore_case,
                 force_exact,
             )
         })
         .with_context(|| format!("couldn't find entry for '{desc}'"))?
     } else {
-        find_entry(&db, needles, username, folder, ignore_case, force_exact)
-            .with_context(|| format!("couldn't find entry for '{desc}'"))?
+        find_entry(
+            &db,
+            needles,
+            username,
+            folder,
+            collection,
+            org,
+            ignore_case,
+            force_exact,
+        )
+        .with_context(|| format!("couldn't find entry for '{desc}'"))?
     };
 
     let prompt = if force {
@@ -4689,6 +4829,8 @@ pub fn archive(
     needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     force_exact: bool,
     bulk: bool,
@@ -4698,6 +4840,8 @@ pub fn archive(
         needles,
         username,
         folder,
+        collection,
+        org,
         ignore_case,
         force_exact,
         bulk,
@@ -4711,6 +4855,8 @@ pub fn unarchive(
     needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     force_exact: bool,
     bulk: bool,
@@ -4720,6 +4866,8 @@ pub fn unarchive(
         needles,
         username,
         folder,
+        collection,
+        org,
         ignore_case,
         force_exact,
         bulk,
@@ -4737,6 +4885,8 @@ fn archive_or_unarchive(
     needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     force_exact: bool,
     bulk: bool,
@@ -4756,8 +4906,15 @@ fn archive_or_unarchive(
         let c = stdout_supports_color();
 
         for needle in &needles {
-            match find_entries_all(&db, needle, username, folder, ignore_case)
-            {
+            match find_entries_all(
+                &db,
+                needle,
+                username,
+                folder,
+                collection,
+                org,
+                ignore_case,
+            ) {
                 Err(e) => {
                     eprintln!("{needle}: {e:#}");
                     any_err = true;
@@ -4866,9 +5023,17 @@ fn archive_or_unarchive(
         needle_str
     );
 
-    let (entry, decrypted) =
-        find_entry(&db, needles, username, folder, ignore_case, force_exact)
-            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    let (entry, decrypted) = find_entry(
+        &db,
+        needles,
+        username,
+        folder,
+        collection,
+        org,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     let c = stdout_supports_color();
     if entry.archived == archive {
@@ -4914,9 +5079,12 @@ fn find_deleted_entry(
     needles: &[Needle],
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     force_exact: bool,
 ) -> anyhow::Result<(rbw::db::Entry, DecryptedCipher)> {
+    let (collection_id, org_id) = resolve_entry_scope(db, collection, org)?;
     let mut requests = BatchRequests::new();
     let plans: Vec<SearchCipherPlan> = db
         .entries
@@ -4938,6 +5106,13 @@ fn find_deleted_entry(
         })
         .collect::<anyhow::Result<_>>()?;
     ciphers.retain(|(entry, _)| entry.deleted);
+    ciphers.retain(|(entry, _)| {
+        entry_in_collection_org_scope(
+            entry,
+            collection_id.as_deref(),
+            org_id.as_deref(),
+        )
+    });
     let (entry, _) = find_entry_raw(
         &ciphers,
         needles,
@@ -4957,8 +5132,11 @@ fn find_deleted_entries_all(
     needle: &Needle,
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
 ) -> anyhow::Result<Vec<(rbw::db::Entry, DecryptedCipher)>> {
+    let (collection_id, org_id) = resolve_entry_scope(db, collection, org)?;
     let mut requests = BatchRequests::new();
     let plans: Vec<SearchCipherPlan> = db
         .entries
@@ -4982,6 +5160,13 @@ fn find_deleted_entries_all(
     let matches: Vec<_> = ciphers
         .iter()
         .filter(|(entry, _)| entry.deleted)
+        .filter(|(entry, _)| {
+            entry_in_collection_org_scope(
+                entry,
+                collection_id.as_deref(),
+                org_id.as_deref(),
+            )
+        })
         .filter(|(_, d)| {
             d.matches(
                 needle,
@@ -5019,6 +5204,8 @@ pub fn restore(
     needles: &[Needle],
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     force_exact: bool,
     bulk: bool,
@@ -5040,6 +5227,8 @@ pub fn restore(
                 needle,
                 username,
                 folder,
+                collection,
+                org,
                 ignore_case,
             ) {
                 Err(e) => {
@@ -5133,6 +5322,8 @@ pub fn restore(
         needles,
         username,
         folder,
+        collection,
+        org,
         ignore_case,
         force_exact,
     )
@@ -5161,6 +5352,8 @@ fn edit_structured(
     needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     json: bool,
     force_exact: bool,
@@ -5182,9 +5375,17 @@ fn edit_structured(
         needle_str
     );
 
-    let (entry, decrypted) =
-        find_entry(&db, needles, username, folder, ignore_case, force_exact)
-            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    let (entry, decrypted) = find_entry(
+        &db,
+        needles,
+        username,
+        folder,
+        collection,
+        org,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     let editable = decrypted_to_editable(&decrypted);
 
@@ -5435,6 +5636,8 @@ pub fn set(
     needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     new_name: Option<&str>,
     new_username: Option<&str>,
@@ -5503,8 +5706,15 @@ pub fn set(
         let mut pending: Vec<BulkPending> = Vec::new();
 
         for needle in &needles {
-            match find_entries_all(&db, needle, username, folder, ignore_case)
-            {
+            match find_entries_all(
+                &db,
+                needle,
+                username,
+                folder,
+                collection,
+                org,
+                ignore_case,
+            ) {
                 Err(e) => {
                     eprintln!("{needle}: {e:#}");
                     any_err = true;
@@ -5644,6 +5854,8 @@ pub fn set(
         needles,
         username,
         folder,
+        collection,
+        org,
         ignore_case,
         new_name,
         new_username,
@@ -5663,8 +5875,11 @@ fn find_entries_all(
     needle: &Needle,
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
 ) -> anyhow::Result<Vec<(rbw::db::Entry, DecryptedCipher)>> {
+    let (collection_id, org_id) = resolve_entry_scope(db, collection, org)?;
     let mut requests = BatchRequests::new();
     let plans: Vec<SearchCipherPlan> = db
         .entries
@@ -5693,6 +5908,13 @@ fn find_entries_all(
         // `find_deleted_entries_all` for `rbw restore --bulk`'s dedicated
         // trashed-only counterpart.
         .filter(|(_, d)| !d.deleted)
+        .filter(|(entry, _)| {
+            entry_in_collection_org_scope(
+                entry,
+                collection_id.as_deref(),
+                org_id.as_deref(),
+            )
+        })
         .filter(|(_, d)| {
             d.matches(
                 needle,
@@ -5941,6 +6163,8 @@ fn set_one(
     needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     new_name: Option<&str>,
     new_username: Option<&str>,
@@ -5968,9 +6192,17 @@ fn set_one(
         needle_str
     );
 
-    let (entry, decrypted) =
-        find_entry(&db, needles, username, folder, ignore_case, force_exact)
-            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    let (entry, decrypted) = find_entry(
+        &db,
+        needles,
+        username,
+        folder,
+        collection,
+        org,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     set_entry(
         &mut db,
@@ -6758,12 +6990,26 @@ fn export_entry_in_scope(
     if entry.deleted {
         return false;
     }
-    if let Some(cid) = scope_collection_id {
+    entry_in_collection_org_scope(entry, scope_collection_id, scope_org_id)
+}
+
+// Whether `entry` belongs to the given collection/org scope (either or both
+// `None` matches everything regardless of the entry's own collection/org).
+// `collection_ids`/`org_id` are plain IDs on every synced entry, never
+// encrypted, so this needs no decryption -- shared by the mirror/export
+// scope above and by `--collection`/`--org` filtering on
+// `find_entry`/`list`/`search`.
+fn entry_in_collection_org_scope(
+    entry: &rbw::db::Entry,
+    collection_id: Option<&str>,
+    org_id: Option<&str>,
+) -> bool {
+    if let Some(cid) = collection_id {
         if !entry.collection_ids.iter().any(|c| c == cid) {
             return false;
         }
     }
-    if let Some(oid) = scope_org_id {
+    if let Some(oid) = org_id {
         if entry.org_id.as_deref() != Some(oid) {
             return false;
         }
@@ -9401,7 +9647,7 @@ pub fn import(
         }
     };
 
-    import_vault(vault, collection, overwrite)
+    import_vault(vault, collection, None, overwrite)
 }
 
 // Creates/updates entries and collections in the currently active account
@@ -9415,6 +9661,7 @@ pub fn import(
 fn import_vault(
     mut vault: ImportedVault,
     collection: Option<&str>,
+    dest_org: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
     unlock(None, None)?;
@@ -9430,6 +9677,17 @@ fn import_vault(
 
     let c = stdout_supports_color();
 
+    // `--dest-org` only disambiguates a `--collection` name that matches
+    // more than one collection across different orgs (mirroring how
+    // `resolve_collection`'s own `org_id` scoping already works elsewhere);
+    // it never restricts anything on its own.
+    let dest_org_id = dest_org
+        .map(|needle| {
+            resolve_organization(&db.organizations, needle)
+                .map(|org| org.id.clone())
+        })
+        .transpose()?;
+
     // `--collection` redirects every entry into one existing collection,
     // ignoring whatever organization/collection/folder metadata the export
     // carries -- so none of the export's own collections need to be
@@ -9437,7 +9695,8 @@ fn import_vault(
     // collection pair.
     let dest_collection = if let Some(needle) = collection {
         let decrypted = decrypt_collections(&db)?;
-        let found = resolve_collection(&decrypted, needle, None)?;
+        let found =
+            resolve_collection(&decrypted, needle, dest_org_id.as_deref())?;
         Some((found.id.clone(), found.org_id.clone()))
     } else {
         None
@@ -9794,14 +10053,27 @@ fn import_vault(
 // server's whole-vault purge endpoint, which explicitly skips org/
 // collection-owned ciphers and so can't do this. Entries outside this
 // collection, and the collection itself, are left untouched.
-fn purge_collection_entries(needle: &str) -> anyhow::Result<()> {
+fn purge_collection_entries(
+    needle: &str,
+    dest_org: Option<&str>,
+) -> anyhow::Result<()> {
     let mut db = load_db()?;
     let mut access_token = db.access_token.as_ref().unwrap().clone();
     let refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
+    let dest_org_id = dest_org
+        .map(|needle| {
+            resolve_organization(&db.organizations, needle)
+                .map(|org| org.id.clone())
+        })
+        .transpose()?;
+
     let decrypted_collections = decrypt_collections(&db)?;
-    let collection =
-        resolve_collection(&decrypted_collections, needle, None)?;
+    let collection = resolve_collection(
+        &decrypted_collections,
+        needle,
+        dest_org_id.as_deref(),
+    )?;
     let collection_id = collection.id.clone();
     let collection_name = collection.name.clone();
 
@@ -9904,6 +10176,7 @@ pub fn mirror_vault(
     collection: Option<&str>,
     org_id: Option<&str>,
     dest_collection: Option<&str>,
+    dest_org: Option<&str>,
     attachments: bool,
     overwrite: bool,
     purge_dest: bool,
@@ -9957,6 +10230,9 @@ pub fn mirror_vault(
         eprintln!("  scope: organization '{org}'");
     } else {
         eprintln!("  scope: entire vault");
+    }
+    if let Some(needle) = dest_org {
+        eprintln!("  destination organization: '{needle}'");
     }
     if let Some(needle) = dest_collection {
         eprintln!("  destination collection: '{needle}'");
@@ -10031,7 +10307,7 @@ pub fn mirror_vault(
             // the whole-vault path below) since it's just a loop of ordinary
             // per-cipher permanent deletes, the same primitive `rbw remove
             // --force` uses.
-            purge_collection_entries(needle)?;
+            purge_collection_entries(needle, dest_org)?;
         } else {
             // Already confirmed above (the whole-mirror confirmation covers
             // it), so pass `yes: true` to skip `purge_vault`'s own prompt --
@@ -10063,7 +10339,7 @@ pub fn mirror_vault(
 
     let imported = bw_vault_to_imported(bw, attachments_map);
 
-    import_vault(imported, dest_collection, overwrite)
+    import_vault(imported, dest_collection, dest_org, overwrite)
 }
 
 // A collection from the synced database, with its name decrypted.
@@ -10371,7 +10647,15 @@ pub fn assign_collections(
         let mut any_err = false;
         let mut pending: Vec<(rbw::db::Entry, DecryptedCipher)> = Vec::new();
         for needle in &needles {
-            match find_entries_all(&db, needle, user, folder, ignore_case) {
+            match find_entries_all(
+                &db,
+                needle,
+                user,
+                folder,
+                None,
+                None,
+                ignore_case,
+            ) {
                 Err(e) => {
                     eprintln!("{needle}: {e:#}");
                     any_err = true;
@@ -10428,6 +10712,8 @@ pub fn assign_collections(
             vec![needle],
             user,
             folder,
+            None,
+            None,
             ignore_case,
             force_exact,
         )
@@ -10608,7 +10894,15 @@ pub fn unassign_collections(
         let mut any_err = false;
         let mut pending: Vec<(rbw::db::Entry, DecryptedCipher)> = Vec::new();
         for needle in &needles {
-            match find_entries_all(&db, needle, user, folder, ignore_case) {
+            match find_entries_all(
+                &db,
+                needle,
+                user,
+                folder,
+                None,
+                None,
+                ignore_case,
+            ) {
                 Err(e) => {
                     eprintln!("{needle}: {e:#}");
                     any_err = true;
@@ -10666,6 +10960,8 @@ pub fn unassign_collections(
             vec![needle],
             user,
             folder,
+            None,
+            None,
             ignore_case,
             force_exact,
         )
@@ -10902,7 +11198,7 @@ pub fn purge_collection(
         }
     }
 
-    purge_collection_entries(&collection_id)
+    purge_collection_entries(&collection_id, None)
 }
 
 // Organization names are plaintext (unlike collection names, which are
@@ -11032,6 +11328,79 @@ fn normalize_collection_name(name: &str) -> anyhow::Result<String> {
         anyhow::bail!("collection name is empty or has a leading/trailing slash: {name:?}");
     }
     Ok(trimmed.to_string())
+}
+
+// Resolve an organization given by name or ID against the account's
+// organization list (`db.organizations`, already plaintext -- see the
+// comment on that field). Mirrors `resolve_collection`: exact ID first,
+// then exact name, then a case-insensitive substring fallback, erroring
+// when a name is ambiguous.
+fn resolve_organization<'a>(
+    organizations: &'a [rbw::db::Organization],
+    needle: &str,
+) -> anyhow::Result<&'a rbw::db::Organization> {
+    if let Some(org) = organizations
+        .iter()
+        .find(|o| o.id.eq_ignore_ascii_case(needle))
+    {
+        return Ok(org);
+    }
+
+    let mut matches: Vec<&rbw::db::Organization> =
+        organizations.iter().filter(|o| o.name == needle).collect();
+    if matches.is_empty() {
+        let needle_lower = needle.to_lowercase();
+        matches = organizations
+            .iter()
+            .filter(|o| o.name.to_lowercase().contains(&needle_lower))
+            .collect();
+    }
+
+    match matches[..] {
+        [] => Err(anyhow::anyhow!("no organization found for '{needle}'")),
+        [org] => Ok(org),
+        _ => {
+            let candidates = matches
+                .iter()
+                .map(|o| format!("{} ({})", o.name, o.id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(anyhow::anyhow!(
+                "multiple organizations found for '{needle}': {candidates}; \
+                use the organization ID instead"
+            ))
+        }
+    }
+}
+
+// Resolve `--collection`/`--org` (name or ID) from the `find`-family
+// commands (get/show/edit/... and list/search) into concrete IDs for
+// `entry_in_collection_org_scope`. `--org` alone scopes by organization;
+// `--collection` (optionally combined with `--org` to disambiguate a name
+// shared across orgs, same as `resolve_collection`'s own `org_id` scoping)
+// resolves to one specific collection -- its own org is returned instead of
+// the raw `--org` needle in that case, since the collection already pins it
+// down more precisely.
+fn resolve_entry_scope(
+    db: &rbw::db::Db,
+    collection: Option<&str>,
+    org: Option<&str>,
+) -> anyhow::Result<(Option<String>, Option<String>)> {
+    let org_id = org
+        .map(|needle| {
+            resolve_organization(&db.organizations, needle)
+                .map(|found| found.id.clone())
+        })
+        .transpose()?;
+
+    if let Some(needle) = collection {
+        let decrypted = decrypt_collections(db)?;
+        let found =
+            resolve_collection(&decrypted, needle, org_id.as_deref())?;
+        Ok((Some(found.id.clone()), Some(found.org_id.clone())))
+    } else {
+        Ok((None, org_id))
+    }
 }
 
 // Resolve the target organization: the given `--org-id` (validated), or
@@ -11750,6 +12119,8 @@ pub fn history(
     needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     output: OutputMode,
     force_exact: bool,
@@ -11769,9 +12140,17 @@ pub fn history(
         needle_str
     );
 
-    let (_, decrypted) =
-        find_entry(&db, needles, username, folder, ignore_case, force_exact)
-            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    let (_, decrypted) = find_entry(
+        &db,
+        needles,
+        username,
+        folder,
+        collection,
+        org,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
     if output_is_structured(output) {
         write_serialized_pretty(
             &decrypted.history,
@@ -11921,9 +12300,20 @@ fn find_entry(
     mut needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     force_exact: bool,
 ) -> anyhow::Result<(rbw::db::Entry, DecryptedCipher)> {
+    let (collection_id, org_id) = resolve_entry_scope(db, collection, org)?;
+    let in_scope = |entry: &rbw::db::Entry| {
+        entry_in_collection_org_scope(
+            entry,
+            collection_id.as_deref(),
+            org_id.as_deref(),
+        )
+    };
+
     // Fast-path: exactly one UUID needle — try exact match first. Trashed
     // entries are never a candidate for ordinary name/UUID resolution
     // (restoring one is the one exception -- see
@@ -11935,6 +12325,7 @@ fn find_entry(
             for cipher in &db.entries {
                 if !cipher.deleted
                     && uuid::Uuid::parse_str(&cipher.id) == Ok(uuid)
+                    && in_scope(cipher)
                 {
                     return Ok((cipher.clone(), decrypt_cipher(cipher)?));
                 }
@@ -11948,6 +12339,7 @@ fn find_entry(
     let plans: Vec<SearchCipherPlan> = db
         .entries
         .iter()
+        .filter(|entry| in_scope(entry))
         .map(|entry| SearchCipherPlan::build(entry, &mut requests))
         .collect();
     let results = if requests.is_empty() {
@@ -11958,6 +12350,7 @@ fn find_entry(
     let mut ciphers: Vec<(rbw::db::Entry, DecryptedSearchCipher)> = db
         .entries
         .iter()
+        .filter(|entry| in_scope(entry))
         .zip(plans)
         .map(|(entry, plan)| {
             plan.resolve(&results)
@@ -11991,6 +12384,8 @@ fn find_entry_multi(
     needles: Vec<Needle>,
     username: Option<&str>,
     folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
     ignore_case: bool,
     force_exact: bool,
 ) -> anyhow::Result<(String, rbw::db::Entry, DecryptedCipher)> {
@@ -12002,10 +12397,27 @@ fn find_entry_multi(
         for account in target_accounts {
             crate::actions::set_active_account(Some(account.clone()))?;
             let db = load_db()?;
+            // A `--collection`/`--org` needle that doesn't resolve in this
+            // particular account (name not found here, or ambiguous here)
+            // just means this account contributes nothing -- it doesn't
+            // abort the search across the other accounts in `--all`.
+            let Ok((collection_id, org_id)) =
+                resolve_entry_scope(&db, collection, org)
+            else {
+                continue;
+            };
+            let in_scope = |entry: &rbw::db::Entry| {
+                entry_in_collection_org_scope(
+                    entry,
+                    collection_id.as_deref(),
+                    org_id.as_deref(),
+                )
+            };
             let mut requests = BatchRequests::new();
             let plans: Vec<SearchCipherPlan> = db
                 .entries
                 .iter()
+                .filter(|entry| in_scope(entry))
                 .map(|entry| SearchCipherPlan::build(entry, &mut requests))
                 .collect();
             let results = if requests.is_empty() {
@@ -12013,7 +12425,9 @@ fn find_entry_multi(
             } else {
                 crate::actions::decrypt_batch(requests.into_vec())?
             };
-            for (entry, plan) in db.entries.iter().zip(plans) {
+            for (entry, plan) in
+                db.entries.iter().filter(|entry| in_scope(entry)).zip(plans)
+            {
                 owner.insert(entry.id.clone(), account.clone());
                 pool.push((entry.clone(), plan.resolve(&results)?));
             }
@@ -12055,8 +12469,16 @@ fn find_entry_multi(
 
     crate::actions::set_active_account(Some(account.clone()))?;
     let db = load_db()?;
-    let (entry, decrypted) =
-        find_entry(&db, needles, username, folder, ignore_case, force_exact)?;
+    let (entry, decrypted) = find_entry(
+        &db,
+        needles,
+        username,
+        folder,
+        collection,
+        org,
+        ignore_case,
+        force_exact,
+    )?;
     Ok((account.clone(), entry, decrypted))
 }
 
@@ -19968,14 +20390,71 @@ mod test {
         assert_eq!(resolve_org(&db, Some("org2")).unwrap(), "org2");
     }
 
+    fn organization(id: &str, name: &str) -> rbw::db::Organization {
+        rbw::db::Organization {
+            id: id.to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_resolve_organization_matches_id_name_and_substring() {
+        let organizations = vec![
+            organization("11111111-aaaa", "bitwarden.com"),
+            organization("22222222-bbbb", "bitwarden.com testing"),
+        ];
+
+        // Exact ID wins, even when other names would substring-match.
+        assert_eq!(
+            resolve_organization(&organizations, "11111111-aaaa")
+                .unwrap()
+                .name,
+            "bitwarden.com"
+        );
+        // Exact name.
+        assert_eq!(
+            resolve_organization(&organizations, "bitwarden.com")
+                .unwrap()
+                .id,
+            "11111111-aaaa"
+        );
+        // Substring fallback (case-insensitive).
+        assert_eq!(
+            resolve_organization(&organizations, "testing").unwrap().id,
+            "22222222-bbbb"
+        );
+        assert!(resolve_organization(&organizations, "nope").is_err());
+    }
+
+    #[test]
+    fn test_resolve_organization_lists_candidates_on_ambiguity() {
+        let organizations = vec![
+            organization("11111111-aaaa", "Infra"),
+            organization("22222222-bbbb", "Infra/Prod"),
+        ];
+
+        let err = resolve_organization(&organizations, "infra")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("multiple organizations found"), "{err}");
+        assert!(err.contains("Infra (11111111-aaaa)"), "{err}");
+        assert!(err.contains("Infra/Prod (22222222-bbbb)"), "{err}");
+
+        // An exact name match is not ambiguous with its substring siblings.
+        assert_eq!(
+            resolve_organization(&organizations, "Infra").unwrap().id,
+            "11111111-aaaa"
+        );
+    }
+
     // Both of `mirror_vault`'s guard clauses are checked before any
     // config/agent access, so they're directly unit-testable without a
     // configured account.
     #[test]
     fn test_mirror_vault_rejects_identical_from_and_to() {
         let err = mirror_vault(
-            "same", "same", None, None, None, false, false, false, true,
-            None, false,
+            "same", "same", None, None, None, None, false, false, false,
+            true, None, false,
         )
         .unwrap_err()
         .to_string();
@@ -19988,6 +20467,7 @@ mod test {
             "a",
             "b",
             Some("some-collection"),
+            None,
             None,
             None,
             false,
@@ -20007,6 +20487,7 @@ mod test {
             "b",
             None,
             Some("org-id"),
+            None,
             None,
             false,
             false,
@@ -20034,6 +20515,7 @@ mod test {
             None,
             None,
             Some("some-collection"),
+            None,
             false,
             false,
             true,
