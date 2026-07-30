@@ -272,7 +272,15 @@ enum Opt {
             personal API key (instead of your password) first before regular \
             logins will work."
     )]
-    Register,
+    Register {
+        #[arg(
+            long,
+            help = "Read the API key client_id and client_secret from \
+                standard input, one per line, instead of prompting via \
+                pinentry"
+        )]
+        stdin: bool,
+    },
 
     #[command(about = "Log in to the Bitwarden server")]
     Login {
@@ -1257,7 +1265,7 @@ impl Opt {
                 format!("config {}", config.subcommand_name())
             }
             Self::Account { .. } => "account".to_string(),
-            Self::Register => "register".to_string(),
+            Self::Register { .. } => "register".to_string(),
             Self::Login { .. } => "login".to_string(),
             Self::Version => "version".to_string(),
             Self::Unlock { .. } => "unlock".to_string(),
@@ -1996,7 +2004,8 @@ impl Config {
     }
 }
 
-// Shared by `login --stdin` and `unlock --stdin`.
+// Shared by `login --stdin`, `unlock --stdin`, and (twice, for client_id then
+// client_secret) `register --stdin`.
 fn read_stdin_password() -> String {
     let mut buf = String::new();
     let _ = std::io::stdin()
@@ -2096,7 +2105,14 @@ fn main() {
                 clear_credential_source,
             ),
         },
-        Opt::Register => commands::register(),
+        Opt::Register { stdin } => {
+            let (client_id, client_secret) = if stdin {
+                (Some(read_stdin_password()), Some(read_stdin_password()))
+            } else {
+                (None, None)
+            };
+            commands::register(client_id, client_secret)
+        }
         Opt::Login { stdin, totp } => {
             let password = stdin.then(read_stdin_password);
             commands::login(password, totp)

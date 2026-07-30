@@ -11,16 +11,43 @@ fn password_from_env() -> Option<rbw::locked::Password> {
     Some(rbw::locked::Password::new(buf))
 }
 
+// `client_id`/`client_secret` come from `--stdin` (e.g. for a fully
+// non-interactive first registration on a brand-new host); when both are
+// given, the pinentry prompt and its 3-attempt retry loop are skipped
+// entirely -- there's no one to correct a typo interactively, so a bad key
+// just fails once with a clear error instead of hanging on a pinentry
+// nothing will ever answer. When either is absent, falls back to the
+// original interactive pinentry flow, exactly as before.
 pub async fn register(
     sock: &mut crate::sock::Sock,
     environment: &rbw::protocol::Environment,
     account: &rbw::config::Account,
+    client_id: Option<&rbw::locked::Password>,
+    client_secret: Option<&rbw::locked::Password>,
 ) -> anyhow::Result<()> {
     let db = load_db(account)
         .await
         .unwrap_or_else(|_| rbw::db::Db::new());
 
     if db.needs_login() {
+        let email = account_email(account)?;
+
+        if let (Some(client_id), Some(client_secret)) =
+            (client_id, client_secret)
+        {
+            let apikey = rbw::locked::ApiKey::new(
+                client_id.clone(),
+                client_secret.clone(),
+            );
+            rbw::actions::register(&email, apikey)
+                .await
+                .context("failed to log in to bitwarden instance")?;
+
+            respond_ack(sock).await?;
+
+            return Ok(());
+        }
+
         let url_str = account.base_url();
         let url = reqwest::Url::parse(&url_str)
             .context("failed to parse base url")?;
@@ -29,8 +56,6 @@ pub async fn register(
                 "couldn't find host in rbw base url {url_str}"
             ));
         };
-
-        let email = account_email(account)?;
 
         let mut err_msg = None;
         for i in 1_u8..=3 {

@@ -173,8 +173,36 @@ async fn dispatch(
     requested_account: Option<&str>,
 ) -> anyhow::Result<bool> {
     let set_timeout = match action {
-        rbw::protocol::Action::Register => {
-            crate::actions::register(sock, environment, account).await?;
+        rbw::protocol::Action::Register {
+            mut client_id,
+            mut client_secret,
+        } => {
+            // Same locked-memory + zeroize treatment as `Unlock`'s password.
+            let locked_client_id = client_id.as_deref().map(|s| {
+                let mut v = rbw::locked::Vec::new();
+                v.extend(s.as_bytes().iter().copied());
+                rbw::locked::Password::new(v)
+            });
+            if let Some(ref mut s) = client_id {
+                zeroize::Zeroize::zeroize(s);
+            }
+            let locked_client_secret = client_secret.as_deref().map(|s| {
+                let mut v = rbw::locked::Vec::new();
+                v.extend(s.as_bytes().iter().copied());
+                rbw::locked::Password::new(v)
+            });
+            if let Some(ref mut s) = client_secret {
+                zeroize::Zeroize::zeroize(s);
+            }
+
+            crate::actions::register(
+                sock,
+                environment,
+                account,
+                locked_client_id.as_ref(),
+                locked_client_secret.as_ref(),
+            )
+            .await?;
             true
         }
         rbw::protocol::Action::Login { mut password, totp } => {

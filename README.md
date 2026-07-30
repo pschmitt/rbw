@@ -336,6 +336,13 @@ order to use `rbw` with the official Bitwarden server, you will need to first
 run `rbw register` to register each device using `rbw` with the Bitwarden
 server. This will prompt you for your personal API key which you can find using
 the instructions [here](https://bitwarden.com/help/article/personal-api-key/).
+Pass `--stdin` to supply the client ID and client secret non-interactively
+instead (one per line, client ID first) -- useful for a scripted first-run
+registration on a freshly provisioned host:
+
+```sh
+printf '%s\n%s\n' "$API_CLIENT_ID" "$API_CLIENT_SECRET" | rbw register --stdin
+```
 
 ### Backup and restore (`rbw export`/`rbw import`)
 

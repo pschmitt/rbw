@@ -2802,9 +2802,15 @@ fn clipboard_store(val: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn register() -> anyhow::Result<()> {
+// `client_id`/`client_secret` come from `--stdin` (e.g. for a fully
+// non-interactive first registration on a brand-new host); when absent,
+// falls back to the normal interactive pinentry flow, exactly as before.
+pub fn register(
+    client_id: Option<String>,
+    client_secret: Option<String>,
+) -> anyhow::Result<()> {
     ensure_agent()?;
-    crate::actions::register()?;
+    crate::actions::register(client_id, client_secret)?;
 
     Ok(())
 }

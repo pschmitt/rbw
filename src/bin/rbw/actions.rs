@@ -31,8 +31,14 @@ pub fn set_active_account(account: Option<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn register() -> anyhow::Result<()> {
-    simple_action(rbw::protocol::Action::Register)
+pub fn register(
+    client_id: Option<String>,
+    client_secret: Option<String>,
+) -> anyhow::Result<()> {
+    simple_action(rbw::protocol::Action::Register {
+        client_id,
+        client_secret,
+    })
 }
 
 pub fn login(

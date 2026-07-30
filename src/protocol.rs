@@ -197,7 +197,14 @@ pub enum Action {
         password: Option<String>,
         totp: Option<String>,
     },
-    Register,
+    // `client_id`/`client_secret` let the client supply a pre-obtained
+    // personal API key (e.g. from `--stdin`) instead of the agent prompting
+    // for both via pinentry. Both `None` (the common case) preserves the
+    // fully-interactive flow exactly as before.
+    Register {
+        client_id: Option<String>,
+        client_secret: Option<String>,
+    },
     Unlock {
         password: Option<String>,
     },
