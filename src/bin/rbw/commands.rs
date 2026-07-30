@@ -2706,6 +2706,94 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn termux_enroll() -> anyhow::Result<()> {
+    use zeroize::Zeroize as _;
+
+    let mut config = rbw::config::Config::load()?;
+    config.migrate_legacy();
+    let account_name = crate::actions::current_account()
+        .unwrap_or_else(|| config.primary_account_name());
+    let account = config.account(Some(&account_name))?;
+    if account.unlock.termux.is_some() {
+        anyhow::bail!(
+            "account {account_name:?} already has Termux unlock configured"
+        );
+    }
+
+    let bundle = rbw::termux::default_bundle_path(&account_name);
+    if bundle.exists() {
+        anyhow::bail!(
+            "Termux unlock bundle {} already exists; remove it before enrolling again",
+            bundle.display()
+        );
+    }
+
+    let environment = crate::actions::get_environment();
+    let description = format!(
+        "Enroll native Android unlock for rbw account {account_name:?}"
+    );
+    let runtime = tokio::runtime::Runtime::new()
+        .context("failed to initialize the password prompt")?;
+    let mut password = runtime
+        .block_on(rbw::pinentry::getpin(
+            &config.pinentry,
+            "Master password",
+            &description,
+            None,
+            &environment,
+            false,
+            None,
+            config.pinentry_timeout,
+        ))?
+        .password()
+        .to_vec();
+
+    let key_alias = rbw::termux::default_key_alias(&account_name);
+    let algorithm = "SHA256withRSA";
+    let result = (|| {
+        rbw::termux::generate(&key_alias, "RSA", Some(2048), 30)?;
+        if let Err(error) = rbw::termux::enroll(
+            &bundle,
+            &key_alias,
+            algorithm,
+            std::mem::take(&mut password),
+        ) {
+            let _ = rbw::termux::delete(&key_alias);
+            return Err(error);
+        }
+
+        let account = config
+            .accounts
+            .iter_mut()
+            .find(|account| account.name == account_name)
+            .ok_or_else(|| {
+                anyhow::anyhow!("account {account_name:?} vanished")
+            })?;
+        account.unlock.termux = Some(rbw::config::TermuxKeystoreUnlock {
+            file: bundle.clone(),
+            key_alias: key_alias.clone(),
+            algorithm: algorithm.to_string(),
+            fingerprint: true,
+        });
+        if let Err(error) = config.save() {
+            let _ = std::fs::remove_file(&bundle);
+            let _ = rbw::termux::delete(&key_alias);
+            return Err(anyhow::Error::new(error));
+        }
+        let _ = stop_agent();
+        println!(
+            "Termux unlock enrolled for account {account_name:?}.\n\
+             Key: {key_alias}\n\
+             Bundle: {}\n\
+             Future unlocks will use fingerprint authentication.",
+            bundle.display()
+        );
+        Ok(())
+    })();
+    password.zeroize();
+    result
+}
+
 pub fn account_list() {
     let config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());

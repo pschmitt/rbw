@@ -11,7 +11,7 @@ use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::io::Write as _;
-use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use zeroize::Zeroize as _;
 
 const BUNDLE_VERSION: u8 = 1;
@@ -19,6 +19,38 @@ const AAD: &[u8] = b"rbw/termux-keystore/v1";
 const CHALLENGE_LEN: usize = 32;
 const SALT_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
+
+pub fn default_key_alias(account_name: &str) -> String {
+    format!("rbw-{}", safe_component(account_name))
+}
+
+pub fn default_bundle_path(account_name: &str) -> std::path::PathBuf {
+    crate::dirs::config_file()
+        .parent()
+        .expect("rbw config path has a parent")
+        .join("termux")
+        .join(format!("{}.bundle", safe_component(account_name)))
+}
+
+fn safe_component(value: &str) -> String {
+    let component: String = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '_' | '-')
+            {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if component.is_empty() {
+        "default".to_string()
+    } else {
+        component
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Bundle {
@@ -53,9 +85,11 @@ fn command_output(
     command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    if stdin.is_some() {
-        command.stdin(std::process::Stdio::piped());
-    }
+    command.stdin(if stdin.is_some() {
+        std::process::Stdio::piped()
+    } else {
+        std::process::Stdio::null()
+    });
     let mut child = command
         .spawn()
         .with_context(|| format!("failed to start {program}"))?;
@@ -230,6 +264,17 @@ pub fn enroll(
     algorithm: &str,
     mut password: Vec<u8>,
 ) -> anyhow::Result<()> {
+    let result = enroll_inner(file, key_alias, algorithm, &password);
+    password.zeroize();
+    result
+}
+
+fn enroll_inner(
+    file: &std::path::Path,
+    key_alias: &str,
+    algorithm: &str,
+    password: &[u8],
+) -> anyhow::Result<()> {
     if password.is_empty() {
         anyhow::bail!("the master password must not be empty");
     }
@@ -240,6 +285,17 @@ pub fn enroll(
     rand::rng().fill_bytes(&mut salt);
     rand::rng().fill_bytes(&mut nonce);
 
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!("failed to create {}", parent.display())
+        })?;
+        std::fs::set_permissions(
+            parent,
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .with_context(|| format!("failed to protect {}", parent.display()))?;
+    }
+
     let mut signature = sign(key_alias, algorithm, &challenge, true)?;
     let mut key = derive_key(&signature, &salt)?;
     let result = Aes256Gcm::new_from_slice(&key)
@@ -247,7 +303,7 @@ pub fn enroll(
         .encrypt(
             Nonce::from_slice(&nonce),
             aes_gcm::aead::Payload {
-                msg: &password,
+                msg: password,
                 aad: AAD,
             },
         )
@@ -256,7 +312,6 @@ pub fn enroll(
         });
     key.zeroize();
     signature.zeroize();
-    password.zeroize();
     let ciphertext = result?;
 
     let bundle = Bundle {
@@ -276,6 +331,10 @@ pub fn enroll(
     output.write_all(&json)?;
     output.write_all(b"\n")?;
     Ok(())
+}
+
+pub fn delete(key_alias: &str) -> anyhow::Result<()> {
+    run_keystore(&["delete", key_alias], None).map(|_| ())
 }
 
 pub fn generate(

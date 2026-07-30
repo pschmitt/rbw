@@ -186,27 +186,29 @@ the fingerprint prompt is only the user interface, while Android Keystore
 enforces the key use. The encrypted bundle contains no private key or
 reusable signature.
 
-Create an authentication-gated key and enroll the account's master password:
+Enroll the active account in one step:
 
 ```shell
-rbw termux generate rbw-unlock --algorithm RSA --size 2048 --validity 30
-printf '%s\n' 'master password' |
-  rbw termux enroll --file ~/.config/rbw/termux.bundle \
-    --key-alias rbw-unlock --algorithm SHA256withRSA --stdin
-rbw termux status rbw-unlock
+rbw termux enroll
 ```
 
-The status output must report `hardware=true`,
-`authentication_required=true`, and
-`hardware_enforced=true`. Configure the bundle for the account in
-`config.json` (or through the declarative Home Manager module):
+rbw asks for the master password using the configured pinentry, generates an
+authentication-gated RSA key, prompts for fingerprint authentication, writes
+the encrypted bundle below rbw's config directory, and updates the active
+account in `config.json`. The generated key and bundle are named after the
+account, so multiple accounts can be enrolled independently. Use
+`rbw termux status` to inspect the Android Keystore properties; each enrolled
+key must report `hardware=true`, `authentication_required=true`, and
+`hardware_enforced=true`.
+
+For declarative Home Manager setups, the equivalent account option is:
 
 ```json
 {
   "unlock": {
     "termux": {
-      "file": "/data/data/com.termux/files/home/.config/rbw/termux.bundle",
-      "key_alias": "rbw-unlock",
+      "file": "/data/data/com.termux/files/home/.config/rbw/termux/personal.bundle",
+      "key_alias": "rbw-personal",
       "algorithm": "SHA256withRSA",
       "fingerprint": true
     }

@@ -414,7 +414,7 @@ fn wait_for_exit(pid: rustix::process::Pid) {
     }
 }
 
-fn get_environment() -> rbw::protocol::Environment {
+pub fn get_environment() -> rbw::protocol::Environment {
     let tty = std::env::var_os("RBW_TTY").or_else(|| {
         rustix::termios::ttyname(std::io::stdin(), vec![])
             .ok()
