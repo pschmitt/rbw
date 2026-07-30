@@ -2949,8 +2949,7 @@ const MAX_CREDENTIAL_SOURCE_DEPTH: usize = 16;
 fn login_resolving_credential_source(
     visited: &mut Vec<String>,
 ) -> anyhow::Result<()> {
-    let (password, totp) = resolve_credential_source(visited)
-        .map_or((None, None), |(password, totp)| (Some(password), totp));
+    let (password, totp) = resolve_unlock_credentials(visited)?;
     crate::actions::login(password, totp)
 }
 
@@ -2964,18 +2963,26 @@ fn unlock_impl(
 ) -> anyhow::Result<()> {
     ensure_agent()?;
     let (password, totp) = password.map_or_else(
-        || {
-            resolve_credential_source(visited)
-                .map_or((None, None), |(password, totp)| {
-                    (Some(password), totp)
-                })
-        },
-        |password| (Some(password), totp),
-    );
+        || resolve_unlock_credentials(visited),
+        |password| Ok((Some(password), totp)),
+    )?;
     crate::actions::login(password.clone(), totp)?;
     crate::actions::unlock(password)?;
 
     Ok(())
+}
+
+// Explicit Termux configuration is fail-closed: a configured provider must
+// work, rather than silently falling back to a weaker pinentry path.
+fn resolve_unlock_credentials(
+    visited: &mut Vec<String>,
+) -> anyhow::Result<(Option<String>, Option<String>)> {
+    let account = active_account()?;
+    if let Some(termux) = account.unlock.termux {
+        return Ok((Some(rbw::termux::unlock(&termux)?), None));
+    }
+    Ok(resolve_credential_source(visited)
+        .map_or((None, None), |(password, totp)| (Some(password), totp)))
 }
 
 // If the currently-active account has a `credential_source` configured,

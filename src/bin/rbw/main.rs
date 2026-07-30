@@ -278,6 +278,12 @@ enum Opt {
         account: AccountCmd,
     },
 
+    #[command(about = "Use Termux Android Keystore for native unlocks")]
+    Termux {
+        #[command(subcommand)]
+        termux: TermuxCmd,
+    },
+
     #[command(
         about = "Register this device with the Bitwarden server",
         long_about = "Register this device with the Bitwarden server\n\n\
@@ -1509,6 +1515,7 @@ impl Opt {
                 format!("config {}", config.subcommand_name())
             }
             Self::Account { .. } => "account".to_string(),
+            Self::Termux { .. } => "termux".to_string(),
             Self::Register { .. } => "register".to_string(),
             Self::Login { .. } => "login".to_string(),
             Self::Version => "version".to_string(),
@@ -1592,6 +1599,57 @@ enum Config {
             content changed and still parses as valid config."
     )]
     Edit,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum TermuxCmd {
+    #[command(
+        about = "Generate an authentication-gated Android Keystore key"
+    )]
+    Generate {
+        #[arg(help = "Android Keystore alias")]
+        key_alias: String,
+        #[arg(
+            long,
+            default_value = "RSA",
+            help = "Key algorithm: RSA or EC"
+        )]
+        algorithm: String,
+        #[arg(long, help = "RSA size or EC curve size")]
+        size: Option<u32>,
+        #[arg(
+            long,
+            default_value_t = 30,
+            help = "Seconds after device authentication during which signing is allowed"
+        )]
+        validity: u32,
+    },
+    #[command(
+        about = "Create an encrypted master-password bundle",
+        long_about = "Create an encrypted master-password bundle for native \
+            Termux Keystore unlocks. The password is read from standard input \
+            and the bundle is created with mode 0600. The key must already \
+            exist and enforce user authentication."
+    )]
+    Enroll {
+        #[arg(long, value_name = "FILE")]
+        file: std::path::PathBuf,
+        #[arg(long, help = "Android Keystore alias")]
+        key_alias: String,
+        #[arg(
+            long,
+            default_value = "SHA256withRSA",
+            help = "Signature algorithm matching the Keystore key"
+        )]
+        algorithm: String,
+        #[arg(long, help = "Read the master password from standard input")]
+        stdin: bool,
+    },
+    #[command(about = "Show Android Keystore security properties")]
+    Status {
+        #[arg(help = "Only show this Android Keystore alias")]
+        key_alias: Option<String>,
+    },
 }
 
 #[derive(Debug, clap::Parser)]
@@ -2422,6 +2480,38 @@ fn main() {
                 credential_source_item,
                 clear_credential_source,
             ),
+        },
+        Opt::Termux { termux } => match termux {
+            TermuxCmd::Generate {
+                key_alias,
+                algorithm,
+                size,
+                validity,
+            } => {
+                rbw::termux::generate(&key_alias, &algorithm, size, validity)
+            }
+            TermuxCmd::Enroll {
+                file,
+                key_alias,
+                algorithm,
+                stdin,
+            } => {
+                if stdin {
+                    rbw::termux::enroll(
+                        &file,
+                        &key_alias,
+                        &algorithm,
+                        read_stdin_password().into_bytes(),
+                    )
+                } else {
+                    Err(anyhow::anyhow!(
+                        "termux enroll currently requires --stdin"
+                    ))
+                }
+            }
+            TermuxCmd::Status { key_alias } => {
+                rbw::termux::status(key_alias.as_deref())
+            }
         },
         Opt::Register { stdin } => {
             let (client_id, client_secret) = if stdin {

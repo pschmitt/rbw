@@ -210,6 +210,51 @@ let
                   the equivalent TUI accounts-panel action.
                 '';
               };
+              termux = mkOption {
+                type = types.nullOr (
+                  types.submodule {
+                    options = {
+                      file = mkOption {
+                        type = types.path;
+                        description = ''
+                          Path to the encrypted master-password bundle
+                          produced by `rbw termux enroll`.
+                        '';
+                      };
+                      key_alias = mkOption {
+                        type = types.str;
+                        description = ''
+                          Android Keystore alias of the authentication-gated
+                          signing key used to unlock this account.
+                        '';
+                      };
+                      algorithm = mkOption {
+                        type = types.str;
+                        default = "SHA256withRSA";
+                        description = ''
+                          Termux Keystore signature algorithm, matching the
+                          configured RSA or EC key.
+                        '';
+                      };
+                      fingerprint = mkOption {
+                        type = types.bool;
+                        default = true;
+                        description = ''
+                          Invoke `termux-fingerprint` before using the key.
+                          The Keystore key must still enforce authentication;
+                          this prompt alone is not a security boundary.
+                        '';
+                      };
+                    };
+                  }
+                );
+                default = null;
+                description = ''
+                  Unlock this account using an authentication-gated Android
+                  Keystore signing key through Termux. Mirrors
+                  `TermuxKeystoreUnlock` in `src/config.rs`.
+                '';
+              };
             };
           };
           default = { };
@@ -351,7 +396,11 @@ let
         '';
       };
       clipboard = mkOption {
-        type = types.enum [ "auto" "system" "osc52" ];
+        type = types.enum [
+          "auto"
+          "system"
+          "osc52"
+        ];
         default = "auto";
         description = ''
           Which mechanism `-c`/`--clipboard` and the TUI's copy actions use

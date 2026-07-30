@@ -47,6 +47,33 @@ pub struct UnlockConfig {
     // See `CredentialSource`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials: Option<CredentialSource>,
+    // See `TermuxKeystoreUnlock`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub termux: Option<TermuxKeystoreUnlock>,
+}
+
+// Unlock an account with a master-password bundle protected by an
+// authentication-gated Android Keystore signing key. The bundle path and key
+// alias are deliberately configured separately: the alias is part of the
+// trusted local configuration, not attacker-controlled bundle data.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct TermuxKeystoreUnlock {
+    pub file: std::path::PathBuf,
+    pub key_alias: String,
+    #[serde(default = "default_termux_algorithm")]
+    pub algorithm: String,
+    #[serde(default = "default_termux_fingerprint")]
+    pub fingerprint: bool,
+}
+
+fn default_termux_algorithm() -> String {
+    "SHA256withRSA".to_string()
+}
+
+fn default_termux_fingerprint() -> bool {
+    true
 }
 
 // Which commands should skip this account when merging entries across every

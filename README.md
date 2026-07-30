@@ -178,6 +178,47 @@ set `hide_trashed`/`hide_archived` to `false` in the config) to show them.
 `rbw help` can be used to get more information about the available
 functionality.
 
+#### Native Termux Android Keystore unlock
+
+On Android, the pschmitt fork can unlock an account natively through
+Termux:API. This uses an authentication-gated Android Keystore signing key;
+the fingerprint prompt is only the user interface, while Android Keystore
+enforces the key use. The encrypted bundle contains no private key or
+reusable signature.
+
+Create an authentication-gated key and enroll the account's master password:
+
+```shell
+rbw termux generate rbw-unlock --algorithm RSA --size 2048 --validity 30
+printf '%s\n' 'master password' |
+  rbw termux enroll --file ~/.config/rbw/termux.bundle \
+    --key-alias rbw-unlock --algorithm SHA256withRSA --stdin
+rbw termux status rbw-unlock
+```
+
+The status output must report `hardware=true`,
+`authentication_required=true`, and
+`hardware_enforced=true`. Configure the bundle for the account in
+`config.json` (or through the declarative Home Manager module):
+
+```json
+{
+  "unlock": {
+    "termux": {
+      "file": "/data/data/com.termux/files/home/.config/rbw/termux.bundle",
+      "key_alias": "rbw-unlock",
+      "algorithm": "SHA256withRSA",
+      "fingerprint": true
+    }
+  }
+}
+```
+
+After that, `rbw unlock`, `rbw login`, `rbw get`, and the TUI use the native
+provider automatically; no shell wrapper is involved. The provider is
+fail-closed: a missing bundle, unavailable Termux API, wrong key, or
+non-authenticated key is an error rather than a fallback to pinentry.
+
 Run `rbw get <name>` to get your passwords. If you also want to get the username
 or the note associated, you can use the flag `--full`. You can also use the flag
 `--field={field}` to get whatever default or custom field you want. The `--raw`
