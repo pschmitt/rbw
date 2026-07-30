@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.14.0] - 2026-07-31
+
+### Added
+
+* Add a blocking TUI screen lock that requires the master password to unlock.
+* Add `rbw export-info` for inspecting counts across rbw and Bitwarden export
+  formats.
+* Add reproducible release archives, checksum verification, and artifact
+  attestations.
+
+### Changed
+
+* Extend `--from-file` workflows to upstream Bitwarden JSON, encrypted JSON,
+  ZIP, and CSV formats.
+* Use `--passphrase` consistently for encrypted `--from-file` inputs while
+  retaining `--from-file-passphrase` as a compatibility alias.
+* Preserve the input export format when writing `--from-file` changes.
+* Improve Termux Keystore enrollment, status, and cleanup workflows.
+
 ## [2.13.12] - 2026-07-31
 
 ### Changed
