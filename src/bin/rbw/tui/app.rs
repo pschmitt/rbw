@@ -1736,7 +1736,7 @@ impl App {
     // selected account. Kept separate from `handle_agent_locked`: that path
     // reacts to an external/automatic agent lock and deliberately permits a
     // dismiss-and-retry flow, while a manual screen lock must stay blocking.
-    fn handle_screen_locked(&mut self, name: String) {
+    fn show_screen_locked(&mut self, name: String) {
         self.detail_cache.clear();
         self.reveal = false;
         self.mode = Mode::ScreenLocked(name);
@@ -1755,7 +1755,7 @@ impl App {
         };
         crate::actions::set_active_account(Some(name.clone()))?;
         commands::lock(false)?;
-        self.handle_screen_locked(name);
+        self.show_screen_locked(name);
         Ok(())
     }
 
@@ -3633,7 +3633,7 @@ mod test {
     fn screen_lock_is_blocking_until_unlock_or_quit() {
         let mut a = app_with_entries(1);
         a.reveal = true;
-        a.handle_screen_locked("default".to_string());
+        a.show_screen_locked("default".to_string());
         assert!(!a.reveal);
         assert!(matches!(
             a.mode,

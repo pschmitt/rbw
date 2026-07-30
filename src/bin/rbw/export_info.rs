@@ -222,7 +222,7 @@ fn summarize_rbw(text: &str) -> Result<Info> {
         info.add_type(
             object.get("type").and_then(|v| v.as_str()).unwrap_or(""),
         );
-        if has_text(object.get("notes")) {
+        if has_text(object.get("notes").and_then(serde_json::Value::as_str)) {
             info.entries_with_notes += 1;
         }
         info.custom_fields += object
