@@ -81,9 +81,11 @@
             modules = [
               self.homeManagerModules.default
               {
-                home.username = "rbw-test";
-                home.homeDirectory = "/build/rbw-test";
-                home.stateVersion = "24.05";
+                home = {
+                  username = "rbw-test";
+                  homeDirectory = "/build/rbw-test";
+                  stateVersion = "24.05";
+                };
                 programs.rbw.declarative = {
                   enable = true;
                   settings = {
@@ -121,7 +123,9 @@
               ];
               hide_archived = true;
               hide_trashed = true;
+              clipboard = "auto";
               tui_keybindings = { };
+              tui_lock_timeout = 0;
             }
             + "\n";
         in

@@ -6,6 +6,7 @@ on:
   workflow_dispatch: {}
 env:
   RUST_BACKTRACE: 1
+  SOURCE_DATE_EPOCH: 0
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
