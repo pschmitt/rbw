@@ -414,6 +414,24 @@
       land correctly on the other side -- and clean up the test collection
       and entries afterward either way.
 
+      **Update (2026-07-30): live-verified for real**, via `bw-backup.git`'s
+      new `bw-sync.service` on `rofl-10` -- not the `ai`/`bw` test accounts
+      above, but an actual production run (`--from personal --to
+      vaultwarden --attachments --overwrite --purge-dest -y`, no
+      `--dest-collection`, whole-vault purge path): purged the destination
+      personal vault, then mirrored 2211 entries (2 collections skipped --
+      "organization not available locally", expected since that org
+      doesn't exist on the destination yet) and 41 attachments in 1m42s
+      wall clock, zero errors, exit 0. Notably faster and cleaner than the
+      old bw-cli/bw.py pipeline it replaced (which took ~6 minutes and
+      logged several "Not found." attachment-upload failures on the same
+      vault the night before). Three unrelated bugs surfaced and were
+      fixed in `bw-backup.git`'s own NixOS module along the way (wrong
+      package path for `rbw` in a generated helper script, `rbw-agent` not
+      reachable via PATH from that same script, and the account's
+      TOTP-based 2FA needing a live-generated code) -- none in `mirror`
+      itself, which worked exactly as designed once those were sorted out.
+
 - [x] `rbw mirror --dry-run`: print the same plan (accounts/emails, scope,
       entry/collection counts, attachments/overwrite/purge-dest flags) and
       stop there -- no confirmation prompt, destination account never
