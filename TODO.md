@@ -619,10 +619,30 @@
         without a live account's real encryption keys.
         Verified: `cargo build --all-targets`/`cargo test` (215 passed,
         up from 213) /`cargo clippy --all-targets` (all clean) on
-        `rofl-13`, `cargo fmt --all` there before syncing back. Full
-        live verification (an actual passkey round-tripping through a
-        real `rbw mirror` run against production accounts) deferred to
-        `bw-auto.git`'s redeploy on rofl-10, where source/destination
-        accounts and their real rbw-agent instances already exist
-        without needing any ad-hoc local account isolation (the kind
-        that caused a prior incident this session).
+        `rofl-13`, `cargo fmt --all` there before syncing back.
+
+        **Live-verified for real** after deploying v2.13.7 to rofl-10:
+        the real source vault has 25 entries with actual passkeys
+        (confirmed via `rbw export` under the `bw-sync` service
+        account's own config/agent -- no ad-hoc isolation this time,
+        just the same real service context the systemd units use).
+        Triggered the real `rbw-auto-sync-personal.service`
+        (`--purge-dest --overwrite`, the daily job) and inspected both
+        sides' exports before/after:
+        - Decrypted correctly from the source: spot-checked one entry's
+          `rp_id`/`rp_name`/`user_name`/`user_display_name`/
+          `creation_date`/`key_type`/`key_algorithm`/`discoverable`, all
+          correct.
+        - 24 of 25 passkey entries appeared on the destination after
+          the sync with fido2_credentials intact (spot-checked one:
+          `rp_id`/`rp_name`/`user_name`/`user_display_name`/
+          `creation_date`/`key_type` all round-tripped correctly through
+          a real decrypt -> re-encrypt -> re-decrypt cycle across two
+          real Bitwarden-protocol servers). The one that didn't transfer
+          belongs to a source-side organization the destination isn't a
+          member of -- excluded by `personal`-mode mirror by design
+          (same "collections skipped: N (organization not available
+          locally)" behavior already logged for non-passkey entries),
+          unrelated to this fix.
+        No lingering `rbw-agent` processes after cleanup; temp export
+        files shredded.
