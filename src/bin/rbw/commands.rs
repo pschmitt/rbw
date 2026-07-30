@@ -2545,6 +2545,7 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
         "sync_interval" => Some(config.sync_interval.to_string()),
         "pinentry" => Some(config.pinentry),
         "pinentry_timeout" => Some(config.pinentry_timeout.to_string()),
+        "tui_lock_timeout" => Some(config.tui_lock_timeout.to_string()),
         "hide_archived" => Some(config.hide_archived.to_string()),
         "hide_trashed" => Some(config.hide_trashed.to_string()),
         "clipboard" => {
@@ -2638,6 +2639,11 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
                 .parse()
                 .context("failed to parse value for pinentry_timeout")?;
         }
+        "tui_lock_timeout" => {
+            config.tui_lock_timeout = value
+                .parse()
+                .context("failed to parse value for tui_lock_timeout")?;
+        }
         "hide_archived" => {
             config.hide_archived = value
                 .parse()
@@ -2682,6 +2688,9 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
         "pinentry" => config.pinentry = rbw::config::default_pinentry(),
         "pinentry_timeout" => {
             config.pinentry_timeout = rbw::config::default_pinentry_timeout();
+        }
+        "tui_lock_timeout" => {
+            config.tui_lock_timeout = rbw::config::default_tui_lock_timeout();
         }
         "hide_archived" => {
             config.hide_archived = rbw::config::default_hide_archived();
@@ -2798,20 +2807,23 @@ pub fn termux_remove(yes: bool) -> anyhow::Result<()> {
     config.migrate_legacy();
     let account_name = crate::actions::current_account()
         .unwrap_or_else(|| config.primary_account_name());
-    let account = config.account(Some(&account_name))?;
-    let configured = account.unlock.termux.clone();
-    let key_alias = configured.as_ref().map_or_else(
-        || rbw::termux::default_key_alias(&account_name),
-        |termux| termux.key_alias.clone(),
-    );
-    let bundle = configured.as_ref().map_or_else(
-        || rbw::termux::default_bundle_path(&account_name),
-        |termux| termux.file.clone(),
-    );
+    let (configured, key_alias, bundle) = {
+        let account = config.account(Some(&account_name))?;
+        let configured = account.unlock.termux.as_ref();
+        let key_alias = configured.map_or_else(
+            || rbw::termux::default_key_alias(&account_name),
+            |termux| termux.key_alias.clone(),
+        );
+        let bundle = configured.map_or_else(
+            || rbw::termux::default_bundle_path(&account_name),
+            |termux| termux.file.clone(),
+        );
+        (configured.is_some(), key_alias, bundle)
+    };
 
     let key_present = rbw::termux::key_present(&key_alias)?;
     let bundle_present = bundle.exists();
-    if configured.is_none() && !key_present && !bundle_present {
+    if !configured && !key_present && !bundle_present {
         println!("No Termux unlock found for account {account_name:?}.");
         return Ok(());
     }
@@ -8561,7 +8573,7 @@ fn resolve_export_passphrase(
     }
 }
 
-pub(crate) fn resolve_import_passphrase(
+pub fn resolve_import_passphrase(
     decrypt: bool,
     decrypt_passphrase: Option<&str>,
 ) -> anyhow::Result<Option<String>> {
@@ -9810,7 +9822,7 @@ fn imported_history_to_encrypted(
         .collect()
 }
 
-pub(crate) fn read_import_input(
+pub fn read_import_input(
     file: Option<&std::path::Path>,
 ) -> anyhow::Result<Vec<u8>> {
     if let Some(path) = file {
@@ -9891,7 +9903,7 @@ fn extract_vault_json(targz: &[u8]) -> anyhow::Result<String> {
 // Figures out whether `raw` is plain JSON (today's `rbw export` output) or a
 // gpg-encrypted tar.gz (`rbw export --encrypt`'s output) and returns the
 // JSON text either way.
-pub(crate) fn load_import_json(
+pub fn load_import_json(
     raw: &[u8],
     decrypt_passphrase: Option<&str>,
 ) -> anyhow::Result<String> {
@@ -9919,7 +9931,6 @@ pub(crate) fn load_import_json(
 // format is. Attachment bytes are kept in a side table keyed by attachment
 // id, since `DecryptedAttachment` itself only carries metadata.
 pub struct FileVault {
-    pub format: crate::import_bitwarden::DetectedFormat,
     pub entries: Vec<DecryptedCipher>,
     pub attachment_data: std::collections::HashMap<String, Vec<u8>>,
     // `org_id`/`collection_ids` per entry, keyed by id: `DecryptedCipher`
@@ -9962,7 +9973,7 @@ pub fn load_from_file(
     let mut passphrase = passphrase.map(std::string::ToString::to_string);
 
     let detected = crate::import_bitwarden::detect_format(&raw)?;
-    let (vault, format) = match detected {
+    let vault = match detected {
         crate::import_bitwarden::DetectedFormat::Rbw => {
             let json_text = if std::str::from_utf8(&raw).is_ok_and(|text| {
                 serde_json::from_str::<serde_json::Value>(text).is_ok()
@@ -9982,13 +9993,13 @@ pub fn load_from_file(
                     "failed to parse import data (expected the JSON shape \
                      produced by `rbw export`)",
                 )?;
-            (vault, detected)
+            vault
         }
         crate::import_bitwarden::DetectedFormat::BitwardenJson => {
             let text = std::str::from_utf8(&raw)
                 .context("Bitwarden JSON export is not valid UTF-8")?;
             let bw = crate::import_bitwarden::parse_bitwarden_json(text)?;
-            (bw_vault_to_imported(bw, None), detected)
+            bw_vault_to_imported(bw, None)
         }
         crate::import_bitwarden::DetectedFormat::BitwardenEncryptedJson => {
             let resolved = match &passphrase {
@@ -10000,20 +10011,19 @@ pub fn load_from_file(
             )?;
             let bw = crate::import_bitwarden::parse_bitwarden_json(&text)?;
             passphrase = Some(resolved);
-            (bw_vault_to_imported(bw, None), detected)
+            bw_vault_to_imported(bw, None)
         }
         crate::import_bitwarden::DetectedFormat::BitwardenZip => {
             let (bw, attachments) = crate::import_bitwarden::parse_zip(&raw)?;
-            (bw_vault_to_imported(bw, Some(attachments)), detected)
+            bw_vault_to_imported(bw, Some(attachments))
         }
     };
 
-    Ok(file_vault_from_imported(vault, format, passphrase))
+    Ok(file_vault_from_imported(&vault, passphrase))
 }
 
 fn file_vault_from_imported(
-    vault: ImportedVault,
-    format: crate::import_bitwarden::DetectedFormat,
+    vault: &ImportedVault,
     passphrase: Option<String>,
 ) -> FileVault {
     let mut attachment_data = std::collections::HashMap::new();
@@ -10114,7 +10124,6 @@ fn file_vault_from_imported(
         .collect();
 
     FileVault {
-        format,
         entries,
         attachment_data,
         entry_extra,
@@ -20255,10 +20264,6 @@ mod test {
         file.flush().unwrap();
 
         let loaded = load_from_file(file.path(), None).unwrap();
-        assert_eq!(
-            loaded.format,
-            crate::import_bitwarden::DetectedFormat::BitwardenJson
-        );
         assert_eq!(loaded.entries.len(), 1);
         assert_eq!(loaded.entries[0].name, "example.com");
         assert_eq!(loaded.entries[0].folder.as_deref(), Some("Work"));
@@ -20292,10 +20297,6 @@ mod test {
 
         let loaded =
             load_from_file(file.path(), Some("test passphrase")).unwrap();
-        assert_eq!(
-            loaded.format,
-            crate::import_bitwarden::DetectedFormat::BitwardenEncryptedJson
-        );
         assert_eq!(loaded.entries[0].name, "private note");
         assert!(matches!(loaded.entries[0].data, DecryptedData::SecureNote));
         assert_eq!(loaded.passphrase.as_deref(), Some("test passphrase"));
@@ -20320,10 +20321,6 @@ mod test {
         file.flush().unwrap();
 
         let loaded = load_from_file(file.path(), None).unwrap();
-        assert_eq!(
-            loaded.format,
-            crate::import_bitwarden::DetectedFormat::BitwardenZip
-        );
         assert_eq!(loaded.entries[0].attachments.len(), 1);
         assert_eq!(
             loaded.entries[0].attachments[0].file_name.as_deref(),

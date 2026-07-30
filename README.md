@@ -123,6 +123,10 @@ Available configuration options:
 * `lock_timeout`: The number of seconds to keep the master keys in memory for
   before requiring the password to be entered again. Defaults to `3600` (one
   hour).
+* `tui_lock_timeout`: The number of seconds of inactivity before the TUI
+  automatically locks and requires the master password again. Defaults to `0`
+  (disabled). Override it for one run with
+  `rbw tui --screen-lock-timeout SECONDS`.
 * `sync_interval`: `rbw` will automatically sync the database from the server
   at an interval of this many seconds, while the agent is running. Setting
   this value to `0` disables this behavior. Defaults to `3600` (one hour).
@@ -173,6 +177,11 @@ Locking is account-aware: with multiple accounts configured, `rbw lock` with
 no account selected locks every account, while `rbw -a <name> lock` (or
 `RBW_ACCOUNT=<name> rbw lock`) locks only that account. `rbw lock --all`
 always locks every configured account, even when an account is selected.
+
+The TUI can also lock manually with `l`, or automatically after an inactivity
+timeout configured by `tui_lock_timeout` or overridden with
+`--screen-lock-timeout`. Press Enter or `y` on the lock screen to re-enter the
+master password; press `q` to quit.
 
 Destructive commands (`rbw remove`, `rbw attachment rm`, `rbw collection
 delete`, and `rbw purge`/`rbw panic`) ask for confirmation before making changes when

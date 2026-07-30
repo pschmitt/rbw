@@ -401,6 +401,13 @@ enum Opt {
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
         )]
         from_file_passphrase: Option<String>,
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            conflicts_with = "from_file",
+            help = "Automatically lock the TUI after this many seconds of inactivity (0 disables it; defaults to config.json)"
+        )]
+        screen_lock_timeout: Option<u64>,
     },
 
     #[command(
@@ -2598,12 +2605,14 @@ fn main() {
             from_file,
             write,
             from_file_passphrase,
+            screen_lock_timeout,
         } => tui::run(
             term.as_deref(),
             all,
             from_file.as_deref(),
             write,
             from_file_passphrase.as_deref(),
+            screen_lock_timeout,
         ),
         Opt::Export {
             format,

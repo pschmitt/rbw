@@ -143,7 +143,7 @@ fn detect_format(raw: &[u8], requested: Format) -> Result<DetectedFormat> {
             {
                 return Ok(DetectedFormat::BitwardenJson);
             }
-        } else if is_csv(text)? {
+        } else if is_csv(text) {
             return Ok(DetectedFormat::BitwardenCsv);
         }
     }
@@ -239,14 +239,14 @@ fn summarize_rbw(text: &str) -> Result<Info> {
             .map_or(0, Vec::len);
         if object
             .get("archived")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
         {
             info.archived += 1;
         }
         if object
             .get("deleted")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
         {
             info.deleted += 1;
@@ -285,7 +285,7 @@ fn summarize_bitwarden(
             5 => "SshKey",
             _ => "",
         });
-        if has_text(item.notes.as_ref().map(|s| s.as_str())) {
+        if has_text(item.notes.as_deref()) {
             info.entries_with_notes += 1;
         }
         info.custom_fields += item.fields.len();
@@ -370,17 +370,17 @@ fn summarize_csv(raw: &[u8]) -> Result<Info> {
     Ok(info)
 }
 
-fn is_csv(text: &str) -> Result<bool> {
+fn is_csv(text: &str) -> bool {
     let mut reader = csv::Reader::from_reader(text.as_bytes());
     let Ok(headers) = reader.headers() else {
-        return Ok(false);
+        return false;
     };
-    Ok(headers
+    headers
         .iter()
         .any(|header| header.eq_ignore_ascii_case("type"))
         && headers
             .iter()
-            .any(|header| header.eq_ignore_ascii_case("name")))
+            .any(|header| header.eq_ignore_ascii_case("name"))
 }
 
 fn has_text(value: Option<&str>) -> bool {
@@ -520,7 +520,7 @@ mod test {
 
     #[test]
     fn csv_reports_supported_counts() {
-        let csv = "folder,favorite,type,name,notes,fields,reprompt,archivedDate,login_uri,login_username,login_password,login_totp\nWork,false,login,login,remember,env: prod,0,,https://example.test,user,password,,\n,false,note,note,,,,0,,,,\n";
+        let csv = "folder,favorite,type,name,notes,fields,reprompt,archivedDate,login_uri,login_username,login_password,login_totp\nWork,false,login,login,remember,env: prod,0,,https://example.test,user,password,\n,false,note,note,,,,0,,,,\n";
         let info = summarize_csv(csv.as_bytes()).unwrap();
         assert_eq!(info.format, "bitwarden-csv");
         assert_eq!(info.entries, 2);

@@ -430,11 +430,10 @@ impl TuiAction {
             Self::AttachmentDelete | Self::DeleteEntry => &["d"],
             Self::ToggleArchived => &["x"],
             Self::CycleArchivedFilter => &["X"],
-            Self::LockScreen => &["l"],
+            Self::LockScreen | Self::AccountSetCredentialSource => &["l"],
             Self::AccountUnlock => &["enter", "u"],
             Self::AccountSync => &["s"],
             Self::AccountSetPrimary => &["p"],
-            Self::AccountSetCredentialSource => &["l"],
             Self::AccountClearCredentialSource => &["L"],
         }
     }

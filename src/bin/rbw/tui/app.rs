@@ -411,6 +411,9 @@ pub struct App {
     // over the built-in defaults (see `keymap::Keymap::resolve`). `super::ui`
     // reads it to render live keybinding hints instead of hardcoded text.
     pub keymap: Keymap,
+    // Inactivity duration for the automatic screen lock. `None` disables it.
+    screen_lock_timeout: Option<std::time::Duration>,
+    last_activity: std::time::Instant,
     // Throttle for `poll_agent_lock`: the IPC round trip to the agent is
     // cheap, but there's no need to make it on every ~500ms UI tick, so we
     // only actually check once `LOCK_CHECK_INTERVAL` has elapsed.
@@ -439,7 +442,11 @@ const LOCK_CHECK_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(3);
 
 impl App {
-    pub fn new(open: commands::TuiOpen, initial_term: Option<&str>) -> Self {
+    pub fn new(
+        open: commands::TuiOpen,
+        initial_term: Option<&str>,
+        screen_lock_timeout: Option<u64>,
+    ) -> Self {
         let config = rbw::config::Config::load().ok();
         let keymap = config.as_ref().map_or_else(
             || Keymap::resolve(&std::collections::HashMap::new()),
@@ -460,12 +467,21 @@ impl App {
                 TrashFilter::Include
             }
         });
+        let screen_lock_timeout = screen_lock_timeout
+            .or_else(|| {
+                rbw::config::Config::load()
+                    .ok()
+                    .map(|config| config.tui_lock_timeout)
+            })
+            .filter(|seconds| *seconds > 0)
+            .map(std::time::Duration::from_secs);
         Self::with_keymap(
             open,
             initial_term,
             keymap,
             archived_filter,
             trash_filter,
+            screen_lock_timeout,
         )
     }
 
@@ -478,6 +494,7 @@ impl App {
         keymap: Keymap,
         archived_filter: ArchivedFilter,
         trash_filter: TrashFilter,
+        screen_lock_timeout: Option<std::time::Duration>,
     ) -> Self {
         let vaults = open
             .vaults
@@ -500,6 +517,7 @@ impl App {
             false,
             archived_filter,
             trash_filter,
+            screen_lock_timeout,
         )
     }
 
@@ -555,6 +573,7 @@ impl App {
             read_only,
             archived_filter,
             trash_filter,
+            None,
         )
     }
 
@@ -568,6 +587,7 @@ impl App {
         read_only: bool,
         archived_filter: ArchivedFilter,
         trash_filter: TrashFilter,
+        screen_lock_timeout: Option<std::time::Duration>,
     ) -> Self {
         let mut app = Self {
             vaults,
@@ -589,6 +609,8 @@ impl App {
             detail_max_scroll: std::cell::Cell::new(0),
             detail_focused: false,
             keymap,
+            screen_lock_timeout,
+            last_activity: std::time::Instant::now(),
             // The account(s) handed to us were just unlocked by `tui_open`
             // moments ago, so there's no point re-checking immediately.
             last_lock_check: std::time::Instant::now(),
@@ -1756,7 +1778,26 @@ impl App {
         crate::actions::set_active_account(Some(name.clone()))?;
         commands::lock(false)?;
         self.show_screen_locked(name);
+        self.last_activity = std::time::Instant::now();
         Ok(())
+    }
+
+    pub fn note_activity(&mut self) {
+        self.last_activity = std::time::Instant::now();
+    }
+
+    pub fn screen_lock_due(&mut self) -> bool {
+        let Some(timeout) = self.screen_lock_timeout else {
+            return false;
+        };
+        if self.read_only
+            || matches!(self.mode, Mode::ScreenLocked(_))
+            || self.last_activity.elapsed() < timeout
+        {
+            return false;
+        }
+        self.last_activity = std::time::Instant::now();
+        true
     }
 
     // A sync error's message is the only thing that survives the round
@@ -1808,7 +1849,7 @@ impl App {
     // The manually requested screen lock is a true gate: only the explicit
     // unlock keys or quitting are accepted. In particular, an accidental
     // keypress must not expose the vault again without authentication.
-    fn handle_screen_locked(&mut self, key: KeyEvent) -> Action {
+    fn handle_screen_locked(&self, key: KeyEvent) -> Action {
         let Mode::ScreenLocked(name) = &self.mode else {
             return Action::None;
         };
@@ -3159,6 +3200,7 @@ mod test {
             Keymap::resolve(&std::collections::HashMap::new()),
             ArchivedFilter::Hide,
             TrashFilter::Hide,
+            None,
         )
     }
 
@@ -3181,6 +3223,7 @@ mod test {
             Keymap::resolve(&overrides),
             ArchivedFilter::Hide,
             TrashFilter::Hide,
+            None,
         )
     }
 
@@ -3238,6 +3281,7 @@ mod test {
             Keymap::resolve(&std::collections::HashMap::new()),
             ArchivedFilter::Hide,
             TrashFilter::Hide,
+            None,
         );
         a.mode = Mode::Normal;
         a

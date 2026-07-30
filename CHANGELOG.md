@@ -18,6 +18,8 @@
   retaining `--from-file-passphrase` as a compatibility alias.
 * Preserve the input export format when writing `--from-file` changes.
 * Improve Termux Keystore enrollment, status, and cleanup workflows.
+* Add configurable TUI inactivity locking via `tui_lock_timeout` and
+  `--screen-lock-timeout`.
 
 ## [2.13.12] - 2026-07-31
 

@@ -1758,6 +1758,7 @@ mod test {
                 multi: false,
             },
             None,
+            None,
         );
         draw(&app); // opens focused on the live search bar
 
@@ -2109,6 +2110,7 @@ mod test {
             keymap,
             crate::commands::ArchivedFilter::Hide,
             crate::commands::TrashFilter::Hide,
+            None,
         )
     }
 

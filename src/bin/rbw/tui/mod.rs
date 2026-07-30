@@ -51,6 +51,7 @@ pub fn run(
     from_file: Option<&std::path::Path>,
     write: bool,
     from_file_passphrase: Option<&str>,
+    screen_lock_timeout: Option<u64>,
 ) -> anyhow::Result<()> {
     if let Some(path) = from_file {
         let vault = crate::commands::tui_vault_from_file(
@@ -74,7 +75,7 @@ pub fn run(
     let open = crate::commands::tui_open_with_progress(all, true, |msg| {
         let _ = draw_loading(&mut terminal, msg);
     })?;
-    let mut app = App::new(open, initial_term);
+    let mut app = App::new(open, initial_term, screen_lock_timeout);
     let res = run_loop(&mut terminal, &mut app);
     disable_mouse();
     ratatui::restore();
@@ -123,6 +124,11 @@ fn run_loop(
         // Piggyback agent-lock detection on this same ~2Hz tick (throttled
         // internally to every few seconds) rather than adding a second timer.
         app.poll_agent_lock();
+        if app.screen_lock_due() {
+            if let Err(e) = app.lock_screen() {
+                app.set_error(format!("{e:#}"));
+            }
+        }
         terminal.draw(|f| ui::render(f, app))?;
 
         if !event::poll(TICK)? {
@@ -136,6 +142,7 @@ fn run_loop(
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
+                app.note_activity();
                 match app.handle_key(key) {
                     Action::None => {}
                     Action::Quit => return Ok(()),
@@ -160,6 +167,7 @@ fn run_loop(
                 }
             }
             Event::Mouse(mouse) => {
+                app.note_activity();
                 let size = terminal.size()?;
                 let full =
                     ratatui::layout::Rect::new(0, 0, size.width, size.height);

@@ -353,6 +353,15 @@ let
           every subsequent unlock attempt behind it.
         '';
       };
+      tui_lock_timeout = mkOption {
+        type = types.ints.unsigned;
+        default = 0;
+        description = ''
+          Seconds of inactivity before the TUI automatically locks and
+          requires the master password again. Zero disables the timeout;
+          `rbw tui --screen-lock-timeout` can override it per invocation.
+        '';
+      };
       hide_archived = mkOption {
         type = types.bool;
         default = true;

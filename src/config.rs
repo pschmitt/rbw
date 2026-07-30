@@ -266,6 +266,10 @@ pub struct Config {
     // pinentry can hold the terminal at a time.
     #[serde(default = "default_pinentry_timeout")]
     pub pinentry_timeout: u64,
+    // Seconds of TUI inactivity before the interactive screen locks. Zero
+    // disables the inactivity lock; the `rbw tui` flag can override this.
+    #[serde(default = "default_tui_lock_timeout")]
+    pub tui_lock_timeout: u64,
     // Whether archived entries are hidden from `rbw list`/`rbw search` (and
     // the TUI) by default. Overridable per-invocation with `--archived`
     // (show only archived) / `--include-archived` (disable hiding).
@@ -317,6 +321,7 @@ impl Default for Config {
             sync_interval: default_sync_interval(),
             pinentry: default_pinentry(),
             pinentry_timeout: default_pinentry_timeout(),
+            tui_lock_timeout: default_tui_lock_timeout(),
             hide_archived: default_hide_archived(),
             hide_trashed: default_hide_trashed(),
             tui_keybindings: std::collections::HashMap::new(),
@@ -341,6 +346,10 @@ pub fn default_pinentry() -> String {
 
 pub fn default_pinentry_timeout() -> u64 {
     300
+}
+
+pub fn default_tui_lock_timeout() -> u64 {
+    0
 }
 
 pub fn default_hide_archived() -> bool {
