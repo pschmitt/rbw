@@ -236,15 +236,6 @@ let
                           configured RSA or EC key.
                         '';
                       };
-                      fingerprint = mkOption {
-                        type = types.bool;
-                        default = true;
-                        description = ''
-                          Invoke `termux-fingerprint` before using the key.
-                          The Keystore key must still enforce authentication;
-                          this prompt alone is not a security boundary.
-                        '';
-                      };
                     };
                   }
                 );

@@ -2706,7 +2706,7 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn termux_enroll() -> anyhow::Result<()> {
+pub fn termux_enroll(validity: u32) -> anyhow::Result<()> {
     use zeroize::Zeroize as _;
 
     let mut config = rbw::config::Config::load()?;
@@ -2751,7 +2751,7 @@ pub fn termux_enroll() -> anyhow::Result<()> {
     let key_alias = rbw::termux::default_key_alias(&account_name);
     let algorithm = "SHA256withRSA";
     let result = (|| {
-        rbw::termux::generate(&key_alias, "RSA", Some(2048), 30)?;
+        rbw::termux::generate(&key_alias, "RSA", Some(2048), validity)?;
         if let Err(error) = rbw::termux::enroll(
             &bundle,
             &key_alias,
@@ -2773,7 +2773,6 @@ pub fn termux_enroll() -> anyhow::Result<()> {
             file: bundle.clone(),
             key_alias: key_alias.clone(),
             algorithm: algorithm.to_string(),
-            fingerprint: true,
         });
         if let Err(error) = config.save() {
             let _ = std::fs::remove_file(&bundle);
@@ -2785,7 +2784,7 @@ pub fn termux_enroll() -> anyhow::Result<()> {
             "Termux unlock enrolled for account {account_name:?}.\n\
              Key: {key_alias}\n\
              Bundle: {}\n\
-             Future unlocks will use fingerprint authentication.",
+             Future unlocks will ask Android Keystore for authentication.",
             bundle.display()
         );
         Ok(())

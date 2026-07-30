@@ -125,36 +125,12 @@ fn run_keystore(
     }
 }
 
-fn fingerprint() -> anyhow::Result<()> {
-    let output = command_output("termux-fingerprint", &[], None)?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "termux-fingerprint failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    let response: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .context("termux-fingerprint returned invalid JSON")?;
-    let result = response
-        .get("auth_result")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    if !result.to_ascii_lowercase().contains("success") {
-        anyhow::bail!("fingerprint authentication was not successful");
-    }
-    Ok(())
-}
-
 fn sign(
     key_alias: &str,
     algorithm: &str,
     challenge: &[u8],
-    ask_fingerprint: bool,
 ) -> anyhow::Result<Vec<u8>> {
     ensure_key_is_authenticated(key_alias)?;
-    if ask_fingerprint {
-        fingerprint()?;
-    }
     run_keystore(&["sign", key_alias, algorithm], Some(challenge))
 }
 
@@ -247,12 +223,8 @@ pub fn unlock(
     if challenge.len() != CHALLENGE_LEN {
         anyhow::bail!("invalid Termux unlock bundle challenge");
     }
-    let mut signature = sign(
-        &config.key_alias,
-        &config.algorithm,
-        &challenge,
-        config.fingerprint,
-    )?;
+    let mut signature =
+        sign(&config.key_alias, &config.algorithm, &challenge)?;
     let result = decrypt_bundle(&bundle, &signature);
     signature.zeroize();
     result
@@ -296,7 +268,7 @@ fn enroll_inner(
         .with_context(|| format!("failed to protect {}", parent.display()))?;
     }
 
-    let mut signature = sign(key_alias, algorithm, &challenge, true)?;
+    let mut signature = sign(key_alias, algorithm, &challenge)?;
     let mut key = derive_key(&signature, &salt)?;
     let result = Aes256Gcm::new_from_slice(&key)
         .expect("AES-256-GCM keys are always 32 bytes")

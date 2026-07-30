@@ -1619,7 +1619,7 @@ enum TermuxCmd {
         size: Option<u32>,
         #[arg(
             long,
-            default_value_t = 30,
+            default_value_t = 300,
             help = "Seconds after device authentication during which signing is allowed"
         )]
         validity: u32,
@@ -1631,7 +1631,14 @@ enum TermuxCmd {
             authentication-gated key, creates the encrypted bundle, and \
             updates rbw's config.json automatically."
     )]
-    Enroll,
+    Enroll {
+        #[arg(
+            long,
+            default_value_t = 300,
+            help = "Seconds after device authentication during which signing is allowed"
+        )]
+        validity: u32,
+    },
     #[command(about = "Show Android Keystore security properties")]
     Status {
         #[arg(help = "Only show this Android Keystore alias")]
@@ -2477,7 +2484,9 @@ fn main() {
             } => {
                 rbw::termux::generate(&key_alias, &algorithm, size, validity)
             }
-            TermuxCmd::Enroll => commands::termux_enroll(),
+            TermuxCmd::Enroll { validity } => {
+                commands::termux_enroll(validity)
+            }
             TermuxCmd::Status { key_alias } => {
                 rbw::termux::status(key_alias.as_deref())
             }

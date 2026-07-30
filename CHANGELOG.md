@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.13.11] - 2026-07-31
+
+### Added
+
+* Native Termux Android Keystore unlock enrollment for Android builds.
+* Configurable Keystore authentication validity during enrollment.
+
+### Fixed
+
+* Keystore unlock no longer performs a redundant separate fingerprint prompt.
+
 ## [1.15.0] - 2025-12-31
 
 ## Added

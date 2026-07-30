@@ -64,16 +64,10 @@ pub struct TermuxKeystoreUnlock {
     pub key_alias: String,
     #[serde(default = "default_termux_algorithm")]
     pub algorithm: String,
-    #[serde(default = "default_termux_fingerprint")]
-    pub fingerprint: bool,
 }
 
 fn default_termux_algorithm() -> String {
     "SHA256withRSA".to_string()
-}
-
-fn default_termux_fingerprint() -> bool {
-    true
 }
 
 // Which commands should skip this account when merging entries across every

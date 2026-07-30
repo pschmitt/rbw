@@ -182,21 +182,24 @@ functionality.
 
 On Android, the pschmitt fork can unlock an account natively through
 Termux:API. This uses an authentication-gated Android Keystore signing key;
-the fingerprint prompt is only the user interface, while Android Keystore
-enforces the key use. The encrypted bundle contains no private key or
-reusable signature.
+the Keystore signing operation itself is the security boundary. The encrypted
+bundle contains no private key or reusable signature.
 
 Enroll the active account in one step:
 
 ```shell
 rbw termux enroll
+# Or choose a ten-minute authorization window during enrollment:
+# rbw termux enroll --validity 600
 ```
 
 rbw asks for the master password using the configured pinentry, generates an
-authentication-gated RSA key, prompts for fingerprint authentication, writes
-the encrypted bundle below rbw's config directory, and updates the active
-account in `config.json`. The generated key and bundle are named after the
-account, so multiple accounts can be enrolled independently. Use
+authentication-gated RSA key, asks Android Keystore for authentication when
+it first signs, writes the encrypted bundle below rbw's config directory, and
+updates the active account in `config.json`. The default authorization window
+is five minutes; adjust it with `--validity SECONDS`. The generated key and
+bundle are named after the account, so multiple accounts can be enrolled
+independently. Use
 `rbw termux status` to inspect the Android Keystore properties; each enrolled
 key must report `hardware=true`, `authentication_required=true`, and
 `hardware_enforced=true`.
@@ -209,8 +212,7 @@ For declarative Home Manager setups, the equivalent account option is:
     "termux": {
       "file": "/data/data/com.termux/files/home/.config/rbw/termux/personal.bundle",
       "key_alias": "rbw-personal",
-      "algorithm": "SHA256withRSA",
-      "fingerprint": true
+      "algorithm": "SHA256withRSA"
     }
   }
 }
