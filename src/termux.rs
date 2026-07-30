@@ -20,9 +20,38 @@ const AAD: &[u8] = b"rbw/termux-keystore/v1";
 const CHALLENGE_LEN: usize = 32;
 const SALT_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
+pub const KEY_ALIAS_ENV: &str = "RBW_TERMUX_KEY_ALIAS";
 
 pub fn default_key_alias(account_name: &str) -> String {
     format!("rbw-{}", safe_component(account_name))
+}
+
+/// Resolve the Android Keystore alias used by Termux operations.
+///
+/// The environment variable is intentionally highest precedence so a
+/// temporary override does not require rewriting config.json. The global
+/// config value is next; an already configured account alias remains the
+/// fallback for that account, followed by the generated alias.
+pub fn resolve_key_alias(
+    config: &crate::config::Config,
+    account_name: &str,
+    account_alias: Option<&str>,
+) -> String {
+    std::env::var(KEY_ALIAS_ENV)
+        .ok()
+        .filter(|alias| !alias.is_empty())
+        .or_else(|| {
+            config
+                .termux_key_alias
+                .clone()
+                .filter(|alias| !alias.is_empty())
+        })
+        .or_else(|| {
+            account_alias
+                .filter(|alias| !alias.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| default_key_alias(account_name))
 }
 
 pub fn default_bundle_path(account_name: &str) -> std::path::PathBuf {

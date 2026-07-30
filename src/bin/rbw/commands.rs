@@ -2544,6 +2544,7 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
         "lock_timeout" => Some(config.lock_timeout.to_string()),
         "sync_interval" => Some(config.sync_interval.to_string()),
         "pinentry" => Some(config.pinentry),
+        "termux_key_alias" => config.termux_key_alias,
         "pinentry_timeout" => Some(config.pinentry_timeout.to_string()),
         "tui_lock_timeout" => Some(config.tui_lock_timeout.to_string()),
         "hide_archived" => Some(config.hide_archived.to_string()),
@@ -2634,6 +2635,9 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
             config.sync_interval = interval;
         }
         "pinentry" => config.pinentry = value.to_string(),
+        "termux_key_alias" => {
+            config.termux_key_alias = Some(value.to_string());
+        }
         "pinentry_timeout" => {
             config.pinentry_timeout = value
                 .parse()
@@ -2686,6 +2690,7 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
             config.lock_timeout = rbw::config::default_lock_timeout();
         }
         "pinentry" => config.pinentry = rbw::config::default_pinentry(),
+        "termux_key_alias" => config.termux_key_alias = None,
         "pinentry_timeout" => {
             config.pinentry_timeout = rbw::config::default_pinentry_timeout();
         }
@@ -2757,17 +2762,23 @@ pub fn termux_enroll(validity: u32) -> anyhow::Result<()> {
         .password()
         .to_vec();
 
-    let key_alias = rbw::termux::default_key_alias(&account_name);
+    let key_alias =
+        rbw::termux::resolve_key_alias(&config, &account_name, None);
     let algorithm = "SHA256withRSA";
     let result = (|| {
-        rbw::termux::generate(&key_alias, "RSA", Some(2048), validity)?;
+        let generated_key = !rbw::termux::key_present(&key_alias)?;
+        if generated_key {
+            rbw::termux::generate(&key_alias, "RSA", Some(2048), validity)?;
+        }
         if let Err(error) = rbw::termux::enroll(
             &bundle,
             &key_alias,
             algorithm,
             std::mem::take(&mut password),
         ) {
-            let _ = rbw::termux::delete(&key_alias);
+            if generated_key {
+                let _ = rbw::termux::delete(&key_alias);
+            }
             return Err(error);
         }
 
@@ -2785,15 +2796,18 @@ pub fn termux_enroll(validity: u32) -> anyhow::Result<()> {
         });
         if let Err(error) = config.save() {
             let _ = std::fs::remove_file(&bundle);
-            let _ = rbw::termux::delete(&key_alias);
+            if generated_key {
+                let _ = rbw::termux::delete(&key_alias);
+            }
             return Err(anyhow::Error::new(error));
         }
         let _ = stop_agent();
         println!(
             "Termux unlock enrolled for account {account_name:?}.\n\
-             Key: {key_alias}\n\
+             Key: {key_alias} ({})\n\
              Bundle: {}\n\
              Future unlocks will ask Android Keystore for authentication.",
+            if generated_key { "generated" } else { "reused" },
             bundle.display()
         );
         Ok(())
@@ -2810,9 +2824,10 @@ pub fn termux_remove(yes: bool) -> anyhow::Result<()> {
     let (configured, key_alias, bundle) = {
         let account = config.account(Some(&account_name))?;
         let configured = account.unlock.termux.as_ref();
-        let key_alias = configured.map_or_else(
-            || rbw::termux::default_key_alias(&account_name),
-            |termux| termux.key_alias.clone(),
+        let key_alias = rbw::termux::resolve_key_alias(
+            &config,
+            &account_name,
+            configured.map(|termux| termux.key_alias.as_str()),
         );
         let bundle = configured.map_or_else(
             || rbw::termux::default_bundle_path(&account_name),
@@ -3140,6 +3155,13 @@ fn resolve_unlock_credentials(
 ) -> anyhow::Result<(Option<String>, Option<String>)> {
     let account = active_account()?;
     if let Some(termux) = account.unlock.termux {
+        let config = rbw::config::Config::load()?;
+        let mut termux = termux;
+        termux.key_alias = rbw::termux::resolve_key_alias(
+            &config,
+            &account.name,
+            Some(&termux.key_alias),
+        );
         return Ok((Some(rbw::termux::unlock(&termux)?), None));
     }
     Ok(resolve_credential_source(visited)

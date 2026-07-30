@@ -257,6 +257,10 @@ pub struct Config {
     pub sync_interval: u64,
     #[serde(default = "default_pinentry")]
     pub pinentry: String,
+    // Default Android Keystore alias for native Termux unlocks. An explicit
+    // RBW_TERMUX_KEY_ALIAS environment variable takes precedence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub termux_key_alias: Option<String>,
     // Seconds pinentry waits at the terminal for input before giving up and
     // exiting on its own; passed straight through to pinentry's own
     // `--timeout` flag, so `0` means never (the old, unconditional
@@ -320,6 +324,7 @@ impl Default for Config {
             lock_timeout: default_lock_timeout(),
             sync_interval: default_sync_interval(),
             pinentry: default_pinentry(),
+            termux_key_alias: None,
             pinentry_timeout: default_pinentry_timeout(),
             tui_lock_timeout: default_tui_lock_timeout(),
             hide_archived: default_hide_archived(),

@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.14.1] - 2026-07-31
+
+### Changed
+
+* Add configurable Android Keystore alias selection via `termux_key_alias`
+  and `RBW_TERMUX_KEY_ALIAS`, including reuse of an existing key.
+* Publish this changelog section directly as the GitHub release description.
+
+### Fixed
+
+* Make CI and release builds robust when `SOURCE_DATE_EPOCH` is unset.
+* Keep the Home Manager configuration smoke test synchronized with current
+  default settings.
+
 ## [2.14.0] - 2026-07-31
 
 ### Added

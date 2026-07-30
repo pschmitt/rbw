@@ -133,6 +133,9 @@ Available configuration options:
 * `pinentry`: The
   [pinentry](https://www.gnupg.org/related_software/pinentry/index.html)
   executable to use. Defaults to `pinentry`.
+* `termux_key_alias`: Default Android Keystore alias for native Termux
+  unlocks. `RBW_TERMUX_KEY_ALIAS` overrides it at runtime; when neither is
+  set, enrollment generates `rbw-<account>`.
 * `password_gen`: The default password-generation policy used by `rbw gen`
   and `rbw create --generate` whenever the equivalent flag isn't passed
   explicitly (`length`, `no_symbols`, `only_numbers`, `nonconfusables`,
@@ -231,9 +234,12 @@ rbw asks for the master password using the configured pinentry, generates an
 authentication-gated RSA key, asks Android Keystore for authentication when
 it first signs, writes the encrypted bundle below rbw's config directory, and
 updates the active account in `config.json`. The default authorization window
-is five minutes; adjust it with `--validity SECONDS`. The generated key and
-bundle are named after the account, so multiple accounts can be enrolled
-independently. Use `rbw termux status` to inspect a readable report of the
+is five minutes; adjust it with `--validity SECONDS`. By default the generated
+key and bundle are named after the account, so multiple accounts can be
+enrolled independently. To use an existing alias, set `termux_key_alias` in
+config.json or export `RBW_TERMUX_KEY_ALIAS`; the environment variable wins,
+and enrollment reuses the selected key instead of generating another one. Use
+`rbw termux status` to inspect a readable report of the
 Android Keystore properties; each enrolled key must report hardware backing,
 authentication, and hardware enforcement as `yes`.
 

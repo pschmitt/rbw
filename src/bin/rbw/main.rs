@@ -1676,8 +1676,10 @@ enum TermuxCmd {
         about = "Generate an authentication-gated Android Keystore key"
     )]
     Generate {
-        #[arg(help = "Android Keystore alias")]
-        key_alias: String,
+        #[arg(
+            help = "Android Keystore alias (defaults to RBW_TERMUX_KEY_ALIAS, config, or rbw-<account>)"
+        )]
+        key_alias: Option<String>,
         #[arg(
             long,
             default_value = "RSA",
@@ -2562,9 +2564,19 @@ fn main() {
                 algorithm,
                 size,
                 validity,
-            } => {
+            } => (|| -> anyhow::Result<()> {
+                let config = rbw::config::Config::load()?;
+                let account_name = crate::actions::current_account()
+                    .unwrap_or_else(|| config.primary_account_name());
+                let key_alias = key_alias.unwrap_or_else(|| {
+                    rbw::termux::resolve_key_alias(
+                        &config,
+                        &account_name,
+                        None,
+                    )
+                });
                 rbw::termux::generate(&key_alias, &algorithm, size, validity)
-            }
+            })(),
             TermuxCmd::Enroll { validity } => {
                 commands::termux_enroll(validity)
             }

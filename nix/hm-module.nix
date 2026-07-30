@@ -342,6 +342,12 @@ let
         default = "pinentry";
         description = "The pinentry executable to use.";
       };
+      termux_key_alias = mkNullOrStr ''
+        Default Android Keystore alias for `rbw termux enroll` and other
+        native Termux unlock operations. `RBW_TERMUX_KEY_ALIAS` overrides
+        this value at runtime; when unset, rbw uses the configured account
+        alias or generates `rbw-<account>`.
+      '';
       pinentry_timeout = mkOption {
         type = types.ints.unsigned;
         default = 300;
