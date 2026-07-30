@@ -175,7 +175,7 @@ no account selected locks every account, while `rbw -a <name> lock` (or
 always locks every configured account, even when an account is selected.
 
 Destructive commands (`rbw remove`, `rbw attachment rm`, `rbw collection
-delete`, and `rbw purge`) ask for confirmation before making changes when
+delete`, and `rbw purge`/`rbw panic`) ask for confirmation before making changes when
 stdin is a terminal; pass `-y`/`--yes` to skip the prompt. When stdin is not a
 tty (scripts and pipelines), no prompt is shown and the historical no-prompt
 behavior is kept.
@@ -186,6 +186,11 @@ skip) *and* re-prompt for the master password to prove intent, the same way
 `rbw login`/`rbw unlock` do. Pass `--stdin` to supply that password
 non-interactively instead of via pinentry; `--yes --stdin` together makes
 either command fully scriptable.
+
+`rbw purge` also removes the active account's configured Termux Keystore key
+and encrypted unlock bundle. Use `rbw termux remove` when you want to remove
+only that native unlock. Both destructive paths are irreversible for the key
+and bundle.
 
 `rbw remove` moves an entry to the trash rather than deleting it outright;
 pass `--force` for an actual permanent delete (this also catches an
@@ -219,10 +224,16 @@ it first signs, writes the encrypted bundle below rbw's config directory, and
 updates the active account in `config.json`. The default authorization window
 is five minutes; adjust it with `--validity SECONDS`. The generated key and
 bundle are named after the account, so multiple accounts can be enrolled
-independently. Use
-`rbw termux status` to inspect the Android Keystore properties; each enrolled
-key must report `hardware=true`, `authentication_required=true`, and
-`hardware_enforced=true`.
+independently. Use `rbw termux status` to inspect a readable report of the
+Android Keystore properties; each enrolled key must report hardware backing,
+authentication, and hardware enforcement as `yes`.
+
+To permanently remove the active account's native unlock key and bundle:
+
+```shell
+rbw termux remove       # asks for confirmation
+rbw termux remove --yes # non-interactive form
+```
 
 For declarative Home Manager setups, the equivalent account option is:
 
@@ -509,6 +520,19 @@ is created with mode 0600, since it contains the fully decrypted vault):
 rbw export --output backup.json
 ```
 
+To inspect an export without unlocking an account or exposing its contents,
+use `rbw export-info`. It reports entry types, entries containing notes,
+passkeys, collections, folders, attachments, custom fields, password history,
+and other counts available in the selected format. JSON output is available for
+scripts, and the format is auto-detected across rbw JSON/gpg, Bitwarden JSON,
+Encrypted JSON, zip, and CSV exports:
+
+```sh
+rbw export-info backup.json
+rbw export-info --json backup.json
+rbw export-info --decrypt backup-encrypted.json
+```
+
 `rbw import` reads that JSON back and recreates the entries and collections
 in the target account's vault (use the global `--account`/`-a` flag to pick
 a different account than the primary one):
@@ -599,18 +623,20 @@ RBW_EXPORT_PASSPHRASE='correct horse battery staple' rbw export --encrypt --outp
 RBW_EXPORT_PASSPHRASE='correct horse battery staple' rbw import --decrypt backup.tar.gz.gpg
 ```
 
-The passphrase can also be passed inline (`rbw export --encrypt PASSPHRASE`
-and `rbw import --decrypt-passphrase PASSPHRASE`), but that exposes it to
+The passphrase can also be passed inline (`rbw export --encrypt PASSPHRASE`,
+`rbw import --decrypt-passphrase PASSPHRASE`, or `--passphrase PASSPHRASE`
+for commands reading `--from-file`), but that exposes it to
 `ps` output and shell history, so prefer the prompt or the environment
 variable.
 
 #### Working with an export file directly
 
-This fork can use an `rbw export` file as a temporary, already-decrypted
-vault. The commands do not contact Bitwarden, use the configured account, or
-start the agent. Plain JSON and gpg-encrypted exports are both accepted. For
-encrypted input, prefer `RBW_EXPORT_PASSPHRASE`; `--from-file-passphrase` is
-available for automation where an inline argument is acceptable:
+This fork can use an export file as a temporary, already-decrypted vault. The
+commands do not contact Bitwarden, use the configured account, or start the
+agent. rbw JSON/gpg exports and upstream Bitwarden JSON, Encrypted JSON, and
+zip-with-attachments exports are all accepted. For encrypted input, prefer
+`RBW_EXPORT_PASSPHRASE`; `--passphrase` is available for automation where an
+inline argument is acceptable:
 
 ```sh
 export RBW_EXPORT_PASSPHRASE='correct horse battery staple'
@@ -628,7 +654,8 @@ The same option is available for `add`, `edit`, `set`, `remove`/`delete`,
 `create`, and `rm`). Write operations update the export in place and leave a
 `FILE.bak` copy of the original. Use `--attachments` when creating the
 original export if attachment contents need to be available to
-`attachment get`, `attachment create`, or the TUI.
+`attachment get`, `attachment create`, or the TUI. Write operations preserve
+the input format, including upstream Bitwarden formats.
 
 The TUI can browse an export without touching the live vault, or edit it with
 `--write`:
@@ -650,12 +677,12 @@ rbw export --from-file backup.tar.gz.gpg \
 rbw export --from-file backup.tar.gz.gpg \
   --format bitwarden-zip --output vault.zip
 rbw export --from-file backup.tar.gz.gpg \
-  --from-file-passphrase 'old password' \
+  --passphrase 'old password' \
   --format bitwarden-encrypted-json --encrypt 'new password' \
   --output vault.json
 ```
 
-The `--from-file-passphrase` value is only for decrypting the input file;
+The `--passphrase` value is only for decrypting the input file;
 `--encrypt` (or `RBW_EXPORT_PASSPHRASE` when the target format requires it)
 controls encryption of the output. Inline passphrases can be visible in
 process listings and shell history, so environment variables or a terminal

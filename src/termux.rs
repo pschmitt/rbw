@@ -10,6 +10,7 @@ use hkdf::Hkdf;
 use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use std::io::IsTerminal as _;
 use std::io::Write as _;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use zeroize::Zeroize as _;
@@ -309,6 +310,18 @@ pub fn delete(key_alias: &str) -> anyhow::Result<()> {
     run_keystore(&["delete", key_alias], None).map(|_| ())
 }
 
+pub fn key_present(key_alias: &str) -> anyhow::Result<bool> {
+    Ok(key_infos()?.iter().any(|key| key.alias == key_alias))
+}
+
+pub fn delete_if_present(key_alias: &str) -> anyhow::Result<bool> {
+    let present = key_present(key_alias)?;
+    if present {
+        delete(key_alias)?;
+    }
+    Ok(present)
+}
+
 pub fn generate(
     key_alias: &str,
     algorithm: &str,
@@ -329,19 +342,67 @@ pub fn generate(
 
 pub fn status(key_alias: Option<&str>) -> anyhow::Result<()> {
     let keys = key_infos()?;
+    let color = std::io::stdout().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none();
+    let mut found = false;
     for key in keys {
         if key_alias.is_none() || key_alias == Some(key.alias.as_str()) {
+            if !found {
+                println!("{}", paint("Android Keystore keys", "1;36", color));
+                found = true;
+            }
+            println!("  {}", paint(&key.alias, "1;37", color));
             println!(
-                "{}: hardware={}, authentication_required={}, hardware_enforced={}, validity={}s",
-                key.alias,
-                key.inside_secure_hardware,
-                key.user_authentication.required,
-                key.user_authentication.enforced_by_secure_hardware,
-                key.user_authentication.validity_duration_seconds,
+                "    hardware-backed:       {}",
+                bool_status(key.inside_secure_hardware, color)
+            );
+            println!(
+                "    authentication required: {}",
+                bool_status(key.user_authentication.required, color)
+            );
+            println!(
+                "    hardware-enforced:       {}",
+                bool_status(
+                    key.user_authentication.enforced_by_secure_hardware,
+                    color,
+                )
+            );
+            println!(
+                "    authorization window:   {}",
+                paint(
+                    &format!(
+                        "{}s",
+                        key.user_authentication.validity_duration_seconds
+                    ),
+                    "33",
+                    color,
+                )
             );
         }
     }
+    if !found {
+        anyhow::bail!(
+            "Termux Keystore key {:?} was not found",
+            key_alias.unwrap_or("<none>")
+        );
+    }
     Ok(())
+}
+
+fn bool_status(value: bool, color: bool) -> String {
+    paint(
+        if value { "yes" } else { "no" },
+        if value { "1;32" } else { "1;31" },
+        color,
+    )
+}
+
+fn paint(value: &str, code: &str, color: bool) -> String {
+    if color {
+        format!("\x1b[{code}m{value}\x1b[0m")
+    } else {
+        value.to_string()
+    }
 }
 
 #[cfg(test)]

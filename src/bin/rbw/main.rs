@@ -11,6 +11,7 @@ use clap::{CommandFactory as _, Parser as _};
 
 mod actions;
 mod commands;
+mod export_info;
 mod import_bitwarden;
 mod osc52;
 mod sock;
@@ -393,12 +394,55 @@ enum Opt {
         )]
         write: bool,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
         )]
         from_file_passphrase: Option<String>,
+    },
+
+    #[command(
+        name = "export-info",
+        about = "Show counts and metadata from an export file",
+        long_about = "Show counts and metadata from an export file\n\n\
+            Reads rbw's own JSON or gpg-encrypted export, Bitwarden's JSON, \
+            password-protected Encrypted JSON, zip, or CSV export, and prints \
+            entry-type, note, passkey, collection, folder, attachment, and \
+            other available counts. Reads from stdin if no file is given.\n\n\
+            --format is auto-detected by default. Use --decrypt or \
+            --decrypt-passphrase for password-protected exports."
+    )]
+    ExportInfo {
+        #[arg(
+            help = "Export file to inspect (defaults to stdin if omitted)"
+        )]
+        file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            alias = "type",
+            value_enum,
+            default_value = "auto",
+            help = "Export format to inspect (default: auto-detect)"
+        )]
+        format: crate::export_info::Format,
+        #[arg(
+            long,
+            conflicts_with = "decrypt_passphrase",
+            help = "Decrypt a password-protected export using \
+                RBW_EXPORT_PASSPHRASE or a tty prompt"
+        )]
+        decrypt: bool,
+        #[arg(
+            long,
+            value_name = "PASSPHRASE",
+            help = "Passphrase for a password-protected export (prefer \
+                --decrypt to keep it out of process listings)"
+        )]
+        decrypt_passphrase: Option<String>,
+        #[arg(short = 'j', long, help = "Display the counts as JSON")]
+        json: bool,
     },
 
     #[command(
@@ -491,7 +535,8 @@ enum Opt {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted input export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -689,7 +734,8 @@ enum Opt {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -741,7 +787,8 @@ enum Opt {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -784,7 +831,8 @@ enum Opt {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -897,7 +945,8 @@ enum Opt {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -936,7 +985,8 @@ enum Opt {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -1019,7 +1069,8 @@ enum Opt {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -1078,7 +1129,8 @@ enum Opt {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -1132,7 +1184,8 @@ enum Opt {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -1168,7 +1221,8 @@ enum Opt {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -1201,7 +1255,8 @@ enum Opt {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -1232,7 +1287,8 @@ enum Opt {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -1265,7 +1321,8 @@ enum Opt {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -1312,7 +1369,8 @@ enum Opt {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -1335,7 +1393,10 @@ enum Opt {
         all: bool,
     },
 
-    #[command(about = "Remove the local copy of the password database")]
+    #[command(
+        visible_alias = "panic",
+        about = "Remove the local database and configured Termux unlock"
+    )]
     Purge {
         #[arg(short = 'y', long, help = "Skip confirmation prompt")]
         yes: bool,
@@ -1524,6 +1585,7 @@ impl Opt {
             Self::Sync { .. } => "sync".to_string(),
             Self::Tui { .. } => "tui".to_string(),
             Self::Export { .. } => "export".to_string(),
+            Self::ExportInfo { .. } => "export-info".to_string(),
             Self::Import { .. } => "import".to_string(),
             Self::List { .. } => "list".to_string(),
             Self::Get { .. } => "get".to_string(),
@@ -1638,6 +1700,14 @@ enum TermuxCmd {
             help = "Seconds after device authentication during which signing is allowed"
         )]
         validity: u32,
+    },
+    #[command(
+        visible_alias = "unenroll",
+        about = "Delete the active account's Termux key and unlock bundle"
+    )]
+    Remove {
+        #[arg(short, long, help = "Do not ask for confirmation")]
+        yes: bool,
     },
     #[command(about = "Show Android Keystore security properties")]
     Status {
@@ -1768,7 +1838,8 @@ enum Attachment {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -1806,7 +1877,8 @@ enum Attachment {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -1850,7 +1922,8 @@ enum Attachment {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -1879,7 +1952,8 @@ enum Attachment {
         )]
         from_file: Option<std::path::PathBuf>,
         #[arg(
-            long,
+            long = "passphrase",
+            alias = "from-file-passphrase",
             value_name = "PASSPHRASE",
             requires = "from_file",
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
@@ -2487,6 +2561,7 @@ fn main() {
             TermuxCmd::Enroll { validity } => {
                 commands::termux_enroll(validity)
             }
+            TermuxCmd::Remove { yes } => commands::termux_remove(yes),
             TermuxCmd::Status { key_alias } => {
                 rbw::termux::status(key_alias.as_deref())
             }
@@ -2548,6 +2623,19 @@ fn main() {
             org.as_deref(),
             from_file.as_deref(),
             from_file_passphrase.as_deref(),
+        ),
+        Opt::ExportInfo {
+            file,
+            format,
+            decrypt,
+            decrypt_passphrase,
+            json,
+        } => export_info::run(
+            file.as_deref(),
+            format,
+            decrypt,
+            decrypt_passphrase.as_deref(),
+            json,
         ),
         Opt::Import {
             file,

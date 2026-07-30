@@ -2793,6 +2793,68 @@ pub fn termux_enroll(validity: u32) -> anyhow::Result<()> {
     result
 }
 
+pub fn termux_remove(yes: bool) -> anyhow::Result<()> {
+    let mut config = rbw::config::Config::load()?;
+    config.migrate_legacy();
+    let account_name = crate::actions::current_account()
+        .unwrap_or_else(|| config.primary_account_name());
+    let account = config.account(Some(&account_name))?;
+    let configured = account.unlock.termux.clone();
+    let key_alias = configured.as_ref().map_or_else(
+        || rbw::termux::default_key_alias(&account_name),
+        |termux| termux.key_alias.clone(),
+    );
+    let bundle = configured.as_ref().map_or_else(
+        || rbw::termux::default_bundle_path(&account_name),
+        |termux| termux.file.clone(),
+    );
+
+    let key_present = rbw::termux::key_present(&key_alias)?;
+    let bundle_present = bundle.exists();
+    if configured.is_none() && !key_present && !bundle_present {
+        println!("No Termux unlock found for account {account_name:?}.");
+        return Ok(());
+    }
+    if !yes && !std::io::stdin().is_terminal() {
+        anyhow::bail!(
+            "refusing to remove Termux unlock non-interactively; pass --yes"
+        );
+    }
+    if !yes
+        && !confirm(&format!(
+            "Permanently delete Termux key {key_alias:?} and {}?",
+            bundle.display()
+        ))?
+    {
+        return Ok(());
+    }
+
+    if key_present {
+        rbw::termux::delete(&key_alias)?;
+    }
+    if bundle_present {
+        std::fs::remove_file(&bundle).with_context(|| {
+            format!("failed to remove {}", bundle.display())
+        })?;
+    }
+
+    let account = config
+        .accounts
+        .iter_mut()
+        .find(|account| account.name == account_name)
+        .ok_or_else(|| {
+            anyhow::anyhow!("account {account_name:?} vanished")
+        })?;
+    account.unlock.termux = None;
+    config.save()?;
+    let _ = stop_agent();
+
+    println!(
+        "Removed Termux unlock for account {account_name:?} (key: {key_alias})."
+    );
+    Ok(())
+}
+
 pub fn account_list() {
     let config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());
@@ -8499,7 +8561,7 @@ fn resolve_export_passphrase(
     }
 }
 
-fn resolve_import_passphrase(
+pub(crate) fn resolve_import_passphrase(
     decrypt: bool,
     decrypt_passphrase: Option<&str>,
 ) -> anyhow::Result<Option<String>> {
@@ -9748,7 +9810,7 @@ fn imported_history_to_encrypted(
         .collect()
 }
 
-fn read_import_input(
+pub(crate) fn read_import_input(
     file: Option<&std::path::Path>,
 ) -> anyhow::Result<Vec<u8>> {
     if let Some(path) = file {
@@ -9829,7 +9891,7 @@ fn extract_vault_json(targz: &[u8]) -> anyhow::Result<String> {
 // Figures out whether `raw` is plain JSON (today's `rbw export` output) or a
 // gpg-encrypted tar.gz (`rbw export --encrypt`'s output) and returns the
 // JSON text either way.
-fn load_import_json(
+pub(crate) fn load_import_json(
     raw: &[u8],
     decrypt_passphrase: Option<&str>,
 ) -> anyhow::Result<String> {
@@ -9857,6 +9919,7 @@ fn load_import_json(
 // format is. Attachment bytes are kept in a side table keyed by attachment
 // id, since `DecryptedAttachment` itself only carries metadata.
 pub struct FileVault {
+    pub format: crate::import_bitwarden::DetectedFormat,
     pub entries: Vec<DecryptedCipher>,
     pub attachment_data: std::collections::HashMap<String, Vec<u8>>,
     // `org_id`/`collection_ids` per entry, keyed by id: `DecryptedCipher`
@@ -9882,42 +9945,77 @@ pub struct FileEntryExtra {
 }
 
 // Loads an export file as a one-off, in-memory, read-only vault: no config,
-// no agent, no account touched at all. Reuses the same JSON/gpg-tar.gz
-// parsing `rbw import` uses, but -- unlike `import` -- doesn't require an
-// explicit `--decrypt` flag up front: plain JSON is tried first, and a
-// passphrase is only resolved if that fails.
+// no agent, no account touched at all. This deliberately shares the format
+// detection and upstream Bitwarden conversion used by `import`, so every
+// command accepting `--from-file` understands rbw JSON/gpg archives as well
+// as Bitwarden JSON, encrypted JSON, and zip exports.
 //
-// `passphrase` is the explicit, non-interactive override from a
-// `--from-file-passphrase` flag (if any); when `None`, the passphrase falls
-// back to `$RBW_EXPORT_PASSPHRASE`, then an interactive `/dev/tty` prompt,
-// same as before this parameter existed.
+// `passphrase` is the explicit, non-interactive override from `--passphrase`
+// (with the old `--from-file-passphrase` spelling retained as an alias); when
+// `None`, the passphrase falls back to `$RBW_EXPORT_PASSPHRASE`, then an
+// interactive `/dev/tty` prompt.
 pub fn load_from_file(
     path: &std::path::Path,
     passphrase: Option<&str>,
 ) -> anyhow::Result<FileVault> {
     let raw = read_import_input(Some(path))?;
-
-    let is_plain_json = std::str::from_utf8(&raw).is_ok_and(|text| {
-        serde_json::from_str::<serde_json::Value>(text).is_ok()
-    });
     let mut passphrase = passphrase.map(std::string::ToString::to_string);
-    let json_text = if is_plain_json {
-        String::from_utf8(raw).unwrap()
-    } else {
-        let resolved = match &passphrase {
-            Some(p) if !p.is_empty() => p.clone(),
-            _ => resolve_env_or_prompted_passphrase(false)?,
-        };
-        let text = decrypt_import_archive(&raw, &resolved)?;
-        passphrase = Some(resolved);
-        text
+
+    let detected = crate::import_bitwarden::detect_format(&raw)?;
+    let (vault, format) = match detected {
+        crate::import_bitwarden::DetectedFormat::Rbw => {
+            let json_text = if std::str::from_utf8(&raw).is_ok_and(|text| {
+                serde_json::from_str::<serde_json::Value>(text).is_ok()
+            }) {
+                String::from_utf8(raw).unwrap()
+            } else {
+                let resolved = match &passphrase {
+                    Some(p) if !p.is_empty() => p.clone(),
+                    _ => resolve_env_or_prompted_passphrase(false)?,
+                };
+                let text = decrypt_import_archive(&raw, &resolved)?;
+                passphrase = Some(resolved);
+                text
+            };
+            let vault: ImportedVault = serde_json::from_str(&json_text)
+                .context(
+                    "failed to parse import data (expected the JSON shape \
+                     produced by `rbw export`)",
+                )?;
+            (vault, detected)
+        }
+        crate::import_bitwarden::DetectedFormat::BitwardenJson => {
+            let text = std::str::from_utf8(&raw)
+                .context("Bitwarden JSON export is not valid UTF-8")?;
+            let bw = crate::import_bitwarden::parse_bitwarden_json(text)?;
+            (bw_vault_to_imported(bw, None), detected)
+        }
+        crate::import_bitwarden::DetectedFormat::BitwardenEncryptedJson => {
+            let resolved = match &passphrase {
+                Some(p) if !p.is_empty() => p.clone(),
+                _ => resolve_env_or_prompted_passphrase(false)?,
+            };
+            let text = crate::import_bitwarden::decrypt_encrypted_json(
+                &raw, &resolved,
+            )?;
+            let bw = crate::import_bitwarden::parse_bitwarden_json(&text)?;
+            passphrase = Some(resolved);
+            (bw_vault_to_imported(bw, None), detected)
+        }
+        crate::import_bitwarden::DetectedFormat::BitwardenZip => {
+            let (bw, attachments) = crate::import_bitwarden::parse_zip(&raw)?;
+            (bw_vault_to_imported(bw, Some(attachments)), detected)
+        }
     };
 
-    let vault: ImportedVault = serde_json::from_str(&json_text).context(
-        "failed to parse import data (expected the JSON shape produced by \
-         `rbw export`)",
-    )?;
+    Ok(file_vault_from_imported(vault, format, passphrase))
+}
 
+fn file_vault_from_imported(
+    vault: ImportedVault,
+    format: crate::import_bitwarden::DetectedFormat,
+    passphrase: Option<String>,
+) -> FileVault {
     let mut attachment_data = std::collections::HashMap::new();
     let mut entry_extra = std::collections::HashMap::new();
     let entries = vault
@@ -10015,13 +10113,14 @@ pub fn load_from_file(
         })
         .collect();
 
-    Ok(FileVault {
+    FileVault {
+        format,
         entries,
         attachment_data,
         entry_extra,
         collections,
         passphrase,
-    })
+    }
 }
 
 // Parses one raw attachment JSON value (see `ImportedAttachment`) into a
@@ -10056,7 +10155,8 @@ fn parse_file_attachment(
 }
 
 // Writes `entries`/`collections` back to `path` in whatever format they
-// were loaded in (`passphrase` is `FileVault::passphrase`/
+// were loaded in (`format` is `FileVault::format`, and `passphrase` is
+// `FileVault::passphrase`/
 // `TuiFileVault::passphrase` -- `Some` round-trips back through gpg with
 // the same passphrase, `None` writes plain JSON), via the exact same
 // tar.gz/gpg/atomic-write pipeline `export()` uses. Attachment bytes
@@ -10069,19 +10169,62 @@ fn save_to_file(
     collections: Vec<ExportedCollection>,
     passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
+    // Read the existing file before replacing it. This keeps all existing
+    // writeback call sites format-preserving, including TUI edits, without
+    // trusting a caller to remember to thread the detected format through.
+    let format = crate::import_bitwarden::detect_format(&read_import_input(
+        Some(path),
+    )?)?;
     let vault = ExportedVault {
         entries,
         collections,
     };
-    if let Some(passphrase) = passphrase {
-        let archive = build_export_tar_gz(&vault)?;
-        let encrypted = gpg_symmetric_encrypt(passphrase, &archive)?;
-        write_secure_output_file(path, &encrypted)
-    } else {
-        let mut json = serde_json::to_vec_pretty(&vault)
-            .context("failed to serialize vault to JSON")?;
-        json.push(b'\n');
-        write_secure_output_file(path, &json)
+    match format {
+        crate::import_bitwarden::DetectedFormat::Rbw => {
+            if let Some(passphrase) = passphrase {
+                let archive = build_export_tar_gz(&vault)?;
+                let encrypted = gpg_symmetric_encrypt(passphrase, &archive)?;
+                write_secure_output_file(path, &encrypted)
+            } else {
+                let mut json = serde_json::to_vec_pretty(&vault)
+                    .context("failed to serialize vault to JSON")?;
+                json.push(b'\n');
+                write_secure_output_file(path, &json)
+            }
+        }
+        crate::import_bitwarden::DetectedFormat::BitwardenJson => {
+            let (bw, _) = exported_vault_to_bw(&vault);
+            let mut json = serde_json::to_vec_pretty(&bw)
+                .context("failed to serialize Bitwarden JSON export")?;
+            json.push(b'\n');
+            write_secure_output_file(path, &json)
+        }
+        crate::import_bitwarden::DetectedFormat::BitwardenEncryptedJson => {
+            let passphrase = passphrase.context(
+                "cannot write an encrypted Bitwarden export without a \
+                 passphrase",
+            )?;
+            let (bw, _) = exported_vault_to_bw(&vault);
+            let json = serde_json::to_string(&bw)
+                .context("failed to serialize Bitwarden JSON export")?;
+            let encrypted = crate::import_bitwarden::encrypt_encrypted_json(
+                &json,
+                passphrase,
+                rbw::api::KdfType::Pbkdf2,
+                600_000,
+                None,
+                None,
+            )?;
+            write_secure_output_file(path, encrypted.as_bytes())
+        }
+        crate::import_bitwarden::DetectedFormat::BitwardenZip => {
+            let (bw, attachments) = exported_vault_to_bw(&vault);
+            let json = serde_json::to_string_pretty(&bw)
+                .context("failed to serialize Bitwarden JSON export")?;
+            let zip =
+                crate::import_bitwarden::write_zip(&json, &attachments)?;
+            write_secure_output_file(path, &zip)
+        }
     }
 }
 
@@ -13638,9 +13781,15 @@ pub fn lock(all: bool) -> anyhow::Result<()> {
 
 pub fn purge(yes: bool) -> anyhow::Result<()> {
     let account = active_account()?;
+    let termux_configured = account.unlock.termux.is_some();
+    let what = if termux_configured {
+        "the local database and its Termux key/bundle"
+    } else {
+        "the local copy of the password database"
+    };
     if !yes
         && !confirm(&format!(
-            "Remove the local copy of the password database for {}?",
+            "Remove {what} for {}?",
             style::name(account_email(&account)?, stdout_supports_color())
         ))?
     {
@@ -13650,6 +13799,7 @@ pub fn purge(yes: bool) -> anyhow::Result<()> {
     stop_agent()?;
 
     remove_db()?;
+    termux_remove(true)?;
 
     Ok(())
 }
@@ -20081,6 +20231,108 @@ mod test {
         };
         assert_eq!(username.as_deref(), Some("alice"));
         assert_eq!(password.as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn test_load_from_file_reads_bitwarden_json_export() {
+        let json = r#"{
+            "folders": [{"id": "folder-1", "name": "Work"}],
+            "collections": [],
+            "items": [{
+                "id": "item-1",
+                "folderId": "folder-1",
+                "type": 1,
+                "name": "example.com",
+                "login": {
+                    "username": "alice",
+                    "password": "hunter2",
+                    "uris": [{"uri": "https://example.com", "match": 0}]
+                }
+            }]
+        }"#;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+        file.flush().unwrap();
+
+        let loaded = load_from_file(file.path(), None).unwrap();
+        assert_eq!(
+            loaded.format,
+            crate::import_bitwarden::DetectedFormat::BitwardenJson
+        );
+        assert_eq!(loaded.entries.len(), 1);
+        assert_eq!(loaded.entries[0].name, "example.com");
+        assert_eq!(loaded.entries[0].folder.as_deref(), Some("Work"));
+        let DecryptedData::Login {
+            username, password, ..
+        } = &loaded.entries[0].data
+        else {
+            panic!("expected a login entry");
+        };
+        assert_eq!(username.as_deref(), Some("alice"));
+        assert_eq!(password.as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn test_load_from_file_reads_bitwarden_encrypted_json_with_passphrase() {
+        let json = r#"{"folders":[],"collections":[],"items":[{
+            "id":"item-1","type":2,"name":"private note"
+        }]}"#;
+        let encrypted = crate::import_bitwarden::encrypt_encrypted_json(
+            json,
+            "test passphrase",
+            rbw::api::KdfType::Pbkdf2,
+            1,
+            None,
+            None,
+        )
+        .unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(encrypted.as_bytes()).unwrap();
+        file.flush().unwrap();
+
+        let loaded =
+            load_from_file(file.path(), Some("test passphrase")).unwrap();
+        assert_eq!(
+            loaded.format,
+            crate::import_bitwarden::DetectedFormat::BitwardenEncryptedJson
+        );
+        assert_eq!(loaded.entries[0].name, "private note");
+        assert!(matches!(loaded.entries[0].data, DecryptedData::SecureNote));
+        assert_eq!(loaded.passphrase.as_deref(), Some("test passphrase"));
+    }
+
+    #[test]
+    fn test_load_from_file_reads_bitwarden_zip_attachments() {
+        let json = r#"{"folders":[],"collections":[],"items":[{
+            "id":"item-1","type":2,"name":"example"
+        }]}"#;
+        let zip = crate::import_bitwarden::write_zip(
+            json,
+            &[(
+                "example".to_string(),
+                "notes.txt".to_string(),
+                b"attachment bytes".to_vec(),
+            )],
+        )
+        .unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&zip).unwrap();
+        file.flush().unwrap();
+
+        let loaded = load_from_file(file.path(), None).unwrap();
+        assert_eq!(
+            loaded.format,
+            crate::import_bitwarden::DetectedFormat::BitwardenZip
+        );
+        assert_eq!(loaded.entries[0].attachments.len(), 1);
+        assert_eq!(
+            loaded.entries[0].attachments[0].file_name.as_deref(),
+            Some("notes.txt")
+        );
+        assert_eq!(
+            loaded.attachment_data.values().next().unwrap(),
+            b"attachment bytes"
+        );
     }
 
     // A hand-written/older export missing `id` (added to `ImportedEntry`

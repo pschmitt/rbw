@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.13.12] - 2026-07-31
+
+### Changed
+
+* Improve `rbw termux status` with readable security indicators and colors.
+* Add `rbw termux remove` for deleting the Keystore key and unlock bundle.
+* Add `rbw panic` as an alias for purge; it also removes the active account's
+  configured Termux unlock.
+
 ## [2.13.11] - 2026-07-31
 
 ### Added
