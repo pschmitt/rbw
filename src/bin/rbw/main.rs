@@ -1985,6 +1985,27 @@ enum Org {
         )]
         org_id: Option<String>,
     },
+
+    #[command(
+        about = "Rename an organization",
+        long_about = "Rename an organization\n\n\
+            Organization names are plaintext (unlike collection names), \
+            so this is a simple metadata update -- no re-encryption \
+            involved. The server also requires a billing email on every \
+            update; this always sends the active account's own email, \
+            since there's nowhere to read the org's current billing \
+            email back from locally."
+    )]
+    Rename {
+        #[arg(help = "New name for the organization")]
+        name: String,
+        #[arg(
+            long = "org-id",
+            help = "Organization ID (auto-detected if the vault has a \
+                single org)"
+        )]
+        org_id: Option<String>,
+    },
 }
 
 impl Org {
@@ -1997,6 +2018,7 @@ impl Org {
             Self::RemoveUser { .. } => "remove-user",
             Self::Delete { .. } => "delete",
             Self::Confirm { .. } => "confirm",
+            Self::Rename { .. } => "rename",
         }
         .to_string()
     }
@@ -2700,6 +2722,9 @@ fn main() {
             Org::Confirm { user, org_id } => {
                 commands::confirm_org_user(org_id.as_deref(), &user)
             }
+            Org::Rename { name, org_id } => {
+                commands::rename_org(org_id.as_deref(), &name)
+            }
         },
         Opt::History {
             find_args,
@@ -3024,6 +3049,8 @@ mod test {
             &["rbw", "org", "list"][..],
             &["rbw", "org", "ls", "-o", "json"][..],
             &["rbw", "org", "list", "--yaml"][..],
+            &["rbw", "org", "rename", "new-name"][..],
+            &["rbw", "org", "rename", "new-name", "--org-id", "some-org"][..],
         ] {
             parse(args);
         }

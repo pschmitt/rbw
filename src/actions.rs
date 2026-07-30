@@ -650,6 +650,29 @@ fn create_attachment_once(
     Ok(())
 }
 
+pub fn rename_org(
+    access_token: &str,
+    refresh_token: &str,
+    org_id: &str,
+    name: &str,
+    billing_email: &str,
+) -> Result<(Option<String>, ())> {
+    with_exchange_refresh_token(access_token, refresh_token, |access_token| {
+        rename_org_once(access_token, org_id, name, billing_email)
+    })
+}
+
+fn rename_org_once(
+    access_token: &str,
+    org_id: &str,
+    name: &str,
+    billing_email: &str,
+) -> Result<()> {
+    let (client, _) = api_client()?;
+    client.rename_org(access_token, org_id, name, billing_email)?;
+    Ok(())
+}
+
 pub fn rename_collection(
     access_token: &str,
     refresh_token: &str,

@@ -10905,6 +10905,45 @@ pub fn purge_collection(
     purge_collection_entries(&collection_id)
 }
 
+// Organization names are plaintext (unlike collection names, which are
+// encrypted with the org key -- see the `Organization` doc comment in
+// db.rs), so no `crate::actions::encrypt` call is needed here. The server
+// requires billing_email on every update even though this only ever
+// changes the name; there's nowhere to read the org's *current* billing
+// email back from (the locally-cached `Organization` only has id/name), so
+// this just passes through the active account's own email -- fine for the
+// common case of a self-hosted instance where the account owns the org it's
+// renaming.
+pub fn rename_org(org_id: Option<&str>, name: &str) -> anyhow::Result<()> {
+    unlock(None, None)?;
+
+    let mut db = load_db()?;
+    let org_id = resolve_org(&db, org_id)?;
+
+    let config = rbw::config::Config::load()?;
+    let account =
+        config.account(crate::actions::current_account().as_deref())?;
+    let billing_email = account_email(&account)?;
+
+    let access_token = db.access_token.as_ref().unwrap();
+    let refresh_token = db.refresh_token.as_ref().unwrap();
+
+    if let (Some(access_token), ()) = rbw::actions::rename_org(
+        access_token,
+        refresh_token,
+        &org_id,
+        name,
+        billing_email,
+    )? {
+        db.access_token = Some(access_token);
+        save_db(&db)?;
+    }
+
+    crate::actions::sync()?;
+
+    Ok(())
+}
+
 pub fn rename_collection(
     collection: &str,
     org_id: Option<&str>,

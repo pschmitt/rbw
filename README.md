@@ -285,6 +285,9 @@ the `rbw org` command group:
   Required before they can decrypt anything in the org -- this re-encrypts
   the org's key to their now-known public key, which only happens once
   they've accepted.
+* `rbw org rename <new-name>`: rename an organization. Organization names
+  are plaintext (unlike collection names), so this is a simple metadata
+  update.
 * `rbw org remove-user <user>` (aliases: `rm`, `remove`, `del`): remove a
   member from an organization (asks for confirmation unless `-y`/`--yes`).
 * `rbw org delete`: **permanently** delete an organization and everything in
@@ -292,7 +295,7 @@ the `rbw org` command group:
   `--yes` is given, a confirmation; `--stdin` supplies the password without a
   pinentry prompt. This cannot be undone.
 
-`invite`, `remove-user`, and `delete` accept an optional `--org-id`; when the
+`invite`, `remove-user`, `rename`, and `delete` accept an optional `--org-id`; when the
 vault contains exactly one organization, it is auto-detected and the flag can
 be omitted. `invite`/`remove-user`/`confirm`/`accept` take the member by
 email or user ID.

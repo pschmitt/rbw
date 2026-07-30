@@ -1314,6 +1314,13 @@ pub struct OrgUser {
 }
 
 #[derive(serde::Serialize, Debug)]
+struct OrgUpdateReq {
+    name: String,
+    #[serde(rename = "billingEmail")]
+    billing_email: String,
+}
+
+#[derive(serde::Serialize, Debug)]
 struct OrgCreateReq {
     name: String,
     #[serde(rename = "billingEmail")]
@@ -2757,6 +2764,40 @@ impl Client {
                 .bytes()
                 .map(|bytes| bytes.to_vec())
                 .map_err(|source| Error::Reqwest { source }),
+            _ => Err(Error::RequestFailed {
+                status: res.status().as_u16(),
+            }),
+        }
+    }
+
+    // Organization names (unlike collection names) are plaintext, not
+    // per-org-key-encrypted -- see the `Organization` doc comment in db.rs.
+    // billing_email is required by the server on every update even though
+    // this command only ever changes the name; callers pass through
+    // whatever the org's current billing email already is.
+    pub fn rename_org(
+        &self,
+        access_token: &str,
+        org_id: &str,
+        name: &str,
+        billing_email: &str,
+    ) -> Result<()> {
+        let req = OrgUpdateReq {
+            name: name.to_string(),
+            billing_email: billing_email.to_string(),
+        };
+        let client = reqwest::blocking::Client::new();
+        let res = client
+            .put(self.api_url(&format!("/organizations/{org_id}")))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(&req)
+            .send()
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
             _ => Err(Error::RequestFailed {
                 status: res.status().as_u16(),
             }),

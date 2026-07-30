@@ -57,6 +57,34 @@
 
 ## Pending ship work
 
+- [x] `rbw org rename <new-name>`: rename an organization, mirroring `rbw
+      collection rename`'s shape (`--org-id`, auto-detected if the vault
+      has a single org). Org names are plaintext (unlike collection
+      names, which are per-org-key-encrypted), so this is a direct,
+      unencrypted `PUT /organizations/{id}` with `{name, billingEmail}`
+      (confirmed against Vaultwarden's actual route handler/request
+      struct, not guessed) -- no agent mediation needed beyond the
+      `unlock(None, None)` every CLI command already does. The server
+      requires `billingEmail` on every update even though this only ever
+      changes `name`; there's no local cache of an org's *current*
+      billing email to preserve it, so this always sends the active
+      account's own email instead -- fine for the common case (a
+      self-hosted instance where the account owns the org it's renaming),
+      possibly surprising otherwise. Requested from `bw-backup.git` after
+      renaming a `rbw org create`-d test/staging org into its intended
+      final name. Verified with `cargo build/test/clippy/fmt` on
+      `rofl-13` (210 tests, clippy clean), then live-verified for real:
+      built the binary, ran it against a throwaway isolated profile
+      (separate `HOME`/config, --stdin login+unlock, no pinentry) to
+      avoid a protocol-version mismatch with the long-running main
+      agent, renamed a real org, confirmed via a fresh `org list`.
+      Caveat for next time: isolating `HOME`/`RBW_AGENT` alone doesn't
+      isolate the agent socket, which is resolved from `XDG_RUNTIME_DIR`
+      (unaffected by `HOME`) -- `stop-agent` under that "isolated"
+      profile ended up killing the real main agent instead, locking every
+      account there. `XDG_RUNTIME_DIR` needs overriding too for genuine
+      isolation, not just `HOME`.
+
 - [x] `rbw import`: accept upstream Bitwarden export dumps directly, not
       just `rbw export`'s own JSON shape. New `src/bin/rbw/import_bitwarden.rs`
       parses Bitwarden's own "JSON" export, password-protected "Encrypted
