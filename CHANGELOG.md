@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.14.3] - 2026-07-31
+
+### Fixed
+
+* Verify the master password actually unlocks the account before enrolling
+  a Termux Keystore key against it (`rbw termux enroll`). Previously a
+  mistyped password was encrypted into the unlock bundle unchecked, so it
+  would only surface as a failure on the next real unlock.
+
 ## [2.14.2] - 2026-07-31
 
 ### Fixed

@@ -2762,6 +2762,25 @@ pub fn termux_enroll(validity: u32) -> anyhow::Result<()> {
         .password()
         .to_vec();
 
+    // Verify the password actually unlocks the account before enrolling a
+    // Termux key against it -- otherwise a mistyped password would get
+    // baked into the encrypted bundle, and every future Termux unlock would
+    // "succeed" at the crypto layer while producing a password that never
+    // actually works.
+    let mut password_string = String::from_utf8(password.clone())
+        .context("master password was not valid UTF-8")?;
+    crate::actions::set_active_account(Some(account_name.clone()))?;
+    let verified =
+        unlock_impl(Some(password_string.clone()), None, &mut Vec::new());
+    password_string.zeroize();
+    if let Err(error) = verified {
+        password.zeroize();
+        return Err(error.context(
+            "master password did not unlock the account; refusing to \
+             enroll a Termux key for a password that doesn't work",
+        ));
+    }
+
     let key_alias =
         rbw::termux::resolve_key_alias(&config, &account_name, None);
     let algorithm = "SHA256withRSA";
