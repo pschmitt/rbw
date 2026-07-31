@@ -3262,7 +3262,13 @@ fn resolve_from_credential_source(
     visited: &mut Vec<String>,
 ) -> anyhow::Result<(String, Option<String>)> {
     crate::actions::set_active_account(Some(source.account.clone()))?;
-    unlock_impl(None, None, visited)?;
+    // Skip re-authenticating (pinentry, Termux fingerprint, ...) when the
+    // source account is already unlocked -- this runs on every credential
+    // resolution, including ones for an `unlock: always` account whose
+    // source was just unlocked moments earlier in the same call.
+    if !active_account_unlocked() {
+        unlock_impl(None, None, visited)?;
+    }
     if !active_account_unlocked() {
         anyhow::bail!("source account '{}' did not unlock", source.account);
     }

@@ -155,13 +155,46 @@ fn run_keystore(
     }
 }
 
+fn fingerprint() -> anyhow::Result<()> {
+    let output = command_output("termux-fingerprint", &[], None)?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "termux-fingerprint failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .context("termux-fingerprint returned invalid JSON")?;
+    let result = response
+        .get("auth_result")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !result.to_ascii_lowercase().contains("success") {
+        anyhow::bail!("fingerprint authentication was not successful");
+    }
+    Ok(())
+}
+
 fn sign(
     key_alias: &str,
     algorithm: &str,
     challenge: &[u8],
 ) -> anyhow::Result<Vec<u8>> {
     ensure_key_is_authenticated(key_alias)?;
-    run_keystore(&["sign", key_alias, algorithm], Some(challenge))
+    // termux-keystore never prompts for authentication itself: it only
+    // checks whether Android already considers the user authenticated
+    // within the key's validity window. termux-fingerprint is what
+    // actually satisfies that check.
+    fingerprint()?;
+    let signature =
+        run_keystore(&["sign", key_alias, algorithm], Some(challenge))?;
+    if signature.is_empty() {
+        anyhow::bail!(
+            "Termux Keystore returned no signature for {key_alias:?}; \
+             authentication likely failed or was not confirmed in time"
+        );
+    }
+    Ok(signature)
 }
 
 fn key_infos() -> anyhow::Result<Vec<KeyInfo>> {

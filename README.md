@@ -219,8 +219,11 @@ functionality.
 
 On Android, the pschmitt fork can unlock an account natively through
 Termux:API. This uses an authentication-gated Android Keystore signing key;
-the Keystore signing operation itself is the security boundary. The encrypted
-bundle contains no private key or reusable signature.
+the Keystore signing operation itself is the security boundary, and a
+`termux-fingerprint` prompt is what satisfies Android's authentication check
+before each sign (`termux-keystore sign` never prompts on its own — it only
+checks whether you're already authenticated within the key's validity
+window). The encrypted bundle contains no private key or reusable signature.
 
 Enroll the active account in one step:
 
@@ -231,8 +234,8 @@ rbw termux enroll
 ```
 
 rbw asks for the master password using the configured pinentry, generates an
-authentication-gated RSA key, asks Android Keystore for authentication when
-it first signs, writes the encrypted bundle below rbw's config directory, and
+authentication-gated RSA key, prompts for fingerprint authentication, writes
+the encrypted bundle below rbw's config directory, and
 updates the active account in `config.json`. The default authorization window
 is five minutes; adjust it with `--validity SECONDS`. By default the generated
 key and bundle are named after the account, so multiple accounts can be

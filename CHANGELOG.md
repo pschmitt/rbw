@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.14.2] - 2026-07-31
+
+### Fixed
+
+* Restore the `termux-fingerprint` prompt before Termux Keystore signing --
+  `termux-keystore sign` never authenticates on its own, so removing it in
+  2.13.11 left every sign failing with `UserNotAuthenticatedException` and no
+  prompt at all.
+* Fail loudly instead of silently accepting stderr as signature data when
+  `termux-keystore sign` returns no output.
+* Skip redundant re-authentication (pinentry, Termux fingerprint, ...) when
+  resolving a `credential_source` whose source account is already unlocked,
+  which could otherwise prompt twice in a single command.
+
 ## [2.14.1] - 2026-07-31
 
 ### Changed
