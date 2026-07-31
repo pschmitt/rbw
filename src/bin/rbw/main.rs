@@ -308,6 +308,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
             "version",
             "purge",
             "purge-vault",
+            "agent",
             "stop-agent",
             "completions",
         ],
@@ -436,6 +437,12 @@ enum Opt {
     Account {
         #[command(subcommand)]
         account: AccountCmd,
+    },
+
+    #[command(about = "Manage the background agent")]
+    Agent {
+        #[command(subcommand)]
+        agent: AgentCmd,
     },
 
     #[command(about = "Use Termux Android Keystore for native unlocks")]
@@ -1723,7 +1730,13 @@ enum Opt {
     },
 
     #[command(name = "stop-agent", about = "Terminate the background agent")]
-    StopAgent,
+    StopAgent {
+        #[arg(
+            long,
+            help = "Forcefully kill the agent if it is unresponsive"
+        )]
+        kill: bool,
+    },
 
     #[command(
         name = "completions",
@@ -1742,6 +1755,9 @@ impl Opt {
                 format!("config {}", config.subcommand_name())
             }
             Self::Account { .. } => "account".to_string(),
+            Self::Agent { agent } => {
+                format!("agent {}", agent.subcommand_name())
+            }
             Self::Termux { .. } => "termux".to_string(),
             Self::Register { .. } => "register".to_string(),
             Self::Login { .. } => "login".to_string(),
@@ -1780,8 +1796,28 @@ impl Opt {
             Self::Purge { .. } => "purge".to_string(),
             Self::PurgeVault { .. } => "purge-vault".to_string(),
             Self::Mirror { .. } => "mirror".to_string(),
-            Self::StopAgent => "stop-agent".to_string(),
+            Self::StopAgent { .. } => "stop-agent".to_string(),
             Self::Completions { .. } => "completions".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum AgentCmd {
+    #[command(about = "Terminate the background agent")]
+    Stop {
+        #[arg(
+            long,
+            help = "Forcefully kill the agent if it is unresponsive"
+        )]
+        kill: bool,
+    },
+}
+
+impl AgentCmd {
+    fn subcommand_name(&self) -> &'static str {
+        match self {
+            Self::Stop { .. } => "stop",
         }
     }
 }
@@ -2752,6 +2788,15 @@ fn main() {
                 rbw::termux::status(key_alias.as_deref())
             }
         },
+        Opt::Agent { agent } => match agent {
+            AgentCmd::Stop { kill } => {
+                if kill {
+                    commands::kill_agent()
+                } else {
+                    commands::stop_agent()
+                }
+            }
+        },
         Opt::Register { stdin } => {
             let (client_id, client_secret) = if stdin {
                 (Some(read_stdin_password()), Some(read_stdin_password()))
@@ -3517,7 +3562,13 @@ fn main() {
                 dry_run,
             )
         }
-        Opt::StopAgent => commands::stop_agent(),
+        Opt::StopAgent { kill } => {
+            if kill {
+                commands::kill_agent()
+            } else {
+                commands::stop_agent()
+            }
+        }
         Opt::Completions { shell } => {
             match shell {
                 CompletionShell::Bash => {
@@ -3631,6 +3682,24 @@ mod test {
         assert!(!help.contains("\nCommands:"));
         assert!(help.contains("  export"));
         assert!(help.contains("  export-info"));
+    }
+
+    #[test]
+    fn test_agent_stop_accepts_force_kill() {
+        let Opt::Agent {
+            agent: AgentCmd::Stop { kill },
+        } = parse(&["rbw", "agent", "stop", "--kill"]).command
+        else {
+            panic!("expected rbw agent stop --kill");
+        };
+        assert!(kill);
+
+        let Opt::StopAgent { kill } =
+            parse(&["rbw", "stop-agent", "--kill"]).command
+        else {
+            panic!("expected rbw stop-agent --kill");
+        };
+        assert!(kill);
     }
 
     #[test]

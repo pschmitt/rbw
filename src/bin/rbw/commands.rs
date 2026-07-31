@@ -13997,6 +13997,12 @@ pub fn stop_agent() -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn kill_agent() -> anyhow::Result<()> {
+    crate::actions::kill()?;
+
+    Ok(())
+}
+
 pub fn inject(
     input: Option<&std::path::Path>,
     output: Option<&std::path::Path>,

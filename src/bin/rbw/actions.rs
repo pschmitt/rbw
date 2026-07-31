@@ -146,14 +146,7 @@ pub fn lock_all() -> anyhow::Result<()> {
 pub fn quit() -> anyhow::Result<()> {
     match crate::sock::Sock::connect() {
         Ok(mut sock) => {
-            let pidfile = rbw::dirs::pid_file();
-            let mut pid = String::new();
-            std::fs::File::open(pidfile)?.read_to_string(&mut pid)?;
-            let Some(pid) =
-                rustix::process::Pid::from_raw(pid.trim_end().parse()?)
-            else {
-                anyhow::bail!("failed to read pid from pidfile");
-            };
+            let pid = agent_pid()?;
             sock.send(&rbw::protocol::Request::with_account(
                 get_environment(),
                 current_account(),
@@ -170,6 +163,26 @@ pub fn quit() -> anyhow::Result<()> {
             _ => Err(e.into()),
         },
     }
+}
+
+pub fn kill() -> anyhow::Result<()> {
+    let pid = match agent_pid() {
+        Ok(pid) => pid,
+        Err(e)
+            if e.downcast_ref::<std::io::Error>().is_some_and(|e| {
+                e.kind() == std::io::ErrorKind::NotFound
+            }) =>
+        {
+            return Ok(())
+        }
+        Err(e) => return Err(e),
+    };
+    match rustix::process::kill_process(pid, rustix::process::Signal::KILL) {
+        Ok(()) => wait_for_exit(pid),
+        Err(e) if e == rustix::io::Errno::SRCH => (),
+        Err(e) => return Err(e.into()),
+    }
+    Ok(())
 }
 
 pub fn decrypt(
@@ -403,6 +416,16 @@ fn connect() -> anyhow::Result<crate::sock::Sock> {
             log.display()
         )
     })
+}
+
+fn agent_pid() -> anyhow::Result<rustix::process::Pid> {
+    let mut pid = String::new();
+    std::fs::File::open(rbw::dirs::pid_file())?.read_to_string(&mut pid)?;
+    let Some(pid) = rustix::process::Pid::from_raw(pid.trim_end().parse()?)
+    else {
+        anyhow::bail!("failed to read pid from pidfile");
+    };
+    Ok(pid)
 }
 
 fn wait_for_exit(pid: rustix::process::Pid) {

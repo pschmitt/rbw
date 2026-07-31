@@ -7,6 +7,8 @@
 * Reorganize `config.yaml` into grouped `agent`, `pinentry`, `tui`, and
   `hide` sections, and use camelCase for configuration keys.
 * Rename TUI keybinding action names to camelCase, including `forceQuit`.
+* Add `rbw agent stop`, with `--kill` for an unresponsive agent; retain
+  `rbw stop-agent` as a compatibility alias.
 
 ## [2.15.0] - 2026-07-31
 

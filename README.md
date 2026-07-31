@@ -154,7 +154,8 @@ Logging into the server and unlocking the database will only be done as
 necessary, so running `rbw login` when you are already logged in will do
 nothing, and similarly for `rbw unlock`. If necessary, you can explicitly log
 out by running `rbw purge`, and you can explicitly lock the database by running
-`rbw lock` or `rbw stop-agent`.
+`rbw lock` or `rbw agent stop` (`rbw stop-agent` remains as a compatibility
+alias). If the agent is unresponsive, use `rbw agent stop --kill`.
 
 Locking is account-aware: with multiple accounts configured, `rbw lock` with
 no account selected locks every account, while `rbw -a <name> lock` (or
