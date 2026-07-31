@@ -142,5 +142,25 @@
               '';
         }
       );
+
+      devShells = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        {
+          default = pkgs.mkShell {
+            packages = with pkgs; [
+              just
+              cargo
+              rustc
+              clippy
+              rustfmt
+              cargo-deny
+              nixfmt-rfc-style
+            ];
+          };
+        }
+      );
     };
 }
