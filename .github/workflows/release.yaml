@@ -138,8 +138,9 @@ jobs:
             --owner=0 --group=0 --numeric-owner -cf - "$pkg" |
             gzip -n -9 > "$pkg.tar.gz"
           gzip -t "$pkg.tar.gz"
-          "$tar_bin" -tzf "$pkg.tar.gz" | grep -Fqx "$pkg/rbw"
-          "$tar_bin" -tzf "$pkg.tar.gz" | grep -Fqx "$pkg/rbw-agent"
+          "$tar_bin" -tzf "$pkg.tar.gz" > "$pkg.contents"
+          grep -Fqx "$pkg/rbw" "$pkg.contents"
+          grep -Fqx "$pkg/rbw-agent" "$pkg.contents"
       - uses: actions/upload-artifact@v4
         with:
           name: tarball-${{ matrix.target }}
