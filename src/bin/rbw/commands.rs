@@ -9986,16 +9986,16 @@ pub fn load_import_json(
 pub fn prompt_for_encrypted_export_if_needed(
     raw: &[u8],
     decrypt_passphrase: Option<String>,
-) -> anyhow::Result<Option<String>> {
+) -> Option<String> {
     if decrypt_passphrase.is_some() {
-        return Ok(decrypt_passphrase);
+        return decrypt_passphrase;
     }
     if let Ok(text) = std::str::from_utf8(raw) {
         if serde_json::from_str::<serde_json::Value>(text).is_ok() {
-            return Ok(None);
+            return None;
         }
     }
-    Ok(resolve_env_or_prompted_passphrase(false).ok())
+    resolve_env_or_prompted_passphrase(false).ok()
 }
 
 // A vault loaded from an export file for `--from-file` (`list`/`search`/
@@ -11222,8 +11222,8 @@ pub fn import(
         crate::import_bitwarden::DetectedFormat::Rbw => {
             let decrypt_passphrase = prompt_for_encrypted_export_if_needed(
                 &raw,
-                decrypt_passphrase.clone(),
-            )?;
+                decrypt_passphrase,
+            );
             let json_text =
                 load_import_json(&raw, decrypt_passphrase.as_deref())?;
             serde_json::from_str(&json_text).context(

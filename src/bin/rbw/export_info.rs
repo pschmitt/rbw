@@ -165,7 +165,7 @@ fn summarize(
                 crate::commands::prompt_for_encrypted_export_if_needed(
                     raw,
                     passphrase.map(str::to_string),
-                )?;
+                );
             let text = crate::commands::load_import_json(
                 raw,
                 passphrase.as_deref(),
