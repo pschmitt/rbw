@@ -284,6 +284,10 @@ delete one, `rbw attachment rm <entry> --attachment <attachment-id-or-filename>`
 to write the attachment to stdout instead of a file. Using the entry UUID is
 the most precise option and avoids shell quoting issues for names with spaces.
 
+Search terms support field scopes such as `u:alice`, `uri:github`, `n:git`,
+`f:work`, `org:acme`, and `col:production`; the same syntax works in the TUI
+and in `rbw list <term>`.
+
 ### Passkeys
 
 Passkeys (WebAuthn/FIDO2 credentials) synced onto a login item are fully

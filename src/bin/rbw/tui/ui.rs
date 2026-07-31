@@ -1655,9 +1655,9 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
     // Every currently-bound chord for `action`, joined for display — the
     // real resolved keymap (post `tui.keys` override), not the
     // hand-picked subset of built-in defaults the old hardcoded list here
-    // showed. "type"/"u:/uri:/n:/f:" stay literal (search syntax, not a
-    // keybinding), and "quit"'s trailing "esc" is the hardcoded fallback in
-    // `App::handle_normal`, not a `Keymap`-resolved chord.
+    // showed. "type"/"u:/uri:/n:/f:/org:/col:" stay literal (search syntax,
+    // not a keybinding), and "quit"'s trailing "esc" is the hardcoded
+    // fallback in `App::handle_normal`, not a `Keymap`-resolved chord.
     let km = &app.keymap;
     let dc = |action: TuiAction| km.display_chords(action).join(" · ");
 
@@ -1667,8 +1667,8 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
             "filter the list (search is always live)",
         ),
         (
-            "  u:/uri:/n:/f:".to_string(),
-            "scope a word to user/uri/name/folder",
+            "  u:/uri:/n:/f:/org:/col:".to_string(),
+            "scope a word to user/uri/name/folder/org/collection",
         ),
         (
             format!(

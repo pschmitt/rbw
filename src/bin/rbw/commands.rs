@@ -711,6 +711,7 @@ impl DecryptedSearchCipher {
     // (today's plain substring behavior) or, prefixed like "u:alice" or
     // "uri:google", scopes that word to one field. Every word must match
     // (AND) for the entry as a whole to match. See `QueryToken`.
+    #[cfg(test)]
     pub fn search_match(
         &self,
         term: &str,
@@ -4901,16 +4902,24 @@ fn search_from_file(
     passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
     let vault = load_from_file(path, passphrase)?;
+    let scope_target = FileSaveTarget {
+        path: path.to_path_buf(),
+        passphrase: vault.passphrase.clone(),
+        collections: vault.collections.clone(),
+        entry_extra: vault.entry_extra.clone(),
+    };
 
     if output_is_structured(output) {
         let mut entries: Vec<DecryptedCipher> = vault
             .entries
             .into_iter()
             .filter(|entry| {
-                decrypted_cipher_to_search(entry).search_match(
+                let scope = tui_file_entry_scope(&scope_target, &entry.id);
+                decrypted_cipher_to_search(entry).search_match_with_scope(
                     term,
                     folder,
                     with_attachments,
+                    Some(&scope),
                 )
             })
             .collect();
@@ -4944,8 +4953,18 @@ fn search_from_file(
     let mut entries: Vec<DecryptedListCipher> = vault
         .entries
         .iter()
-        .map(decrypted_cipher_to_search)
-        .filter(|entry| entry.search_match(term, folder, with_attachments))
+        .filter_map(|entry| {
+            let scope = tui_file_entry_scope(&scope_target, &entry.id);
+            let searchable = decrypted_cipher_to_search(entry);
+            searchable
+                .search_match_with_scope(
+                    term,
+                    folder,
+                    with_attachments,
+                    Some(&scope),
+                )
+                .then_some(searchable)
+        })
         .map(std::convert::Into::into)
         .collect();
     entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
@@ -5024,18 +5043,19 @@ pub fn search(
                     )
                 })
                 .filter_map(|entry| match decrypt_search_cipher(entry) {
-                    Ok(searchable)
-                        if searchable.search_match(
+                    Ok(searchable) => {
+                        let scope = tui_entry_scope(&db, entry);
+                        (searchable.search_match_with_scope(
                             term,
                             folder,
                             with_attachments,
-                        ) && archived_filter
-                            .matches(searchable.archived)
-                            && trash_filter.matches(searchable.deleted) =>
-                    {
-                        decrypt_cipher(entry).ok()
+                            Some(&scope),
+                        ) && archived_filter.matches(searchable.archived)
+                            && trash_filter.matches(searchable.deleted))
+                        .then(|| decrypt_cipher(entry).ok())
+                        .flatten()
                     }
-                    Ok(_) | Err(_) => None,
+                    Err(_) => None,
                 })
                 .collect();
             if tag_account {
@@ -5086,7 +5106,7 @@ pub fn search(
         // batch request rather than one socket round-trip per field per
         // entry.
         let mut requests = BatchRequests::new();
-        let plans: Vec<SearchCipherPlan> = db
+        let plans: Vec<(TuiEntryScope, SearchCipherPlan)> = db
             .entries
             .iter()
             .filter(|entry| {
@@ -5096,7 +5116,12 @@ pub fn search(
                     org_id.as_deref(),
                 )
             })
-            .map(|entry| SearchCipherPlan::build(entry, &mut requests))
+            .map(|entry| {
+                (
+                    tui_entry_scope(&db, entry),
+                    SearchCipherPlan::build(entry, &mut requests),
+                )
+            })
             .collect();
 
         let results = if requests.is_empty() {
@@ -5107,15 +5132,24 @@ pub fn search(
 
         let mut account_entries: Vec<DecryptedListCipher> = plans
             .into_iter()
-            .map(|plan| plan.resolve(&results))
-            .filter(|entry| {
-                entry.as_ref().map_or(true, |entry| {
-                    entry.search_match(term, folder, with_attachments)
-                        && archived_filter.matches(entry.archived)
-                        && trash_filter.matches(entry.deleted)
+            .map(|(scope, plan)| {
+                plan.resolve(&results).map(|entry| {
+                    let matches = entry.search_match_with_scope(
+                        term,
+                        folder,
+                        with_attachments,
+                        Some(&scope),
+                    ) && archived_filter
+                        .matches(entry.archived)
+                        && trash_filter.matches(entry.deleted);
+                    (matches, entry)
                 })
             })
-            .map(|entry| entry.map(std::convert::Into::into))
+            .filter_map(|entry| match entry {
+                Ok((true, entry)) => Some(Ok(entry.into())),
+                Ok((false, _)) => None,
+                Err(e) => Some(Err(e)),
+            })
             .collect::<Result<_, anyhow::Error>>()?;
         if tag_account {
             for entry in &mut account_entries {
