@@ -3358,8 +3358,11 @@ fn credential_source_login_fields(
 // actual unlocking as a side effect of building its target list; this just
 // reports what ended up unlocked.
 pub fn unlock_all() -> anyhow::Result<()> {
-    let target_accounts =
-        list_target_accounts(true, rbw::config::ExcludeContext::Unlock)?;
+    let target_accounts = list_target_accounts(
+        true,
+        rbw::config::ExcludeContext::Unlock,
+        true,
+    )?;
     let c = stdout_supports_color();
     for account in &target_accounts {
         eprintln!(
@@ -3380,8 +3383,12 @@ pub fn unlocked() -> anyhow::Result<()> {
 }
 
 pub fn sync(all: bool) -> anyhow::Result<()> {
+    // Sync needs a running agent and a server login, but not an unlocked
+    // vault. Keep that distinction intact: an ordinary sync must not prompt
+    // for the master password just to refresh the local database.
+    ensure_agent()?;
     let target_accounts =
-        list_target_accounts(all, rbw::config::ExcludeContext::Sync)?;
+        list_target_accounts(all, rbw::config::ExcludeContext::Sync, false)?;
     let c = stdout_supports_color();
 
     let mut failed = Vec::new();
@@ -3490,7 +3497,7 @@ pub fn list(
     }
 
     let target_accounts =
-        list_target_accounts(all, rbw::config::ExcludeContext::List)?;
+        list_target_accounts(all, rbw::config::ExcludeContext::List, true)?;
     let tag_account = target_accounts.len() > 1;
 
     // Structured output (`--json`/`--yaml`) always emits the *full* decrypted
@@ -3705,7 +3712,7 @@ pub fn get(
     }
 
     let target_accounts =
-        list_target_accounts(all, rbw::config::ExcludeContext::Get)?;
+        list_target_accounts(all, rbw::config::ExcludeContext::Get, true)?;
     let tag_account = target_accounts.len() > 1;
 
     let needle_str = needles
@@ -3846,7 +3853,7 @@ pub fn show(
     }
 
     let target_accounts =
-        list_target_accounts(all, rbw::config::ExcludeContext::Show)?;
+        list_target_accounts(all, rbw::config::ExcludeContext::Show, true)?;
 
     let needle_str = needles
         .iter()
@@ -4858,7 +4865,7 @@ pub fn search(
     }
 
     let target_accounts =
-        list_target_accounts(all, rbw::config::ExcludeContext::Search)?;
+        list_target_accounts(all, rbw::config::ExcludeContext::Search, true)?;
     let tag_account = target_accounts.len() > 1;
 
     // Structured output (`--json`/`--yaml`) emits the *full* decrypted entry
@@ -5084,7 +5091,7 @@ pub fn code(
     }
 
     let target_accounts =
-        list_target_accounts(all, rbw::config::ExcludeContext::Code)?;
+        list_target_accounts(all, rbw::config::ExcludeContext::Code, true)?;
 
     let needle_str = needles
         .iter()
@@ -16511,27 +16518,35 @@ fn should_unlock_for_merge(
 }
 
 // Which accounts `list`/`search`/`get` should query. An explicit --account/
-// RBW_ACCOUNT always wins and scopes to just that one account, unchanged from
-// single-account behavior. Otherwise every configured account is a candidate,
-// filtered per-account by `Account::excluded_from(ctx)` and `Account::unlock`
-// (see `should_unlock_for_merge`); an account that isn't proactively
-// unlocked still makes it into the merge if it happens to already be
-// unlocked. `ctx` identifies the calling subcommand (e.g. `List`, `Search`,
-// `Get`) so each can be excluded independently via `exclude_from`.
+// RBW_ACCOUNT always wins and scopes to just that one account. Otherwise every
+// configured account is a candidate, filtered per-account by
+// `Account::excluded_from(ctx)` and `Account::unlock` (see
+// `should_unlock_for_merge`); an account that isn't proactively unlocked
+// still makes it into the merge if it happens to already be unlocked. `ctx`
+// identifies the calling subcommand (e.g. `List`, `Search`, `Get`) so each can
+// be excluded independently via `exclude_from`. `unlock_single_account`
+// preserves the normal single-account behavior for commands that need vault
+// data, while allowing login-only commands such as `sync` to stay locked.
 fn list_target_accounts(
     all: bool,
     ctx: rbw::config::ExcludeContext,
+    unlock_single_account: bool,
 ) -> anyhow::Result<Vec<String>> {
     if let Some(name) = crate::actions::current_account() {
+        if unlock_single_account {
+            unlock(None, None)?;
+        }
         return Ok(vec![name]);
     }
 
     crate::actions::set_active_account(None)?;
-    unlock(None, None)?;
 
     let config = rbw::config::Config::load()?;
     let accounts = config.accounts();
     if accounts.len() <= 1 {
+        if unlock_single_account {
+            unlock(None, None)?;
+        }
         return Ok(vec![config.primary_account_name()]);
     }
 

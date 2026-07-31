@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::io::Write as _;
 
 use is_terminal::IsTerminal as _;
@@ -355,10 +356,11 @@ fn grouped_commands(command: &clap::Command, color: bool) -> String {
 
     let mut help = String::new();
     for (group, names) in HELP_GROUPS {
-        help.push_str(&format!(
-            "{}:\n",
+        let _ = writeln!(
+            help,
+            "{}:",
             styled_help_value(heading_style, group, color)
-        ));
+        );
         for name in *names {
             let Some(command) = commands.get(name) else {
                 continue;
@@ -393,10 +395,10 @@ fn grouped_commands(command: &clap::Command, color: bool) -> String {
                         command.get_name(),
                         color,
                     ));
-                    help.push_str(&format!("  {line}\n"));
+                    let _ = writeln!(help, "  {line}");
                 } else {
                     help.push_str(&" ".repeat(prefix.len() + name_width + 2));
-                    help.push_str(&format!("{line}\n"));
+                    let _ = writeln!(help, "{line}");
                 }
             }
         }

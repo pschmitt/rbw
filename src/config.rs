@@ -5,10 +5,10 @@ use std::os::unix::fs::OpenOptionsExt as _;
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-// Whether `list`/`search`/`get` should proactively unlock this account
-// (prompting as needed) when merging entries across every configured
-// account. Independent of `Account::exclude_from` (see `ExcludeContext`),
-// which controls whether the account's entries show up in the merge at all.
+// Whether entry lookups should proactively unlock this account (prompting as
+// needed) when merging entries across every configured account. Independent
+// of `Account::exclude_from` (see `ExcludeContext`), which controls whether
+// the account's entries show up in the merge at all.
 #[derive(
     serde::Serialize,
     serde::Deserialize,
