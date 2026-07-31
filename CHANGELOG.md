@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.16.1] - 2026-07-31
+
+### Added
+
+* Add `org:` and `col:` filters to the TUI, `rbw search`, and `rbw list
+  <term>`, and show organization/collection metadata in the TUI preview.
+
 ## [2.16.0] - 2026-07-31
 
 ### Changed
