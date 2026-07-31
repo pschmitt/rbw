@@ -89,12 +89,12 @@
                 programs.rbw.declarative = {
                   enable = true;
                   settings = {
-                    pinentry = "pinentry-gtk2";
-                    lock_timeout = 120;
-                    primary_account = "personal";
+                    pinentry.command = "pinentry-gtk2";
+                    agent.lockTimeout = 120;
+                    primaryAccount = "personal";
                     accounts.personal = {
                       email = "me@example.com";
-                      base_url = "https://vault.example.com";
+                      baseUrl = "https://vault.example.com";
                     };
                   };
                 };
@@ -105,33 +105,45 @@
           configFile = "${hm.config.xdg.configHome}/rbw/config.yaml";
           expected =
             builtins.toJSON {
-              pinentry = "pinentry-gtk2";
-              pinentry_timeout = 300;
-              lock_timeout = 120;
-              sync_interval = 3600;
-              primary_account = "personal";
+              agent = {
+                syncInterval = 3600;
+                lockTimeout = 120;
+              };
+              pinentry = {
+                command = "pinentry-gtk2";
+                timeout = 300;
+              };
+              primaryAccount = "personal";
               accounts = [
                 {
                   name = "personal";
                   email = "me@example.com";
-                  base_url = "https://vault.example.com";
+                  baseUrl = "https://vault.example.com";
                   unlock = {
                     policy = "on-demand";
                   };
-                  exclude_from = [ ];
                 }
               ];
-              hide_archived = true;
-              hide_trashed = true;
+              tui = {
+                lockTimeout = 0;
+              };
+              hide = {
+                archived = true;
+                trashed = true;
+              };
               clipboard = "auto";
-              tui_keybindings = { };
-              tui_lock_timeout = 0;
             }
             + "\n";
         in
         {
           hm-module-config-yaml =
-            pkgs.runCommand "rbw-hm-module-check" { nativeBuildInputs = [ pkgs.jq pkgs.yq-go ]; }
+            pkgs.runCommand "rbw-hm-module-check"
+              {
+                nativeBuildInputs = [
+                  pkgs.jq
+                  pkgs.yq-go
+                ];
+              }
               ''
                 ${activationScript}
                 yq -o=json '.' '${configFile}' > actual.json

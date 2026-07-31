@@ -59,6 +59,7 @@ pub struct UnlockConfig {
 #[derive(
     serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
 )]
+#[serde(rename_all = "camelCase")]
 pub struct TermuxKeystoreUnlock {
     pub file: std::path::PathBuf,
     pub key_alias: String,
@@ -101,7 +102,7 @@ pub enum ExcludeContext {
 // field-for-field; `length` is `None` (rather than 0) so "unset" is
 // distinguishable from "explicitly zero" for future flags that might want
 // that. Kept `Copy`/`Eq` so `Config` can cheaply skip serializing it when
-// it's still the all-defaults value a freshly-written config.json shouldn't
+// it's still the all-defaults value a freshly-written config.yaml shouldn't
 // be cluttered with.
 #[derive(
     serde::Serialize,
@@ -113,6 +114,7 @@ pub enum ExcludeContext {
     PartialEq,
     Eq,
 )]
+#[serde(rename_all = "camelCase")]
 pub struct PasswordGenPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length: Option<usize>,
@@ -129,6 +131,104 @@ pub struct PasswordGenPolicy {
 impl PasswordGenPolicy {
     fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+}
+
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentConfig {
+    #[serde(default = "default_sync_interval")]
+    pub sync_interval: u64,
+    #[serde(default = "default_lock_timeout")]
+    pub lock_timeout: u64,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            sync_interval: default_sync_interval(),
+            lock_timeout: default_lock_timeout(),
+        }
+    }
+}
+
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct PinentryConfig {
+    #[serde(default = "default_pinentry")]
+    pub command: String,
+    #[serde(default = "default_pinentry_timeout")]
+    pub timeout: u64,
+}
+
+impl Default for PinentryConfig {
+    fn default() -> Self {
+        Self {
+            command: default_pinentry(),
+            timeout: default_pinentry_timeout(),
+        }
+    }
+}
+
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct TuiConfig {
+    #[serde(
+        default,
+        skip_serializing_if = "std::collections::HashMap::is_empty"
+    )]
+    pub keys: std::collections::HashMap<String, Vec<String>>,
+    #[serde(default = "default_tui_lock_timeout")]
+    pub lock_timeout: u64,
+}
+
+impl Default for TuiConfig {
+    fn default() -> Self {
+        Self {
+            keys: std::collections::HashMap::new(),
+            lock_timeout: default_tui_lock_timeout(),
+        }
+    }
+}
+
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct HideConfig {
+    #[serde(default = "default_hide_archived")]
+    pub archived: bool,
+    #[serde(default = "default_hide_trashed")]
+    pub trashed: bool,
+}
+
+impl Default for HideConfig {
+    fn default() -> Self {
+        Self {
+            archived: default_hide_archived(),
+            trashed: default_hide_trashed(),
+        }
+    }
+}
+
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq, Default,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct TermuxConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_alias: Option<String>,
+}
+
+impl TermuxConfig {
+    fn is_default(&self) -> bool {
+        self.key_alias.is_none()
     }
 }
 
@@ -203,6 +303,7 @@ pub struct CredentialSource {
 #[derive(
     serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq,
 )]
+#[serde(rename_all = "camelCase")]
 pub struct Account {
     // Stable local identifier used by `--account` and the agent; unrelated to
     // the email/server.
@@ -222,25 +323,25 @@ pub struct Account {
     pub exclude_from: Vec<ExcludeContext>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct Config {
     // ---- legacy single-account fields --------------------------------------
-    // Retained for backward compatibility: an older config with these set (and
-    // no `accounts`) is treated as a single implicit account named "default".
-    // New configs write `accounts` instead.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // Deserialization-only fields for an older single-account shape. New
+    // configs always write `accounts` instead.
+    #[serde(skip_serializing, default)]
     pub email: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing, default)]
     pub sso_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing, default)]
     pub base_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing, default)]
     pub identity_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing, default)]
     pub ui_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing, default)]
     pub notifications_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing, default)]
     pub client_cert_path: Option<std::path::PathBuf>,
 
     // ---- accounts ----------------------------------------------------------
@@ -250,51 +351,19 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primary_account: Option<String>,
 
-    // ---- global preferences ------------------------------------------------
-    #[serde(default = "default_lock_timeout")]
-    pub lock_timeout: u64,
-    #[serde(default = "default_sync_interval")]
-    pub sync_interval: u64,
-    #[serde(default = "default_pinentry")]
-    pub pinentry: String,
+    // ---- grouped global preferences ---------------------------------------
+    #[serde(default)]
+    pub agent: AgentConfig,
+    #[serde(default)]
+    pub pinentry: PinentryConfig,
+    #[serde(default)]
+    pub tui: TuiConfig,
+    #[serde(default)]
+    pub hide: HideConfig,
     // Default Android Keystore alias for native Termux unlocks. An explicit
     // RBW_TERMUX_KEY_ALIAS environment variable takes precedence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub termux_key_alias: Option<String>,
-    // Seconds pinentry waits at the terminal for input before giving up and
-    // exiting on its own; passed straight through to pinentry's own
-    // `--timeout` flag, so `0` means never (the old, unconditional
-    // behavior). Without this, a pinentry left unanswered -- its terminal
-    // closed, its process orphaned, whatever -- hangs around forever and
-    // wedges every subsequent unlock attempt behind it, since only one
-    // pinentry can hold the terminal at a time.
-    #[serde(default = "default_pinentry_timeout")]
-    pub pinentry_timeout: u64,
-    // Seconds of TUI inactivity before the interactive screen locks. Zero
-    // disables the inactivity lock; the `rbw tui` flag can override this.
-    #[serde(default = "default_tui_lock_timeout")]
-    pub tui_lock_timeout: u64,
-    // Whether archived entries are hidden from `rbw list`/`rbw search` (and
-    // the TUI) by default. Overridable per-invocation with `--archived`
-    // (show only archived) / `--include-archived` (disable hiding).
-    #[serde(default = "default_hide_archived")]
-    pub hide_archived: bool,
-    // Whether trashed entries (removed via `rbw remove`/`rbw delete`) are
-    // hidden from `rbw list`/`rbw search` (and the TUI) by default.
-    // Overridable per-invocation with `--trashed`/`--deleted` (show only
-    // trashed) / `--include-trashed`/`--include-deleted` (disable hiding).
-    #[serde(default = "default_hide_trashed")]
-    pub hide_trashed: bool,
-    // TUI keybinding overrides: action name (e.g. "copy_password",
-    // "move_down") to a list of key chord strings (e.g. "ctrl-y", "alt-p",
-    // "g", "pagedown") that fully replace that action's built-in default
-    // chords. Actions not listed here keep their defaults. See
-    // `src/bin/rbw/tui/keymap.rs` for the full action list and defaults.
-    #[serde(
-        default,
-        skip_serializing_if = "std::collections::HashMap::is_empty"
-    )]
-    pub tui_keybindings: std::collections::HashMap<String, Vec<String>>,
+    #[serde(default, skip_serializing_if = "TermuxConfig::is_default")]
+    pub termux: TermuxConfig,
     // Default password-generation policy for `rbw gen` and `rbw create
     // --generate`; see `PasswordGenPolicy`. Editable from the TUI's settings
     // view.
@@ -307,34 +376,6 @@ pub struct Config {
     // backcompat, no longer generated in new configs
     #[serde(skip_serializing)]
     pub device_id: Option<String>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            email: None,
-            sso_id: None,
-            base_url: None,
-            identity_url: None,
-            ui_url: None,
-            notifications_url: None,
-            client_cert_path: None,
-            accounts: Vec::new(),
-            primary_account: None,
-            lock_timeout: default_lock_timeout(),
-            sync_interval: default_sync_interval(),
-            pinentry: default_pinentry(),
-            termux_key_alias: None,
-            pinentry_timeout: default_pinentry_timeout(),
-            tui_lock_timeout: default_tui_lock_timeout(),
-            hide_archived: default_hide_archived(),
-            hide_trashed: default_hide_trashed(),
-            tui_keybindings: std::collections::HashMap::new(),
-            password_gen: PasswordGenPolicy::default(),
-            clipboard: ClipboardMechanism::default(),
-            device_id: None,
-        }
-    }
 }
 
 pub fn default_lock_timeout() -> u64 {
@@ -386,9 +427,10 @@ impl Config {
             }
         })?;
         let mut slf = parse_config(&contents, &file)?;
-        if slf.lock_timeout == 0 {
+        slf.migrate_legacy();
+        if slf.agent.lock_timeout == 0 {
             log::warn!("lock_timeout must be greater than 0");
-            slf.lock_timeout = default_lock_timeout();
+            slf.agent.lock_timeout = default_lock_timeout();
         }
         Ok(slf)
     }
@@ -410,9 +452,10 @@ impl Config {
             }
         })?;
         let mut slf = parse_config(&contents, &file)?;
-        if slf.lock_timeout == 0 {
+        slf.migrate_legacy();
+        if slf.agent.lock_timeout == 0 {
             log::warn!("lock_timeout must be greater than 0");
-            slf.lock_timeout = default_lock_timeout();
+            slf.agent.lock_timeout = default_lock_timeout();
         }
         Ok(slf)
     }
@@ -518,6 +561,30 @@ impl Config {
                 name: "default".to_string(),
                 ..Account::default()
             })
+    }
+
+    // Return the primary account for configuration updates, creating the
+    // default account on a fresh configuration when necessary.
+    pub fn primary_mut(&mut self) -> &mut Account {
+        self.migrate_legacy();
+        if self.accounts.is_empty() {
+            let name = self
+                .primary_account
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+            self.accounts.push(Account {
+                name: name.clone(),
+                ..Account::default()
+            });
+            self.primary_account = Some(name);
+        }
+        let name = self.primary_account_name();
+        let index = self
+            .accounts
+            .iter()
+            .position(|account| account.name == name)
+            .unwrap_or(0);
+        &mut self.accounts[index]
     }
 
     // Fold the legacy top-level fields into an explicit account entry, clearing
@@ -1031,11 +1098,44 @@ mod test {
     #[test]
     fn config_yaml_deserializes() {
         let config = parse_config(
-            "clipboard: osc52\nlock_timeout: 120\n",
+            "clipboard: osc52\nagent:\n  syncInterval: 42\n  lockTimeout: 120\n\npinentry:\n  command: pinentry\n  timeout: 300\ntui:\n  lockTimeout: 10\nhide:\n  archived: false\n  trashed: true\n",
             std::path::Path::new("config.yaml"),
         )
         .unwrap();
         assert_eq!(config.clipboard, ClipboardMechanism::Osc52);
-        assert_eq!(config.lock_timeout, 120);
+        assert_eq!(config.agent.sync_interval, 42);
+        assert_eq!(config.agent.lock_timeout, 120);
+        assert_eq!(config.pinentry.command, "pinentry");
+        assert_eq!(config.pinentry.timeout, 300);
+        assert_eq!(config.tui.lock_timeout, 10);
+        assert!(!config.hide.archived);
+        assert!(config.hide.trashed);
+    }
+
+    #[test]
+    fn config_yaml_serializes_grouped_camel_case() {
+        let mut config = Config::new();
+        config.agent.sync_interval = 42;
+        config.pinentry.command = "pinentry-curses".to_string();
+        config.tui.lock_timeout = 10;
+        config
+            .tui
+            .keys
+            .insert("forceQuit".to_string(), vec!["alt-Q".to_string()]);
+        config.hide.archived = false;
+        config.termux.key_alias = Some("rbw-personal".to_string());
+        config.password_gen.no_symbols = true;
+
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        assert!(yaml.contains("syncInterval: 42"));
+        assert!(yaml.contains("command: pinentry-curses"));
+        assert!(yaml.contains("lockTimeout: 10"));
+        assert!(yaml.contains("forceQuit:"));
+        assert!(yaml.contains("keyAlias: rbw-personal"));
+        assert!(yaml.contains("noSymbols: true"));
+        assert!(yaml.contains("archived: false"));
+        assert!(!yaml.contains("sync_interval"));
+        assert!(!yaml.contains("tui_keybindings"));
+        assert!(!yaml.contains("hide_archived"));
     }
 }

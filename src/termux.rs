@@ -42,7 +42,8 @@ pub fn resolve_key_alias(
         .filter(|alias| !alias.is_empty())
         .or_else(|| {
             config
-                .termux_key_alias
+                .termux
+                .key_alias
                 .clone()
                 .filter(|alias| !alias.is_empty())
         })

@@ -4,7 +4,7 @@
 
 Don't run `cargo build`/`test`/`clippy` on `fnuc` (it hosts Home Assistant
 and other live infra). Do it on a scratch host instead: `rsync -az --delete
---exclude target --exclude .git ./ <host>:~/rbw-build/`, then `nix shell
+--exclude target --exclude .git ./ <host>:~/build/rbw/`, then `nix shell
 nixpkgs#cargo nixpkgs#rustc nixpkgs#clippy nixpkgs#pkg-config
 nixpkgs#openssl nixpkgs#gcc -c cargo <build|test|clippy>`. Run `cargo fmt
 --all` before committing.

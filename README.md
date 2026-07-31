@@ -81,12 +81,12 @@ Then configure it:
 programs.rbw.declarative = {
   enable = true;
   settings = {
-    pinentry = "pinentry-gnome3";
-    lock_timeout = 3600;
-    primary_account = "personal";
+    pinentry.command = "pinentry-gnome3";
+    agent.lockTimeout = 3600;
+    primaryAccount = "personal";
     accounts.personal = {
       email = "me@example.com";
-      base_url = "https://vault.bitwarden.com";
+      baseUrl = "https://vault.bitwarden.com";
     };
   };
 };
@@ -98,7 +98,7 @@ unset options are omitted from the generated file rather than written as
 `null`. See the module's option documentation (e.g. via `home-manager
 option programs.rbw.declarative` or your editor's Nix LSP) for the full
 list of settings, including `accounts.<name>.unlock`,
-`accounts.<name>.exclude_from_list`, and `tui_keybindings`.
+`accounts.<name>.excludeFrom`, and `tui.keys`.
 
 rbw reads both `config.yaml` and the legacy `config.json`; when both exist,
 `config.yaml` takes precedence. Configuration written by rbw itself, including
@@ -106,57 +106,32 @@ rbw reads both `config.yaml` and the legacy `config.json`; when both exist,
 
 ## Configuration
 
-Configuration options are set using the `rbw config` command (`rbw config set
-<key> <value>`, `rbw config get <key>`, `rbw config unset <key>`, `rbw config
-show` (YAML by default, or JSON with `--json`), or `rbw config edit` to edit
-the whole config.yaml in `$EDITOR`).
-Available configuration options:
+Configuration is YAML with camelCase keys. `rbw config show` prints the
+readable YAML form by default; pass `--json` for JSON. The complete file can
+be edited with `rbw config edit`.
 
-* `email`: The email address to use as the account name when logging into the
-  Bitwarden server. Required.
-* `sso_id`: The SSO organization ID. Defaults to regular login process if unset.
-* `base_url`: The URL of the Bitwarden server to use. Defaults to the official
-  server at `https://api.bitwarden.com/` if unset.
-* `identity_url`: The URL of the Bitwarden identity server to use. If unset,
-  will use the `/identity` path on the configured `base_url`, or
-  `https://identity.bitwarden.com/` if no `base_url` is set.
-* `ui_url`: The URL of the Bitwarden UI to use. If unset,
-  will default to `https://vault.bitwarden.com/`.
-* `notifications_url`: The URL of the Bitwarden notifications server to use.
-  If unset, will use the `/notifications` path on the configured `base_url`,
-  or `https://notifications.bitwarden.com/` if no `base_url` is set.
-* `lock_timeout`: The number of seconds to keep the master keys in memory for
-  before requiring the password to be entered again. Defaults to `3600` (one
-  hour).
-* `tui_lock_timeout`: The number of seconds of inactivity before the TUI
-  automatically locks and requires the master password again. Defaults to `0`
-  (disabled). Override it for one run with
-  `rbw tui --screen-lock-timeout SECONDS`.
-* `sync_interval`: `rbw` will automatically sync the database from the server
-  at an interval of this many seconds, while the agent is running. Setting
-  this value to `0` disables this behavior. Defaults to `3600` (one hour).
-* `pinentry`: The
-  [pinentry](https://www.gnupg.org/related_software/pinentry/index.html)
-  executable to use. Defaults to `pinentry`.
-* `termux_key_alias`: Default Android Keystore alias for native Termux
-  unlocks. `RBW_TERMUX_KEY_ALIAS` overrides it at runtime; when neither is
-  set, enrollment generates `rbw-<account>`.
-* `password_gen`: The default password-generation policy used by `rbw gen`
-  and `rbw create --generate` whenever the equivalent flag isn't passed
-  explicitly (`length`, `no_symbols`, `only_numbers`, `nonconfusables`,
-  `diceware` -- same fields as those commands' flags). Not settable via `rbw
-  config set`; edit `config.yaml` directly, or use the TUI's settings view
-  (`S` from the main screen).
-* `clipboard`: Which mechanism `-c`/`--clipboard` and the TUI's copy actions
-  use to copy text. One of `auto` (default), `system`, or `osc52`. `system`
-  copies via the system clipboard (X11/Wayland/macOS, through `rbw-agent`).
-  `osc52` writes an OSC 52 terminal escape sequence to the client's own
-  stdout instead (with tmux/GNU screen passthrough handled automatically),
-  which works over SSH and in terminals without display-server access,
-  provided the terminal supports it. This also works with non-interactive
-  SSH commands such as `ssh host rbw get example.com --clipboard`, which do
-  not allocate a remote PTY. `auto` tries both and succeeds if either one
-  does.
+The main sections are:
+
+* `accounts` and `primaryAccount`: account connection settings use keys such
+  as `ssoId`, `baseUrl`, `identityUrl`, `uiUrl`, `notificationsUrl`, and
+  `clientCertPath`. Per-account unlock settings live under `unlock`, and
+  account exclusions under `excludeFrom`.
+* `agent`: `syncInterval` controls background synchronization and
+  `lockTimeout` controls how long unlocked keys remain in memory.
+* `pinentry`: `command` selects the pinentry executable and `timeout` sets
+  its input timeout.
+* `tui`: `lockTimeout` controls inactivity locking and `keys` contains
+  camelCase action names such as `forceQuit` and `copyPassword`.
+* `hide`: `archived` and `trashed` control default list/search visibility.
+* `termux.keyAlias`: the default Android Keystore alias; the
+  `RBW_TERMUX_KEY_ALIAS` environment variable overrides it.
+* `passwordGen`: the default generation policy, with `noSymbols`,
+  `onlyNumbers`, `nonconfusables`, and `diceware` options.
+* `clipboard`: one of `auto`, `system`, or `osc52`.
+
+Scalar settings can also be changed with dotted paths, for example
+`rbw config set pinentry.command pinentry-curses` or
+`rbw config set agent.lockTimeout 3600`.
 
 ### Profiles
 
@@ -187,7 +162,7 @@ no account selected locks every account, while `rbw -a <name> lock` (or
 always locks every configured account, even when an account is selected.
 
 The TUI can also lock manually with `l`, or automatically after an inactivity
-timeout configured by `tui_lock_timeout` or overridden with
+timeout configured by `tui.lockTimeout` or overridden with
 `--screen-lock-timeout`. Press Enter or `y` on the lock screen to re-enter the
 master password; press `q` to quit.
 
@@ -215,7 +190,7 @@ already-trashed entry with no live match, letting `--force` double as a
 trash-purge for a single item). `rbw restore` undoes a trash move. Deleted
 and archived entries (see below) are hidden from `list`/`search` by default;
 pass `--trashed`/`--include-trashed` or `--archived`/`--include-archived` (or
-set `hide_trashed`/`hide_archived` to `false` in the config) to show them.
+set `hide.trashed`/`hide.archived` to `false` in the config) to show them.
 
 `rbw help` can be used to get more information about the available
 functionality.
@@ -244,7 +219,7 @@ the encrypted bundle below rbw's config directory, and
 updates the active account in `config.yaml`. The default authorization window
 is five minutes; adjust it with `--validity SECONDS`. By default the generated
 key and bundle are named after the account, so multiple accounts can be
-enrolled independently. To use an existing alias, set `termux_key_alias` in
+enrolled independently. To use an existing alias, set `termux.keyAlias` in
 config.yaml or export `RBW_TERMUX_KEY_ALIAS`; the environment variable wins,
 and enrollment reuses the selected key instead of generating another one. Use
 `rbw termux status` to inspect a readable report of the
@@ -260,16 +235,12 @@ rbw termux remove --yes # non-interactive form
 
 For declarative Home Manager setups, the equivalent account option is:
 
-```json
-{
-  "unlock": {
-    "termux": {
-      "file": "/data/data/com.termux/files/home/.config/rbw/termux/personal.bundle",
-      "key_alias": "rbw-personal",
-      "algorithm": "SHA256withRSA"
-    }
-  }
-}
+```yaml
+unlock:
+  termux:
+    file: /data/data/com.termux/files/home/.config/rbw/termux/personal.bundle
+    keyAlias: rbw-personal
+    algorithm: SHA256withRSA
 ```
 
 After that, `rbw unlock`, `rbw login`, `rbw get`, and the TUI use the native
@@ -331,7 +302,7 @@ For commands that support formatted output, use `-o name`, `-o json`, or
 `rbw create --generate` (`-g`) generates the password instead of prompting
 for one, using the same flags as `rbw gen` (`--length`/`-l`, `--no-symbols`,
 `--only-numbers`, `--nonconfusables`, `--diceware`); any of those flags
-implies `--generate`. Omitted flags fall back to the `password_gen` config
+implies `--generate`. Omitted flags fall back to the `passwordGen` config
 policy, then to a 20-character password from the full character set. This
 is mutually exclusive with piping a fully-formed entry into `rbw create` via
 stdin.
@@ -347,7 +318,7 @@ independently of the trash:
 * `rbw unarchive <entry>`: undo it (same `--bulk`/`-y` support).
 
 Archived entries are hidden by default, same as trashed ones -- see
-`--archived`/`--include-archived` and `hide_archived` above.
+`--archived`/`--include-archived` and `hide.archived` above.
 
 ### Organization collections (`rbw collection`)
 

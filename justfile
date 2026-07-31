@@ -9,7 +9,7 @@ export CARGO_TERM_COLOR := "always"
 default-target := "x86_64-unknown-linux-musl"
 native-target := "x86_64-unknown-linux-gnu"
 default-host := "rofl-13"
-remote-build-base := "~/rbw-build"
+remote-build-base := "~/build/rbw"
 remote-cargo-tools := "nixpkgs#cargo nixpkgs#rustc nixpkgs#clippy nixpkgs#pkg-config nixpkgs#openssl nixpkgs#gcc"
 
 # Running just without arguments lists the available recipes.

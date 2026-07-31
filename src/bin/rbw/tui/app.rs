@@ -407,7 +407,7 @@ pub struct App {
     // scroll the preview instead of moving the list selection; Left/Esc (or
     // a list-pane click) moves it back. Only meaningful in `Mode::Normal`.
     pub detail_focused: bool,
-    // Resolved once at startup from `tui_keybindings` (config.json) merged
+    // Resolved once at startup from `tui.keys` (config.yaml) merged
     // over the built-in defaults (see `keymap::Keymap::resolve`). `super::ui`
     // reads it to render live keybinding hints instead of hardcoded text.
     pub keymap: Keymap,
@@ -423,10 +423,10 @@ pub struct App {
     // upload/delete, the accounts panel) is rejected instead of attempted.
     read_only: bool,
     // Main list's archived-visibility filter, initialized from
-    // `hide_archived` (config.json) and cycled at runtime by
+    // `hide.archived` (config.yaml) and cycled at runtime by
     // `TuiAction::CycleArchivedFilter`.
     pub archived_filter: ArchivedFilter,
-    // Main list's trash-visibility filter, initialized from `hide_trashed`
+    // Main list's trash-visibility filter, initialized from `hide.trashed`
     // (config.json). Unlike `archived_filter`, there's no runtime toggle
     // for this yet (no `TuiAction` cycles it) -- restoring/browsing trash
     // from the TUI is left for a later pass; this only needs to keep
@@ -450,18 +450,18 @@ impl App {
         let config = rbw::config::Config::load().ok();
         let keymap = config.as_ref().map_or_else(
             || Keymap::resolve(&std::collections::HashMap::new()),
-            |config| Keymap::resolve(&config.tui_keybindings),
+            |config| Keymap::resolve(&config.tui.keys),
         );
         let archived_filter =
             config.as_ref().map_or(ArchivedFilter::Hide, |config| {
-                if config.hide_archived {
+                if config.hide.archived {
                     ArchivedFilter::Hide
                 } else {
                     ArchivedFilter::Include
                 }
             });
         let trash_filter = config.map_or(TrashFilter::Hide, |config| {
-            if config.hide_trashed {
+            if config.hide.trashed {
                 TrashFilter::Hide
             } else {
                 TrashFilter::Include
@@ -471,7 +471,7 @@ impl App {
             .or_else(|| {
                 rbw::config::Config::load()
                     .ok()
-                    .map(|config| config.tui_lock_timeout)
+                    .map(|config| config.tui.lock_timeout)
             })
             .filter(|seconds| *seconds > 0)
             .map(std::time::Duration::from_secs);
@@ -532,18 +532,18 @@ impl App {
         let config = rbw::config::Config::load().ok();
         let keymap = config.as_ref().map_or_else(
             || Keymap::resolve(&std::collections::HashMap::new()),
-            |config| Keymap::resolve(&config.tui_keybindings),
+            |config| Keymap::resolve(&config.tui.keys),
         );
         let archived_filter =
             config.as_ref().map_or(ArchivedFilter::Hide, |config| {
-                if config.hide_archived {
+                if config.hide.archived {
                     ArchivedFilter::Hide
                 } else {
                     ArchivedFilter::Include
                 }
             });
         let trash_filter = config.map_or(TrashFilter::Hide, |config| {
-            if config.hide_trashed {
+            if config.hide.trashed {
                 TrashFilter::Hide
             } else {
                 TrashFilter::Include
@@ -3208,7 +3208,7 @@ mod test {
     // needs it configured, since it has no default chord.
     fn app_with_force_quit_bound() -> App {
         let mut overrides = std::collections::HashMap::new();
-        overrides.insert("force_quit".to_string(), vec!["alt-Q".to_string()]);
+        overrides.insert("forceQuit".to_string(), vec!["alt-Q".to_string()]);
         App::with_keymap(
             crate::commands::TuiOpen {
                 vaults: vec![crate::commands::TuiVault {

@@ -40,7 +40,7 @@ let
   # nested inside lists), generates a shell snippet that renders the value to
   # JSON with each marker replaced by that file's contents, read at
   # activation time rather than baked into the Nix store. Used below so
-  # account fields like `email`/`base_url` can point at a sops-nix secret
+  # account fields like `email`/`baseUrl` can point at a sops-nix secret
   # instead of embedding the value in `config.yaml` -- mirrors the same
   # `_secret` convention used for `glab`'s config in this repo (see
   # modules/home-manager/glab.nix).
@@ -58,14 +58,17 @@ let
   filterNulls =
     v:
     if builtins.isAttrs v then
-      lib.mapAttrs (_: filterNulls) (lib.filterAttrs (_: x: x != null) v)
+      let
+        filtered = lib.filterAttrs (_: x: x != null) (lib.mapAttrs (_: filterNulls) v);
+      in
+      if filtered == { } then null else filtered
     else if builtins.isList v then
-      map filterNulls v
+      if v == [ ] then null else map filterNulls v
     else
       v;
 
   isDefaultPasswordGen =
-    pg: pg.length == null && !pg.no_symbols && !pg.only_numbers && !pg.nonconfusables && !pg.diceware;
+    pg: pg.length == null && !pg.noSymbols && !pg.onlyNumbers && !pg.nonconfusables && !pg.diceware;
 
   mkNullOrStr =
     description:
@@ -132,12 +135,12 @@ let
           '';
         };
         email = mkNullOrStrOrSecret "The email address to log into this account with.";
-        sso_id = mkNullOrStrOrSecret "The SSO organization ID for this account. Defaults to the regular login process if unset.";
-        base_url = mkNullOrStrOrSecret "The URL of the Bitwarden/Vaultwarden server for this account. Defaults to the official Bitwarden server if unset.";
-        identity_url = mkNullOrStrOrSecret "The identity server URL for this account. Defaults to the `/identity` path on `base_url`, or the official server, if unset.";
-        ui_url = mkNullOrStrOrSecret "The vault UI URL for this account. Defaults to the official Bitwarden vault UI if unset.";
-        notifications_url = mkNullOrStrOrSecret "The notifications server URL for this account. Defaults to the `/notifications` path on `base_url`, or the official server, if unset.";
-        client_cert_path = mkNullOrPath "Path to a client certificate to present to the server for this account, if required.";
+        ssoId = mkNullOrStrOrSecret "The SSO organization ID for this account. Defaults to the regular login process if unset.";
+        baseUrl = mkNullOrStrOrSecret "The URL of the Bitwarden/Vaultwarden server for this account. Defaults to the official Bitwarden server if unset.";
+        identityUrl = mkNullOrStrOrSecret "The identity server URL for this account. Defaults to the `/identity` path on `baseUrl`, or the official server, if unset.";
+        uiUrl = mkNullOrStrOrSecret "The vault UI URL for this account. Defaults to the official Bitwarden vault UI if unset.";
+        notificationsUrl = mkNullOrStrOrSecret "The notifications server URL for this account. Defaults to the `/notifications` path on `baseUrl`, or the official server, if unset.";
+        clientCertPath = mkNullOrPath "Path to a client certificate to present to the server for this account, if required.";
         # See `UnlockConfig` in `src/config.rs`.
         unlock = mkOption {
           type = types.submodule {
@@ -221,7 +224,7 @@ let
                           produced by `rbw termux enroll`.
                         '';
                       };
-                      key_alias = mkOption {
+                      keyAlias = mkOption {
                         type = types.str;
                         description = ''
                           Android Keystore alias of the authentication-gated
@@ -255,7 +258,7 @@ let
           '';
         };
         # See `ExcludeContext` in `src/config.rs`.
-        exclude_from = mkOption {
+        excludeFrom = mkOption {
           type = types.listOf (
             types.enum [
               "list"
@@ -286,19 +289,6 @@ let
   # Top-level `Config` fields from `src/config.rs`.
   settingsModule = types.submodule {
     options = {
-      # ---- legacy single-account fields, retained for backward
-      # compatibility; prefer `accounts` for new configs -------------------
-      email = mkNullOrStrOrSecret ''
-        Legacy top-level email address. Retained for backward compatibility
-        with configs predating multi-account support; prefer `accounts`.
-      '';
-      sso_id = mkNullOrStrOrSecret "Legacy top-level SSO organization ID; prefer `accounts`.";
-      base_url = mkNullOrStrOrSecret "Legacy top-level server URL; prefer `accounts`.";
-      identity_url = mkNullOrStrOrSecret "Legacy top-level identity server URL; prefer `accounts`.";
-      ui_url = mkNullOrStrOrSecret "Legacy top-level vault UI URL; prefer `accounts`.";
-      notifications_url = mkNullOrStrOrSecret "Legacy top-level notifications server URL; prefer `accounts`.";
-      client_cert_path = mkNullOrPath "Legacy top-level client certificate path; prefer `accounts`.";
-
       # ---- accounts --------------------------------------------------------
       accounts = mkOption {
         type = types.attrsOf accountModule;
@@ -306,100 +296,117 @@ let
         description = ''
           Configured Bitwarden/Vaultwarden accounts, keyed by account name
           (used as the account's `name` field unless overridden). Rendered
-          to the JSON `accounts` array; note that array order in the
+          to the YAML `accounts` array; note that array order in the
           rendered config follows attribute-name (alphabetical) order, so
-          if `primary_account` is unset, the alphabetically-first account
+          if `primaryAccount` is unset, the alphabetically-first account
           name becomes primary rather than any particular insertion order --
-          set `primary_account` explicitly when configuring more than one
+          set `primaryAccount` explicitly when configuring more than one
           account to avoid relying on this.
         '';
       };
-      primary_account = mkNullOrStr ''
+      primaryAccount = mkNullOrStr ''
         Name of the primary account; defaults to the first account (see the
         `accounts` ordering caveat above) when unset.
       '';
 
-      # ---- global preferences ------------------------------------------
-      lock_timeout = mkOption {
-        type = types.ints.unsigned;
-        default = 3600;
-        description = ''
-          The number of seconds to keep the master keys in memory for
-          before requiring the password to be entered again.
-        '';
-      };
-      sync_interval = mkOption {
-        type = types.ints.unsigned;
-        default = 3600;
-        description = ''
-          `rbw` will automatically sync the database from the server at an
-          interval of this many seconds, while the agent is running.
-          Setting this to `0` disables this behavior.
-        '';
+      # ---- grouped global preferences ---------------------------------
+      agent = mkOption {
+        type = types.submodule {
+          options = {
+            syncInterval = mkOption {
+              type = types.ints.unsigned;
+              default = 3600;
+              description = ''
+                `rbw` automatically syncs the database at this many seconds
+                while the agent is running. `0` disables this behavior.
+              '';
+            };
+            lockTimeout = mkOption {
+              type = types.ints.unsigned;
+              default = 3600;
+              description = ''
+                Seconds to keep master keys in memory before requiring the
+                password again.
+              '';
+            };
+          };
+        };
+        default = { };
+        description = "Agent synchronization and key-retention settings.";
       };
       pinentry = mkOption {
-        type = types.str;
-        default = "pinentry";
-        description = "The pinentry executable to use.";
-      };
-      termux_key_alias = mkNullOrStr ''
-        Default Android Keystore alias for `rbw termux enroll` and other
-        native Termux unlock operations. `RBW_TERMUX_KEY_ALIAS` overrides
-        this value at runtime; when unset, rbw uses the configured account
-        alias or generates `rbw-<account>`.
-      '';
-      pinentry_timeout = mkOption {
-        type = types.ints.unsigned;
-        default = 300;
-        description = ''
-          Seconds pinentry waits at the terminal for input before giving up
-          and exiting on its own. Setting this to `0` disables the timeout
-          (pinentry waits forever) -- not recommended, since a pinentry left
-          unanswered for any reason then hangs around forever and wedges
-          every subsequent unlock attempt behind it.
-        '';
-      };
-      tui_lock_timeout = mkOption {
-        type = types.ints.unsigned;
-        default = 0;
-        description = ''
-          Seconds of inactivity before the TUI automatically locks and
-          requires the master password again. Zero disables the timeout;
-          `rbw tui --screen-lock-timeout` can override it per invocation.
-        '';
-      };
-      hide_archived = mkOption {
-        type = types.bool;
-        default = true;
-        description = ''
-          Whether archived entries are hidden from `rbw list`/`rbw search`
-          (and the TUI) by default. Overridable per-invocation with
-          `--archived` (show only archived) / `--include-archived`
-          (disable hiding).
-        '';
-      };
-      hide_trashed = mkOption {
-        type = types.bool;
-        default = true;
-        description = ''
-          Whether trashed entries (removed via `rbw remove`/`rbw delete`)
-          are hidden from `rbw list`/`rbw search` (and the TUI) by
-          default. Overridable per-invocation with `--trashed`/`--deleted`
-          (show only trashed) / `--include-trashed`/`--include-deleted`
-          (disable hiding).
-        '';
-      };
-      tui_keybindings = mkOption {
-        type = types.attrsOf (types.listOf types.str);
+        type = types.submodule {
+          options = {
+            command = mkOption {
+              type = types.str;
+              default = "pinentry";
+              description = "The pinentry executable to use.";
+            };
+            timeout = mkOption {
+              type = types.ints.unsigned;
+              default = 300;
+              description = ''
+                Seconds pinentry waits before giving up. `0` disables the
+                timeout and makes pinentry wait forever.
+              '';
+            };
+          };
+        };
         default = { };
-        description = ''
-          TUI keybinding overrides: action name (e.g. `copy_password`,
-          `move_down`) to a list of key chord strings (e.g. `ctrl-y`,
-          `alt-p`, `g`, `pagedown`) that fully replace that action's
-          built-in default chords. Actions not listed here keep their
-          defaults. See `src/bin/rbw/tui/keymap.rs` in the rbw source for
-          the full action list and defaults.
-        '';
+        description = "Pinentry command and timeout settings.";
+      };
+      termux = mkOption {
+        type = types.submodule {
+          options.keyAlias = mkNullOrStr ''
+            Default Android Keystore alias for `rbw termux enroll` and other
+            native Termux unlock operations. `RBW_TERMUX_KEY_ALIAS` overrides
+            this value at runtime.
+          '';
+        };
+        default = { };
+        description = "Global Termux Keystore settings.";
+      };
+      tui = mkOption {
+        type = types.submodule {
+          options = {
+            keys = mkOption {
+              type = types.attrsOf (types.listOf types.str);
+              default = { };
+              description = ''
+                TUI keybinding overrides, keyed by camelCase action names
+                such as `forceQuit` and `copyPassword`.
+              '';
+            };
+            lockTimeout = mkOption {
+              type = types.ints.unsigned;
+              default = 0;
+              description = ''
+                Seconds of inactivity before the TUI locks. Zero disables
+                the timeout; `rbw tui --screen-lock-timeout` overrides it.
+              '';
+            };
+          };
+        };
+        default = { };
+        description = "TUI keybindings and inactivity-lock settings.";
+      };
+      hide = mkOption {
+        type = types.submodule {
+          options = {
+            archived = mkOption {
+              type = types.bool;
+              default = true;
+              description = "Hide archived entries by default.";
+            };
+            trashed = mkOption {
+              type = types.bool;
+              default = true;
+              description = "Hide trashed entries by default.";
+            };
+          };
+        };
+        default = { };
+        description = "Default visibility settings for archived and trashed entries.";
       };
       clipboard = mkOption {
         type = types.enum [
@@ -419,7 +426,7 @@ let
         '';
       };
       # Mirrors `PasswordGenPolicy` in `src/config.rs`.
-      password_gen = mkOption {
+      passwordGen = mkOption {
         type = types.submodule {
           options = {
             length = mkNullOrInt ''
@@ -427,7 +434,7 @@ let
               when not overridden on the command line. Unset (`null`)
               leaves the built-in default length in place.
             '';
-            no_symbols = mkOption {
+            noSymbols = mkOption {
               type = types.bool;
               default = false;
               description = ''
@@ -435,7 +442,7 @@ let
                 --generate` when not overridden on the command line.
               '';
             };
-            only_numbers = mkOption {
+            onlyNumbers = mkOption {
               type = types.bool;
               default = false;
               description = ''
@@ -501,8 +508,8 @@ in
         cfg.settings
         // {
           accounts = lib.attrValues cfg.settings.accounts;
-          password_gen =
-            if isDefaultPasswordGen cfg.settings.password_gen then null else cfg.settings.password_gen;
+          passwordGen =
+            if isDefaultPasswordGen cfg.settings.passwordGen then null else cfg.settings.passwordGen;
         }
       );
       configFile = "${config.xdg.configHome}/rbw/config.yaml";

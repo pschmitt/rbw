@@ -1,6 +1,6 @@
 // User-configurable TUI keybindings: named actions mapped to key chords
-// (e.g. "ctrl-y", "alt-p", "g", "pagedown"), loaded from config.json's
-// `tui_keybindings` and merged on top of the built-in defaults below. An
+// (e.g. "ctrl-y", "alt-p", "g", "pagedown"), loaded from config.yaml's
+// `tui.keys` and merged on top of the built-in defaults below. An
 // action not mentioned in the user's config keeps its default chords; one
 // that *is* mentioned has its defaults fully replaced (not appended to) by
 // the configured chords.
@@ -58,7 +58,7 @@ impl KeyChord {
     // key's own name or character otherwise. `parse` accepts exactly this
     // form back (see `parse_glyphs`), as well as the more verbose
     // "ctrl-alt-key" form it documents, so a chord shown in the UI can be
-    // pasted straight back into `tui_keybindings`.
+    // pasted straight back into `tui.keys`.
     pub fn display(&self) -> String {
         let mut out = String::new();
         if self.modifiers.contains(KeyModifiers::CONTROL) {
@@ -146,7 +146,7 @@ impl KeyChord {
     // Accepts the terse glyph form `display` emits — a run of modifier
     // glyphs (`^` ctrl, `⌥` alt, `⇧` shift) with no separator, followed by a
     // plain character or one of the named glyphs below — so a chord shown
-    // in the UI can be pasted straight back into `tui_keybindings`. Returns
+    // in the UI can be pasted straight back into `tui.keys`. Returns
     // `None` (falling back to the textual "ctrl-alt-key" parser above) for
     // anything that isn't in this form, including a glyph-free string.
     fn parse_glyphs(s: &str) -> Option<Self> {
@@ -333,57 +333,55 @@ impl TuiAction {
         Self::AttachmentDelete,
     ];
 
-    // The config.json key used to override this action's chords.
+    // The config.yaml key used to override this action's chords.
     fn config_key(self) -> &'static str {
         match self {
-            Self::ForceQuit => "force_quit",
+            Self::ForceQuit => "forceQuit",
             Self::Quit => "quit",
-            Self::MoveDown => "move_down",
-            Self::MoveUp => "move_up",
-            Self::PageDown => "page_down",
-            Self::PageUp => "page_up",
-            Self::JumpFirst => "jump_first",
-            Self::JumpLast => "jump_last",
-            Self::ScrollDetailDown => "scroll_detail_down",
-            Self::ScrollDetailUp => "scroll_detail_up",
-            Self::FocusDetail => "focus_detail",
-            Self::FocusList => "focus_list",
-            Self::ToggleSearch => "toggle_search",
-            Self::ToggleReveal => "toggle_reveal",
-            Self::CopyPassword => "copy_password",
-            Self::CopyUsername => "copy_username",
-            Self::CopyTotp => "copy_totp",
-            Self::OpenUri => "open_uri",
-            Self::OpenAttachments => "open_attachments",
+            Self::MoveDown => "moveDown",
+            Self::MoveUp => "moveUp",
+            Self::PageDown => "pageDown",
+            Self::PageUp => "pageUp",
+            Self::JumpFirst => "jumpFirst",
+            Self::JumpLast => "jumpLast",
+            Self::ScrollDetailDown => "scrollDetailDown",
+            Self::ScrollDetailUp => "scrollDetailUp",
+            Self::FocusDetail => "focusDetail",
+            Self::FocusList => "focusList",
+            Self::ToggleSearch => "toggleSearch",
+            Self::ToggleReveal => "toggleReveal",
+            Self::CopyPassword => "copyPassword",
+            Self::CopyUsername => "copyUsername",
+            Self::CopyTotp => "copyTotp",
+            Self::OpenUri => "openUri",
+            Self::OpenAttachments => "openAttachments",
             Self::StartEdit => "edit",
-            Self::OpenEditor => "open_editor",
+            Self::OpenEditor => "openEditor",
             Self::StartAdd => "add",
-            Self::OpenAccounts => "open_accounts",
-            Self::OpenSettings => "open_settings",
+            Self::OpenAccounts => "openAccounts",
+            Self::OpenSettings => "openSettings",
             Self::DeleteEntry => "delete",
-            Self::ToggleArchived => "toggle_archived",
-            Self::CycleArchivedFilter => "cycle_archived_filter",
-            Self::LockScreen => "lock_screen",
+            Self::ToggleArchived => "toggleArchived",
+            Self::CycleArchivedFilter => "cycleArchivedFilter",
+            Self::LockScreen => "lockScreen",
             Self::Sync => "sync",
             Self::Help => "help",
-            Self::AttachmentClose => "attachment_close",
-            Self::AttachmentMoveDown => "attachment_move_down",
-            Self::AttachmentMoveUp => "attachment_move_up",
-            Self::AttachmentDownload => "attachment_download",
-            Self::AttachmentUpload => "attachment_upload",
-            Self::AttachmentDelete => "attachment_delete",
-            Self::AccountClose => "account_close",
-            Self::AccountMoveDown => "account_move_down",
-            Self::AccountMoveUp => "account_move_up",
-            Self::AccountUnlock => "account_unlock",
-            Self::AccountSync => "account_sync",
-            Self::AccountSetPrimary => "account_set_primary",
-            Self::AccountAdd => "account_add",
-            Self::AccountSetCredentialSource => {
-                "account_set_credential_source"
-            }
+            Self::AttachmentClose => "attachmentClose",
+            Self::AttachmentMoveDown => "attachmentMoveDown",
+            Self::AttachmentMoveUp => "attachmentMoveUp",
+            Self::AttachmentDownload => "attachmentDownload",
+            Self::AttachmentUpload => "attachmentUpload",
+            Self::AttachmentDelete => "attachmentDelete",
+            Self::AccountClose => "accountClose",
+            Self::AccountMoveDown => "accountMoveDown",
+            Self::AccountMoveUp => "accountMoveUp",
+            Self::AccountUnlock => "accountUnlock",
+            Self::AccountSync => "accountSync",
+            Self::AccountSetPrimary => "accountSetPrimary",
+            Self::AccountAdd => "accountAdd",
+            Self::AccountSetCredentialSource => "accountSetCredentialSource",
             Self::AccountClearCredentialSource => {
-                "account_clear_credential_source"
+                "accountClearCredentialSource"
             }
         }
     }
@@ -622,7 +620,7 @@ mod test {
     fn override_replaces_defaults_entirely() {
         let mut overrides = std::collections::HashMap::new();
         overrides
-            .insert("copy_password".to_string(), vec!["ctrl-y".to_string()]);
+            .insert("copyPassword".to_string(), vec!["ctrl-y".to_string()]);
         let keymap = Keymap::resolve(&overrides);
 
         // The configured chord works.
@@ -660,14 +658,14 @@ mod test {
         );
     }
 
-    // Once configured, `force_quit` resolves like any other action --
+    // Once configured, `forceQuit` resolves like any other action --
     // including a real terminal's redundant `SHIFT` bit alongside the
     // already-uppercase `Char('Q')` (see
     // `uppercase_letter_defaults_match_a_real_shift_reported_keypress`).
     #[test]
     fn force_quit_resolves_once_configured() {
         let mut overrides = std::collections::HashMap::new();
-        overrides.insert("force_quit".to_string(), vec!["alt-Q".to_string()]);
+        overrides.insert("forceQuit".to_string(), vec!["alt-Q".to_string()]);
         let keymap = Keymap::resolve(&overrides);
 
         let alt_shift_q = KeyEvent::new(
@@ -798,7 +796,7 @@ mod test {
     fn resolved_keymap_reports_the_overridden_chord_not_the_default() {
         let mut overrides = std::collections::HashMap::new();
         overrides
-            .insert("copy_password".to_string(), vec!["ctrl-y".to_string()]);
+            .insert("copyPassword".to_string(), vec!["ctrl-y".to_string()]);
         let keymap = Keymap::resolve(&overrides);
 
         assert_eq!(keymap.primary_chord(TuiAction::CopyPassword), "^y");

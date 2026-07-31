@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.16.0] - 2026-07-31
+
+### Changed
+
+* Reorganize `config.yaml` into grouped `agent`, `pinentry`, `tui`, and
+  `hide` sections, and use camelCase for configuration keys.
+* Rename TUI keybinding action names to camelCase, including `forceQuit`.
+
 ## [2.15.0] - 2026-07-31
 
 ### Added

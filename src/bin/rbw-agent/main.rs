@@ -21,9 +21,9 @@ async fn tokio_main(
 
     let config = rbw::config::Config::load()?;
     let timeout_duration =
-        std::time::Duration::from_secs(config.lock_timeout);
+        std::time::Duration::from_secs(config.agent.lock_timeout);
     let sync_timeout_duration =
-        std::time::Duration::from_secs(config.sync_interval);
+        std::time::Duration::from_secs(config.agent.sync_interval);
     let (timeout, timer_r) = crate::timeout::Timeout::new();
     let (sync_timeout, sync_timer_r) = crate::timeout::Timeout::new();
     if sync_timeout_duration > std::time::Duration::ZERO {

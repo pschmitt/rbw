@@ -20,9 +20,9 @@ const MISSING_CONFIG_HELP: &str =
         rbw config set email <email>\n\n\
     Additionally, if you are using a self-hosted installation, you should \
     run:\n\n    \
-        rbw config set base_url <url>\n\n\
+        rbw config set baseUrl <url>\n\n\
     and, if your server has a non-default identity url:\n\n    \
-        rbw config set identity_url <url>\n";
+    rbw config set identityUrl <url>\n";
 
 const EXPORT_PASSPHRASE_ENV: &str = "RBW_EXPORT_PASSPHRASE";
 
@@ -247,7 +247,7 @@ pub struct DecryptedSearchCipher {
 }
 
 // How `list`/`search` (and the TUI) treat archived entries: hidden by
-// default (per the `hide_archived` config option), shown alongside normal
+// default (per the `hide.archived` config option), shown alongside normal
 // entries with `--include-archived`, or exclusively with `--archived`.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ArchivedFilter {
@@ -267,7 +267,7 @@ impl ArchivedFilter {
 
     // Resolves the `--archived`/`--include-archived` flags (mutually
     // exclusive, enforced by clap) against the configured default: when
-    // neither flag is given, falls back to `hide_archived` from
+    // neither flag is given, falls back to `hide.archived` from
     // `config.yaml`.
     pub fn from_flags(
         archived: bool,
@@ -306,7 +306,7 @@ impl ArchivedFilter {
 
 // How `list`/`search` (and the TUI) treat trashed (soft-deleted, via `rbw
 // remove`/`rbw delete`) entries: hidden by default (per the
-// `hide_trashed` config option), shown alongside normal entries with
+// `hide.trashed` config option), shown alongside normal entries with
 // `--include-trashed`/`--include-deleted`, or exclusively with
 // `--trashed`/`--deleted`. Structurally identical to `ArchivedFilter`, but
 // kept as a separate type since the two dimensions are independent and
@@ -331,7 +331,7 @@ impl TrashFilter {
     // Resolves the `--trashed`/`--deleted` and `--include-trashed`/
     // `--include-deleted` flags (mutually exclusive, enforced by clap)
     // against the configured default: when neither flag is given, falls
-    // back to `hide_trashed` from `config.yaml`.
+    // back to `hide.trashed` from `config.yaml`.
     pub fn from_flags(
         trashed: bool,
         include_trashed: bool,
@@ -2520,6 +2520,31 @@ impl std::convert::TryFrom<&String> for ListField {
     }
 }
 
+pub const CONFIG_KEYS: &[&str] = &[
+    "email",
+    "ssoId",
+    "baseUrl",
+    "identityUrl",
+    "uiUrl",
+    "notificationsUrl",
+    "clientCertPath",
+    "primaryAccount",
+    "agent.syncInterval",
+    "agent.lockTimeout",
+    "pinentry.command",
+    "pinentry.timeout",
+    "termux.keyAlias",
+    "tui.lockTimeout",
+    "hide.archived",
+    "hide.trashed",
+    "passwordGen.length",
+    "passwordGen.noSymbols",
+    "passwordGen.onlyNumbers",
+    "passwordGen.nonconfusables",
+    "passwordGen.diceware",
+    "clipboard",
+];
+
 pub fn config_show(json: bool) -> anyhow::Result<()> {
     let config = rbw::config::Config::load()?;
     if json {
@@ -2537,22 +2562,38 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
     let primary = config.primary();
     let value = match key {
         "email" => primary.email,
-        "sso_id" => primary.sso_id,
-        "base_url" => primary.base_url,
-        "identity_url" => primary.identity_url,
-        "ui_url" => primary.ui_url,
-        "notifications_url" => primary.notifications_url,
-        "client_cert_path" => {
+        "ssoId" => primary.sso_id,
+        "baseUrl" => primary.base_url,
+        "identityUrl" => primary.identity_url,
+        "uiUrl" => primary.ui_url,
+        "notificationsUrl" => primary.notifications_url,
+        "clientCertPath" => {
             primary.client_cert_path.map(|p| p.display().to_string())
         }
-        "lock_timeout" => Some(config.lock_timeout.to_string()),
-        "sync_interval" => Some(config.sync_interval.to_string()),
-        "pinentry" => Some(config.pinentry),
-        "termux_key_alias" => config.termux_key_alias,
-        "pinentry_timeout" => Some(config.pinentry_timeout.to_string()),
-        "tui_lock_timeout" => Some(config.tui_lock_timeout.to_string()),
-        "hide_archived" => Some(config.hide_archived.to_string()),
-        "hide_trashed" => Some(config.hide_trashed.to_string()),
+        "primaryAccount" => config.primary_account,
+        "agent.lockTimeout" => Some(config.agent.lock_timeout.to_string()),
+        "agent.syncInterval" => Some(config.agent.sync_interval.to_string()),
+        "pinentry.command" => Some(config.pinentry.command),
+        "pinentry.timeout" => Some(config.pinentry.timeout.to_string()),
+        "termux.keyAlias" => config.termux.key_alias,
+        "tui.lockTimeout" => Some(config.tui.lock_timeout.to_string()),
+        "hide.archived" => Some(config.hide.archived.to_string()),
+        "hide.trashed" => Some(config.hide.trashed.to_string()),
+        "passwordGen.length" => {
+            config.password_gen.length.map(|length| length.to_string())
+        }
+        "passwordGen.noSymbols" => {
+            Some(config.password_gen.no_symbols.to_string())
+        }
+        "passwordGen.onlyNumbers" => {
+            Some(config.password_gen.only_numbers.to_string())
+        }
+        "passwordGen.nonconfusables" => {
+            Some(config.password_gen.nonconfusables.to_string())
+        }
+        "passwordGen.diceware" => {
+            Some(config.password_gen.diceware.to_string())
+        }
         "clipboard" => {
             Some(clipboard_mechanism_str(config.clipboard).to_string())
         }
@@ -2610,57 +2651,86 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
     let mut config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());
     match key {
-        "email" => config.email = Some(value.to_string()),
-        "sso_id" => config.sso_id = Some(value.to_string()),
-        "base_url" => config.base_url = Some(value.to_string()),
-        "identity_url" => config.identity_url = Some(value.to_string()),
-        "ui_url" => config.ui_url = Some(value.to_string()),
-        "notifications_url" => {
-            config.notifications_url = Some(value.to_string());
+        "email" => config.primary_mut().email = Some(value.to_string()),
+        "ssoId" => config.primary_mut().sso_id = Some(value.to_string()),
+        "baseUrl" => config.primary_mut().base_url = Some(value.to_string()),
+        "identityUrl" => {
+            config.primary_mut().identity_url = Some(value.to_string());
         }
-        "client_cert_path" => {
-            config.client_cert_path =
+        "uiUrl" => config.primary_mut().ui_url = Some(value.to_string()),
+        "notificationsUrl" => {
+            config.primary_mut().notifications_url = Some(value.to_string());
+        }
+        "clientCertPath" => {
+            config.primary_mut().client_cert_path =
                 Some(std::path::PathBuf::from(value.to_string()));
         }
-        "lock_timeout" => {
+        "primaryAccount" => config.primary_account = Some(value.to_string()),
+        "agent.lockTimeout" => {
             let timeout = value
                 .parse()
-                .context("failed to parse value for lock_timeout")?;
+                .context("failed to parse value for agent.lockTimeout")?;
             if timeout == 0 {
-                log::error!("lock_timeout must be greater than 0");
+                log::error!("agent.lockTimeout must be greater than 0");
             } else {
-                config.lock_timeout = timeout;
+                config.agent.lock_timeout = timeout;
             }
         }
-        "sync_interval" => {
+        "agent.syncInterval" => {
             let interval = value
                 .parse()
-                .context("failed to parse value for sync_interval")?;
-            config.sync_interval = interval;
+                .context("failed to parse value for agent.syncInterval")?;
+            config.agent.sync_interval = interval;
         }
-        "pinentry" => config.pinentry = value.to_string(),
-        "termux_key_alias" => {
-            config.termux_key_alias = Some(value.to_string());
+        "pinentry.command" => config.pinentry.command = value.to_string(),
+        "termux.keyAlias" => {
+            config.termux.key_alias = Some(value.to_string());
         }
-        "pinentry_timeout" => {
-            config.pinentry_timeout = value
+        "pinentry.timeout" => {
+            config.pinentry.timeout = value
                 .parse()
-                .context("failed to parse value for pinentry_timeout")?;
+                .context("failed to parse value for pinentry.timeout")?;
         }
-        "tui_lock_timeout" => {
-            config.tui_lock_timeout = value
+        "tui.lockTimeout" => {
+            config.tui.lock_timeout = value
                 .parse()
-                .context("failed to parse value for tui_lock_timeout")?;
+                .context("failed to parse value for tui.lockTimeout")?;
         }
-        "hide_archived" => {
-            config.hide_archived = value
+        "hide.archived" => {
+            config.hide.archived = value
                 .parse()
-                .context("failed to parse value for hide_archived")?;
+                .context("failed to parse value for hide.archived")?;
         }
-        "hide_trashed" => {
-            config.hide_trashed = value
+        "hide.trashed" => {
+            config.hide.trashed = value
                 .parse()
-                .context("failed to parse value for hide_trashed")?;
+                .context("failed to parse value for hide.trashed")?;
+        }
+        "passwordGen.length" => {
+            config.password_gen.length =
+                Some(value.parse().context(
+                    "failed to parse value for passwordGen.length",
+                )?);
+        }
+        "passwordGen.noSymbols" => {
+            config.password_gen.no_symbols = value
+                .parse()
+                .context("failed to parse value for passwordGen.noSymbols")?;
+        }
+        "passwordGen.onlyNumbers" => {
+            config.password_gen.only_numbers = value.parse().context(
+                "failed to parse value for passwordGen.onlyNumbers",
+            )?;
+        }
+        "passwordGen.nonconfusables" => {
+            config.password_gen.nonconfusables = value.parse().context(
+                "failed to parse value for passwordGen.nonconfusables",
+            )?;
+        }
+        "passwordGen.diceware" => {
+            config.password_gen.diceware = value
+                .parse()
+                .context("failed to parse value for passwordGen.diceware")?;
         }
         "clipboard" => {
             config.clipboard = parse_clipboard_mechanism(value)?;
@@ -2683,29 +2753,50 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
     let mut config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());
     match key {
-        "email" => config.email = None,
-        "sso_id" => config.sso_id = None,
-        "base_url" => config.base_url = None,
-        "identity_url" => config.identity_url = None,
-        "ui_url" => config.ui_url = None,
-        "notifications_url" => config.notifications_url = None,
-        "client_cert_path" => config.client_cert_path = None,
-        "lock_timeout" => {
-            config.lock_timeout = rbw::config::default_lock_timeout();
+        "email" => config.primary_mut().email = None,
+        "ssoId" => config.primary_mut().sso_id = None,
+        "baseUrl" => config.primary_mut().base_url = None,
+        "identityUrl" => config.primary_mut().identity_url = None,
+        "uiUrl" => config.primary_mut().ui_url = None,
+        "notificationsUrl" => config.primary_mut().notifications_url = None,
+        "clientCertPath" => config.primary_mut().client_cert_path = None,
+        "primaryAccount" => config.primary_account = None,
+        "agent.lockTimeout" => {
+            config.agent.lock_timeout = rbw::config::default_lock_timeout();
         }
-        "pinentry" => config.pinentry = rbw::config::default_pinentry(),
-        "termux_key_alias" => config.termux_key_alias = None,
-        "pinentry_timeout" => {
-            config.pinentry_timeout = rbw::config::default_pinentry_timeout();
+        "agent.syncInterval" => {
+            config.agent.sync_interval = rbw::config::default_sync_interval();
         }
-        "tui_lock_timeout" => {
-            config.tui_lock_timeout = rbw::config::default_tui_lock_timeout();
+        "pinentry.command" => {
+            config.pinentry.command = rbw::config::default_pinentry();
         }
-        "hide_archived" => {
-            config.hide_archived = rbw::config::default_hide_archived();
+        "termux.keyAlias" => config.termux.key_alias = None,
+        "pinentry.timeout" => {
+            config.pinentry.timeout = rbw::config::default_pinentry_timeout();
         }
-        "hide_trashed" => {
-            config.hide_trashed = rbw::config::default_hide_trashed();
+        "tui.lockTimeout" => {
+            config.tui.lock_timeout = rbw::config::default_tui_lock_timeout();
+        }
+        "hide.archived" => {
+            config.hide.archived = rbw::config::default_hide_archived();
+        }
+        "hide.trashed" => {
+            config.hide.trashed = rbw::config::default_hide_trashed();
+        }
+        "passwordGen.length" => {
+            config.password_gen.length = None;
+        }
+        "passwordGen.noSymbols" => {
+            config.password_gen.no_symbols = false;
+        }
+        "passwordGen.onlyNumbers" => {
+            config.password_gen.only_numbers = false;
+        }
+        "passwordGen.nonconfusables" => {
+            config.password_gen.nonconfusables = false;
+        }
+        "passwordGen.diceware" => {
+            config.password_gen.diceware = false;
         }
         "clipboard" => {
             config.clipboard = rbw::config::ClipboardMechanism::default();
@@ -2754,14 +2845,14 @@ pub fn termux_enroll(validity: u32) -> anyhow::Result<()> {
         .context("failed to initialize the password prompt")?;
     let mut password = runtime
         .block_on(rbw::pinentry::getpin(
-            &config.pinentry,
+            &config.pinentry.command,
             "Master password",
             &description,
             None,
             &environment,
             false,
             None,
-            config.pinentry_timeout,
+            config.pinentry.timeout,
         ))?
         .password()
         .to_vec();

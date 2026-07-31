@@ -1716,14 +1716,14 @@ async fn save_db(
 
 async fn config_pinentry() -> anyhow::Result<String> {
     let config = rbw::config::Config::load_async().await?;
-    Ok(config.pinentry)
+    Ok(config.pinentry.command)
 }
 
-// See `Config::pinentry_timeout`. Passed straight through to pinentry's own
+// See `PinentryConfig::timeout`. Passed straight through to pinentry's own
 // `--timeout` flag, so `0` means "no timeout" there too.
 async fn config_pinentry_timeout() -> anyhow::Result<u64> {
     let config = rbw::config::Config::load_async().await?;
-    Ok(config.pinentry_timeout)
+    Ok(config.pinentry.timeout)
 }
 
 pub async fn subscribe_to_notifications(

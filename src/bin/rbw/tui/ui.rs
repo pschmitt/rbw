@@ -494,8 +494,8 @@ fn row(label: &str, value: impl Into<String>) -> Line<'static> {
 // Appended after a row's value to remind you it's one keypress away from the
 // clipboard — ⌥ (Alt) because that's the chord that works no matter whether
 // the search bar or the list has focus; the plain letter (e.g. 'u') only
-// works from the list. Doesn't reflect a rebound `copy_username`/
-// `copy_password`/`copy_totp` — see the `tui_keybindings` known gap.
+// works from the list. Doesn't reflect a rebound `copyUsername`/
+// `copyPassword`/`copyTotp` — see the `tui.keys` known gap.
 fn copy_hint(chord: &str) -> Span<'static> {
     Span::styled(
         format!("  (⌥{chord} copy)"),
@@ -879,7 +879,7 @@ fn type_name(data: &DecryptedData) -> &'static str {
 }
 
 // The status-bar keybinding hint for the current mode, built from the
-// actual resolved `Keymap` (post `tui_keybindings` override) rather than a
+// actual resolved `Keymap` (post `tui.keys` override) rather than a
 // hardcoded default chord — pulled out of `render_status` so it can be unit
 // tested without a terminal. `Mode::Edit`/`ConfirmDelete`/`Prompt`/`Help`
 // stay literal: their keys are fixed widget semantics (field navigation,
@@ -1617,7 +1617,7 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(b, rect);
 
     // Every currently-bound chord for `action`, joined for display — the
-    // real resolved keymap (post `tui_keybindings` override), not the
+    // real resolved keymap (post `tui.keys` override), not the
     // hand-picked subset of built-in defaults the old hardcoded list here
     // showed. "type"/"u:/uri:/n:/f:" stay literal (search syntax, not a
     // keybinding), and "quit"'s trailing "esc" is the hardcoded fallback in
@@ -2093,7 +2093,7 @@ mod test {
     }
 
     // Builds an otherwise-trivial App (empty vault) around a given keymap,
-    // so `status_hint` can be checked against a `tui_keybindings` override
+    // so `status_hint` can be checked against a `tui.keys` override
     // without touching the real `~/.config/rbw/config.json`.
     fn app_with_keymap(keymap: crate::tui::keymap::Keymap) -> App {
         App::with_keymap(
@@ -2145,7 +2145,7 @@ mod test {
         // that before it ever reaches `action_for`, so the hint must not
         // claim it works there.
         let mut overrides = std::collections::HashMap::new();
-        overrides.insert("open_uri".to_string(), vec!["l".to_string()]);
+        overrides.insert("openUri".to_string(), vec!["l".to_string()]);
         let app = app_with_keymap(Keymap::resolve(&overrides)); // starts in Mode::Search
 
         let hint = status_hint(&app);

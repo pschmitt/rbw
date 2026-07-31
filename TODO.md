@@ -9,11 +9,11 @@
       `/home/pschmitt/devel/private/pschmitt/bw-backup.git`.
 - [x] `rbw create --generate`/`-g`: generate a password with the same flags
       as `rbw gen` (length, no-symbols, numbers-only, etc). Backed by a
-      configurable default password-generation policy in config.json
-      (`password_gen`), with a TUI view to edit it (`S` from the main
+      configurable default password-generation policy in config.yaml
+      (`passwordGen`), with a TUI view to edit it (`S` from the main
       screen, `Mode::Settings`). The settings panel is deliberately generic
       (a flat list of editable key/value fields, currently just the
-      password-gen policy) so other config.json knobs can be added to it
+      password-gen policy) so other config.yaml knobs can be added to it
       later without restructuring.
 - [x] Cross-account credential linking: `Account::credential_source` points
       at a Login entry in another configured account's vault; `rbw account
@@ -31,9 +31,9 @@
       open (`App::poll_agent_lock`, throttled to every few seconds), clear
       in-memory secrets, and show `Mode::LockedPrompt` that on accept opens
       pinentry to unlock again.
-- [x] Home-manager module exposing every config.json option as Nix options
-      (accounts, `unlock` policy, `exclude_from_list`, `tui_keybindings`,
-      `password_gen`/`PasswordGenPolicy`, per-account `credential_source`,
+- [x] Home-manager module exposing every config.yaml option as Nix options
+      (accounts, `unlock` policy, `excludeFrom`, `tui.keys`,
+      `passwordGen`/`PasswordGenPolicy`, per-account `credentials`,
       etc.) — keep this in sync whenever a new config option is added.
 - [x] `--from-file FILE` on `rbw list`/`rbw search`/`rbw tui`: browse a
       `rbw export` file directly (plain JSON or gpg-encrypted, passphrase
@@ -294,8 +294,8 @@
       trashed entries now survive sync instead of being dropped, but are
       hidden from `rbw list`/`rbw search` by default — overridable with
       `--archived`/`--include-archived` and `--trashed`(`--deleted`)/
-      `--include-trashed`(`--include-deleted`), each backed by a config.json
-      default (`hide_archived`, `hide_trashed`, both `true`; mirrored in the
+      `--include-trashed`(`--include-deleted`), each backed by a config.yaml
+      default (`hide.archived`, `hide.trashed`, both `true`; mirrored in the
       home-manager module). `find_entry`/`find_entry_multi`/
       `find_entries_all` (used by `get`/`edit`/`set`/`remove`/etc.)
       unconditionally exclude trashed entries, so a plain `rbw remove` can

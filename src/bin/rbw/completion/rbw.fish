@@ -92,7 +92,7 @@ complete -f -c rbw -n '__fish_seen_subcommand_from get' -s h -l help -d 'Print h
 # `rbw config get <key>` accepts a fixed set of configuration keys. The Fish
 # generator does not emit positional possible-values, so keep these candidates
 # in the custom completion section.
-complete -f -c rbw -n '__fish_seen_subcommand_from config; and __fish_seen_subcommand_from get' -a 'email sso_id base_url identity_url ui_url notifications_url client_cert_path lock_timeout sync_interval pinentry termux_key_alias pinentry_timeout tui_lock_timeout hide_archived hide_trashed clipboard'
+complete -f -c rbw -n '__fish_seen_subcommand_from config; and __fish_seen_subcommand_from get' -a 'email ssoId baseUrl identityUrl uiUrl notificationsUrl clientCertPath primaryAccount agent.syncInterval agent.lockTimeout pinentry.command pinentry.timeout termux.keyAlias tui.lockTimeout hide.archived hide.trashed passwordGen.length passwordGen.noSymbols passwordGen.onlyNumbers passwordGen.nonconfusables passwordGen.diceware clipboard'
 
 # `rbw attachment {get,list,rm}` completions: entry name, and the
 # --attachment id/filename, both resolved live against the vault since

@@ -113,7 +113,7 @@ impl From<&PasswordGenArgs> for rbw::pwgen::GenFlags {
     }
 }
 
-// Explicit CLI flags > configured `password_gen` policy > `rbw::pwgen`'s own
+// Explicit CLI flags > configured `passwordGen` policy > `rbw::pwgen`'s own
 // hardcoded defaults.
 fn resolve_pwgen(cli: &PasswordGenArgs) -> (usize, rbw::pwgen::Type) {
     let policy = rbw::config::Config::load()
@@ -123,14 +123,14 @@ fn resolve_pwgen(cli: &PasswordGenArgs) -> (usize, rbw::pwgen::Type) {
 }
 
 // Resolves `--archived`/`--include-archived` against the configured
-// `hide_archived` default (falling back to the hide-by-default behavior if
+// `hide.archived` default (falling back to the hide-by-default behavior if
 // the config can't be loaded).
 fn resolve_archived_filter(
     archived: bool,
     include_archived: bool,
 ) -> commands::ArchivedFilter {
     let hide_archived_default =
-        rbw::config::Config::load().map_or(true, |c| c.hide_archived);
+        rbw::config::Config::load().map_or(true, |c| c.hide.archived);
     commands::ArchivedFilter::from_flags(
         archived,
         include_archived,
@@ -139,7 +139,7 @@ fn resolve_archived_filter(
 }
 
 // Resolves `--trashed`/`--deleted` and `--include-trashed`/
-// `--include-deleted` against the configured `hide_trashed` default
+// `--include-deleted` against the configured `hide.trashed` default
 // (falling back to the hide-by-default behavior if the config can't be
 // loaded).
 fn resolve_trash_filter(
@@ -147,7 +147,7 @@ fn resolve_trash_filter(
     include_trashed: bool,
 ) -> commands::TrashFilter {
     let hide_trashed_default =
-        rbw::config::Config::load().map_or(true, |c| c.hide_trashed);
+        rbw::config::Config::load().map_or(true, |c| c.hide.trashed);
     commands::TrashFilter::from_flags(
         trashed,
         include_trashed,
@@ -861,7 +861,7 @@ enum Opt {
             long,
             help = "Include archived entries alongside normal ones (by \
                 default, archived entries are hidden unless `--archived`/\
-                `--include-archived` is given, or `hide_archived` is set to \
+                `--include-archived` is given, or `hide.archived` is set to \
                 false in config.yaml)"
         )]
         include_archived: bool,
@@ -878,7 +878,7 @@ enum Opt {
             alias = "include-deleted",
             help = "Include trashed entries alongside normal ones (by \
                 default, trashed entries are hidden unless `--trashed`/\
-                `--include-trashed` is given, or `hide_trashed` is set to \
+                `--include-trashed` is given, or `hide.trashed` is set to \
                 false in config.yaml)"
         )]
         include_trashed: bool,
@@ -1072,7 +1072,7 @@ enum Opt {
             long,
             help = "Include archived entries alongside normal ones (by \
                 default, archived entries are hidden unless `--archived`/\
-                `--include-archived` is given, or `hide_archived` is set to \
+                `--include-archived` is given, or `hide.archived` is set to \
                 false in config.yaml)"
         )]
         include_archived: bool,
@@ -1089,7 +1089,7 @@ enum Opt {
             alias = "include-deleted",
             help = "Include trashed entries alongside normal ones (by \
                 default, trashed entries are hidden unless `--trashed`/\
-                `--include-trashed` is given, or `hide_trashed` is set to \
+                `--include-trashed` is given, or `hide.trashed` is set to \
                 false in config.yaml)"
         )]
         include_trashed: bool,
@@ -1808,24 +1808,9 @@ enum Config {
     Get {
         #[arg(
             help = "Configuration key to print",
-            value_parser = clap::builder::PossibleValuesParser::new([
-                "email",
-                "sso_id",
-                "base_url",
-                "identity_url",
-                "ui_url",
-                "notifications_url",
-                "client_cert_path",
-                "lock_timeout",
-                "sync_interval",
-                "pinentry",
-                "termux_key_alias",
-                "pinentry_timeout",
-                "tui_lock_timeout",
-                "hide_archived",
-                "hide_trashed",
-                "clipboard",
-            ])
+            value_parser = clap::builder::PossibleValuesParser::new(
+                commands::CONFIG_KEYS.iter().copied(),
+            )
         )]
         key: String,
     },
@@ -3666,24 +3651,7 @@ mod test {
         };
         assert!(json);
 
-        for key in [
-            "email",
-            "sso_id",
-            "base_url",
-            "identity_url",
-            "ui_url",
-            "notifications_url",
-            "client_cert_path",
-            "lock_timeout",
-            "sync_interval",
-            "pinentry",
-            "termux_key_alias",
-            "pinentry_timeout",
-            "tui_lock_timeout",
-            "hide_archived",
-            "hide_trashed",
-            "clipboard",
-        ] {
+        for key in commands::CONFIG_KEYS {
             parse(&["rbw", "config", "get", key]);
         }
         assert!(

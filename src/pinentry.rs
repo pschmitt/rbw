@@ -23,7 +23,7 @@ pub async fn getpin(
     // it was meant for got closed, its process got orphaned, whatever --
     // hangs around forever and wedges every subsequent unlock attempt behind
     // it, since only one pinentry can hold the terminal at a time. See
-    // `Config::pinentry_timeout`.
+    // `PinentryConfig::timeout`.
     timeout: u64,
 ) -> Result<crate::locked::Password> {
     let mut opts = tokio::process::Command::new(pinentry);
