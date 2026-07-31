@@ -2520,9 +2520,13 @@ impl std::convert::TryFrom<&String> for ListField {
     }
 }
 
-pub fn config_show() -> anyhow::Result<()> {
+pub fn config_show(json: bool) -> anyhow::Result<()> {
     let config = rbw::config::Config::load()?;
-    write_json_pretty(&config, "failed to write config to stdout")
+    if json {
+        write_json_pretty(&config, "failed to write config to stdout")
+    } else {
+        write_yaml_pretty(&config, "failed to write config to stdout")
+    }
 }
 
 // Print a single setting's effective value: account-scoped keys resolve

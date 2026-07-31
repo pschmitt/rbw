@@ -108,7 +108,8 @@ rbw reads both `config.yaml` and the legacy `config.json`; when both exist,
 
 Configuration options are set using the `rbw config` command (`rbw config set
 <key> <value>`, `rbw config get <key>`, `rbw config unset <key>`, `rbw config
-show`, or `rbw config edit` to edit the whole config.yaml in `$EDITOR`).
+show` (YAML by default, or JSON with `--json`), or `rbw config edit` to edit
+the whole config.yaml in `$EDITOR`).
 Available configuration options:
 
 * `email`: The email address to use as the account name when logging into the

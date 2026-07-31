@@ -1800,10 +1800,33 @@ enum CompletionShell {
 #[derive(Debug, clap::Parser)]
 enum Config {
     #[command(about = "Show the values of all configuration settings")]
-    Show,
+    Show {
+        #[arg(long, help = "Display the configuration as JSON")]
+        json: bool,
+    },
     #[command(about = "Print the value of a single configuration setting")]
     Get {
-        #[arg(help = "Configuration key to print")]
+        #[arg(
+            help = "Configuration key to print",
+            value_parser = clap::builder::PossibleValuesParser::new([
+                "email",
+                "sso_id",
+                "base_url",
+                "identity_url",
+                "ui_url",
+                "notifications_url",
+                "client_cert_path",
+                "lock_timeout",
+                "sync_interval",
+                "pinentry",
+                "termux_key_alias",
+                "pinentry_timeout",
+                "tui_lock_timeout",
+                "hide_archived",
+                "hide_trashed",
+                "clipboard",
+            ])
+        )]
         key: String,
     },
     #[command(about = "Set a configuration option")]
@@ -2606,7 +2629,7 @@ impl Org {
 impl Config {
     fn subcommand_name(&self) -> String {
         match self {
-            Self::Show => "show",
+            Self::Show { .. } => "show",
             Self::Get { .. } => "get",
             Self::Set { .. } => "set",
             Self::Unset { .. } => "unset",
@@ -2675,7 +2698,7 @@ fn main() {
     let subcommand_name = opt.subcommand_name();
     let res = match opt {
         Opt::Config { config } => match config {
-            Config::Show => commands::config_show(),
+            Config::Show { json } => commands::config_show(json),
             Config::Get { key } => commands::config_get(&key),
             Config::Set { key, value } => commands::config_set(&key, &value),
             Config::Unset { key } => commands::config_unset(&key),
@@ -3623,6 +3646,49 @@ mod test {
         assert!(!help.contains("\nCommands:"));
         assert!(help.contains("  export"));
         assert!(help.contains("  export-info"));
+    }
+
+    #[test]
+    fn test_config_show_and_get_options() {
+        let Opt::Config {
+            config: Config::Show { json },
+        } = parse(&["rbw", "config", "show"]).command
+        else {
+            panic!("expected config show");
+        };
+        assert!(!json);
+
+        let Opt::Config {
+            config: Config::Show { json },
+        } = parse(&["rbw", "config", "show", "--json"]).command
+        else {
+            panic!("expected config show --json");
+        };
+        assert!(json);
+
+        for key in [
+            "email",
+            "sso_id",
+            "base_url",
+            "identity_url",
+            "ui_url",
+            "notifications_url",
+            "client_cert_path",
+            "lock_timeout",
+            "sync_interval",
+            "pinentry",
+            "termux_key_alias",
+            "pinentry_timeout",
+            "tui_lock_timeout",
+            "hide_archived",
+            "hide_trashed",
+            "clipboard",
+        ] {
+            parse(&["rbw", "config", "get", key]);
+        }
+        assert!(
+            Cli::try_parse_from(["rbw", "config", "get", "unknown"]).is_err()
+        );
     }
 
     fn parse(args: &[&str]) -> Cli {

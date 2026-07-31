@@ -89,6 +89,11 @@ complete -f -c rbw -n '__fish_seen_subcommand_from get' -s c -l clipboard -d 'Co
 complete -f -c rbw -n '__fish_seen_subcommand_from get' -l all -d 'Search every unlocked account, not just the primary'
 complete -f -c rbw -n '__fish_seen_subcommand_from get' -s h -l help -d 'Print help'
 
+# `rbw config get <key>` accepts a fixed set of configuration keys. The Fish
+# generator does not emit positional possible-values, so keep these candidates
+# in the custom completion section.
+complete -f -c rbw -n '__fish_seen_subcommand_from config; and __fish_seen_subcommand_from get' -a 'email sso_id base_url identity_url ui_url notifications_url client_cert_path lock_timeout sync_interval pinentry termux_key_alias pinentry_timeout tui_lock_timeout hide_archived hide_trashed clipboard'
+
 # `rbw attachment {get,list,rm}` completions: entry name, and the
 # --attachment id/filename, both resolved live against the vault since
 # clap can't know either of them ahead of time.
