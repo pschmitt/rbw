@@ -268,7 +268,7 @@ impl ArchivedFilter {
     // Resolves the `--archived`/`--include-archived` flags (mutually
     // exclusive, enforced by clap) against the configured default: when
     // neither flag is given, falls back to `hide_archived` from
-    // `config.json`.
+    // `config.yaml`.
     pub fn from_flags(
         archived: bool,
         include_archived: bool,
@@ -331,7 +331,7 @@ impl TrashFilter {
     // Resolves the `--trashed`/`--deleted` and `--include-trashed`/
     // `--include-deleted` flags (mutually exclusive, enforced by clap)
     // against the configured default: when neither flag is given, falls
-    // back to `hide_trashed` from `config.json`.
+    // back to `hide_trashed` from `config.yaml`.
     pub fn from_flags(
         trashed: bool,
         include_trashed: bool,
@@ -2561,7 +2561,7 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-// Open the whole config.json as pretty JSON in $EDITOR, the same
+// Open the whole config.yaml as YAML in $EDITOR, the same
 // serialize/edit/strip-comments/reparse shape as entry editing (see
 // `edit`/`edit_full`). Mirrors `config_set`'s post-save `stop_agent` call --
 // any field could plausibly affect already-cached agent state (accounts,
@@ -2570,10 +2570,10 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
 pub fn config_edit() -> anyhow::Result<()> {
     let config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());
-    let serialized = serde_json::to_string_pretty(&config)?;
+    let serialized = serde_yaml::to_string(&config)?;
 
-    let help = "# Edit the JSON below. Lines starting with # are ignored.";
-    let contents = rbw::edit::edit(&serialized, help, "json")?;
+    let help = "# Edit the YAML below. Lines starting with # are ignored.";
+    let contents = rbw::edit::edit(&serialized, help, "yaml")?;
     let contents_trimmed = contents
         .lines()
         .filter(|l| !l.starts_with('#'))
@@ -2589,8 +2589,8 @@ pub fn config_edit() -> anyhow::Result<()> {
     }
 
     let updated: rbw::config::Config =
-        serde_json::from_str(&contents_trimmed)
-            .map_err(|e| anyhow::anyhow!("failed to parse JSON: {e}"))?;
+        serde_yaml::from_str(&contents_trimmed)
+            .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?;
     updated.save()?;
 
     // See `config_set`'s comment: not using lock() because we don't want to
@@ -9973,6 +9973,31 @@ pub fn load_import_json(
     );
 }
 
+// If `raw` isn't already resolvable as plain JSON and no passphrase was
+// given, this is exactly the shape of rbw's own gpg-encrypted export
+// archive (`load_import_json` would otherwise just fail with a "pass
+// --decrypt" hint) -- resolve one from RBW_EXPORT_PASSPHRASE or a
+// `/dev/tty` prompt instead of erroring, same as `--decrypt` itself and
+// `load_from_file`'s existing `--from-file` behavior. Falls through to
+// `None` (and `load_import_json`'s existing hard failure) when a
+// passphrase was already resolved, `raw` turns out to parse as plain JSON
+// on its own, or no tty is available to prompt on -- so a script piping in
+// ciphertext without `--decrypt` still fails fast instead of hanging.
+pub fn prompt_for_encrypted_export_if_needed(
+    raw: &[u8],
+    decrypt_passphrase: Option<String>,
+) -> anyhow::Result<Option<String>> {
+    if decrypt_passphrase.is_some() {
+        return Ok(decrypt_passphrase);
+    }
+    if let Ok(text) = std::str::from_utf8(raw) {
+        if serde_json::from_str::<serde_json::Value>(text).is_ok() {
+            return Ok(None);
+        }
+    }
+    Ok(resolve_env_or_prompted_passphrase(false).ok())
+}
+
 // A vault loaded from an export file for `--from-file` (`list`/`search`/
 // `tui`): entries are already decrypted, since that's what the export
 // format is. Attachment bytes are kept in a side table keyed by attachment
@@ -11195,6 +11220,10 @@ pub fn import(
 
     let vault: ImportedVault = match detected {
         crate::import_bitwarden::DetectedFormat::Rbw => {
+            let decrypt_passphrase = prompt_for_encrypted_export_if_needed(
+                &raw,
+                decrypt_passphrase.clone(),
+            )?;
             let json_text =
                 load_import_json(&raw, decrypt_passphrase.as_deref())?;
             serde_json::from_str(&json_text).context(

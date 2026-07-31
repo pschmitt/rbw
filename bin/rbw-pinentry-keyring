@@ -16,7 +16,7 @@ Options:
 
 Notes:
   - Ensure "secret-tool" is installed to access the keyring.
-  - Add "rbw-pinentry-keyring" as the "pinentry" in rbw configuration (${XDG_CONFIG_HOME}/rbw/config.json).
+  - Add "rbw-pinentry-keyring" as the "pinentry" in rbw configuration (${XDG_CONFIG_HOME}/rbw/config.yaml).
   - Master passwords are stored in the keyring as plaintext; secure your keyring appropriately.
   - Supports multiple profiles; set RBW_PROFILE during setup to specify the profile.
   - Can easily be rewritten to use other backends than keyring by setting the "secret_value"-variable

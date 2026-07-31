@@ -29,7 +29,7 @@ pub fn default_key_alias(account_name: &str) -> String {
 /// Resolve the Android Keystore alias used by Termux operations.
 ///
 /// The environment variable is intentionally highest precedence so a
-/// temporary override does not require rewriting config.json. The global
+/// temporary override does not require rewriting config.yaml. The global
 /// config value is next; an already configured account alias remains the
 /// fallback for that account, followed by the generated alias.
 pub fn resolve_key_alias(

@@ -127,6 +127,12 @@ pub enum Error {
         file: std::path::PathBuf,
     },
 
+    #[error("failed to load config from {}", .file.display())]
+    LoadConfigYaml {
+        source: serde_yaml::Error,
+        file: std::path::PathBuf,
+    },
+
     #[error("failed to load db from {}", .file.display())]
     LoadDb {
         source: std::io::Error,
@@ -232,6 +238,12 @@ pub enum Error {
     #[error("failed to save config to {}", .file.display())]
     SaveConfigJson {
         source: serde_json::Error,
+        file: std::path::PathBuf,
+    },
+
+    #[error("failed to save config to {}", .file.display())]
+    SaveConfigYaml {
+        source: serde_yaml::Error,
         file: std::path::PathBuf,
     },
 

@@ -7,6 +7,7 @@ export RUST_BACKTRACE := "1"
 export CARGO_TERM_COLOR := "always"
 
 default-target := "x86_64-unknown-linux-musl"
+native-target := "x86_64-unknown-linux-gnu"
 default-host := "rofl-13"
 remote-build-base := "~/rbw-build"
 remote-cargo-tools := "nixpkgs#cargo nixpkgs#rustc nixpkgs#clippy nixpkgs#pkg-config nixpkgs#openssl nixpkgs#gcc"
@@ -54,7 +55,7 @@ release-local target=default-target:
     cargo build --locked --all-targets --all-features --release --target "{{ target }}"
 
 # Run the test suite on the remote build host.
-test target=default-target host=default-host:
+test target=native-target host=default-host:
     #!/usr/bin/env bash
     set -euo pipefail
     host="{{ host }}"
@@ -68,7 +69,7 @@ test target=default-target host=default-host:
     ssh -- "$host" "cd '$remote_dir' && nix shell {{ remote-cargo-tools }} -c cargo test --locked --all-features --target '$target'"
 
 # Run cargo check on the remote build host.
-cargo-check target=default-target host=default-host:
+cargo-check target=native-target host=default-host:
     #!/usr/bin/env bash
     set -euo pipefail
     host="{{ host }}"
@@ -82,7 +83,7 @@ cargo-check target=default-target host=default-host:
     ssh -- "$host" "cd '$remote_dir' && nix shell {{ remote-cargo-tools }} -c cargo check --locked --all-targets --all-features --target '$target'"
 
 # Run clippy with warnings promoted to errors on the remote build host.
-clippy target=default-target host=default-host:
+clippy target=native-target host=default-host:
     #!/usr/bin/env bash
     set -euo pipefail
     host="{{ host }}"
@@ -96,7 +97,7 @@ clippy target=default-target host=default-host:
     ssh -- "$host" "cd '$remote_dir' && nix shell {{ remote-cargo-tools }} -c cargo clippy --locked --all-targets --all-features --target '$target' -- -Dwarnings"
 
 # Build documentation and run doctests on the remote build host.
-doc target=default-target host=default-host:
+doc target=native-target host=default-host:
     #!/usr/bin/env bash
     set -euo pipefail
     host="{{ host }}"

@@ -405,7 +405,7 @@ enum Opt {
             long,
             value_name = "SECONDS",
             conflicts_with = "from_file",
-            help = "Automatically lock the TUI after this many seconds of inactivity (0 disables it; defaults to config.json)"
+            help = "Automatically lock the TUI after this many seconds of inactivity (0 disables it; defaults to config.yaml)"
         )]
         screen_lock_timeout: Option<u64>,
     },
@@ -703,7 +703,7 @@ enum Opt {
             help = "Include archived entries alongside normal ones (by \
                 default, archived entries are hidden unless `--archived`/\
                 `--include-archived` is given, or `hide_archived` is set to \
-                false in config.json)"
+                false in config.yaml)"
         )]
         include_archived: bool,
         #[arg(
@@ -720,7 +720,7 @@ enum Opt {
             help = "Include trashed entries alongside normal ones (by \
                 default, trashed entries are hidden unless `--trashed`/\
                 `--include-trashed` is given, or `hide_trashed` is set to \
-                false in config.json)"
+                false in config.yaml)"
         )]
         include_trashed: bool,
         #[arg(
@@ -914,7 +914,7 @@ enum Opt {
             help = "Include archived entries alongside normal ones (by \
                 default, archived entries are hidden unless `--archived`/\
                 `--include-archived` is given, or `hide_archived` is set to \
-                false in config.json)"
+                false in config.yaml)"
         )]
         include_archived: bool,
         #[arg(
@@ -931,7 +931,7 @@ enum Opt {
             help = "Include trashed entries alongside normal ones (by \
                 default, trashed entries are hidden unless `--trashed`/\
                 `--include-trashed` is given, or `hide_trashed` is set to \
-                false in config.json)"
+                false in config.yaml)"
         )]
         include_trashed: bool,
         #[arg(
@@ -1660,10 +1660,10 @@ enum Config {
         key: String,
     },
     #[command(
-        about = "Edit the full config.json in $EDITOR",
-        long_about = "Edit the full config.json in $EDITOR\n\n\
+        about = "Edit the full config.yaml in $EDITOR",
+        long_about = "Edit the full config.yaml in $EDITOR\n\n\
             Opens the whole configuration (every account, all global \
-            settings) as pretty-printed JSON in the editor named by the \
+            settings) as YAML in the editor named by the \
             $VISUAL or $EDITOR environment variables. Saved on exit if the \
             content changed and still parses as valid config."
     )]
@@ -1700,7 +1700,7 @@ enum TermuxCmd {
         long_about = "Set up native Android Keystore unlock for the active \
             account. Prompts for the master password, generates an \
             authentication-gated key, creates the encrypted bundle, and \
-            updates rbw's config.json automatically."
+            updates rbw's config.yaml automatically."
     )]
     Enroll {
         #[arg(

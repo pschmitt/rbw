@@ -35,7 +35,21 @@ fn create_dir_all_with_permissions(
 }
 
 pub fn config_file() -> std::path::PathBuf {
-    config_dir().join("config.json")
+    config_file_in(&config_dir())
+}
+
+pub fn config_yaml_file() -> std::path::PathBuf {
+    config_dir().join("config.yaml")
+}
+
+fn config_file_in(dir: &std::path::Path) -> std::path::PathBuf {
+    let yaml = dir.join("config.yaml");
+    let json = dir.join("config.json");
+    if yaml.exists() || !json.exists() {
+        yaml
+    } else {
+        json
+    }
 }
 
 const INVALID_PATH: &percent_encoding::AsciiSet =
@@ -110,5 +124,32 @@ pub fn profile() -> String {
     match std::env::var("RBW_PROFILE") {
         Ok(profile) if !profile.is_empty() => format!("rbw-{profile}"),
         _ => "rbw".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::config_file_in;
+
+    #[test]
+    fn yaml_config_takes_precedence_over_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = dir.path().join("config.yaml");
+        let json = dir.path().join("config.json");
+
+        std::fs::write(&json, "{}").unwrap();
+        assert_eq!(config_file_in(dir.path()), json);
+
+        std::fs::write(&yaml, "{}").unwrap();
+        assert_eq!(config_file_in(dir.path()), yaml);
+    }
+
+    #[test]
+    fn yaml_is_the_default_config_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            config_file_in(dir.path()),
+            dir.path().join("config.yaml")
+        );
     }
 }

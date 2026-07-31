@@ -378,14 +378,14 @@ impl Config {
                 file: file.clone(),
             }
         })?;
-        let mut json = String::new();
-        fh.read_to_string(&mut json)
-            .map_err(|source| Error::LoadConfig {
+        let mut contents = String::new();
+        fh.read_to_string(&mut contents).map_err(|source| {
+            Error::LoadConfig {
                 source,
                 file: file.clone(),
-            })?;
-        let mut slf: Self = serde_json::from_str(&json)
-            .map_err(|source| Error::LoadConfigJson { source, file })?;
+            }
+        })?;
+        let mut slf = parse_config(&contents, &file)?;
         if slf.lock_timeout == 0 {
             log::warn!("lock_timeout must be greater than 0");
             slf.lock_timeout = default_lock_timeout();
@@ -402,15 +402,14 @@ impl Config {
                     file: file.clone(),
                 }
             })?;
-        let mut json = String::new();
-        fh.read_to_string(&mut json).await.map_err(|source| {
+        let mut contents = String::new();
+        fh.read_to_string(&mut contents).await.map_err(|source| {
             Error::LoadConfigAsync {
                 source,
                 file: file.clone(),
             }
         })?;
-        let mut slf: Self = serde_json::from_str(&json)
-            .map_err(|source| Error::LoadConfigJson { source, file })?;
+        let mut slf = parse_config(&contents, &file)?;
         if slf.lock_timeout == 0 {
             log::warn!("lock_timeout must be greater than 0");
             slf.lock_timeout = default_lock_timeout();
@@ -419,7 +418,7 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
-        let file = crate::dirs::config_file();
+        let file = crate::dirs::config_yaml_file();
         // unwrap is safe here because Self::filename is explicitly
         // constructed as a filename in a directory
         std::fs::create_dir_all(file.parent().unwrap()).map_err(
@@ -440,20 +439,21 @@ impl Config {
                 source,
                 file: file.clone(),
             })?;
-        fh.write_all(
-            serde_json::to_string_pretty(self)
-                .map_err(|source| Error::SaveConfigJson {
-                    source,
-                    file: file.clone(),
-                })?
-                .as_bytes(),
-        )
-        .map_err(|source| Error::SaveConfig {
-            source,
-            file: file.clone(),
+        let mut yaml = serde_yaml::to_string(self).map_err(|source| {
+            Error::SaveConfigYaml {
+                source,
+                file: file.clone(),
+            }
         })?;
-        fh.write_all(b"\n")
-            .map_err(|source| Error::SaveConfig { source, file })?;
+        if !yaml.ends_with('\n') {
+            yaml.push('\n');
+        }
+        fh.write_all(yaml.as_bytes()).map_err(|source| {
+            Error::SaveConfig {
+                source,
+                file: file.clone(),
+            }
+        })?;
         Ok(())
     }
 
@@ -648,6 +648,24 @@ impl Config {
     }
 }
 
+fn parse_config(contents: &str, file: &std::path::Path) -> Result<Config> {
+    if file.extension().and_then(std::ffi::OsStr::to_str) == Some("yaml") {
+        serde_yaml::from_str(contents).map_err(|source| {
+            Error::LoadConfigYaml {
+                source,
+                file: file.to_path_buf(),
+            }
+        })
+    } else {
+        serde_json::from_str(contents).map_err(|source| {
+            Error::LoadConfigJson {
+                source,
+                file: file.to_path_buf(),
+            }
+        })
+    }
+}
+
 impl Account {
     // Whether this account should be skipped for `ctx`: either `ctx` itself
     // or the magic `ExcludeContext::All` is in `exclude_from`.
@@ -766,8 +784,8 @@ pub async fn device_id(config: &Config) -> Result<String> {
 #[cfg(test)]
 mod test {
     use super::{
-        Account, ClipboardMechanism, Config, CredentialSource, Error,
-        ExcludeContext,
+        parse_config, Account, ClipboardMechanism, Config, CredentialSource,
+        Error, ExcludeContext,
     };
 
     fn named(name: &str, email: &str) -> Account {
@@ -1008,5 +1026,16 @@ mod test {
                 mechanism
             );
         }
+    }
+
+    #[test]
+    fn config_yaml_deserializes() {
+        let config = parse_config(
+            "clipboard: osc52\nlock_timeout: 120\n",
+            std::path::Path::new("config.yaml"),
+        )
+        .unwrap();
+        assert_eq!(config.clipboard, ClipboardMechanism::Osc52);
+        assert_eq!(config.lock_timeout, 120);
     }
 }

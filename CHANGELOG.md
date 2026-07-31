@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.15.0] - 2026-07-31
+
+### Added
+
+* Use YAML for the rbw configuration by default while continuing to support
+  legacy JSON configuration files. When both exist, `config.yaml` takes
+  precedence over `config.json`.
+
+### Fixed
+
+* `rbw import` and `rbw export-info` now resolve a missing passphrase for a
+  gpg-encrypted export from `RBW_EXPORT_PASSPHRASE` or a `/dev/tty` prompt,
+  matching `--from-file`'s existing behavior, instead of erroring and asking
+  for `--decrypt`/`--decrypt-passphrase` up front. Non-interactive runs
+  (no passphrase, no tty) keep the original fail-fast error.
+
 ## [2.14.3] - 2026-07-31
 
 ### Fixed

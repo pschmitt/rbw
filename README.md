@@ -48,7 +48,7 @@ not replace independently rebuilding the archive and comparing its checksum.
 ### Home Manager
 
 This fork also exports a Home Manager module (`homeManagerModules.default`)
-that exposes `config.json` as declarative Nix options (mirroring `Config`
+that exposes `config.yaml` as declarative Nix options (mirroring `Config`
 and `Account` in `src/config.rs`), and installs `rbw` itself.
 
 Its options live under `programs.rbw.declarative`, not `programs.rbw`
@@ -59,7 +59,7 @@ Manager is imported. This module can't redeclare those same option paths,
 so it lives at a sibling path instead. It's fully independent of the
 built-in module -- don't set both `programs.rbw.settings` (upstream,
 freeform) and `programs.rbw.declarative.enable` (this module) at once, as
-only this module actually renders `config.json`.
+only this module actually renders the configuration file.
 
 Add the flake as an input:
 
@@ -92,19 +92,23 @@ programs.rbw.declarative = {
 };
 ```
 
-This writes `~/.config/rbw/config.json` (or
-`$XDG_CONFIG_HOME/rbw/config.json`) from `programs.rbw.declarative.settings`;
+This writes `~/.config/rbw/config.yaml` (or
+`$XDG_CONFIG_HOME/rbw/config.yaml`) from `programs.rbw.declarative.settings`;
 unset options are omitted from the generated file rather than written as
 `null`. See the module's option documentation (e.g. via `home-manager
 option programs.rbw.declarative` or your editor's Nix LSP) for the full
 list of settings, including `accounts.<name>.unlock`,
 `accounts.<name>.exclude_from_list`, and `tui_keybindings`.
 
+rbw reads both `config.yaml` and the legacy `config.json`; when both exist,
+`config.yaml` takes precedence. Configuration written by rbw itself, including
+`rbw config set` and `rbw config edit`, uses YAML and writes `config.yaml`.
+
 ## Configuration
 
 Configuration options are set using the `rbw config` command (`rbw config set
 <key> <value>`, `rbw config get <key>`, `rbw config unset <key>`, `rbw config
-show`, or `rbw config edit` to edit the whole config.json in `$EDITOR`).
+show`, or `rbw config edit` to edit the whole config.yaml in `$EDITOR`).
 Available configuration options:
 
 * `email`: The email address to use as the account name when logging into the
@@ -140,7 +144,7 @@ Available configuration options:
   and `rbw create --generate` whenever the equivalent flag isn't passed
   explicitly (`length`, `no_symbols`, `only_numbers`, `nonconfusables`,
   `diceware` -- same fields as those commands' flags). Not settable via `rbw
-  config set`; edit `config.json` directly, or use the TUI's settings view
+  config set`; edit `config.yaml` directly, or use the TUI's settings view
   (`S` from the main screen).
 * `clipboard`: Which mechanism `-c`/`--clipboard` and the TUI's copy actions
   use to copy text. One of `auto` (default), `system`, or `osc52`. `system`
@@ -236,11 +240,11 @@ rbw termux enroll
 rbw asks for the master password using the configured pinentry, generates an
 authentication-gated RSA key, prompts for fingerprint authentication, writes
 the encrypted bundle below rbw's config directory, and
-updates the active account in `config.json`. The default authorization window
+updates the active account in `config.yaml`. The default authorization window
 is five minutes; adjust it with `--validity SECONDS`. By default the generated
 key and bundle are named after the account, so multiple accounts can be
 enrolled independently. To use an existing alias, set `termux_key_alias` in
-config.json or export `RBW_TERMUX_KEY_ALIAS`; the environment variable wins,
+config.yaml or export `RBW_TERMUX_KEY_ALIAS`; the environment variable wins,
 and enrollment reuses the selected key instead of generating another one. Use
 `rbw termux status` to inspect a readable report of the
 Android Keystore properties; each enrolled key must report hardware backing,

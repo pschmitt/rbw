@@ -1,4 +1,4 @@
-# Home Manager module exposing rbw's `config.json` as declarative Nix
+# Home Manager module exposing rbw's `config.yaml` as declarative Nix
 # options. Kept in sync with `src/config.rs` — every field of `Config` and
 # `Account` there should have a corresponding option here.
 #
@@ -19,7 +19,7 @@
 # `programs.rbw.enable`/`.settings`: enabling this module does not touch
 # those, and vice versa. Don't set both `programs.rbw.settings` (upstream)
 # and `programs.rbw.declarative.enable` (this module) at once -- only this
-# module actually renders `config.json`.
+# module actually renders rbw's configuration file.
 { self }:
 {
   config,
@@ -41,7 +41,7 @@ let
   # JSON with each marker replaced by that file's contents, read at
   # activation time rather than baked into the Nix store. Used below so
   # account fields like `email`/`base_url` can point at a sops-nix secret
-  # instead of embedding the value in `config.json` -- mirrors the same
+  # instead of embedding the value in `config.yaml` -- mirrors the same
   # `_secret` convention used for `glab`'s config in this repo (see
   # modules/home-manager/glab.nix).
   utils = import "${pkgs.path}/nixos/lib/utils.nix" {
@@ -52,7 +52,7 @@ let
 
   # Recursively drop `null` values from attrsets (including those nested
   # inside lists), so unset `Option<T>` fields are omitted from the
-  # generated JSON instead of being written out as explicit `null` --
+  # generated YAML instead of being written out as explicit `null` --
   # matching the `#[serde(skip_serializing_if = "Option::is_none")]"`
   # behavior of the corresponding fields in `src/config.rs`.
   filterNulls =
@@ -91,7 +91,7 @@ let
 
   # Like `mkNullOrStr`, but also accepts a `secretRef` so the value can be
   # sourced from a file (e.g. a sops-nix secret) instead of being written
-  # literally into `config.json`'s Nix store copy.
+  # literally into the Nix store copy of rbw's configuration.
   mkNullOrStrOrSecret =
     description:
     mkOption {
@@ -474,7 +474,7 @@ let
 in
 {
   options.programs.rbw.declarative = {
-    enable = mkEnableOption "rbw, the unofficial Bitwarden CLI, with a fully declarative config.json";
+    enable = mkEnableOption "rbw, the unofficial Bitwarden CLI, with a fully declarative config.yaml";
 
     package = mkOption {
       type = types.package;
@@ -486,10 +486,10 @@ in
       type = settingsModule;
       default = { };
       description = ''
-        Contents of rbw's `config.json`, mirroring `Config` in
+        Contents of rbw's `config.yaml`, mirroring `Config` in
         `src/config.rs`. Written to
-        `$XDG_CONFIG_HOME/rbw/config.json` (typically
-        `~/.config/rbw/config.json`); unset (`null`) options are omitted
+        `$XDG_CONFIG_HOME/rbw/config.yaml` (typically
+        `~/.config/rbw/config.yaml`); unset (`null`) options are omitted
         from the generated file rather than written as explicit `null`.
       '';
     };
@@ -505,7 +505,8 @@ in
             if isDefaultPasswordGen cfg.settings.password_gen then null else cfg.settings.password_gen;
         }
       );
-      configFile = "${config.xdg.configHome}/rbw/config.json";
+      configFile = "${config.xdg.configHome}/rbw/config.yaml";
+      configJson = "${config.xdg.configHome}/rbw/config.json.tmp";
     in
     {
       home.packages = [ cfg.package ];
@@ -519,10 +520,13 @@ in
       # modules/home-manager/glab.nix).
       home.activation.rbw-config = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
         $DRY_RUN_CMD mkdir -p "$(dirname '${configFile}')"
-        $DRY_RUN_CMD rm -f '${configFile}'
+        $DRY_RUN_CMD rm -f '${configFile}' '${configJson}'
         if [[ -z "''${DRY_RUN_CMD:-}" ]]
         then
-          ${utils.genJqSecretsReplacementSnippet rendered configFile}
+          umask 077
+          ${utils.genJqSecretsReplacementSnippet rendered configJson}
+          ${pkgs.yq-go}/bin/yq -P '.' '${configJson}' > '${configFile}'
+          rm -f '${configJson}'
           chmod 600 '${configFile}'
         fi
       '';
