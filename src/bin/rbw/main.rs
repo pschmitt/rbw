@@ -7,7 +7,7 @@ use is_terminal::IsTerminal as _;
 use std::os::unix::process::ExitStatusExt as _;
 
 use anyhow::Context as _;
-use clap::{CommandFactory as _, Parser as _};
+use clap::{CommandFactory as _, FromArgMatches as _};
 
 mod actions;
 mod commands;
@@ -263,6 +263,163 @@ struct Cli {
 
     #[command(subcommand)]
     command: Opt,
+}
+
+const HELP_GROUPS: &[(&str, &[&str])] = &[
+    (
+        "Account and server",
+        &[
+            "config", "account", "register", "login", "unlock", "unlocked",
+            "sync", "lock", "termux",
+        ],
+    ),
+    (
+        "Vault",
+        &[
+            "list",
+            "search",
+            "get",
+            "show",
+            "code",
+            "history",
+            "add",
+            "generate",
+            "edit",
+            "set",
+            "remove",
+            "archive",
+            "unarchive",
+            "restore",
+            "attachment",
+        ],
+    ),
+    (
+        "Import and export",
+        &["export", "export-info", "import", "mirror"],
+    ),
+    ("Organizations", &["collection", "org"]),
+    (
+        "Other",
+        &[
+            "tui",
+            "inject",
+            "run",
+            "version",
+            "purge",
+            "purge-vault",
+            "stop-agent",
+            "completions",
+        ],
+    ),
+];
+
+fn configure_cli_command(command: clap::Command) -> clap::Command {
+    let color = std::io::stdout().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none();
+    let grouped_commands = grouped_commands(&command, color);
+
+    command
+        .styles(
+            clap::builder::styling::Styles::styled()
+                .header(clap::builder::styling::AnsiColor::Yellow.on_default().bold())
+                .usage(clap::builder::styling::AnsiColor::Yellow.on_default().bold())
+                .literal(clap::builder::styling::AnsiColor::Green.on_default().bold())
+                .placeholder(clap::builder::styling::AnsiColor::Cyan.on_default()),
+        )
+        .before_help(grouped_commands)
+        .help_template(
+            "{about-with-newline}{usage-heading} {usage}\n\n{before-help}{options}{after-help}",
+        )
+}
+
+fn grouped_commands(command: &clap::Command, color: bool) -> String {
+    let commands = command
+        .get_subcommands()
+        .map(|command| (command.get_name(), command))
+        .collect::<std::collections::HashMap<_, _>>();
+    let name_width = HELP_GROUPS
+        .iter()
+        .flat_map(|(_, names)| names.iter())
+        .filter_map(|name| {
+            commands.get(name).map(|command| command.get_name().len())
+        })
+        .max()
+        .unwrap_or(0);
+    let terminal_width = terminal_size::terminal_size()
+        .map_or(100, |(terminal_size::Width(width), _)| usize::from(width));
+    let heading_style = clap::builder::styling::AnsiColor::Yellow
+        .on_default()
+        .bold();
+    let command_style =
+        clap::builder::styling::AnsiColor::Green.on_default().bold();
+
+    let mut help = String::new();
+    for (group, names) in HELP_GROUPS {
+        help.push_str(&format!(
+            "{}:\n",
+            styled_help_value(heading_style, group, color)
+        ));
+        for name in *names {
+            let Some(command) = commands.get(name) else {
+                continue;
+            };
+            let aliases = command.get_visible_aliases().collect::<Vec<_>>();
+            let alias_text = if aliases.is_empty() {
+                String::new()
+            } else {
+                format!(" [aliases: {}]", aliases.join(", "))
+            };
+            let about = command
+                .get_about()
+                .map_or_else(String::new, ToString::to_string);
+            let description = format!("{about}{alias_text}");
+            let prefix = format!(
+                "  {}",
+                " ".repeat(
+                    name_width.saturating_sub(command.get_name().len())
+                )
+            );
+            let description_width =
+                terminal_width.saturating_sub(name_width + 4).max(1);
+            let mut lines = textwrap::wrap(&description, description_width);
+            if lines.is_empty() {
+                lines.push(std::borrow::Cow::Borrowed(""));
+            }
+            for (line_number, line) in lines.iter().enumerate() {
+                if line_number == 0 {
+                    help.push_str(&prefix);
+                    help.push_str(&styled_help_value(
+                        command_style,
+                        command.get_name(),
+                        color,
+                    ));
+                    help.push_str(&format!("  {line}\n"));
+                } else {
+                    help.push_str(&" ".repeat(prefix.len() + name_width + 2));
+                    help.push_str(&format!("{line}\n"));
+                }
+            }
+        }
+        help.push('\n');
+    }
+    help
+}
+
+fn styled_help_value(
+    style: clap::builder::styling::Style,
+    value: &str,
+    color: bool,
+) -> String {
+    if color {
+        format!("{style}{value}{style:#}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn parse_cli() -> Cli {
+    let matches = configure_cli_command(Cli::command()).get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -2468,7 +2625,7 @@ fn read_stdin_password() -> String {
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = parse_cli();
     let opt = cli.command;
 
     // Resolve the target account: --account, else $RBW_ACCOUNT, else the
@@ -3430,6 +3587,7 @@ fn main() {
 #[cfg(test)]
 mod test {
     use super::*;
+    use clap::Parser as _;
 
     // Runs clap's internal consistency checks (positional ordering,
     // conflicting shorts, ...) over the whole CLI definition, which
@@ -3437,6 +3595,32 @@ mod test {
     #[test]
     fn test_cli_definition_is_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn test_root_help_groups_commands() {
+        let command = Cli::command();
+        let grouped_names = HELP_GROUPS
+            .iter()
+            .flat_map(|(_, names)| names.iter().copied())
+            .collect::<std::collections::HashSet<_>>();
+        let command_names = command
+            .get_subcommands()
+            .map(clap::Command::get_name)
+            .filter(|name| *name != "help")
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(grouped_names, command_names);
+
+        let help = configure_cli_command(command)
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("Account and server:"));
+        assert!(help.contains("Import and export:"));
+        assert!(help.contains("Organizations:"));
+        assert!(!help.contains("\nCommands:"));
+        assert!(help.contains("  export"));
+        assert!(help.contains("  export-info"));
     }
 
     fn parse(args: &[&str]) -> Cli {
