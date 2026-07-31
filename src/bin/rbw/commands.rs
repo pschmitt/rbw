@@ -363,6 +363,8 @@ enum QueryToken {
     Folder(String),
     Notes(String),
     Field(String),
+    Organization(String),
+    Collection(String),
 }
 
 impl QueryToken {
@@ -387,6 +389,10 @@ impl QueryToken {
                 | "note"
                 | "notes"
                 | "field"
+                | "org"
+                | "organization"
+                | "col"
+                | "collection"
         )
     }
 
@@ -404,6 +410,8 @@ impl QueryToken {
             "f" | "folder" => Self::Folder(value.to_string()),
             "note" | "notes" => Self::Notes(value.to_string()),
             "field" => Self::Field(value.to_string()),
+            "org" | "organization" => Self::Organization(value.to_string()),
+            "col" | "collection" => Self::Collection(value.to_string()),
             _ => unreachable!("checked by recognizes_prefix"),
         }
     }
@@ -451,6 +459,8 @@ pub enum SearchField {
     Uri,
     Notes,
     Field,
+    Organization,
+    Collection,
     // A hidden/sensitive value with no scoping prefix of its own (password,
     // card number, ssh private key, …) — only ever reached by a bare word
     // (`QueryToken::Any`), matching `search_match`'s own `sensitive_fields`
@@ -480,7 +490,10 @@ pub fn highlight_ranges(
         | (QueryToken::Folder(term), SearchField::Folder)
         | (QueryToken::Uri(term), SearchField::Uri)
         | (QueryToken::Notes(term), SearchField::Notes)
-        | (QueryToken::Field(term), SearchField::Field)) = (token, field)
+        | (QueryToken::Field(term), SearchField::Field)
+        | (QueryToken::Organization(term), SearchField::Organization)
+        | (QueryToken::Collection(term), SearchField::Collection)) =
+            (token, field)
         else {
             continue;
         };
@@ -704,6 +717,16 @@ impl DecryptedSearchCipher {
         folder: Option<&str>,
         with_attachments: bool,
     ) -> bool {
+        self.search_match_with_scope(term, folder, with_attachments, None)
+    }
+
+    pub fn search_match_with_scope(
+        &self,
+        term: &str,
+        folder: Option<&str>,
+        with_attachments: bool,
+        scope: Option<&TuiEntryScope>,
+    ) -> bool {
         if let Some(folder) = folder {
             if self.folder.as_deref() != Some(folder) {
                 return false;
@@ -720,10 +743,14 @@ impl DecryptedSearchCipher {
 
         parse_query(term)
             .iter()
-            .all(|token| self.token_match(token))
+            .all(|token| self.token_match(token, scope))
     }
 
-    fn token_match(&self, token: &QueryToken) -> bool {
+    fn token_match(
+        &self,
+        token: &QueryToken,
+        scope: Option<&TuiEntryScope>,
+    ) -> bool {
         let contains = |field: &str, needle: &str| {
             field.to_lowercase().contains(&needle.to_lowercase())
         };
@@ -759,6 +786,12 @@ impl DecryptedSearchCipher {
             QueryToken::Field(term) => {
                 self.fields.iter().any(|f| contains(f, term))
             }
+            QueryToken::Organization(term) => scope
+                .and_then(|scope| scope.organization.as_deref())
+                .is_some_and(|org| contains(org, term)),
+            QueryToken::Collection(term) => scope.is_some_and(|scope| {
+                scope.collections.iter().any(|col| contains(col, term))
+            }),
         }
     }
 }
@@ -8274,9 +8307,9 @@ struct ExportedEntry {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ExportedCollection {
-    id: String,
-    org_id: String,
-    name: String,
+    pub id: String,
+    pub org_id: String,
+    pub name: String,
 }
 
 #[derive(serde::Serialize)]
@@ -16263,6 +16296,41 @@ pub struct TuiVault {
     pub search: Vec<DecryptedSearchCipher>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct TuiEntryScope {
+    pub organization: Option<String>,
+    pub collections: Vec<String>,
+}
+
+pub fn tui_entry_scope(
+    db: &rbw::db::Db,
+    entry: &rbw::db::Entry,
+) -> TuiEntryScope {
+    let organization = entry.org_id.as_deref().map(|id| {
+        db.organizations
+            .iter()
+            .find(|org| org.id == id)
+            .map_or_else(|| id.to_string(), |org| org.name.clone())
+    });
+    let collections = entry
+        .collection_ids
+        .iter()
+        .map(|id| {
+            db.collections
+                .iter()
+                .find(|collection| collection.id == *id)
+                .map_or_else(
+                    || id.clone(),
+                    |collection| collection.name.clone(),
+                )
+        })
+        .collect();
+    TuiEntryScope {
+        organization,
+        collections,
+    }
+}
+
 // The initial state handed to the TUI: the vaults of every currently-unlocked
 // account, the names of configured-but-locked accounts (offered for lazy
 // unlock in the accounts panel), and whether more than one account exists (so
@@ -16368,6 +16436,36 @@ pub struct FileSaveTarget {
     pub passphrase: Option<String>,
     pub collections: Vec<ExportedCollection>,
     pub entry_extra: std::collections::HashMap<String, FileEntryExtra>,
+}
+
+pub fn tui_file_entry_scope(
+    target: &FileSaveTarget,
+    entry_id: &str,
+) -> TuiEntryScope {
+    let Some(extra) = target.entry_extra.get(entry_id) else {
+        return TuiEntryScope::default();
+    };
+    let collections = extra
+        .collection_ids
+        .iter()
+        .map(|id| {
+            target
+                .collections
+                .iter()
+                .find(|collection| collection.id == *id)
+                .map_or_else(
+                    || id.clone(),
+                    |collection| collection.name.clone(),
+                )
+        })
+        .collect();
+    TuiEntryScope {
+        // The export format carries collection organization IDs, but not the
+        // organization names. Keep the ID visible/searchable rather than
+        // dropping the organization association from the preview.
+        organization: extra.org_id.clone(),
+        collections,
+    }
 }
 
 // Writes `decrypted`/`attachment_data` back to `target.path`, in whatever
@@ -18617,6 +18715,23 @@ mod test {
         // An unrecognized prefix falls back to a literal substring match
         // instead of erroring or matching nothing.
         assert!(!entry.search_match("bogus:alice", None, false));
+
+        let scope = TuiEntryScope {
+            organization: Some("Acme Engineering".to_string()),
+            collections: vec!["Production".to_string()],
+        };
+        assert!(entry.search_match_with_scope(
+            "org:acme col:prod",
+            None,
+            false,
+            Some(&scope),
+        ));
+        assert!(!entry.search_match_with_scope(
+            "org:personal",
+            None,
+            false,
+            Some(&scope),
+        ));
     }
 
     #[test]

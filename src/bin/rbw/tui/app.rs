@@ -362,11 +362,9 @@ struct AccountVault {
     // id (`DecryptedAttachment` itself only carries metadata). `None` for a
     // live account, which fetches attachment bytes from the server instead.
     attachment_data: Option<std::collections::HashMap<String, Vec<u8>>>,
-    // `Some` only for a writable (`rbw tui --from-file FILE --write`)
-    // vault: everything needed to save `decrypted`/`attachment_data` back
-    // to disk. `None` for a live account (nothing to save to) and for a
-    // read-only `--from-file` vault (nothing can reach a mutation handler
-    // in the first place -- see `App::reject_if_read_only`).
+    // `Some` for a `--from-file` vault: everything needed to resolve
+    // organization/collection labels and, when writable, save
+    // `decrypted`/`attachment_data` back to disk. `None` for live accounts.
     file_save: Option<commands::FileSaveTarget>,
 }
 
@@ -550,7 +548,7 @@ impl App {
             }
         });
         let read_only = !vault.write;
-        let file_save = vault.write.then_some(commands::FileSaveTarget {
+        let file_save = Some(commands::FileSaveTarget {
             path: vault.path,
             passphrase: vault.passphrase,
             collections: vault.collections,
@@ -671,17 +669,23 @@ impl App {
 
     fn recompute_filter(&mut self) {
         let term = self.filter.value().to_string();
-        let mut filtered: Vec<usize> = self
-            .search
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| {
-                (term.is_empty() || c.search_match(&term, None, false))
-                    && self.archived_filter.matches(c.archived)
-                    && self.trash_filter.matches(c.deleted)
-            })
-            .map(|(i, _)| i)
-            .collect();
+        let mut filtered = Vec::new();
+        for i in 0..self.search.len() {
+            let scope = self.scope_for_index(i);
+            let c = &self.search[i];
+            if (term.is_empty()
+                || c.search_match_with_scope(
+                    &term,
+                    None,
+                    false,
+                    scope.as_ref(),
+                ))
+                && self.archived_filter.matches(c.archived)
+                && self.trash_filter.matches(c.deleted)
+            {
+                filtered.push(i);
+            }
+        }
         filtered.sort_by(|&a, &b| {
             let ca = &self.search[a];
             let cb = &self.search[b];
@@ -716,6 +720,21 @@ impl App {
         let o = *self.owner.get(i)?;
         let s = *self.slot.get(i)?;
         self.vaults.get(o)?.db.entries.get(s).cloned()
+    }
+
+    fn scope_for_index(&self, i: usize) -> Option<commands::TuiEntryScope> {
+        let owner = *self.owner.get(i)?;
+        let slot = *self.slot.get(i)?;
+        let vault = self.vaults.get(owner)?;
+        let entry = vault.db.entries.get(slot)?;
+        Some(vault.file_save.as_ref().map_or_else(
+            || commands::tui_entry_scope(&vault.db, entry),
+            |target| commands::tui_file_entry_scope(target, &entry.id),
+        ))
+    }
+
+    pub fn current_scope(&self) -> Option<commands::TuiEntryScope> {
+        self.current_index().and_then(|i| self.scope_for_index(i))
     }
 
     pub fn current_detail(&self) -> Option<&DecryptedCipher> {

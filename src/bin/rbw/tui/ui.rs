@@ -432,7 +432,13 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
         return;
     };
 
-    let lines = detail_lines(detail, app.reveal, app.filter.value());
+    let scope = app.current_scope();
+    let lines = detail_lines_with_scope(
+        detail,
+        app.reveal,
+        app.filter.value(),
+        scope.as_ref(),
+    );
     // Clamp to content that actually overflows the pane, so scrolling a
     // preview that already fits is a visible no-op instead of pushing
     // content off the top. Cached back onto `app` so the next keypress
@@ -582,10 +588,20 @@ fn opt_row(
     }
 }
 
+#[cfg(test)]
 fn detail_lines(
     detail: &DecryptedCipher,
     reveal: bool,
     query: &str,
+) -> Vec<Line<'static>> {
+    detail_lines_with_scope(detail, reveal, query, None)
+}
+
+fn detail_lines_with_scope(
+    detail: &DecryptedCipher,
+    reveal: bool,
+    query: &str,
+    scope: Option<&commands::TuiEntryScope>,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -610,6 +626,26 @@ fn detail_lines(
             commands::SearchField::Folder,
             "",
         ));
+    }
+    if let Some(scope) = scope {
+        if let Some(organization) = &scope.organization {
+            lines.push(highlighted_row(
+                "org",
+                organization,
+                query,
+                commands::SearchField::Organization,
+                "",
+            ));
+        }
+        for collection in &scope.collections {
+            lines.push(highlighted_row(
+                "collection",
+                collection,
+                query,
+                commands::SearchField::Collection,
+                "",
+            ));
+        }
     }
     lines.push(Line::raw(""));
 
@@ -1714,11 +1750,12 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
 #[cfg(test)]
 mod test {
     use super::{
-        detail_lines, pane_at, render, status_hint, totp_line, Pane, MATCH,
+        detail_lines, detail_lines_with_scope, pane_at, render, status_hint,
+        totp_line, Pane, MATCH,
     };
     use crate::commands::{
         AttachmentMetadata, DecryptedCipher, DecryptedData, DecryptedField,
-        DecryptedUri,
+        DecryptedUri, TuiEntryScope,
     };
     use crate::tui::app::App;
     use ratatui::backend::TestBackend;
@@ -1927,6 +1964,39 @@ mod test {
             2,
             "only username and password get a hint here (no totp)"
         );
+    }
+
+    #[test]
+    fn detail_lines_show_organization_and_collections() {
+        let cipher = DecryptedCipher {
+            id: "id".to_string(),
+            folder: None,
+            name: "GitHub".to_string(),
+            data: DecryptedData::SecureNote,
+            fields: vec![],
+            notes: None,
+            history: vec![],
+            attachments: vec![],
+            attachment_metadata: AttachmentMetadata {
+                attachment_count: 0,
+            },
+            archived: false,
+            deleted: false,
+            account: None,
+        };
+        let scope = TuiEntryScope {
+            organization: Some("Acme".to_string()),
+            collections: vec!["Production".to_string(), "Shared".to_string()],
+        };
+        let text: String =
+            detail_lines_with_scope(&cipher, false, "", Some(&scope))
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .map(|span| span.content.as_ref())
+                .collect();
+        assert!(text.contains("org") && text.contains("Acme"));
+        assert!(text.contains("collection") && text.contains("Production"));
+        assert!(text.contains("collection") && text.contains("Shared"));
     }
 
     #[test]
