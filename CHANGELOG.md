@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.16.2] - 2026-08-02
+
+### Added
+
+* Include archived and trashed entries in exports by default, with
+  `--skip-archived` and `--skip-trash` opt-outs.
+* Preserve archived and trash status through rbw imports and Bitwarden JSON-
+  based export formats.
+
 ## [2.16.1] - 2026-07-31
 
 ### Added

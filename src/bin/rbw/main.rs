@@ -631,7 +631,9 @@ enum Opt {
             reads their export shapes. Bitwarden's CSV format has no \
             columns for Card/Identity/SSH key entries, so \
             --format bitwarden-csv skips them (with a warning), matching \
-            what the official clients do.\n\n\
+            what the official clients do. Archived and trashed entries are \
+            included by default; use --skip-archived and/or --skip-trash \
+            to omit them.\n\n\
             With --encrypt, rbw's own format is written as a \
             symmetrically gpg-encrypted tar.gz archive instead of raw \
             JSON. --format bitwarden-encrypted-json always needs a \
@@ -660,6 +662,18 @@ enum Opt {
                 the export considerably larger and slower to produce."
         )]
         attachments: bool,
+
+        #[arg(
+            long = "skip-trash",
+            help = "Exclude trashed entries from the export (included by default)"
+        )]
+        skip_trash: bool,
+
+        #[arg(
+            long = "skip-archived",
+            help = "Exclude archived entries from the export (included by default)"
+        )]
+        skip_archived: bool,
 
         #[arg(
             long,
@@ -2841,6 +2855,8 @@ fn main() {
         Opt::Export {
             format,
             attachments,
+            skip_trash,
+            skip_archived,
             encrypt,
             output,
             collection,
@@ -2850,6 +2866,8 @@ fn main() {
         } => commands::export(
             format,
             attachments,
+            skip_trash,
+            skip_archived,
             encrypt.as_deref(),
             output.as_deref(),
             collection.as_deref(),
@@ -3855,13 +3873,32 @@ mod test {
 
         let cli = parse(&["rbw", "export"]);
         let Opt::Export {
-            collection, org, ..
+            collection,
+            org,
+            skip_trash,
+            skip_archived,
+            ..
         } = cli.command
         else {
             panic!("expected Opt::Export");
         };
         assert_eq!(collection, None);
         assert_eq!(org, None);
+        assert!(!skip_trash);
+        assert!(!skip_archived);
+
+        let cli =
+            parse(&["rbw", "export", "--skip-trash", "--skip-archived"]);
+        let Opt::Export {
+            skip_trash,
+            skip_archived,
+            ..
+        } = cli.command
+        else {
+            panic!("expected Opt::Export");
+        };
+        assert!(skip_trash);
+        assert!(skip_archived);
 
         let cli = parse(&[
             "rbw",

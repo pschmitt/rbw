@@ -291,6 +291,18 @@ pub struct BwItem {
     pub organization_id: Option<String>,
     #[serde(rename = "folderId", default)]
     pub folder_id: Option<String>,
+    #[serde(
+        rename = "archivedDate",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub archived_date: Option<String>,
+    #[serde(
+        rename = "deletedDate",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub deleted_date: Option<String>,
     #[serde(rename = "type")]
     pub ty: u16,
     pub name: String,
@@ -770,7 +782,7 @@ pub fn write_csv(vault: &BwVault) -> Result<(String, usize)> {
                 item.notes.as_deref().unwrap_or_default(),
                 fields.as_str(),
                 "0",
-                "",
+                item.archived_date.as_deref().unwrap_or_default(),
                 login
                     .and_then(|l| l.uris.first())
                     .and_then(|u| u.uri.as_deref())
@@ -979,6 +991,10 @@ mod test {
                     id: Some("1".to_string()),
                     organization_id: None,
                     folder_id: None,
+                    archived_date: Some(
+                        "2026-07-29T12:00:00.000Z".to_string(),
+                    ),
+                    deleted_date: None,
                     ty: 1,
                     name: "a login".to_string(),
                     notes: None,
@@ -1007,6 +1023,8 @@ mod test {
                     id: Some("2".to_string()),
                     organization_id: None,
                     folder_id: None,
+                    archived_date: None,
+                    deleted_date: None,
                     ty: 5,
                     name: "an ssh key".to_string(),
                     notes: None,
@@ -1026,6 +1044,7 @@ mod test {
         assert!(csv_text.contains("a login"));
         assert!(csv_text.contains("https://example.com"));
         assert!(csv_text.contains("custom: val"));
+        assert!(csv_text.contains("2026-07-29T12:00:00.000Z"));
         assert!(!csv_text.contains("an ssh key"));
 
         let mut reader = csv::Reader::from_reader(csv_text.as_bytes());

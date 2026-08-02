@@ -505,8 +505,11 @@ printf '%s\n%s\n' "$API_CLIENT_ID" "$API_CLIENT_SECRET" | rbw register --stdin
 
 ### Backup and restore (`rbw export`/`rbw import`)
 
-`rbw export` writes the entire active vault (all entries, fully decrypted,
-plus collections) as JSON to stdout:
+`rbw export` writes the entire active vault (including archived and trashed
+entries, fully decrypted, plus collections) as JSON to stdout. Native rbw
+exports preserve both status flags; Bitwarden JSON-based exports preserve
+archived and trash status through `archivedDate` and `deletedDate`. CSV
+cannot represent either status:
 
 ```sh
 rbw export > backup.json

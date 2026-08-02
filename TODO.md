@@ -310,9 +310,11 @@
       actually had Archive-eligible + trashed items) with a temporary
       build: archive/unarchive round-tripped correctly, `--archived`/
       `--trashed` filtered correctly, and organically surfaced real
-      pre-existing archived/trashed entries. `rbw export`/`import` and
-      `--from-file` don't round-trip either flag yet (deferred, no local
-      file semantics for either concept today).
+      pre-existing archived/trashed entries. Native `rbw export` carries
+      both flags and `rbw import` reapplies them after creating/updating
+      entries; Bitwarden JSON-based exports carry archived/trash status
+      through `archivedDate`/`deletedDate`, while CSV has no portable status
+      fields. `--from-file` preserves both flags in rbw-shaped files.
 - [x] Removed the hidden flat-command compatibility shims for collections
       (`list-collections`/`lsc`, `create-collection`, `delete-collection`,
       `edit-collections`, `rename-collection`,

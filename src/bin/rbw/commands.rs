@@ -8418,20 +8418,26 @@ fn export_attachments(
     Ok(out)
 }
 
-// Whether an entry belongs in `export`/`mirror`'s output: never a trashed
-// entry (matches `find_entry`/`find_entries_all`'s exclusion elsewhere --
-// otherwise export/mirror would resurrect a trashed entry as live at the
-// destination instead of leaving it trashed), and within the given
-// collection/org scope, if any.
+// Whether an entry belongs in `export`/`mirror`'s output, within the given
+// collection/org scope, if any. Trashed entries are deliberately not
+// filtered here: native rbw exports carry their `deleted` flag, and the
+// export command is a backup of the whole vault. `mirror` applies its own
+// live-entry filter because the upstream Bitwarden-shaped conversion
+// cannot represent trash status.
 fn export_entry_in_scope(
     entry: &rbw::db::Entry,
     scope_collection_id: Option<&str>,
     scope_org_id: Option<&str>,
 ) -> bool {
-    if entry.deleted {
-        return false;
-    }
     entry_in_collection_org_scope(entry, scope_collection_id, scope_org_id)
+}
+
+fn export_entry_status_allowed(
+    entry: &rbw::db::Entry,
+    skip_trash: bool,
+    skip_archived: bool,
+) -> bool {
+    !(skip_trash && entry.deleted || skip_archived && entry.archived)
 }
 
 // Whether `entry` belongs to the given collection/org scope (either or both
@@ -8468,6 +8474,8 @@ fn build_exported_vault(
     attachments: bool,
     collection: Option<&str>,
     org: Option<&str>,
+    skip_trash: bool,
+    skip_archived: bool,
 ) -> anyhow::Result<ExportedVault> {
     let mut db = load_db()?;
 
@@ -8482,6 +8490,9 @@ fn build_exported_vault(
     let entries_snapshot: Vec<rbw::db::Entry> = db
         .entries
         .iter()
+        .filter(|entry| {
+            export_entry_status_allowed(entry, skip_trash, skip_archived)
+        })
         .filter(|entry| {
             export_entry_in_scope(
                 entry,
@@ -8550,6 +8561,8 @@ fn build_exported_vault(
 pub fn export(
     format: crate::import_bitwarden::ExportFormat,
     attachments: bool,
+    skip_trash: bool,
+    skip_archived: bool,
     encrypt: Option<&str>,
     output: Option<&std::path::Path>,
     collection: Option<&str>,
@@ -8580,7 +8593,13 @@ pub fn export(
 
     if let Some(path) = from_file {
         let file_vault = load_from_file(path, from_file_passphrase)?;
-        let vault = exported_vault_from_file(&file_vault, collection, org)?;
+        let vault = exported_vault_from_file(
+            &file_vault,
+            collection,
+            org,
+            skip_trash,
+            skip_archived,
+        )?;
         return write_exported_vault(
             format, passphrase, output, &vault, None,
         );
@@ -8588,7 +8607,13 @@ pub fn export(
 
     unlock(None, None)?;
 
-    let vault = build_exported_vault(attachments, collection, org)?;
+    let vault = build_exported_vault(
+        attachments,
+        collection,
+        org,
+        skip_trash,
+        skip_archived,
+    )?;
     // Reloaded (rather than threaded through `build_exported_vault`) purely
     // for the KDF settings the `BitwardenEncryptedJson` branch below needs;
     // cheap, since it's just the local db.json cache, and none of those
@@ -8602,6 +8627,8 @@ fn exported_vault_from_file(
     file_vault: &FileVault,
     collection: Option<&str>,
     org: Option<&str>,
+    skip_trash: bool,
+    skip_archived: bool,
 ) -> anyhow::Result<ExportedVault> {
     let collection_id = collection
         .map(|wanted| {
@@ -8624,7 +8651,9 @@ fn exported_vault_from_file(
     let entries = file_vault
         .entries
         .iter()
-        .filter(|entry| !entry.deleted)
+        .filter(|entry| {
+            !(skip_trash && entry.deleted || skip_archived && entry.archived)
+        })
         .filter(|entry| {
             let extra = file_vault.entry_extra.get(&entry.id);
             org.is_none_or(|org_id| {
@@ -9396,8 +9425,8 @@ fn bw_vault_to_imported(
                 notes: item.notes,
                 history,
                 collection_ids: item.collection_ids,
-                archived: false,
-                deleted: false,
+                archived: item.archived_date.is_some(),
+                deleted: item.deleted_date.is_some(),
                 attachments: entry_attachments,
             })
         })
@@ -9608,6 +9637,14 @@ fn exported_vault_to_bw(
                     .folder
                     .as_ref()
                     .and_then(|name| folder_ids.get(name).cloned()),
+                archived_date: entry.archived.then(|| {
+                    humantime::format_rfc3339(std::time::SystemTime::now())
+                        .to_string()
+                }),
+                deleted_date: entry.deleted.then(|| {
+                    humantime::format_rfc3339(std::time::SystemTime::now())
+                        .to_string()
+                }),
                 ty,
                 name: entry.name.clone(),
                 notes: entry.notes.clone(),
@@ -10660,6 +10697,65 @@ fn upload_imported_attachments(
     Ok((restored, failed))
 }
 
+// Applies the status flags carried by an rbw export after the entry's data
+// has been created or updated. The server's import endpoints don't accept
+// archive/trash state, and a trashed entry generally needs to be restored
+// temporarily before its archive state can be changed.
+fn apply_imported_status(
+    db: &mut rbw::db::Db,
+    access_token: &mut String,
+    refresh_token: &str,
+    id: &str,
+    mut archived: bool,
+    mut deleted: bool,
+    target_archived: bool,
+    target_deleted: bool,
+) -> anyhow::Result<()> {
+    if deleted && (!target_deleted || archived != target_archived) {
+        let (new_token, ()) =
+            rbw::actions::restore(access_token, refresh_token, id)?;
+        if let Some(new_token) = new_token {
+            access_token.clone_from(&new_token);
+            db.access_token = Some(new_token);
+            save_db(db)?;
+        }
+        deleted = false;
+    }
+
+    if archived != target_archived {
+        let (new_token, ()) = if target_archived {
+            rbw::actions::archive(access_token, refresh_token, id)?
+        } else {
+            rbw::actions::unarchive(access_token, refresh_token, id)?
+        };
+        if let Some(new_token) = new_token {
+            access_token.clone_from(&new_token);
+            db.access_token = Some(new_token);
+            save_db(db)?;
+        }
+        archived = target_archived;
+    }
+
+    if deleted != target_deleted {
+        let (new_token, ()) =
+            rbw::actions::remove(access_token, refresh_token, id)?;
+        if let Some(new_token) = new_token {
+            access_token.clone_from(&new_token);
+            db.access_token = Some(new_token);
+            save_db(db)?;
+        }
+        deleted = true;
+    }
+
+    if let Some(entry) = db.entries.iter_mut().find(|entry| entry.id == id) {
+        entry.archived = archived;
+        entry.deleted = deleted;
+    }
+    save_db(db)?;
+
+    Ok(())
+}
+
 // Creates a brand-new entry for `imported`. Always creates it in the
 // personal vault first (`rbw::actions::add` has no organization parameter),
 // then -- only if we're a member of the entry's original organization
@@ -10765,33 +10861,42 @@ fn import_create_entry(
         }
     }
 
-    // No attachments to restore -- skip the sync below entirely; nothing
-    // else in this function needs the freshly-synced local `db` state
-    // (`upload_imported_attachments` would just no-op on an empty list
-    // anyway).
-    if imported.attachments.is_empty() {
-        return Ok((0, 0));
-    }
+    let attachment_result = if imported.attachments.is_empty() {
+        Ok((0, 0))
+    } else {
+        crate::actions::sync()?;
+        *db = load_db()?;
+        *access_token = db.access_token.as_ref().unwrap().clone();
+        *refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
-    crate::actions::sync()?;
-    *db = load_db()?;
-    *access_token = db.access_token.as_ref().unwrap().clone();
-    *refresh_token = db.refresh_token.as_ref().unwrap().clone();
+        let Some(final_entry) =
+            db.entries.iter().find(|e| e.id == new_entry_id).cloned()
+        else {
+            anyhow::bail!("entry disappeared from the vault after import");
+        };
 
-    let Some(final_entry) =
-        db.entries.iter().find(|e| e.id == new_entry_id).cloned()
-    else {
-        anyhow::bail!("entry disappeared from the vault after import");
-    };
+        upload_imported_attachments(
+            db,
+            access_token,
+            refresh_token,
+            &final_entry,
+            &imported.attachments,
+            &std::collections::HashSet::new(),
+        )
+    }?;
 
-    upload_imported_attachments(
+    apply_imported_status(
         db,
         access_token,
         refresh_token,
-        &final_entry,
-        &imported.attachments,
-        &std::collections::HashSet::new(),
-    )
+        &new_entry_id,
+        false,
+        false,
+        imported.archived,
+        imported.deleted,
+    )?;
+
+    Ok(attachment_result)
 }
 
 // Updates an already-existing entry (`--overwrite`) in place: data, fields,
@@ -10806,6 +10911,21 @@ fn import_overwrite_entry(
     existing: &rbw::db::Entry,
     imported: &ImportedEntry,
 ) -> anyhow::Result<(usize, usize)> {
+    // The edit endpoint may reject trashed entries. Restore one temporarily;
+    // `apply_imported_status` below reapplies the source flags afterward.
+    if existing.deleted {
+        apply_imported_status(
+            db,
+            access_token,
+            refresh_token,
+            &existing.id,
+            existing.archived,
+            true,
+            existing.archived,
+            false,
+        )?;
+    }
+
     let editable = imported_to_editable(imported);
 
     let org_id = existing.org_id.as_deref();
@@ -10840,43 +10960,53 @@ fn import_overwrite_entry(
         save_db(db)?;
     }
 
-    // No attachments to restore -- nothing downstream needs a fresh sync of
-    // the local `db` (`upload_imported_attachments` no-ops on an empty
-    // list), so skip the round-trip entirely.
-    if imported.attachments.is_empty() {
-        return Ok((0, 0));
-    }
+    let attachment_result = if imported.attachments.is_empty() {
+        Ok((0, 0))
+    } else {
+        crate::actions::sync()?;
+        *db = load_db()?;
+        *access_token = db.access_token.as_ref().unwrap().clone();
+        *refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
-    crate::actions::sync()?;
-    *db = load_db()?;
-    *access_token = db.access_token.as_ref().unwrap().clone();
-    *refresh_token = db.refresh_token.as_ref().unwrap().clone();
+        let Some(refreshed) =
+            db.entries.iter().find(|e| e.id == existing.id).cloned()
+        else {
+            anyhow::bail!("entry disappeared from the vault after update");
+        };
 
-    let Some(refreshed) =
-        db.entries.iter().find(|e| e.id == existing.id).cloned()
-    else {
-        anyhow::bail!("entry disappeared from the vault after update");
-    };
+        let already_attached: std::collections::HashSet<String> =
+            decrypt_cipher(&refreshed).map_or_else(
+                |_| std::collections::HashSet::new(),
+                |d| {
+                    d.attachments
+                        .into_iter()
+                        .filter_map(|a| a.file_name)
+                        .collect()
+                },
+            );
 
-    let already_attached: std::collections::HashSet<String> =
-        decrypt_cipher(&refreshed).map_or_else(
-            |_| std::collections::HashSet::new(),
-            |d| {
-                d.attachments
-                    .into_iter()
-                    .filter_map(|a| a.file_name)
-                    .collect()
-            },
-        );
+        upload_imported_attachments(
+            db,
+            access_token,
+            refresh_token,
+            &refreshed,
+            &imported.attachments,
+            &already_attached,
+        )
+    }?;
 
-    upload_imported_attachments(
+    apply_imported_status(
         db,
         access_token,
         refresh_token,
-        &refreshed,
-        &imported.attachments,
-        &already_attached,
-    )
+        &existing.id,
+        existing.archived,
+        false,
+        imported.archived,
+        imported.deleted,
+    )?;
+
+    Ok(attachment_result)
 }
 
 // The same (name, username) key `import_vault`'s `existing_index` and the
@@ -11279,26 +11409,20 @@ fn bulk_create_batch(
     for imported in &bulk_entries {
         pb.set_message(fit_to_width(&imported.name, PROGRESS_MSG_WIDTH));
 
-        let Some(new_entry) = new_index.get(&imported_entry_key(imported))
+        let Some(new_entry) =
+            new_index.get(&imported_entry_key(imported)).cloned()
         else {
             retry.push(imported);
             pb.inc(1);
             continue;
         };
 
-        created += 1;
-        pb.println(format!(
-            "{} '{}'",
-            style::success("Created", c),
-            imported.name,
-        ));
-
         if !imported.attachments.is_empty() {
             match upload_imported_attachments(
                 db,
                 access_token,
                 refresh_token,
-                new_entry,
+                &new_entry,
                 &imported.attachments,
                 &std::collections::HashSet::new(),
             ) {
@@ -11314,6 +11438,34 @@ fn bulk_create_batch(
                     ));
                     attachments_failed += imported.attachments.len();
                 }
+            }
+        }
+
+        match apply_imported_status(
+            db,
+            access_token,
+            refresh_token,
+            &new_entry.id,
+            new_entry.archived,
+            new_entry.deleted,
+            imported.archived,
+            imported.deleted,
+        ) {
+            Ok(()) => {
+                created += 1;
+                pb.println(format!(
+                    "{} '{}'",
+                    style::success("Created", c),
+                    imported.name,
+                ));
+            }
+            Err(e) => {
+                pb.println(format!(
+                    "{} failed to restore status for '{}': {e:#}",
+                    style_error("Error:", c),
+                    imported.name,
+                ));
+                failed_names.push((imported.name.clone(), format!("{e:#}")));
             }
         }
         pb.inc(1);
@@ -11983,7 +12135,8 @@ pub fn mirror_vault(
     // preview shows real counts instead of vague "everything" language.
     crate::actions::set_active_account(Some(from.to_string()))?;
     unlock(None, None)?;
-    let vault = build_exported_vault(attachments, collection, org_id)?;
+    let vault =
+        build_exported_vault(attachments, collection, org_id, true, false)?;
 
     let entry_count = vault.entries.len();
     let collection_count = vault.collections.len();
@@ -18521,16 +18674,25 @@ mod test {
         assert!(out.contains("..."), "{out:?}");
     }
 
-    // `export`/`mirror` must never resurrect a trashed entry as live at the
-    // destination -- this was a real bug: `build_exported_vault` had no
-    // trashed filter at all, unlike `find_entry`/`find_entries_all`.
     #[test]
-    fn test_export_entry_in_scope_excludes_trashed_entries() {
+    fn test_export_entry_in_scope_includes_trashed_entries() {
         let trashed = rbw::db::Entry {
             deleted: true,
             ..placeholder_entry("id".to_string())
         };
-        assert!(!export_entry_in_scope(&trashed, None, None));
+        assert!(export_entry_in_scope(&trashed, None, None));
+        assert!(export_entry_status_allowed(&trashed, false, false));
+        assert!(!export_entry_status_allowed(&trashed, true, false));
+    }
+
+    #[test]
+    fn test_export_entry_status_can_skip_archived_entries() {
+        let archived = rbw::db::Entry {
+            archived: true,
+            ..placeholder_entry("id".to_string())
+        };
+        assert!(export_entry_status_allowed(&archived, false, false));
+        assert!(!export_entry_status_allowed(&archived, false, true));
     }
 
     #[test]
@@ -20499,6 +20661,8 @@ mod test {
             id: None,
             organization_id: None,
             folder_id: None,
+            archived_date: None,
+            deleted_date: None,
             ty: 1,
             name: "example".to_string(),
             notes: None,
@@ -22418,6 +22582,8 @@ mod test {
                     "id": "1",
                     "organizationId": "org1",
                     "folderId": "f1",
+                    "archivedDate": "2026-07-29T12:00:00.000Z",
+                    "deletedDate": "2026-07-29T12:00:00.000Z",
                     "type": 1,
                     "name": "example",
                     "notes": "some notes",
@@ -22460,6 +22626,8 @@ mod test {
         assert_eq!(login.folder.as_deref(), Some("Work"));
         assert_eq!(login.org_id.as_deref(), Some("org1"));
         assert_eq!(login.collection_ids, vec!["c1".to_string()]);
+        assert!(login.archived);
+        assert!(login.deleted);
         assert_eq!(login.history.len(), 1);
         assert_eq!(login.history[0].password, "old");
         assert_eq!(login.fields.len(), 1);
@@ -22515,8 +22683,8 @@ mod test {
                         password: "old".to_string(),
                     }],
                     collection_ids: vec!["c1".to_string()],
-                    archived: false,
-                    deleted: false,
+                    archived: true,
+                    deleted: true,
                     attachments: vec![],
                 },
                 ExportedEntry {
@@ -22562,6 +22730,8 @@ mod test {
         assert_eq!(login.folder_id.as_deref(), Some(work_folder_id.as_str()));
         assert_eq!(login.collection_ids, vec!["c1".to_string()]);
         assert_eq!(login.fields.len(), 1);
+        assert!(login.archived_date.is_some());
+        assert!(login.deleted_date.is_some());
         let login_data = login.login.as_ref().unwrap();
         assert_eq!(login_data.username.as_deref(), Some("user@example.com"));
         assert_eq!(
