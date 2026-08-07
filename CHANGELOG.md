@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.16.3] - 2026-08-07
+
+### Added
+
+* Add config-driven item `aliases` for `rbw get`: a shortcut name (e.g.
+  `gpg`) can resolve to a specific item, optionally pinned to an account,
+  collection, org, and/or field. Only applies to a bare `rbw get NAME`;
+  `--no-alias` disables resolution for a single invocation, and
+  `--verbose` logs which alias was resolved.
+
 ## [2.16.2] - 2026-08-02
 
 ### Added
