@@ -968,6 +968,12 @@ enum Opt {
         all: bool,
         #[arg(
             long,
+            help = "Don't resolve NAME against a configured `aliases` entry \
+                (see config.yaml), even if it matches one"
+        )]
+        no_alias: bool,
+        #[arg(
+            long,
             value_name = "FILE",
             conflicts_with = "all",
             help = "Read a `rbw export` file directly instead of a configured account"
@@ -3056,6 +3062,7 @@ fn main() {
             list_fields,
             verbose,
             all,
+            no_alias,
             from_file,
             from_file_passphrase,
         } => (|| -> anyhow::Result<()> {
@@ -3077,6 +3084,7 @@ fn main() {
                 verbose,
                 find_args.exact,
                 all,
+                no_alias,
                 from_file.as_deref(),
                 from_file_passphrase.as_deref(),
             )
@@ -3766,6 +3774,25 @@ mod test {
         ] {
             parse(args);
         }
+    }
+
+    // `rbw get` accepts `--no-alias`, defaulting to `false` (alias
+    // resolution enabled) when omitted.
+    #[test]
+    fn test_get_accepts_no_alias() {
+        let Opt::Get { no_alias, .. } =
+            parse(&["rbw", "get", "name"]).command
+        else {
+            panic!("expected Opt::Get");
+        };
+        assert!(!no_alias);
+
+        let Opt::Get { no_alias, .. } =
+            parse(&["rbw", "get", "--no-alias", "name"]).command
+        else {
+            panic!("expected Opt::Get");
+        };
+        assert!(no_alias);
     }
 
     #[test]

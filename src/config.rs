@@ -297,6 +297,56 @@ pub struct CredentialSource {
     pub item: Option<String>,
 }
 
+// A shortcut name that resolves to a specific item (optionally a specific
+// field on it) in a specific account, so a memorable name like `gpg` can
+// stand in for a real item's name/UUID. E.g. `aliases: {gpg: {item: "GPG
+// key", field: "passphrase"}}` makes `rbw get gpg` behave like `rbw get
+// --field passphrase "GPG key"`. Only applies to a bare `rbw get NAME`
+// with none of --user/--folder/--collection/--org set (see
+// `commands::resolve_get_alias`), and only when `--no-alias` isn't given.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemAlias {
+    // Which configured account the item lives in. `None`, `"primary"`, and
+    // `"default"` all mean the primary account (see `primary_account_name`);
+    // any other value must name a configured account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    // Item name or UUID, matched the same way as an `rbw get NAME` needle.
+    pub item: String,
+    // Field to fetch instead of the item's default/primary value. A `--field`
+    // given on the command line overrides this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    // Only match `item` within this collection (name or ID), same as
+    // `rbw get --collection`. Useful to disambiguate an item name that
+    // exists in more than one collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
+    // Only match `item` within this organization (name or ID), same as
+    // `rbw get --org`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org: Option<String>,
+}
+
+impl ItemAlias {
+    // The account name this alias resolves to: the primary account for
+    // `None`/`"primary"`/`"default"`, else the literal configured account
+    // name. Note that this makes `"default"` always mean "primary", even if
+    // an account happens to be literally named "default" without being the
+    // primary one.
+    pub fn account_name(&self, config: &Config) -> String {
+        match self.account.as_deref() {
+            None | Some("primary" | "default") => {
+                config.primary_account_name()
+            }
+            Some(name) => name.to_string(),
+        }
+    }
+}
+
 // A single Bitwarden/Vaultwarden account. The per-server connection details
 // live here so that several accounts (with different servers) can coexist in
 // one config; global preferences (lock timeout, pinentry, …) stay on `Config`.
@@ -373,6 +423,12 @@ pub struct Config {
     // to set the clipboard; see `ClipboardMechanism`.
     #[serde(default)]
     pub clipboard: ClipboardMechanism,
+    // Shortcut names for `rbw get`; see `ItemAlias`.
+    #[serde(
+        default,
+        skip_serializing_if = "std::collections::HashMap::is_empty"
+    )]
+    pub aliases: std::collections::HashMap<String, ItemAlias>,
     // backcompat, no longer generated in new configs
     #[serde(skip_serializing)]
     pub device_id: Option<String>,
@@ -852,7 +908,7 @@ pub async fn device_id(config: &Config) -> Result<String> {
 mod test {
     use super::{
         parse_config, Account, ClipboardMechanism, Config, CredentialSource,
-        Error, ExcludeContext,
+        Error, ExcludeContext, ItemAlias,
     };
 
     fn named(name: &str, email: &str) -> Account {
@@ -1093,6 +1149,80 @@ mod test {
                 mechanism
             );
         }
+    }
+
+    // `None`, `"primary"`, and `"default"` all resolve an alias to the
+    // primary account; any other string names an account directly.
+    #[test]
+    fn item_alias_account_name_resolves_sentinels_to_primary() {
+        let mut c = Config::new();
+        c.accounts =
+            vec![named("personal", "a@x.com"), named("work", "b@co.com")];
+        c.primary_account = Some("work".to_string());
+
+        let unset = ItemAlias {
+            item: "x".to_string(),
+            ..ItemAlias::default()
+        };
+        let primary = ItemAlias {
+            account: Some("primary".to_string()),
+            item: "x".to_string(),
+            ..ItemAlias::default()
+        };
+        let default = ItemAlias {
+            account: Some("default".to_string()),
+            item: "x".to_string(),
+            ..ItemAlias::default()
+        };
+        let explicit = ItemAlias {
+            account: Some("personal".to_string()),
+            item: "x".to_string(),
+            ..ItemAlias::default()
+        };
+
+        assert_eq!(unset.account_name(&c), "work");
+        assert_eq!(primary.account_name(&c), "work");
+        assert_eq!(default.account_name(&c), "work");
+        assert_eq!(explicit.account_name(&c), "personal");
+    }
+
+    #[test]
+    fn aliases_deserialize_from_yaml() {
+        let config = parse_config(
+            "aliases:\n  gpg:\n    account: work\n    item: GPG key\n    field: passphrase\n    collection: Personal\n    org: Acme\n",
+            std::path::Path::new("config.yaml"),
+        )
+        .unwrap();
+        let alias = &config.aliases["gpg"];
+        assert_eq!(alias.account.as_deref(), Some("work"));
+        assert_eq!(alias.item, "GPG key");
+        assert_eq!(alias.field.as_deref(), Some("passphrase"));
+        assert_eq!(alias.collection.as_deref(), Some("Personal"));
+        assert_eq!(alias.org.as_deref(), Some("Acme"));
+    }
+
+    // `collection`/`org` are optional and omitted entirely from a minimal
+    // alias.
+    #[test]
+    fn aliases_collection_and_org_are_optional() {
+        let config = parse_config(
+            "aliases:\n  gpg:\n    item: GPG key\n",
+            std::path::Path::new("config.yaml"),
+        )
+        .unwrap();
+        let alias = &config.aliases["gpg"];
+        assert!(alias.collection.is_none());
+        assert!(alias.org.is_none());
+    }
+
+    // A config with no `aliases` key at all still deserializes, defaulting
+    // to an empty map, and an empty map is skipped on serialization.
+    #[test]
+    fn aliases_default_to_empty_and_are_skipped_when_empty() {
+        let c: Config = serde_json::from_str("{}").unwrap();
+        assert!(c.aliases.is_empty());
+        let yaml = serde_yaml::to_string(&c).unwrap();
+        assert!(!yaml.contains("aliases"));
     }
 
     #[test]

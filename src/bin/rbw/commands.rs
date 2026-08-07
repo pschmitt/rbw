@@ -3806,9 +3806,40 @@ fn get_from_file(
     Ok(())
 }
 
+// Resolve a bare `rbw get NAME` against a configured item alias (see
+// `rbw::config::ItemAlias`). Only fires when there's exactly one needle and
+// none of --user/--folder/--collection/--org are already set -- any of
+// those being present means the caller is doing an explicit search, not
+// invoking a shortcut, so the alias is left alone. Returns the alias name
+// alongside its config when `needles` matches one; `None` otherwise (no
+// alias by that name, or the trigger conditions aren't met).
+fn resolve_get_alias<'a>(
+    config: &'a rbw::config::Config,
+    needles: &[Needle],
+    user: Option<&str>,
+    folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
+) -> Option<(&'a str, &'a rbw::config::ItemAlias)> {
+    let [Needle::Name(name)] = needles else {
+        return None;
+    };
+    if user.is_some()
+        || folder.is_some()
+        || collection.is_some()
+        || org.is_some()
+    {
+        return None;
+    }
+    config
+        .aliases
+        .get_key_value(name)
+        .map(|(name, alias)| (name.as_str(), alias))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn get(
-    needles: Vec<Needle>,
+    mut needles: Vec<Needle>,
     user: Option<&str>,
     folder: Option<&str>,
     collection: Option<&str>,
@@ -3821,6 +3852,7 @@ pub fn get(
     verbose: bool,
     force_exact: bool,
     all: bool,
+    no_alias: bool,
     from_file: Option<&std::path::Path>,
     from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
@@ -3838,6 +3870,54 @@ pub fn get(
             force_exact,
             from_file_passphrase,
         );
+    }
+
+    let mut collection = collection.map(str::to_string);
+    let mut org = org.map(str::to_string);
+    let mut field = field.map(str::to_string);
+
+    if !no_alias {
+        let config = rbw::config::Config::load()?;
+        if let Some((alias_name, alias)) = resolve_get_alias(
+            &config,
+            &needles,
+            user,
+            folder,
+            collection.as_deref(),
+            org.as_deref(),
+        ) {
+            let account = crate::actions::current_account()
+                .unwrap_or_else(|| alias.account_name(&config));
+            if verbose {
+                let c = std::io::stderr().is_terminal()
+                    && std::env::var_os("NO_COLOR").is_none();
+                let field_suffix = alias
+                    .field
+                    .as_deref()
+                    .map(|f| format!(", field '{f}'"))
+                    .unwrap_or_default();
+                eprintln!(
+                    "{}",
+                    style::dim(
+                        &format!(
+                            "Resolved alias '{alias_name}' -> account \
+                            '{account}', item '{}'{field_suffix}",
+                            alias.item,
+                        ),
+                        c,
+                    )
+                );
+            }
+            if crate::actions::current_account().is_none() {
+                crate::actions::set_account(Some(account));
+            }
+            needles = vec![parse_needle(&alias.item).unwrap()];
+            collection = alias.collection.clone();
+            org = alias.org.clone();
+            if field.is_none() {
+                field.clone_from(&alias.field);
+            }
+        }
     }
 
     let target_accounts =
@@ -3860,8 +3940,8 @@ pub fn get(
         needles,
         user,
         folder,
-        collection,
-        org,
+        collection.as_deref(),
+        org.as_deref(),
         ignore_case,
         force_exact,
     )
@@ -3874,7 +3954,7 @@ pub fn get(
         // `get` may fall back to a passphrase field, notes, etc.
         let source = if list_fields || output_is_structured(output) {
             None
-        } else if let Some(field) = field {
+        } else if let Some(field) = &field {
             Some(format!("field '{field}'"))
         } else {
             decrypted.default_secret().map(|(_, src)| src.label())
@@ -3899,7 +3979,7 @@ pub fn get(
         decrypted.display_structured(&desc, output)?;
     } else if output == OutputMode::Name {
         println!("{}", decrypted.name);
-    } else if let Some(field) = field {
+    } else if let Some(field) = &field {
         decrypted.display_field(&desc, field, clipboard);
     } else {
         decrypted.display_short(&desc, clipboard);
@@ -23077,5 +23157,99 @@ mod test {
         .unwrap_err()
         .to_string();
         assert!(!err.contains("can't be combined"), "{err}");
+    }
+
+    fn config_with_gpg_alias() -> rbw::config::Config {
+        let mut config = rbw::config::Config::new();
+        config.aliases.insert(
+            "gpg".to_string(),
+            rbw::config::ItemAlias {
+                item: "GPG key".to_string(),
+                field: Some("passphrase".to_string()),
+                ..rbw::config::ItemAlias::default()
+            },
+        );
+        config
+    }
+
+    // A bare single-`Name`-needle `rbw get NAME` matching a configured
+    // alias resolves to it.
+    #[test]
+    fn test_resolve_get_alias_matches_bare_needle() {
+        let config = config_with_gpg_alias();
+        let needles = [Needle::Name("gpg".to_string())];
+        let (name, alias) =
+            resolve_get_alias(&config, &needles, None, None, None, None)
+                .expect("alias should resolve");
+        assert_eq!(name, "gpg");
+        assert_eq!(alias.item, "GPG key");
+    }
+
+    // A needle that doesn't match any configured alias name falls through
+    // to a normal search.
+    #[test]
+    fn test_resolve_get_alias_ignores_unknown_name() {
+        let config = config_with_gpg_alias();
+        let needles = [Needle::Name("not-an-alias".to_string())];
+        assert!(resolve_get_alias(&config, &needles, None, None, None, None)
+            .is_none());
+    }
+
+    // Any of --user/--folder/--collection/--org being set means the caller
+    // is doing an explicit search, so alias resolution is skipped even if
+    // the needle would otherwise match.
+    #[test]
+    fn test_resolve_get_alias_skipped_when_scoping_flags_are_set() {
+        let config = config_with_gpg_alias();
+        let needles = [Needle::Name("gpg".to_string())];
+        assert!(resolve_get_alias(
+            &config,
+            &needles,
+            Some("someone"),
+            None,
+            None,
+            None
+        )
+        .is_none());
+        assert!(resolve_get_alias(
+            &config,
+            &needles,
+            None,
+            Some("folder"),
+            None,
+            None
+        )
+        .is_none());
+        assert!(resolve_get_alias(
+            &config,
+            &needles,
+            None,
+            None,
+            Some("collection"),
+            None
+        )
+        .is_none());
+        assert!(resolve_get_alias(
+            &config,
+            &needles,
+            None,
+            None,
+            None,
+            Some("org")
+        )
+        .is_none());
+    }
+
+    // More than one needle means the caller passed multiple search terms,
+    // which can't be a bare alias invocation.
+    #[test]
+    fn test_resolve_get_alias_skipped_with_multiple_needles() {
+        let config = config_with_gpg_alias();
+        let needles = [
+            Needle::Name("gpg".to_string()),
+            Needle::Name("extra".to_string()),
+        ];
+        assert!(resolve_get_alias(&config, &needles, None, None, None, None)
+            .is_none());
     }
 }

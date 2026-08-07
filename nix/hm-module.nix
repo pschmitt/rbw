@@ -425,6 +425,48 @@ let
           `auto` tries both and succeeds if either one does.
         '';
       };
+      # Mirrors `HashMap<String, ItemAlias>` in `src/config.rs`.
+      aliases = mkOption {
+        type = types.attrsOf (
+          types.submodule {
+            options = {
+              account = mkNullOrStr ''
+                Which configured account the item lives in. Unset,
+                `"primary"`, and `"default"` all mean the primary account;
+                any other value must name a configured account.
+              '';
+              item = mkOption {
+                type = types.str;
+                description = ''
+                  Item name or UUID, matched the same way as an `rbw get
+                  NAME` lookup.
+                '';
+              };
+              field = mkNullOrStr ''
+                Field to fetch instead of the item's default/primary value.
+                A `--field` given on the command line overrides this.
+              '';
+              collection = mkNullOrStr ''
+                Only match `item` within this collection (name or ID), same
+                as `rbw get --collection`.
+              '';
+              org = mkNullOrStr ''
+                Only match `item` within this organization (name or ID),
+                same as `rbw get --org`.
+              '';
+            };
+          }
+        );
+        default = { };
+        description = ''
+          Shortcut names for `rbw get`, keyed by alias name. E.g. `aliases.gpg
+          = { item = "GPG key"; field = "passphrase"; }` makes `rbw get gpg`
+          behave like `rbw get --field passphrase "GPG key"`. Only applies to
+          a bare `rbw get NAME` with none of --user/--folder/--collection/
+          --org set; pass `--no-alias` to disable resolution for a single
+          invocation. Mirrors `ItemAlias` in `src/config.rs`.
+        '';
+      };
       # Mirrors `PasswordGenPolicy` in `src/config.rs`.
       passwordGen = mkOption {
         type = types.submodule {
