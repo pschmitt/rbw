@@ -297,18 +297,45 @@ pub struct CredentialSource {
     pub item: Option<String>,
 }
 
-// A shortcut name that resolves to a specific item (optionally a specific
-// field on it) in a specific account, so a memorable name like `gpg` can
-// stand in for a real item's name/UUID. E.g. `aliases: {gpg: {item: "GPG
-// key", field: "passphrase"}}` makes `rbw get gpg` behave like `rbw get
-// --field passphrase "GPG key"`. Only applies to a bare `rbw get NAME`
-// with none of --user/--folder/--collection/--org set (see
-// `commands::resolve_get_alias`), and only when `--no-alias` isn't given.
+// One or more shortcut names, so a single entry can be written as a bare
+// string (`alias: gpg`) or a list (`alias: [gpg, gpg-key]`) without forcing
+// callers with only one name to wrap it.
+fn deserialize_one_or_many<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match serde::Deserialize::deserialize(deserializer)? {
+        OneOrMany::One(name) => vec![name],
+        OneOrMany::Many(names) => names,
+    })
+}
+
+// A shortcut name (or several names sharing the same target) that resolves
+// to a specific item (optionally a specific field on it) in a specific
+// account, so a memorable name like `gpg` can stand in for a real item's
+// name/UUID. E.g. `aliases: [{alias: gpg, item: "GPG key", field:
+// "passphrase"}]` makes `rbw get gpg` behave like `rbw get --field
+// passphrase "GPG key"`. Only applies to a bare `rbw get NAME` with none of
+// --user/--folder/--collection/--org set (see `commands::resolve_get_alias`),
+// and only when `--no-alias` isn't given.
 #[derive(
     serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq,
 )]
 #[serde(rename_all = "camelCase")]
 pub struct ItemAlias {
+    // The shortcut name(s) that resolve to `item`. Accepts either a single
+    // string or a list, so several names sharing the same target (e.g.
+    // `gpg`/`gnupg`) don't need repeated entries.
+    #[serde(deserialize_with = "deserialize_one_or_many")]
+    pub alias: Vec<String>,
     // Which configured account the item lives in. `None`, `"primary"`, and
     // `"default"` all mean the primary account (see `primary_account_name`);
     // any other value must name a configured account.
@@ -424,11 +451,8 @@ pub struct Config {
     #[serde(default)]
     pub clipboard: ClipboardMechanism,
     // Shortcut names for `rbw get`; see `ItemAlias`.
-    #[serde(
-        default,
-        skip_serializing_if = "std::collections::HashMap::is_empty"
-    )]
-    pub aliases: std::collections::HashMap<String, ItemAlias>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<ItemAlias>,
     // backcompat, no longer generated in new configs
     #[serde(skip_serializing)]
     pub device_id: Option<String>,
@@ -601,6 +625,13 @@ impl Config {
         self.accounts()
             .first()
             .map_or_else(|| "default".to_string(), |a| a.name.clone())
+    }
+
+    // The configured `ItemAlias` whose `alias` list contains `name`, if any.
+    pub fn find_alias(&self, name: &str) -> Option<&ItemAlias> {
+        self.aliases
+            .iter()
+            .find(|a| a.alias.iter().any(|n| n == name))
     }
 
     // The primary account. Never fails: falls back to an empty "default" so the
@@ -1161,20 +1192,24 @@ mod test {
         c.primary_account = Some("work".to_string());
 
         let unset = ItemAlias {
+            alias: vec!["a".to_string()],
             item: "x".to_string(),
             ..ItemAlias::default()
         };
         let primary = ItemAlias {
+            alias: vec!["a".to_string()],
             account: Some("primary".to_string()),
             item: "x".to_string(),
             ..ItemAlias::default()
         };
         let default = ItemAlias {
+            alias: vec!["a".to_string()],
             account: Some("default".to_string()),
             item: "x".to_string(),
             ..ItemAlias::default()
         };
         let explicit = ItemAlias {
+            alias: vec!["a".to_string()],
             account: Some("personal".to_string()),
             item: "x".to_string(),
             ..ItemAlias::default()
@@ -1189,11 +1224,11 @@ mod test {
     #[test]
     fn aliases_deserialize_from_yaml() {
         let config = parse_config(
-            "aliases:\n  gpg:\n    account: work\n    item: GPG key\n    field: passphrase\n    collection: Personal\n    org: Acme\n",
+            "aliases:\n  - alias: gpg\n    account: work\n    item: GPG key\n    field: passphrase\n    collection: Personal\n    org: Acme\n",
             std::path::Path::new("config.yaml"),
         )
         .unwrap();
-        let alias = &config.aliases["gpg"];
+        let alias = config.find_alias("gpg").unwrap();
         assert_eq!(alias.account.as_deref(), Some("work"));
         assert_eq!(alias.item, "GPG key");
         assert_eq!(alias.field.as_deref(), Some("passphrase"));
@@ -1206,17 +1241,31 @@ mod test {
     #[test]
     fn aliases_collection_and_org_are_optional() {
         let config = parse_config(
-            "aliases:\n  gpg:\n    item: GPG key\n",
+            "aliases:\n  - alias: gpg\n    item: GPG key\n",
             std::path::Path::new("config.yaml"),
         )
         .unwrap();
-        let alias = &config.aliases["gpg"];
+        let alias = config.find_alias("gpg").unwrap();
         assert!(alias.collection.is_none());
         assert!(alias.org.is_none());
     }
 
+    // `alias` can be a list of names sharing the same target item, each of
+    // which resolves independently.
+    #[test]
+    fn aliases_alias_field_accepts_list_of_names() {
+        let config = parse_config(
+            "aliases:\n  - alias: [gpg, gnupg]\n    item: GPG key\n",
+            std::path::Path::new("config.yaml"),
+        )
+        .unwrap();
+        assert_eq!(config.find_alias("gpg").unwrap().item, "GPG key");
+        assert_eq!(config.find_alias("gnupg").unwrap().item, "GPG key");
+        assert!(config.find_alias("unknown").is_none());
+    }
+
     // A config with no `aliases` key at all still deserializes, defaulting
-    // to an empty map, and an empty map is skipped on serialization.
+    // to an empty list, and an empty list is skipped on serialization.
     #[test]
     fn aliases_default_to_empty_and_are_skipped_when_empty() {
         let c: Config = serde_json::from_str("{}").unwrap();

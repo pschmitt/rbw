@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.17.0] - 2026-08-08
+
+### Changed
+
+* **Breaking:** `aliases` in `config.yaml` is now a list of entries instead
+  of a map keyed by alias name, so multiple shortcut names can share one
+  entry: `aliases: [{alias: [gpg, gnupg], item: "GPG key"}]`. `alias`
+  accepts either a single string or a list of strings. Update any existing
+  `aliases: {name: {...}}` config to the new list form.
+
 ## [2.16.3] - 2026-08-07
 
 ### Added

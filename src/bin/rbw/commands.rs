@@ -3831,10 +3831,18 @@ fn resolve_get_alias<'a>(
     {
         return None;
     }
-    config
-        .aliases
-        .get_key_value(name)
-        .map(|(name, alias)| (name.as_str(), alias))
+    let alias = config.find_alias(name)?;
+    // `find_alias` only returns an entry whose `alias` list contains `name`,
+    // so this is always present; borrowing it from `alias` (rather than
+    // `name`, which only lives as long as `needles`) is what lets the
+    // returned tuple satisfy the `'a` lifetime.
+    let matched_name = alias
+        .alias
+        .iter()
+        .find(|n| n.as_str() == name)
+        .expect("find_alias guarantees a matching name")
+        .as_str();
+    Some((matched_name, alias))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -23161,14 +23169,12 @@ mod test {
 
     fn config_with_gpg_alias() -> rbw::config::Config {
         let mut config = rbw::config::Config::new();
-        config.aliases.insert(
-            "gpg".to_string(),
-            rbw::config::ItemAlias {
-                item: "GPG key".to_string(),
-                field: Some("passphrase".to_string()),
-                ..rbw::config::ItemAlias::default()
-            },
-        );
+        config.aliases.push(rbw::config::ItemAlias {
+            alias: vec!["gpg".to_string()],
+            item: "GPG key".to_string(),
+            field: Some("passphrase".to_string()),
+            ..rbw::config::ItemAlias::default()
+        });
         config
     }
 

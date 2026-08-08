@@ -128,24 +128,26 @@ The main sections are:
 * `passwordGen`: the default generation policy, with `noSymbols`,
   `onlyNumbers`, `nonconfusables`, and `diceware` options.
 * `clipboard`: one of `auto`, `system`, or `osc52`.
-* `aliases`: shortcut names for `rbw get`, keyed by alias name. Each entry
-  has an `item` (name or UUID, matched the same way as `rbw get NAME`) and
+* `aliases`: a list of shortcut names for `rbw get`. Each entry has an
+  `alias` (a single name, or a list of names sharing the same target), an
+  `item` (name or UUID, matched the same way as `rbw get NAME`), and
   optional `account`, `field`, `collection`, and `org` keys:
 
   ```yaml
   aliases:
-    gpg:
+    - alias: [gpg, gnupg]
       account: work   # unset, "primary", or "default" all mean the primary account
       item: GPG key
       field: passphrase
   ```
 
-  `rbw get gpg` then behaves like `rbw get --field passphrase "GPG key"`
-  against the `work` account. Alias resolution only applies to a bare `rbw
-  get NAME` -- passing `--user`/`--folder`/`--collection`/`--org` skips it in
-  favor of a normal search -- and can be disabled entirely with
-  `rbw get --no-alias NAME`. With `--verbose`, a resolved alias logs which
-  account/item/field it expanded to.
+  `rbw get gpg` (and `rbw get gnupg`) then behaves like
+  `rbw get --field passphrase "GPG key"` against the `work` account. Alias
+  resolution only applies to a bare `rbw get NAME` -- passing
+  `--user`/`--folder`/`--collection`/`--org` skips it in favor of a normal
+  search -- and can be disabled entirely with `rbw get --no-alias NAME`.
+  With `--verbose`, a resolved alias logs which account/item/field it
+  expanded to.
 
 Scalar settings can also be changed with dotted paths, for example
 `rbw config set pinentry.command pinentry-curses` or

@@ -425,11 +425,19 @@ let
           `auto` tries both and succeeds if either one does.
         '';
       };
-      # Mirrors `HashMap<String, ItemAlias>` in `src/config.rs`.
+      # Mirrors `Vec<ItemAlias>` in `src/config.rs`.
       aliases = mkOption {
-        type = types.attrsOf (
+        type = types.listOf (
           types.submodule {
             options = {
+              alias = mkOption {
+                type = types.either types.str (types.listOf types.str);
+                description = ''
+                  The shortcut name(s) that resolve to `item`. Either a
+                  single name or a list of names sharing the same target
+                  (e.g. `[ "gpg" "gnupg" ]`).
+                '';
+              };
               account = mkNullOrStr ''
                 Which configured account the item lives in. Unset,
                 `"primary"`, and `"default"` all mean the primary account;
@@ -457,14 +465,15 @@ let
             };
           }
         );
-        default = { };
+        default = [ ];
         description = ''
-          Shortcut names for `rbw get`, keyed by alias name. E.g. `aliases.gpg
-          = { item = "GPG key"; field = "passphrase"; }` makes `rbw get gpg`
-          behave like `rbw get --field passphrase "GPG key"`. Only applies to
-          a bare `rbw get NAME` with none of --user/--folder/--collection/
-          --org set; pass `--no-alias` to disable resolution for a single
-          invocation. Mirrors `ItemAlias` in `src/config.rs`.
+          Shortcut names for `rbw get`. E.g. `aliases = [{ alias = [ "gpg"
+          "gnupg" ]; item = "GPG key"; field = "passphrase"; }];` makes both
+          `rbw get gpg` and `rbw get gnupg` behave like `rbw get --field
+          passphrase "GPG key"`. Only applies to a bare `rbw get NAME` with
+          none of --user/--folder/--collection/--org set; pass `--no-alias`
+          to disable resolution for a single invocation. Mirrors
+          `ItemAlias` in `src/config.rs`.
         '';
       };
       # Mirrors `PasswordGenPolicy` in `src/config.rs`.
