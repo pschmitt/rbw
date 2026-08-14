@@ -1667,21 +1667,47 @@ enum Opt {
             --dry-run prints that same preview and stops there -- no \
             confirmation prompt, no destination account touched at all -- \
             for previewing what a mirror would do (including how many \
-            entries it would find) without risking it."
+            entries it would find) without risking it.\n\n\
+            --config reads a YAML or JSON file containing a top-level \
+            `mirrors` list and executes those specifications in order. The \
+            file form is useful for unattended runs with several mirror \
+            targets; --yes, --stdin, and --dry-run still apply to the run."
     )]
     Mirror {
         #[arg(
             long,
+            value_name = "FILE",
+            conflicts_with_all = [
+                "from",
+                "to",
+                "collection",
+                "org_id",
+                "dest_collection",
+                "dest_org",
+                "attachments",
+                "overwrite",
+                "purge_dest",
+            ],
+            help = "Read one or more mirror specifications from a YAML or JSON file"
+        )]
+        config: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            required_unless_present = "config",
+            conflicts_with = "config",
             help = "Account to copy from (must already be configured)"
         )]
-        from: String,
+        from: Option<String>,
         #[arg(
             long,
+            required_unless_present = "config",
+            conflicts_with = "config",
             help = "Account to copy into (must already be configured)"
         )]
-        to: String,
+        to: Option<String>,
         #[arg(
             long,
+            conflicts_with = "config",
             value_name = "COLLECTION",
             help = "Only copy entries in this collection (name or ID) \
                 instead of the entire source vault"
@@ -1689,6 +1715,7 @@ enum Opt {
         collection: Option<String>,
         #[arg(
             long = "org-id",
+            conflicts_with = "config",
             value_name = "ID",
             help = "Only copy entries belonging to this organization \
                 instead of the entire source vault"
@@ -1696,6 +1723,7 @@ enum Opt {
         org_id: Option<String>,
         #[arg(
             long = "dest-collection",
+            conflicts_with = "config",
             value_name = "COLLECTION",
             help = "Import every copied entry into this existing \
                 collection at the destination, instead of whatever \
@@ -1704,6 +1732,7 @@ enum Opt {
         dest_collection: Option<String>,
         #[arg(
             long = "dest-org",
+            conflicts_with = "config",
             value_name = "ORG",
             help = "Resolve --dest-collection's name against only this \
                 destination organization (name or ID), for when the same \
@@ -1712,12 +1741,14 @@ enum Opt {
         dest_org: Option<String>,
         #[arg(
             long,
+            conflicts_with = "config",
             help = "Also copy attachment contents (downloaded from the \
                 source, re-uploaded to the destination)"
         )]
         attachments: bool,
         #[arg(
             long,
+            conflicts_with = "config",
             help = "Overwrite entries that already exist at the \
                 destination (matched by name/username) instead of \
                 skipping them"
@@ -1725,6 +1756,7 @@ enum Opt {
         overwrite: bool,
         #[arg(
             long,
+            conflicts_with = "config",
             help = "Permanently wipe the destination before copying: the \
                 whole personal vault, or just --dest-collection's entries \
                 if given (refused together with source-side --collection/\
@@ -3559,6 +3591,7 @@ fn main() {
             commands::purge_vault(yes, password)
         }
         Opt::Mirror {
+            config,
             from,
             to,
             collection,
@@ -3573,20 +3606,25 @@ fn main() {
             dry_run,
         } => {
             let password = stdin.then(read_stdin_password);
-            commands::mirror_vault(
-                &from,
-                &to,
-                collection.as_deref(),
-                org_id.as_deref(),
-                dest_collection.as_deref(),
-                dest_org.as_deref(),
-                attachments,
-                overwrite,
-                purge_dest,
-                yes,
-                password,
-                dry_run,
-            )
+            match config {
+                Some(path) => commands::mirror_vault_config(
+                    &path, yes, password, dry_run,
+                ),
+                None => commands::mirror_vault(
+                    from.as_deref().expect("clap requires --from"),
+                    to.as_deref().expect("clap requires --to"),
+                    collection.as_deref(),
+                    org_id.as_deref(),
+                    dest_collection.as_deref(),
+                    dest_org.as_deref(),
+                    attachments,
+                    overwrite,
+                    purge_dest,
+                    yes,
+                    password,
+                    dry_run,
+                ),
+            }
         }
         Opt::StopAgent { kill } => {
             if kill {
@@ -4125,6 +4163,7 @@ mod test {
             Cli::try_parse_from(["rbw", "mirror", "--from", "a"]).is_err()
         );
         parse(&["rbw", "mirror", "--from", "a", "--to", "b"]);
+        parse(&["rbw", "mirror", "--config", "mirrors.yaml"]);
     }
 
     #[test]
@@ -4152,6 +4191,7 @@ mod test {
             "--dry-run",
         ]);
         let Opt::Mirror {
+            config,
             from,
             to,
             collection,
@@ -4168,8 +4208,9 @@ mod test {
         else {
             panic!("expected Opt::Mirror");
         };
-        assert_eq!(from, "ai");
-        assert_eq!(to, "bw");
+        assert!(config.is_none());
+        assert_eq!(from.as_deref(), Some("ai"));
+        assert_eq!(to.as_deref(), Some("bw"));
         assert_eq!(collection.as_deref(), Some("some-collection"));
         assert_eq!(org_id.as_deref(), Some("some-org"));
         assert_eq!(dest_collection.as_deref(), Some("some-dest-collection"));

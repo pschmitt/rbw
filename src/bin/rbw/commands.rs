@@ -12158,6 +12158,119 @@ fn purge_collection_entries(
     Ok(())
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct MirrorConfig {
+    mirrors: Vec<MirrorConfigEntry>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct MirrorConfigEntry {
+    from: String,
+    to: String,
+    #[serde(default)]
+    collection: Option<String>,
+    #[serde(default)]
+    org_id: Option<String>,
+    #[serde(default)]
+    dest_collection: Option<String>,
+    #[serde(default)]
+    dest_org: Option<String>,
+    #[serde(default)]
+    attachments: bool,
+    #[serde(default)]
+    overwrite: bool,
+    #[serde(default)]
+    purge_dest: bool,
+    // When true, a missing source collection means "mirror the whole source
+    // vault" instead. This lets callers describe a destination collection
+    // that is either a same-named source collection or a full-vault copy.
+    #[serde(default)]
+    fallback_to_whole_vault: bool,
+}
+
+fn load_mirror_config(
+    path: &std::path::Path,
+) -> anyhow::Result<MirrorConfig> {
+    let contents = std::fs::read_to_string(path).with_context(|| {
+        format!("failed to read mirror config {}", path.display())
+    })?;
+    let config = if matches!(
+        path.extension().and_then(std::ffi::OsStr::to_str),
+        Some("yaml" | "yml")
+    ) {
+        serde_yaml::from_str(&contents).with_context(|| {
+            format!("failed to parse mirror config {}", path.display())
+        })?
+    } else {
+        serde_json::from_str(&contents).with_context(|| {
+            format!("failed to parse mirror config {}", path.display())
+        })?
+    };
+    Ok(config)
+}
+
+pub fn mirror_vault_config(
+    path: &std::path::Path,
+    yes: bool,
+    password: Option<String>,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    let config = load_mirror_config(path)?;
+    if config.mirrors.is_empty() {
+        anyhow::bail!("mirror config {} contains no mirrors", path.display());
+    }
+
+    for (index, mirror) in config.mirrors.iter().enumerate() {
+        mirror_vault_config_entry(mirror, yes, password.clone(), dry_run)
+            .with_context(|| {
+                format!("mirror config entry {} failed", index + 1)
+            })?;
+    }
+
+    Ok(())
+}
+
+fn mirror_vault_config_entry(
+    mirror: &MirrorConfigEntry,
+    yes: bool,
+    password: Option<String>,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    let (collection, purge_dest) =
+        if mirror.fallback_to_whole_vault && mirror.collection.is_some() {
+            crate::actions::set_active_account(Some(mirror.from.clone()))?;
+            unlock(None, None)?;
+            if source_collection_is_present(
+                mirror.collection.as_deref().unwrap(),
+                mirror.org_id.as_deref(),
+            )? {
+                (mirror.collection.as_deref(), false)
+            } else {
+                (None, mirror.purge_dest)
+            }
+        } else {
+            (mirror.collection.as_deref(), mirror.purge_dest)
+        };
+
+    mirror_vault_with_options(
+        &mirror.from,
+        &mirror.to,
+        collection,
+        mirror.org_id.as_deref(),
+        mirror.dest_collection.as_deref(),
+        mirror.dest_org.as_deref(),
+        mirror.attachments,
+        mirror.overwrite,
+        purge_dest,
+        yes,
+        password,
+        dry_run,
+        true,
+    )
+}
+
 // `rbw mirror --from A --to B`: copies vault contents from one already-
 // configured local account to another, reusing the same export/import
 // conversion machinery `rbw export`/`rbw import` are built on, rather than
@@ -12199,6 +12312,39 @@ pub fn mirror_vault(
     yes: bool,
     password: Option<String>,
     dry_run: bool,
+) -> anyhow::Result<()> {
+    mirror_vault_with_options(
+        from,
+        to,
+        collection,
+        org_id,
+        dest_collection,
+        dest_org,
+        attachments,
+        overwrite,
+        purge_dest,
+        yes,
+        password,
+        dry_run,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mirror_vault_with_options(
+    from: &str,
+    to: &str,
+    collection: Option<&str>,
+    org_id: Option<&str>,
+    dest_collection: Option<&str>,
+    dest_org: Option<&str>,
+    attachments: bool,
+    overwrite: bool,
+    purge_dest: bool,
+    yes: bool,
+    password: Option<String>,
+    dry_run: bool,
+    create_destination_collection: bool,
 ) -> anyhow::Result<()> {
     if from == to {
         anyhow::bail!("--from and --to must name different accounts");
@@ -12318,6 +12464,12 @@ pub fn mirror_vault(
     crate::actions::set_active_account(Some(to.to_string()))?;
     unlock(None, None)?;
 
+    if create_destination_collection {
+        if let Some(destination_collection) = dest_collection {
+            ensure_destination_collection(destination_collection, dest_org)?;
+        }
+    }
+
     if purge_dest {
         if let Some(needle) = dest_collection {
             // Scoped purge: no master-password re-proof needed here (unlike
@@ -12357,6 +12509,63 @@ pub fn mirror_vault(
     let imported = bw_vault_to_imported(bw, attachments_map);
 
     import_vault(imported, dest_collection, dest_org, overwrite)
+}
+
+// Resolve or create the destination organization/collection named by a
+// mirror spec. Keeping this here makes a config-file mirror self-contained;
+// callers no longer need a shell preflight that separately runs `org list`,
+// `org create`, and `collection create`.
+fn ensure_destination_collection(
+    collection: &str,
+    org: Option<&str>,
+) -> anyhow::Result<()> {
+    let mut db = load_db()?;
+    let org_id = match org {
+        Some(needle) => match resolve_organization(&db.organizations, needle)
+        {
+            Ok(found) => found.id.clone(),
+            Err(error)
+                if error.to_string().starts_with("no organization found")
+                    && uuid::Uuid::parse_str(needle).is_err() =>
+            {
+                let id = crate::actions::create_org(needle)?;
+                crate::actions::sync()?;
+                id
+            }
+            Err(error) => return Err(error),
+        },
+        None => resolve_org(&db, None)?,
+    };
+
+    db = load_db()?;
+    let existing = decrypt_collections(&db)?;
+    if existing.iter().any(|candidate| {
+        candidate.org_id == org_id && candidate.name == collection
+    }) {
+        return Ok(());
+    }
+
+    let encrypted_name = crate::actions::encrypt(collection, Some(&org_id))?;
+    let access_token = db
+        .access_token
+        .as_ref()
+        .context("destination account has no access token")?;
+    let refresh_token = db
+        .refresh_token
+        .as_ref()
+        .context("destination account has no refresh token")?;
+    let (new_access_token, _) = rbw::actions::create_collection(
+        access_token,
+        refresh_token,
+        &org_id,
+        &encrypted_name,
+    )?;
+    if let Some(new_access_token) = new_access_token {
+        db.access_token = Some(new_access_token);
+        save_db(&db)?;
+    }
+    crate::actions::sync()?;
+    Ok(())
 }
 
 // A collection from the synced database, with its name decrypted.
@@ -13417,6 +13626,23 @@ fn resolve_entry_scope(
         Ok((Some(found.id.clone()), Some(found.org_id.clone())))
     } else {
         Ok((None, org_id))
+    }
+}
+
+fn source_collection_is_present(
+    collection: &str,
+    org: Option<&str>,
+) -> anyhow::Result<bool> {
+    let db = load_db()?;
+    match resolve_entry_scope(&db, Some(collection), org) {
+        Ok((Some(_), _)) => Ok(true),
+        Err(error)
+            if error.to_string().starts_with("no collection found") =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+        Ok((None, _)) => Ok(false),
     }
 }
 
@@ -18676,6 +18902,26 @@ pub fn generate_totp(secret: &str) -> anyhow::Result<String> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_load_mirror_config_uses_camel_case_fields() {
+        let mut file = tempfile::NamedTempFile::with_suffix(".yaml").unwrap();
+        write!(
+            file,
+            "mirrors:\n  - from: source\n    to: destination\n    destCollection: Shared\n    fallbackToWholeVault: true\n"
+        )
+        .unwrap();
+        file.flush().unwrap();
+
+        let config = load_mirror_config(file.path()).unwrap();
+        assert_eq!(config.mirrors.len(), 1);
+        assert_eq!(config.mirrors[0].from, "source");
+        assert_eq!(
+            config.mirrors[0].dest_collection.as_deref(),
+            Some("Shared")
+        );
+        assert!(config.mirrors[0].fallback_to_whole_vault);
+    }
 
     fn imported_login(name: &str, username: Option<&str>) -> ImportedEntry {
         ImportedEntry {
