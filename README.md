@@ -476,6 +476,33 @@ rbw mirror --from personal --to vaultwarden \
   --collection "Shared" --dest-collection "Shared" --overwrite
 ```
 
+For unattended runs, `--config <file>` executes a sequential list of mirror
+specifications. The file is YAML when it ends in `.yaml`/`.yml`, otherwise
+JSON. It contains a top-level `mirrors` list; each entry uses the same names
+as the command-line options in camelCase:
+
+```yaml
+mirrors:
+  - from: personal
+    to: vaultwarden
+    attachments: true
+    overwrite: true
+    purgeDest: true
+  - from: personal
+    to: vaultwarden
+    collection: Shared
+    destCollection: Shared
+    destOrg: Example-Org
+    overwrite: true
+```
+
+`destCollection` causes a missing destination organization or collection to
+be created. `fallbackToWholeVault: true` makes a spec with `collection` use
+the whole source vault when that source collection does not exist; this is
+useful when a destination collection should hold either a same-named source
+collection or a full-vault copy. `--yes`, `--stdin`, and `--dry-run` remain
+command-line controls and can be combined with `--config`.
+
 ### Template and command injection
 
 `rbw inject` can render templates containing secret references. References use
