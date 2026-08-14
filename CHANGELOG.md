@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.17.1] - 2026-08-14
+
+### Added
+
+* Add declarative mirror configuration with `rbw mirror --config FILE`.
+
 ## [2.17.0] - 2026-08-08
 
 ### Changed
