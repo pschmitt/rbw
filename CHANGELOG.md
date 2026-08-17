@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.17.2] - 2026-08-17
+
+### Fixed
+
+* Thread an entry's individual encryption key through `set`/`edit`, and
+  round-trip it on every PUT, so editing one field of such an entry no
+  longer risks leaving its other fields encrypted under the wrong key.
+* Don't let one corrupt password-history entry hide an otherwise-fine
+  entry's current data -- `decrypt_cipher` now degrades a bad history
+  entry individually instead of failing the whole entry.
+
 ## [2.17.1] - 2026-08-14
 
 ### Added
