@@ -71,3 +71,33 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: RUSTDOCFLAGS="-Dwarnings" cargo doc --all-features
       - run: cargo test --doc --all-features
+  # Real-server tests, distinct from `test`'s mocked-HTTP unit tests: these
+  # register an actual account on a throwaway Vaultwarden container and
+  # drive the built `rbw` binary against it over the real wire protocol,
+  # to catch the class of bug unit tests can't see (e.g. a server round
+  # trip silently dropping data an edit didn't touch). See
+  # .github/e2e/run.sh for what's covered and why.
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      vaultwarden:
+        image: vaultwarden/server:latest
+        env:
+          SIGNUPS_ALLOWED: "true"
+          SHOW_PASSWORD_HINT: "false"
+          I_REALLY_WANT_VOLATILE_STORAGE: "true"
+        ports:
+          - 8000:80
+        options: >-
+          --health-cmd "curl -f http://localhost/alive || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --example e2e_register_account
+      - run: .github/e2e/run.sh
+        env:
+          VAULTWARDEN_URL: http://localhost:8000
