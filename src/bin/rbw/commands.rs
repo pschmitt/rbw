@@ -3656,8 +3656,16 @@ pub fn list(
                         org_id.as_deref(),
                     )
                 })
-                .map(decrypt_cipher)
-                .collect::<anyhow::Result<_>>()?;
+                // One corrupt entry must not fail listing the rest of the
+                // vault -- skip it and warn instead.
+                .filter_map(|entry| match decrypt_cipher(entry) {
+                    Ok(decrypted) => Some(decrypted),
+                    Err(e) => {
+                        log::warn!("failed to decrypt entry: {e}");
+                        None
+                    }
+                })
+                .collect();
             if tag_account {
                 for entry in &mut account_entries {
                     entry.account = Some(account.clone());
@@ -3728,8 +3736,14 @@ pub fn list(
 
         let mut account_entries: Vec<DecryptedListCipher> = plans
             .into_iter()
-            .map(|plan| plan.resolve(&results))
-            .collect::<anyhow::Result<_>>()?;
+            .filter_map(|plan| match plan.resolve(&results) {
+                Ok(entry) => Some(entry),
+                Err(e) => {
+                    log::warn!("failed to decrypt entry: {e}");
+                    None
+                }
+            })
+            .collect();
         if tag_account {
             for entry in &mut account_entries {
                 entry.account = Some(account.clone());
@@ -5220,8 +5234,8 @@ pub fn search(
 
         let mut account_entries: Vec<DecryptedListCipher> = plans
             .into_iter()
-            .map(|(scope, plan)| {
-                plan.resolve(&results).map(|entry| {
+            .filter_map(|(scope, plan)| match plan.resolve(&results) {
+                Ok(entry) => {
                     let matches = entry.search_match_with_scope(
                         term,
                         folder,
@@ -5230,15 +5244,18 @@ pub fn search(
                     ) && archived_filter
                         .matches(entry.archived)
                         && trash_filter.matches(entry.deleted);
-                    (matches, entry)
-                })
+                    matches.then(|| entry.into())
+                }
+                // One entry's ciphertext being corrupt (individually-keyed
+                // entries edited by the now-fixed `set`/`edit` bug, or
+                // any other bad data) must not take the rest of the vault
+                // down with it -- skip it and keep searching.
+                Err(e) => {
+                    log::warn!("failed to decrypt entry: {e}");
+                    None
+                }
             })
-            .filter_map(|entry| match entry {
-                Ok((true, entry)) => Some(Ok(entry.into())),
-                Ok((false, _)) => None,
-                Err(e) => Some(Err(e)),
-            })
-            .collect::<Result<_, anyhow::Error>>()?;
+            .collect();
         if tag_account {
             for entry in &mut account_entries {
                 entry.account = Some(account.clone());
@@ -6486,11 +6503,16 @@ fn find_deleted_entry(
         .entries
         .iter()
         .zip(plans)
-        .map(|(entry, plan)| {
-            plan.resolve(&results)
-                .map(|decrypted| (entry.clone(), decrypted))
+        // One corrupt entry must not block finding a different, perfectly
+        // fine one -- skip it and warn instead.
+        .filter_map(|(entry, plan)| match plan.resolve(&results) {
+            Ok(decrypted) => Some((entry.clone(), decrypted)),
+            Err(e) => {
+                log::warn!("failed to decrypt entry: {e}");
+                None
+            }
         })
-        .collect::<anyhow::Result<_>>()?;
+        .collect();
     ciphers.retain(|(entry, _)| entry.deleted);
     ciphers.retain(|(entry, _)| {
         entry_in_collection_org_scope(
@@ -6538,10 +6560,16 @@ fn find_deleted_entries_all(
         .entries
         .iter()
         .zip(plans)
-        .map(|(entry, plan)| {
-            plan.resolve(&results).map(|d| (entry.clone(), d))
+        // One corrupt entry must not block a `--bulk` operation from
+        // finding/matching every other entry -- skip it and warn instead.
+        .filter_map(|(entry, plan)| match plan.resolve(&results) {
+            Ok(d) => Some((entry.clone(), d)),
+            Err(e) => {
+                log::warn!("failed to decrypt entry: {e}");
+                None
+            }
         })
-        .collect::<anyhow::Result<_>>()?;
+        .collect();
 
     let matches: Vec<_> = ciphers
         .iter()
@@ -6570,12 +6598,18 @@ fn find_deleted_entries_all(
         return Err(anyhow::anyhow!("no trashed entry found for '{needle}'"));
     }
 
-    matches
+    Ok(matches
         .iter()
-        .map(|(entry, _)| {
-            decrypt_cipher(entry).map(|d| ((*entry).clone(), d))
+        // A needle matching several entries shouldn't have one corrupt
+        // entry cost it every other match -- skip it and warn instead.
+        .filter_map(|(entry, _)| match decrypt_cipher(entry) {
+            Ok(d) => Some(((*entry).clone(), d)),
+            Err(e) => {
+                log::warn!("failed to decrypt entry: {e}");
+                None
+            }
         })
-        .collect()
+        .collect())
 }
 
 // `rbw restore`: undoes `rbw remove`/`rbw delete` -- restores an entry out
@@ -7421,10 +7455,16 @@ fn find_entries_all(
         .entries
         .iter()
         .zip(plans)
-        .map(|(entry, plan)| {
-            plan.resolve(&results).map(|d| (entry.clone(), d))
+        // One corrupt entry must not block a `--bulk` operation from
+        // finding/matching every other entry -- skip it and warn instead.
+        .filter_map(|(entry, plan)| match plan.resolve(&results) {
+            Ok(d) => Some((entry.clone(), d)),
+            Err(e) => {
+                log::warn!("failed to decrypt entry: {e}");
+                None
+            }
         })
-        .collect::<anyhow::Result<_>>()?;
+        .collect();
 
     let matches: Vec<_> = ciphers
         .iter()
@@ -7458,12 +7498,18 @@ fn find_entries_all(
         return Err(anyhow::anyhow!("no entry found for '{needle}'"));
     }
 
-    matches
+    Ok(matches
         .iter()
-        .map(|(entry, _)| {
-            decrypt_cipher(entry).map(|d| ((*entry).clone(), d))
+        // A needle matching several entries shouldn't have one corrupt
+        // entry cost it every other match -- skip it and warn instead.
+        .filter_map(|(entry, _)| match decrypt_cipher(entry) {
+            Ok(d) => Some(((*entry).clone(), d)),
+            Err(e) => {
+                log::warn!("failed to decrypt entry: {e}");
+                None
+            }
         })
-        .collect()
+        .collect())
 }
 
 // `find_entries_all`'s `--from-file` counterpart: same matching
@@ -14728,11 +14774,16 @@ fn find_entry(
         .iter()
         .filter(|entry| in_scope(entry))
         .zip(plans)
-        .map(|(entry, plan)| {
-            plan.resolve(&results)
-                .map(|decrypted| (entry.clone(), decrypted))
+        // A corrupt, unrelated entry elsewhere in the vault must not
+        // block finding this one by name -- skip it and warn instead.
+        .filter_map(|(entry, plan)| match plan.resolve(&results) {
+            Ok(decrypted) => Some((entry.clone(), decrypted)),
+            Err(e) => {
+                log::warn!("failed to decrypt entry: {e}");
+                None
+            }
         })
-        .collect::<anyhow::Result<_>>()?;
+        .collect();
     ciphers.retain(|(entry, _)| !entry.deleted);
     let (entry, _) = find_entry_raw(
         &ciphers,
@@ -14804,8 +14855,18 @@ fn find_entry_multi(
             for (entry, plan) in
                 db.entries.iter().filter(|entry| in_scope(entry)).zip(plans)
             {
-                owner.insert(entry.id.clone(), account.clone());
-                pool.push((entry.clone(), plan.resolve(&results)?));
+                // A corrupt entry in one account must not block finding
+                // a different entry across the rest of `--all`'s
+                // accounts -- skip it and warn instead.
+                match plan.resolve(&results) {
+                    Ok(decrypted) => {
+                        owner.insert(entry.id.clone(), account.clone());
+                        pool.push((entry.clone(), decrypted));
+                    }
+                    Err(e) => {
+                        log::warn!("failed to decrypt entry: {e}");
+                    }
+                }
             }
         }
         // Trashed entries are never a candidate for ordinary name/UUID
@@ -17686,8 +17747,14 @@ pub fn tui_reload(
     };
     let search = plans
         .into_iter()
-        .map(|plan| plan.resolve(&results))
-        .collect::<anyhow::Result<_>>()?;
+        .filter_map(|plan| match plan.resolve(&results) {
+            Ok(entry) => Some(entry),
+            Err(e) => {
+                log::warn!("failed to decrypt entry: {e}");
+                None
+            }
+        })
+        .collect();
     Ok((db, search))
 }
 
