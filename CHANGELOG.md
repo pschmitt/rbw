@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.17.3] - 2026-08-17
+
+### Fixed
+
+* Don't let one corrupt entry break vault-wide `list`/`search`/`get`/
+  `remove`/`set --bulk`/etc. -- `find_entry`, `find_entry_multi`,
+  `find_entries_all`/`find_deleted_entries_all`, `find_deleted_entry`,
+  `list`, `search`, and the TUI's search-index rebuild now skip a bad
+  entry and log a warning instead of failing the whole scan.
+
+### Added
+
+* Real-server end-to-end tests in CI: a throwaway Vaultwarden service
+  container is exercised over the actual wire protocol (not mocked
+  HTTP), covering single-field-edit preservation, `--bulk` edits, and
+  one-corrupt-entry resilience.
+
 ## [2.17.2] - 2026-08-17
 
 ### Fixed
