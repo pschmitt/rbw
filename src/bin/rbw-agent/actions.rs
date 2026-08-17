@@ -1568,6 +1568,7 @@ pub async fn encrypt(
     sock: &mut crate::sock::Sock,
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     plaintext: &str,
+    entry_key: Option<&str>,
     org_id: Option<&str>,
     account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
@@ -1577,8 +1578,26 @@ pub async fn encrypt(
             "failed to find encryption keys in in-memory state"
         ));
     };
+    // Resolve the cipher's own individual key if it has one -- same as
+    // `encrypt_attachment` -- so re-encrypting one field of an
+    // individually-keyed entry doesn't produce ciphertext under the
+    // wrong key while the entry's other, untouched fields stay under its
+    // real key.
+    let entry_keys = if let Some(entry_key) = entry_key {
+        let key_cs = rbw::cipherstring::CipherString::new(entry_key)
+            .context("failed to parse individual item encryption key")?;
+        Some(rbw::locked::Keys::new(
+            key_cs.decrypt_locked_symmetric(keys).context(
+                "failed to decrypt individual item encryption key",
+            )?,
+        ))
+    } else {
+        None
+    };
+    let effective_keys = entry_keys.as_ref().unwrap_or(keys);
+
     let cipherstring = rbw::cipherstring::CipherString::encrypt_symmetric(
-        keys,
+        effective_keys,
         plaintext.as_bytes(),
     )
     .context("failed to encrypt plaintext secret")?;

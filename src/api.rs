@@ -723,6 +723,7 @@ mod tests {
             ssh_key: Some(test_ssh_key()),
             fields: Vec::new(),
             password_history: Vec::new(),
+            key: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
@@ -1231,6 +1232,14 @@ struct CiphersPutReq {
     ssh_key: Option<CipherSshKey>,
     #[serde(rename = "passwordHistory")]
     password_history: Vec<CiphersPutReqHistory>,
+    // The cipher's own individual encryption key (already encrypted under
+    // the account/org key), carried through verbatim from the entry being
+    // edited. Bitwarden/Vaultwarden treat this PUT as a full-object
+    // replace: omitting `Key` on an entry that already has one discards
+    // it server-side, leaving every field encrypted under the
+    // now-abandoned key permanently undecryptable everywhere.
+    #[serde(rename = "Key", alias = "key")]
+    key: Option<String>,
 }
 
 #[derive(serde::Serialize, Debug)]
@@ -2340,6 +2349,7 @@ impl Client {
         access_token: &str,
         id: &str,
         org_id: Option<&str>,
+        key: Option<&str>,
         name: &str,
         data: &crate::db::EntryData,
         fields: &[crate::db::Field],
@@ -2357,6 +2367,7 @@ impl Client {
             },
             folder_id: folder_uuid.map(std::string::ToString::to_string),
             organization_id: org_id.map(std::string::ToString::to_string),
+            key: key.map(std::string::ToString::to_string),
             name: name.to_string(),
             notes: notes.map(std::string::ToString::to_string),
             login: None,

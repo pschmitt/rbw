@@ -395,11 +395,16 @@ async fn dispatch(
             .await?;
             true
         }
-        rbw::protocol::Action::Encrypt { plaintext, org_id } => {
+        rbw::protocol::Action::Encrypt {
+            plaintext,
+            entry_key,
+            org_id,
+        } => {
             crate::actions::encrypt(
                 sock,
                 state.clone(),
                 &plaintext,
+                entry_key.as_deref(),
                 org_id.as_deref(),
                 account,
             )

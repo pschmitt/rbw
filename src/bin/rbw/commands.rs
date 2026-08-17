@@ -5571,16 +5571,16 @@ pub fn generate(
         let mut access_token = db.access_token.as_ref().unwrap().clone();
         let refresh_token = db.refresh_token.as_ref().unwrap();
 
-        let name = crate::actions::encrypt(name, None)?;
+        let name = crate::actions::encrypt(name, None, None)?;
         let username = username
-            .map(|username| crate::actions::encrypt(username, None))
+            .map(|username| crate::actions::encrypt(username, None, None))
             .transpose()?;
-        let password = crate::actions::encrypt(&password, None)?;
+        let password = crate::actions::encrypt(&password, None, None)?;
         let uris: Vec<_> = uris
             .iter()
             .map(|uri| {
                 Ok(rbw::db::Uri {
-                    uri: crate::actions::encrypt(&uri.0, None)?,
+                    uri: crate::actions::encrypt(&uri.0, None, None)?,
                     match_type: uri.1,
                 })
             })
@@ -5613,7 +5613,7 @@ pub fn generate(
                 let (new_access_token, id) = rbw::actions::create_folder(
                     &access_token,
                     refresh_token,
-                    &crate::actions::encrypt(folder_name, None)?,
+                    &crate::actions::encrypt(folder_name, None, None)?,
                 )?;
                 if let Some(new_access_token) = new_access_token {
                     access_token.clone_from(&new_access_token);
@@ -6939,15 +6939,27 @@ fn edit_structured(
             .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?
     };
 
-    let (data, fields, notes) =
-        editable_to_encrypted(&updated, entry.org_id.as_deref())?;
+    let (data, fields, notes) = editable_to_encrypted(
+        &updated,
+        entry.key.as_deref(),
+        entry.org_id.as_deref(),
+    )?;
 
-    let encrypted_name =
-        crate::actions::encrypt(&updated.name, entry.org_id.as_deref())?;
+    let encrypted_name = crate::actions::encrypt(
+        &updated.name,
+        entry.key.as_deref(),
+        entry.org_id.as_deref(),
+    )?;
 
     let encrypted_notes = notes
         .as_deref()
-        .map(|n| crate::actions::encrypt(n, entry.org_id.as_deref()))
+        .map(|n| {
+            crate::actions::encrypt(
+                n,
+                entry.key.as_deref(),
+                entry.org_id.as_deref(),
+            )
+        })
         .transpose()?;
 
     let mut history = entry.history.clone();
@@ -6993,6 +7005,7 @@ fn edit_structured(
         &refresh_token,
         &entry.id,
         entry.org_id.as_deref(),
+        entry.key.as_deref(),
         &encrypted_name,
         &data,
         &fields,
@@ -7104,12 +7117,12 @@ fn add_structured(
     let access_token = db.access_token.as_ref().unwrap().clone();
     let refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
-    let (data, fields, notes) = editable_to_encrypted(&cipher, None)?;
+    let (data, fields, notes) = editable_to_encrypted(&cipher, None, None)?;
 
-    let encrypted_name = crate::actions::encrypt(&cipher.name, None)?;
+    let encrypted_name = crate::actions::encrypt(&cipher.name, None, None)?;
     let encrypted_notes = notes
         .as_deref()
-        .map(|n| crate::actions::encrypt(n, None))
+        .map(|n| crate::actions::encrypt(n, None, None))
         .transpose()?;
 
     let folder_id = if let Some(folder_name) = cipher.folder.as_deref() {
@@ -7854,9 +7867,17 @@ fn apply_entry_update(
     let access_token = db.access_token.as_ref().unwrap().clone();
     let refresh_token = db.refresh_token.as_ref().unwrap().clone();
     let org_id = entry.org_id.as_deref();
+    // Every field re-encrypted below must use the entry's own individual
+    // key when it has one, exactly like `decrypt_cipher` does when reading
+    // it back -- otherwise the fields this edit leaves untouched (still
+    // ciphertext under the entry's key) end up alongside a freshly
+    // touched field encrypted under the wrong (account/org) key, and
+    // whichever ciphertext doesn't match the key actually in effect
+    // becomes permanently undecryptable.
+    let entry_key = entry.key.as_deref();
 
     let encrypted_name = if let Some(n) = new_name {
-        crate::actions::encrypt(n, org_id)?
+        crate::actions::encrypt(n, entry_key, org_id)?
     } else {
         entry.name.clone()
     };
@@ -7865,7 +7886,7 @@ fn apply_entry_update(
         if n.is_empty() {
             None
         } else {
-            Some(crate::actions::encrypt(n, org_id)?)
+            Some(crate::actions::encrypt(n, entry_key, org_id)?)
         }
     } else {
         entry.notes.clone()
@@ -7883,7 +7904,7 @@ fn apply_entry_update(
         } => {
             let enc_user = if new_username.is_some() {
                 new_username
-                    .map(|u| crate::actions::encrypt(u, org_id))
+                    .map(|u| crate::actions::encrypt(u, entry_key, org_id))
                     .transpose()?
             } else {
                 entry_username.clone()
@@ -7903,7 +7924,7 @@ fn apply_entry_update(
                         },
                     );
                 }
-                Some(crate::actions::encrypt(pw, org_id)?)
+                Some(crate::actions::encrypt(pw, entry_key, org_id)?)
             } else {
                 entry_password.clone()
             };
@@ -7914,7 +7935,9 @@ fn apply_entry_update(
                     .iter()
                     .map(|u| {
                         Ok(rbw::db::Uri {
-                            uri: crate::actions::encrypt(u, org_id)?,
+                            uri: crate::actions::encrypt(
+                                u, entry_key, org_id,
+                            )?,
                             match_type: None,
                         })
                     })
@@ -7922,7 +7945,7 @@ fn apply_entry_update(
             };
             let enc_totp = if new_totp.is_some() {
                 new_totp
-                    .map(|t| crate::actions::encrypt(t, org_id))
+                    .map(|t| crate::actions::encrypt(t, entry_key, org_id))
                     .transpose()?
             } else {
                 entry_totp.clone()
@@ -7950,6 +7973,7 @@ fn apply_entry_update(
             &refresh_token,
             &entry.id,
             org_id,
+            entry_key,
             &encrypted_name,
             &data,
             &entry.fields,
@@ -8336,7 +8360,7 @@ fn resolve_folder_id(
     let (new_access_token, id) = rbw::actions::create_folder(
         access_token,
         refresh_token_str,
-        &crate::actions::encrypt(folder_name, None)?,
+        &crate::actions::encrypt(folder_name, None, None)?,
     )?;
     if let Some(new_access_token) = new_access_token {
         db.access_token = Some(new_access_token);
@@ -10150,6 +10174,7 @@ fn imported_data_to_decrypted(data: &ImportedData) -> DecryptedData {
 
 fn imported_history_to_encrypted(
     history: &[ImportedHistoryEntry],
+    entry_key: Option<&str>,
     org_id: Option<&str>,
 ) -> anyhow::Result<Vec<rbw::db::HistoryEntry>> {
     history
@@ -10157,7 +10182,11 @@ fn imported_history_to_encrypted(
         .map(|h| {
             Ok(rbw::db::HistoryEntry {
                 last_used_date: h.last_used_date.clone(),
-                password: crate::actions::encrypt(&h.password, org_id)?,
+                password: crate::actions::encrypt(
+                    &h.password,
+                    entry_key,
+                    org_id,
+                )?,
             })
         })
         .collect()
@@ -10862,11 +10891,11 @@ fn import_create_entry(
 ) -> anyhow::Result<(usize, usize)> {
     let editable = imported_to_editable(imported);
 
-    let (data, fields, notes) = editable_to_encrypted(&editable, None)?;
-    let encrypted_name = crate::actions::encrypt(&imported.name, None)?;
+    let (data, fields, notes) = editable_to_encrypted(&editable, None, None)?;
+    let encrypted_name = crate::actions::encrypt(&imported.name, None, None)?;
     let encrypted_notes = notes
         .as_deref()
-        .map(|n| crate::actions::encrypt(n, None))
+        .map(|n| crate::actions::encrypt(n, None, None))
         .transpose()?;
 
     let folder_id = if let Some(folder_name) = imported.folder.as_deref() {
@@ -10901,21 +10930,22 @@ fn import_create_entry(
     if target_org.is_some() || has_fields_or_history {
         let org_id = target_org;
         let (org_data, org_fields, org_notes) =
-            editable_to_encrypted(&editable, org_id)?;
+            editable_to_encrypted(&editable, None, org_id)?;
         let org_encrypted_name =
-            crate::actions::encrypt(&imported.name, org_id)?;
+            crate::actions::encrypt(&imported.name, None, org_id)?;
         let org_encrypted_notes = org_notes
             .as_deref()
-            .map(|n| crate::actions::encrypt(n, org_id))
+            .map(|n| crate::actions::encrypt(n, None, org_id))
             .transpose()?;
         let history =
-            imported_history_to_encrypted(&imported.history, org_id)?;
+            imported_history_to_encrypted(&imported.history, None, org_id)?;
 
         if let (Some(new_token), ()) = rbw::actions::edit(
             access_token,
             refresh_token,
             &new_entry_id,
             org_id,
+            None,
             &org_encrypted_name,
             &org_data,
             &org_fields,
@@ -11017,13 +11047,17 @@ fn import_overwrite_entry(
     let editable = imported_to_editable(imported);
 
     let org_id = existing.org_id.as_deref();
-    let (data, fields, notes) = editable_to_encrypted(&editable, org_id)?;
-    let encrypted_name = crate::actions::encrypt(&imported.name, org_id)?;
+    let entry_key = existing.key.as_deref();
+    let (data, fields, notes) =
+        editable_to_encrypted(&editable, entry_key, org_id)?;
+    let encrypted_name =
+        crate::actions::encrypt(&imported.name, entry_key, org_id)?;
     let encrypted_notes = notes
         .as_deref()
-        .map(|n| crate::actions::encrypt(n, org_id))
+        .map(|n| crate::actions::encrypt(n, entry_key, org_id))
         .transpose()?;
-    let history = imported_history_to_encrypted(&imported.history, org_id)?;
+    let history =
+        imported_history_to_encrypted(&imported.history, entry_key, org_id)?;
 
     let folder_id = if let Some(folder_name) = imported.folder.as_deref() {
         resolve_folder_id(db, access_token, refresh_token, folder_name)?
@@ -11036,6 +11070,7 @@ fn import_overwrite_entry(
         refresh_token,
         &existing.id,
         org_id,
+        entry_key,
         &encrypted_name,
         &data,
         &fields,
@@ -11314,15 +11349,18 @@ fn bulk_create_batch(
             (|| -> anyhow::Result<rbw::actions::ImportCipherEntry> {
                 let editable = imported_to_editable(imported);
                 let (data, fields, notes) =
-                    editable_to_encrypted(&editable, org_id)?;
+                    editable_to_encrypted(&editable, None, org_id)?;
                 let encrypted_name =
-                    crate::actions::encrypt(&imported.name, org_id)?;
+                    crate::actions::encrypt(&imported.name, None, org_id)?;
                 let encrypted_notes = notes
                     .as_deref()
-                    .map(|n| crate::actions::encrypt(n, org_id))
+                    .map(|n| crate::actions::encrypt(n, None, org_id))
                     .transpose()?;
-                let history =
-                    imported_history_to_encrypted(&imported.history, org_id)?;
+                let history = imported_history_to_encrypted(
+                    &imported.history,
+                    None,
+                    org_id,
+                )?;
                 let folder_id = imported
                     .folder
                     .as_deref()
@@ -11778,6 +11816,7 @@ fn import_vault(
 
         let encrypted_name = crate::actions::encrypt(
             &imported_col.name,
+            None,
             Some(&imported_col.org_id),
         )?;
         match rbw::actions::create_collection(
@@ -12214,7 +12253,7 @@ fn load_mirror_config(
 pub fn mirror_vault_config(
     path: &std::path::Path,
     yes: bool,
-    password: Option<String>,
+    password: Option<&str>,
     dry_run: bool,
 ) -> anyhow::Result<()> {
     let config = load_mirror_config(path)?;
@@ -12223,10 +12262,15 @@ pub fn mirror_vault_config(
     }
 
     for (index, mirror) in config.mirrors.iter().enumerate() {
-        mirror_vault_config_entry(mirror, yes, password.clone(), dry_run)
-            .with_context(|| {
-                format!("mirror config entry {} failed", index + 1)
-            })?;
+        mirror_vault_config_entry(
+            mirror,
+            yes,
+            password.map(std::string::ToString::to_string),
+            dry_run,
+        )
+        .with_context(|| {
+            format!("mirror config entry {} failed", index + 1)
+        })?;
     }
 
     Ok(())
@@ -12545,7 +12589,8 @@ fn ensure_destination_collection(
         return Ok(());
     }
 
-    let encrypted_name = crate::actions::encrypt(collection, Some(&org_id))?;
+    let encrypted_name =
+        crate::actions::encrypt(collection, None, Some(&org_id))?;
     let access_token = db
         .access_token
         .as_ref()
@@ -12761,11 +12806,11 @@ fn move_entry_to_personal(
 ) -> anyhow::Result<()> {
     let editable = decrypted_to_editable(decrypted);
 
-    let (data, fields, notes) = editable_to_encrypted(&editable, None)?;
-    let encrypted_name = crate::actions::encrypt(&editable.name, None)?;
+    let (data, fields, notes) = editable_to_encrypted(&editable, None, None)?;
+    let encrypted_name = crate::actions::encrypt(&editable.name, None, None)?;
     let encrypted_notes = notes
         .as_deref()
-        .map(|n| crate::actions::encrypt(n, None))
+        .map(|n| crate::actions::encrypt(n, None, None))
         .transpose()?;
 
     let (new_token, new_entry_id) = rbw::actions::add(
@@ -12790,7 +12835,11 @@ fn move_entry_to_personal(
             .map(|h| {
                 Ok(rbw::db::HistoryEntry {
                     last_used_date: h.last_used_date.clone(),
-                    password: crate::actions::encrypt(&h.password, None)?,
+                    password: crate::actions::encrypt(
+                        &h.password,
+                        None,
+                        None,
+                    )?,
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -12799,6 +12848,7 @@ fn move_entry_to_personal(
             access_token,
             refresh_token,
             &new_entry_id,
+            None,
             None,
             &encrypted_name,
             &data,
@@ -13310,7 +13360,7 @@ pub fn create_collection(
     let mut db = load_db()?;
     let org_id = resolve_org(&db, org_id)?;
 
-    let encrypted_name = crate::actions::encrypt(name, Some(&org_id))?;
+    let encrypted_name = crate::actions::encrypt(name, None, Some(&org_id))?;
 
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
@@ -13479,7 +13529,7 @@ pub fn rename_collection(
     let collection =
         resolve_collection(&all_collections, collection, Some(&org_id))?;
 
-    let encrypted_name = crate::actions::encrypt(name, Some(&org_id))?;
+    let encrypted_name = crate::actions::encrypt(name, None, Some(&org_id))?;
 
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
@@ -15943,20 +15993,29 @@ pub fn decrypt_cipher(
             None
         }
     };
+    // Unlike every other field here, a bad history entry must not fail
+    // the whole decrypt: history is append-only and never rewritten by
+    // later edits, so a single old, unrelated corrupt entry (e.g. from
+    // data written before a since-fixed bug) would otherwise permanently
+    // hide this cipher's current, perfectly good name/username/password/
+    // etc. -- exactly the "everything but the field I just changed
+    // disappeared" failure mode this is guarding against.
     let history = entry
         .history
         .iter()
-        .map(|history_entry| {
-            Ok(DecryptedHistoryEntry {
-                last_used_date: history_entry.last_used_date.clone(),
-                password: crate::actions::decrypt(
-                    &history_entry.password,
-                    entry.key.as_deref(),
-                    entry.org_id.as_deref(),
-                )?,
-            })
+        .map(|history_entry| DecryptedHistoryEntry {
+            last_used_date: history_entry.last_used_date.clone(),
+            password: crate::actions::decrypt(
+                &history_entry.password,
+                entry.key.as_deref(),
+                entry.org_id.as_deref(),
+            )
+            .unwrap_or_else(|e| {
+                log::warn!("failed to decrypt history entry: {e}");
+                "[failed to decrypt]".to_string()
+            }),
         })
-        .collect::<anyhow::Result<_>>()?;
+        .collect();
     let attachments: Vec<_> = entry
         .attachments
         .iter()
@@ -16459,6 +16518,7 @@ pub fn decrypted_to_editable(decrypted: &DecryptedCipher) -> EditableCipher {
 
 fn editable_to_encrypted(
     editable: &EditableCipher,
+    entry_key: Option<&str>,
     org_id: Option<&str>,
 ) -> anyhow::Result<(rbw::db::EntryData, Vec<rbw::db::Field>, Option<String>)>
 {
@@ -16473,7 +16533,7 @@ fn editable_to_encrypted(
             let enc = |s: &Option<String>| {
                 s.as_deref()
                     .filter(|v| !v.is_empty())
-                    .map(|v| crate::actions::encrypt(v, org_id))
+                    .map(|v| crate::actions::encrypt(v, entry_key, org_id))
                     .transpose()
             };
             let username = enc(username)?;
@@ -16488,7 +16548,9 @@ fn editable_to_encrypted(
                         .map(parse_uri_match_type)
                         .transpose()?;
                     Ok(rbw::db::Uri {
-                        uri: crate::actions::encrypt(&u.uri, org_id)?,
+                        uri: crate::actions::encrypt(
+                            &u.uri, entry_key, org_id,
+                        )?,
                         match_type,
                     })
                 })
@@ -16534,7 +16596,7 @@ fn editable_to_encrypted(
             let enc = |s: &Option<String>| {
                 s.as_deref()
                     .filter(|v| !v.is_empty())
-                    .map(|v| crate::actions::encrypt(v, org_id))
+                    .map(|v| crate::actions::encrypt(v, entry_key, org_id))
                     .transpose()
             };
             rbw::db::EntryData::Card {
@@ -16568,7 +16630,7 @@ fn editable_to_encrypted(
             let enc = |s: &Option<String>| {
                 s.as_deref()
                     .filter(|v| !v.is_empty())
-                    .map(|v| crate::actions::encrypt(v, org_id))
+                    .map(|v| crate::actions::encrypt(v, entry_key, org_id))
                     .transpose()
             };
             rbw::db::EntryData::Identity {
@@ -16600,7 +16662,7 @@ fn editable_to_encrypted(
             let enc = |s: &Option<String>| {
                 s.as_deref()
                     .filter(|v| !v.is_empty())
-                    .map(|v| crate::actions::encrypt(v, org_id))
+                    .map(|v| crate::actions::encrypt(v, entry_key, org_id))
                     .transpose()
             };
             rbw::db::EntryData::SshKey {
@@ -16620,13 +16682,13 @@ fn editable_to_encrypted(
                 .name
                 .as_deref()
                 .filter(|s| !s.is_empty())
-                .map(|n| crate::actions::encrypt(n, org_id))
+                .map(|n| crate::actions::encrypt(n, entry_key, org_id))
                 .transpose()?;
             let value = f
                 .value
                 .as_deref()
                 .filter(|s| !s.is_empty())
-                .map(|v| crate::actions::encrypt(v, org_id))
+                .map(|v| crate::actions::encrypt(v, entry_key, org_id))
                 .transpose()?;
             Ok(rbw::db::Field {
                 ty,
@@ -17659,13 +17721,25 @@ pub fn tui_save_edit(
         .clone()
         .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
 
-    let (data, fields, notes) =
-        editable_to_encrypted(updated, entry.org_id.as_deref())?;
-    let encrypted_name =
-        crate::actions::encrypt(&updated.name, entry.org_id.as_deref())?;
+    let (data, fields, notes) = editable_to_encrypted(
+        updated,
+        entry.key.as_deref(),
+        entry.org_id.as_deref(),
+    )?;
+    let encrypted_name = crate::actions::encrypt(
+        &updated.name,
+        entry.key.as_deref(),
+        entry.org_id.as_deref(),
+    )?;
     let encrypted_notes = notes
         .as_deref()
-        .map(|n| crate::actions::encrypt(n, entry.org_id.as_deref()))
+        .map(|n| {
+            crate::actions::encrypt(
+                n,
+                entry.key.as_deref(),
+                entry.org_id.as_deref(),
+            )
+        })
         .transpose()?;
 
     let mut history = entry.history.clone();
@@ -17707,6 +17781,7 @@ pub fn tui_save_edit(
         &refresh_token,
         &entry.id,
         entry.org_id.as_deref(),
+        entry.key.as_deref(),
         &encrypted_name,
         &data,
         &fields,
@@ -17740,11 +17815,11 @@ pub fn tui_save_add(
         .clone()
         .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
 
-    let (data, fields, notes) = editable_to_encrypted(cipher, None)?;
-    let encrypted_name = crate::actions::encrypt(&cipher.name, None)?;
+    let (data, fields, notes) = editable_to_encrypted(cipher, None, None)?;
+    let encrypted_name = crate::actions::encrypt(&cipher.name, None, None)?;
     let encrypted_notes = notes
         .as_deref()
-        .map(|n| crate::actions::encrypt(n, None))
+        .map(|n| crate::actions::encrypt(n, None, None))
         .transpose()?;
 
     let folder_id =

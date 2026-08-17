@@ -3608,7 +3608,10 @@ fn main() {
             let password = stdin.then(read_stdin_password);
             match config {
                 Some(path) => commands::mirror_vault_config(
-                    &path, yes, password, dry_run,
+                    &path,
+                    yes,
+                    password.as_deref(),
+                    dry_run,
                 ),
                 None => commands::mirror_vault(
                     from.as_deref().expect("clap requires --from"),
