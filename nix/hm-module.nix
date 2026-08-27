@@ -569,25 +569,47 @@ in
     {
       home.packages = [ cfg.package ];
 
-      # Rendered via an activation script (rather than `xdg.configFile`,
-      # which would symlink into the world-readable Nix store) so that any
-      # `_secret` markers in `rendered` -- see `secretRef` above -- get
-      # resolved from their source file at activation time instead of
-      # having their value embedded in the store. Mirrors the `_secret`
-      # convention used for `glab`'s config in this repo (see
-      # modules/home-manager/glab.nix).
-      home.activation.rbw-config = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-        $DRY_RUN_CMD mkdir -p "$(dirname '${configFile}')"
-        $DRY_RUN_CMD rm -f '${configFile}' '${configJson}'
-        if [[ -z "''${DRY_RUN_CMD:-}" ]]
-        then
-          umask 077
-          ${utils.genJqSecretsReplacementSnippet rendered configJson}
-          ${pkgs.yq-go}/bin/yq -P '.' '${configJson}' > '${configFile}'
-          rm -f '${configJson}'
-          chmod 600 '${configFile}'
-        fi
-      '';
+      # Rendered by a systemd user service (rather than `xdg.configFile`,
+      # which would symlink into the world-readable Nix store, or a
+      # `home.activation` script) so that any `_secret` markers in `rendered`
+      # -- see `secretRef` above -- get resolved from their source file at
+      # runtime instead of having their value embedded in the store.
+      #
+      # This used to be a `home.activation` script (entryAfter
+      # "writeBoundary"), matching the `_secret` convention originally used
+      # for `glab`'s config in the nixos-config repo this module was ported
+      # from (see modules/home-manager/glab.nix there). That approach can
+      # run as part of a system-level home-manager-<user>.service at boot,
+      # before the user's own systemd session (and its sops-nix.service)
+      # has decrypted the referenced secrets, aborting with "No such file or
+      # directory". A systemd.user.service ordered After/Wants
+      # sops-nix.service can't start before that user session (and
+      # sops-nix.service within it) exist, so the race is gone by
+      # construction; `reloadSystemd` already restarts changed user units on
+      # every home-manager switch, so this regenerates config.yaml whenever
+      # `rendered` or the underlying secrets change.
+      systemd.user.services.rbw-config = {
+        Unit = {
+          Description = "Generate rbw config.yaml from declarative settings";
+          After = [ "sops-nix.service" ];
+          Wants = [ "sops-nix.service" ];
+        };
+        Service = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          ExecStart = "${pkgs.writeShellScript "rbw-config-generate" ''
+            set -euo pipefail
+            umask 077
+            mkdir -p "$(dirname '${configFile}')"
+            rm -f '${configFile}' '${configJson}'
+            ${utils.genJqSecretsReplacementSnippet rendered configJson}
+            ${pkgs.yq-go}/bin/yq -P '.' '${configJson}' > '${configFile}'
+            rm -f '${configJson}'
+            chmod 600 '${configFile}'
+          ''}";
+        };
+        Install.WantedBy = [ "default.target" ];
+      };
     }
   );
 }
