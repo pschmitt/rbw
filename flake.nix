@@ -65,13 +65,16 @@
       homeManagerModules.default = import ./nix/hm-module.nix { inherit self; };
 
       # Smoke test: build a minimal home-manager configuration exercising
-      # `programs.rbw.declarative`, and assert the rendered `config.yaml` matches what
-      # we expect (field naming, kebab-case `unlock` enum, `accounts`
-      # attrsOf->list conversion, null-stripping). Config rendering happens
-      # in a `home.activation` script (not `xdg.configFile`, since it needs
-      # to resolve `_secret` markers from disk at activation time -- see
-      # `nix/hm-module.nix`), so the check actually runs that script rather
-      # than reading a Nix-store-rendered file.
+      # `programs.rbw.declarative`, and assert the rendered `config.yaml`
+      # matches what we expect (field naming, kebab-case `unlock` enum,
+      # `accounts` attrsOf->list conversion, null-stripping, and a `file`
+      # secretRef staying an unresolved `{file: ...}` reference rather than
+      # being read). The module renders this purely from `cfg.settings` at
+      # eval time (`renderedConfigFile`, exposed as an internal option for
+      # exactly this reason) -- unlike the old `_secret`-marker convention
+      # this replaced, nothing here needs a `home.activation` script or a
+      # secret to actually exist on disk, so the check just reads the
+      # rendered store path directly.
       checks = forAllSystems (
         system:
         let
@@ -94,15 +97,14 @@
                     primaryAccount = "personal";
                     accounts.personal = {
                       email = "me@example.com";
-                      baseUrl = "https://vault.example.com";
+                      baseUrl.file = "/run/secrets/rbw-base-url";
                     };
                   };
                 };
               }
             ];
           };
-          activationScript = hm.config.home.activation.rbw-config.data;
-          configFile = "${hm.config.xdg.configHome}/rbw/config.yaml";
+          renderedConfigFile = hm.config.programs.rbw.declarative.renderedConfigFile;
           expected =
             builtins.toJSON {
               agent = {
@@ -118,7 +120,7 @@
                 {
                   name = "personal";
                   email = "me@example.com";
-                  baseUrl = "https://vault.example.com";
+                  baseUrl.file = "/run/secrets/rbw-base-url";
                   unlock = {
                     policy = "on-demand";
                   };
@@ -139,14 +141,10 @@
           hm-module-config-yaml =
             pkgs.runCommand "rbw-hm-module-check"
               {
-                nativeBuildInputs = [
-                  pkgs.jq
-                  pkgs.yq-go
-                ];
+                nativeBuildInputs = [ pkgs.jq ];
               }
               ''
-                ${activationScript}
-                yq -o=json '.' '${configFile}' > actual.json
+                jq . '${renderedConfigFile}' > actual.json
                 jq . > expected.json <<'EXPECTED_EOF'
                 ${expected}
                 EXPECTED_EOF

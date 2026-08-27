@@ -48,7 +48,7 @@ pub async fn register(
             return Ok(());
         }
 
-        let url_str = account.base_url();
+        let url_str = account.base_url()?;
         let url = reqwest::Url::parse(&url_str)
             .context("failed to parse base url")?;
         let Some(host) = url.host_str() else {
@@ -269,7 +269,7 @@ async fn login_interactively(
     db: rbw::db::Db,
     account: &rbw::config::Account,
 ) -> anyhow::Result<()> {
-    let url_str = account.base_url();
+    let url_str = account.base_url()?;
     let url =
         reqwest::Url::parse(&url_str).context("failed to parse base url")?;
     let Some(host) = url.host_str() else {
@@ -1676,9 +1676,10 @@ async fn respond_encrypt(
 
 // The account's email, or an error if it isn't configured yet.
 fn account_email(account: &rbw::config::Account) -> anyhow::Result<String> {
-    account.email.clone().ok_or_else(|| {
+    let email = account.email.as_ref().ok_or_else(|| {
         anyhow::anyhow!("failed to find email address in config")
-    })
+    })?;
+    Ok(email.resolve()?)
 }
 
 // Resolve the requested account (by name, or the primary account when None).
@@ -1718,7 +1719,7 @@ async fn load_db(
     account: &rbw::config::Account,
 ) -> anyhow::Result<rbw::db::Db> {
     let email = account_email(account)?;
-    rbw::db::Db::load_async(&account.server_name(), &email)
+    rbw::db::Db::load_async(&account.server_name()?, &email)
         .await
         .map_err(anyhow::Error::new)
 }
@@ -1728,7 +1729,7 @@ async fn save_db(
     db: &rbw::db::Db,
 ) -> anyhow::Result<()> {
     let email = account_email(account)?;
-    db.save_async(&account.server_name(), &email)
+    db.save_async(&account.server_name()?, &email)
         .await
         .map_err(anyhow::Error::new)
 }
@@ -1754,14 +1755,14 @@ pub async fn subscribe_to_notifications(
     }
 
     let email = account_email(account)?;
-    let db = rbw::db::Db::load_async(account.server_name().as_str(), &email)
+    let db = rbw::db::Db::load_async(account.server_name()?.as_str(), &email)
         .await?;
     let access_token =
         db.access_token.context("Error getting access token")?;
 
     let websocket_url = format!(
         "{}/hub?access_token={}",
-        account.notifications_url(),
+        account.notifications_url()?,
         access_token
     )
     .replace("https://", "wss://");

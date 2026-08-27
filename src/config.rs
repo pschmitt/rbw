@@ -374,6 +374,93 @@ impl ItemAlias {
     }
 }
 
+// A string config value that can be given literally, or read from a file at
+// the point of use (e.g. a sops-nix secret's decrypted path) instead of
+// being embedded directly in config.yaml. Serializes back to whichever shape
+// it was read as -- a bare string stays a bare string, `{file: ...}` stays
+// `{file: ...}` -- so `rbw config edit`/`save()` never silently bakes a file
+// reference's resolved value into the file on an unrelated settings change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SecretString {
+    Literal(String),
+    File(std::path::PathBuf),
+}
+
+impl SecretString {
+    // The effective value: the literal string, or the referenced file's
+    // contents with a single trailing newline stripped (matching how most
+    // secret-management tools, including sops-nix, write secret files).
+    pub fn resolve(&self) -> Result<String> {
+        match self {
+            Self::Literal(s) => Ok(s.clone()),
+            Self::File(file) => {
+                let contents =
+                    std::fs::read_to_string(file).map_err(|source| {
+                        Error::LoadSecretFile {
+                            source,
+                            file: file.clone(),
+                        }
+                    })?;
+                Ok(contents
+                    .strip_suffix('\n')
+                    .unwrap_or(&contents)
+                    .to_string())
+            }
+        }
+    }
+
+    // Resolves an `Option<SecretString>` field to an `Option<String>`,
+    // leaving `None` as `None`. Used by the account URL/email helpers below.
+    fn resolve_opt(v: Option<&Self>) -> Result<Option<String>> {
+        v.map(Self::resolve).transpose()
+    }
+}
+
+impl From<String> for SecretString {
+    fn from(s: String) -> Self {
+        Self::Literal(s)
+    }
+}
+
+impl serde::Serialize for SecretString {
+    fn serialize<S>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Literal(s) => serializer.serialize_str(s),
+            Self::File(file) => {
+                use serde::ser::SerializeStruct as _;
+                let mut state =
+                    serializer.serialize_struct("SecretString", 1)?;
+                state.serialize_field("file", file)?;
+                state.end()
+            }
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SecretString {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Literal(String),
+            File { file: std::path::PathBuf },
+        }
+        Ok(match Repr::deserialize(deserializer)? {
+            Repr::Literal(s) => Self::Literal(s),
+            Repr::File { file } => Self::File(file),
+        })
+    }
+}
+
 // A single Bitwarden/Vaultwarden account. The per-server connection details
 // live here so that several accounts (with different servers) can coexist in
 // one config; global preferences (lock timeout, pinentry, …) stay on `Config`.
@@ -385,12 +472,12 @@ pub struct Account {
     // Stable local identifier used by `--account` and the agent; unrelated to
     // the email/server.
     pub name: String,
-    pub email: Option<String>,
-    pub sso_id: Option<String>,
-    pub base_url: Option<String>,
-    pub identity_url: Option<String>,
-    pub ui_url: Option<String>,
-    pub notifications_url: Option<String>,
+    pub email: Option<SecretString>,
+    pub sso_id: Option<SecretString>,
+    pub base_url: Option<SecretString>,
+    pub identity_url: Option<SecretString>,
+    pub ui_url: Option<SecretString>,
+    pub notifications_url: Option<SecretString>,
     pub client_cert_path: Option<std::path::PathBuf>,
     // See `UnlockConfig`.
     #[serde(default)]
@@ -407,17 +494,17 @@ pub struct Config {
     // Deserialization-only fields for an older single-account shape. New
     // configs always write `accounts` instead.
     #[serde(skip_serializing, default)]
-    pub email: Option<String>,
+    pub email: Option<SecretString>,
     #[serde(skip_serializing, default)]
-    pub sso_id: Option<String>,
+    pub sso_id: Option<SecretString>,
     #[serde(skip_serializing, default)]
-    pub base_url: Option<String>,
+    pub base_url: Option<SecretString>,
     #[serde(skip_serializing, default)]
-    pub identity_url: Option<String>,
+    pub identity_url: Option<SecretString>,
     #[serde(skip_serializing, default)]
-    pub ui_url: Option<String>,
+    pub ui_url: Option<SecretString>,
     #[serde(skip_serializing, default)]
-    pub notifications_url: Option<String>,
+    pub notifications_url: Option<SecretString>,
     #[serde(skip_serializing, default)]
     pub client_cert_path: Option<std::path::PathBuf>,
 
@@ -777,19 +864,19 @@ impl Config {
 
     // ---- URL helpers (delegate to the primary account) ---------------------
 
-    pub fn base_url(&self) -> String {
+    pub fn base_url(&self) -> Result<String> {
         self.primary().base_url()
     }
 
-    pub fn identity_url(&self) -> String {
+    pub fn identity_url(&self) -> Result<String> {
         self.primary().identity_url()
     }
 
-    pub fn ui_url(&self) -> String {
+    pub fn ui_url(&self) -> Result<String> {
         self.primary().ui_url()
     }
 
-    pub fn notifications_url(&self) -> String {
+    pub fn notifications_url(&self) -> Result<String> {
         self.primary().notifications_url()
     }
 
@@ -797,7 +884,7 @@ impl Config {
         self.primary().client_cert_path
     }
 
-    pub fn server_name(&self) -> String {
+    pub fn server_name(&self) -> Result<String> {
         self.primary().server_name()
     }
 }
@@ -828,23 +915,28 @@ impl Account {
             || self.exclude_from.contains(&ExcludeContext::All)
     }
 
-    pub fn base_url(&self) -> String {
-        self.base_url.clone().map_or_else(
-            || "https://api.bitwarden.com".to_string(),
-            |url| {
-                let clean_url = url.trim_end_matches('/');
-                if clean_url == "https://api.bitwarden.eu" {
-                    "https://api.bitwarden.eu".to_string()
-                } else {
-                    format!("{clean_url}/api")
-                }
-            },
+    pub fn base_url(&self) -> Result<String> {
+        Ok(
+            SecretString::resolve_opt(self.base_url.as_ref())?.map_or_else(
+                || "https://api.bitwarden.com".to_string(),
+                |url| {
+                    let clean_url = url.trim_end_matches('/');
+                    if clean_url == "https://api.bitwarden.eu" {
+                        "https://api.bitwarden.eu".to_string()
+                    } else {
+                        format!("{clean_url}/api")
+                    }
+                },
+            ),
         )
     }
 
-    pub fn identity_url(&self) -> String {
-        self.identity_url.clone().unwrap_or_else(|| {
-            self.base_url.clone().map_or_else(
+    pub fn identity_url(&self) -> Result<String> {
+        if let Some(url) = &self.identity_url {
+            return url.resolve();
+        }
+        Ok(
+            SecretString::resolve_opt(self.base_url.as_ref())?.map_or_else(
                 || "https://identity.bitwarden.com".to_string(),
                 |url| {
                     let clean_url = url.trim_end_matches('/');
@@ -854,13 +946,16 @@ impl Account {
                         format!("{clean_url}/identity")
                     }
                 },
-            )
-        })
+            ),
+        )
     }
 
-    pub fn ui_url(&self) -> String {
-        self.ui_url.clone().unwrap_or_else(|| {
-            self.base_url.clone().map_or_else(
+    pub fn ui_url(&self) -> Result<String> {
+        if let Some(url) = &self.ui_url {
+            return url.resolve();
+        }
+        Ok(
+            SecretString::resolve_opt(self.base_url.as_ref())?.map_or_else(
                 || "https://vault.bitwarden.com".to_string(),
                 |url| {
                     let clean_url = url.trim_end_matches('/');
@@ -870,13 +965,16 @@ impl Account {
                         clean_url.to_string()
                     }
                 },
-            )
-        })
+            ),
+        )
     }
 
-    pub fn notifications_url(&self) -> String {
-        self.notifications_url.clone().unwrap_or_else(|| {
-            self.base_url.clone().map_or_else(
+    pub fn notifications_url(&self) -> Result<String> {
+        if let Some(url) = &self.notifications_url {
+            return url.resolve();
+        }
+        Ok(
+            SecretString::resolve_opt(self.base_url.as_ref())?.map_or_else(
                 || "https://notifications.bitwarden.com".to_string(),
                 |url| {
                     let clean_url = url.trim_end_matches('/');
@@ -886,14 +984,16 @@ impl Account {
                         format!("{clean_url}/notifications")
                     }
                 },
-            )
-        })
+            ),
+        )
     }
 
-    pub fn server_name(&self) -> String {
-        self.base_url
-            .clone()
-            .unwrap_or_else(|| "default".to_string())
+    // A stable identifier for this account's server, used to key the local
+    // db file. Resolves a file-based `base_url` so the db path is keyed by
+    // the real server URL rather than a secret file's path.
+    pub fn server_name(&self) -> Result<String> {
+        Ok(SecretString::resolve_opt(self.base_url.as_ref())?
+            .unwrap_or_else(|| "default".to_string()))
     }
 }
 
@@ -939,13 +1039,13 @@ pub async fn device_id(config: &Config) -> Result<String> {
 mod test {
     use super::{
         parse_config, Account, ClipboardMechanism, Config, CredentialSource,
-        Error, ExcludeContext, ItemAlias,
+        Error, ExcludeContext, ItemAlias, SecretString,
     };
 
     fn named(name: &str, email: &str) -> Account {
         Account {
             name: name.to_string(),
-            email: Some(email.to_string()),
+            email: Some(SecretString::Literal(email.to_string())),
             ..Account::default()
         }
     }
@@ -955,15 +1055,24 @@ mod test {
     #[test]
     fn legacy_config_synthesizes_default_account() {
         let mut c = Config::new();
-        c.email = Some("me@x.com".to_string());
-        c.base_url = Some("https://vault.example.com".to_string());
+        c.email = Some(SecretString::Literal("me@x.com".to_string()));
+        c.base_url = Some(SecretString::Literal(
+            "https://vault.example.com".to_string(),
+        ));
 
         let accounts = c.accounts();
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].name, "default");
         assert_eq!(c.primary_account_name(), "default");
-        assert_eq!(c.primary().email.as_deref(), Some("me@x.com"));
-        assert_eq!(c.base_url(), "https://vault.example.com/api");
+        assert_eq!(
+            c.primary()
+                .email
+                .as_ref()
+                .map(|s| s.resolve().unwrap())
+                .as_deref(),
+            Some("me@x.com")
+        );
+        assert_eq!(c.base_url().unwrap(), "https://vault.example.com/api");
     }
 
     // With no `primary_account` set, the first account is primary.
@@ -975,7 +1084,12 @@ mod test {
 
         assert_eq!(c.primary_account_name(), "personal");
         assert_eq!(
-            c.account(Some("work")).unwrap().email.as_deref(),
+            c.account(Some("work"))
+                .unwrap()
+                .email
+                .as_ref()
+                .map(|s| s.resolve().unwrap())
+                .as_deref(),
             Some("b@co.com")
         );
         assert_eq!(c.account(None).unwrap().name, "personal");
@@ -997,13 +1111,22 @@ mod test {
     #[test]
     fn migrate_legacy_moves_fields_into_default_account() {
         let mut c = Config::new();
-        c.email = Some("me@x.com".to_string());
-        c.base_url = Some("https://vault.example.com".to_string());
+        c.email = Some(SecretString::Literal("me@x.com".to_string()));
+        c.base_url = Some(SecretString::Literal(
+            "https://vault.example.com".to_string(),
+        ));
         c.migrate_legacy();
 
         assert_eq!(c.accounts.len(), 1);
         assert_eq!(c.accounts[0].name, "default");
-        assert_eq!(c.accounts[0].email.as_deref(), Some("me@x.com"));
+        assert_eq!(
+            c.accounts[0]
+                .email
+                .as_ref()
+                .map(|s| s.resolve().unwrap())
+                .as_deref(),
+            Some("me@x.com")
+        );
         assert_eq!(c.primary_account.as_deref(), Some("default"));
         // Legacy fields are cleared so we don't shadow the account.
         assert!(c.email.is_none());
@@ -1316,5 +1439,89 @@ mod test {
         assert!(!yaml.contains("sync_interval"));
         assert!(!yaml.contains("tui_keybindings"));
         assert!(!yaml.contains("hide_archived"));
+    }
+
+    // A bare string deserializes to `Literal` and resolves to itself,
+    // unchanged.
+    #[test]
+    fn secret_string_literal_resolves_to_itself() {
+        let s: SecretString = serde_json::from_str("\"hunter2\"").unwrap();
+        assert_eq!(s, SecretString::Literal("hunter2".to_string()));
+        assert_eq!(s.resolve().unwrap(), "hunter2");
+    }
+
+    // `{file: ...}` deserializes to `File` and resolves to the referenced
+    // file's contents, with exactly one trailing newline stripped (matching
+    // how sops-nix and most other secret-management tools write files).
+    #[test]
+    fn secret_string_file_resolves_and_trims_one_trailing_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token");
+        std::fs::write(&path, "hunter2\n\n").unwrap();
+
+        let json = format!("{{\"file\": {:?}}}", path.to_str().unwrap());
+        let s: SecretString = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, SecretString::File(path));
+        // Only the final newline is stripped, not every trailing newline.
+        assert_eq!(s.resolve().unwrap(), "hunter2\n");
+    }
+
+    // Resolving a `File` variant whose path doesn't exist fails clearly
+    // instead of panicking, so a config referencing a not-yet-decrypted
+    // secret produces a normal `Result::Err` at the point of use.
+    #[test]
+    fn secret_string_file_missing_fails_clearly() {
+        let s = SecretString::File(std::path::PathBuf::from(
+            "/nonexistent/path/to/secret",
+        ));
+        assert!(matches!(s.resolve(), Err(Error::LoadSecretFile { .. })));
+    }
+
+    // `SecretString` serializes back to the same shape it was deserialized
+    // from -- a `Literal` as a bare string, a `File` as a `{file: ...}`
+    // mapping -- so a config referencing a secret file never gets its
+    // reference silently replaced by the resolved value on save.
+    #[test]
+    fn secret_string_round_trips_through_yaml() {
+        let literal = SecretString::Literal("hunter2".to_string());
+        let literal_yaml = serde_yaml::to_string(&literal).unwrap();
+        assert_eq!(literal_yaml.trim(), "hunter2");
+        assert_eq!(
+            serde_yaml::from_str::<SecretString>(&literal_yaml).unwrap(),
+            literal
+        );
+
+        let file =
+            SecretString::File(std::path::PathBuf::from("/run/secret"));
+        let file_yaml = serde_yaml::to_string(&file).unwrap();
+        assert!(file_yaml.contains("file: /run/secret"));
+        assert_eq!(
+            serde_yaml::from_str::<SecretString>(&file_yaml).unwrap(),
+            file
+        );
+    }
+
+    // An account's `base_url` (and, by extension, `identity_url`/`ui_url`/
+    // `notifications_url`/`server_name`, which all fall back to it) can be
+    // sourced from a file instead of a literal value.
+    #[test]
+    fn account_base_url_resolves_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("base_url");
+        std::fs::write(&path, "https://vault.example.com\n").unwrap();
+
+        let account = Account {
+            name: "work".to_string(),
+            base_url: Some(SecretString::File(path)),
+            ..Account::default()
+        };
+        assert_eq!(
+            account.base_url().unwrap(),
+            "https://vault.example.com/api"
+        );
+        assert_eq!(
+            account.server_name().unwrap(),
+            "https://vault.example.com"
+        );
     }
 }

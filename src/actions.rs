@@ -41,10 +41,15 @@ pub async fn login(
         memory,
         parallelism,
     )?;
+    let sso_id = account
+        .sso_id
+        .as_ref()
+        .map(crate::config::SecretString::resolve)
+        .transpose()?;
     let (access_token, refresh_token, protected_key) = client
         .login(
             email,
-            account.sso_id.as_deref(),
+            sso_id.as_deref(),
             &crate::config::device_id(&config).await?,
             &identity.master_password_hash,
             two_factor_token,
@@ -1076,9 +1081,9 @@ fn api_client() -> Result<(crate::api::Client, crate::config::Account)> {
     let config = crate::config::Config::load()?;
     let account = resolve_account(&config);
     let client = crate::api::Client::new(
-        &account.base_url(),
-        &account.identity_url(),
-        &account.ui_url(),
+        &account.base_url()?,
+        &account.identity_url()?,
+        &account.ui_url()?,
         account.client_cert_path.as_deref(),
     );
     Ok((client, account))
@@ -1089,9 +1094,9 @@ async fn api_client_async(
     let config = crate::config::Config::load_async().await?;
     let account = resolve_account(&config);
     let client = crate::api::Client::new(
-        &account.base_url(),
-        &account.identity_url(),
-        &account.ui_url(),
+        &account.base_url()?,
+        &account.identity_url()?,
+        &account.ui_url()?,
         account.client_cert_path.as_deref(),
     );
     Ok((client, account))

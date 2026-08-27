@@ -2594,13 +2594,16 @@ pub fn config_show(json: bool) -> anyhow::Result<()> {
 pub fn config_get(key: &str) -> anyhow::Result<()> {
     let config = rbw::config::Config::load()?;
     let primary = config.primary();
+    let resolve = |v: Option<rbw::config::SecretString>| -> anyhow::Result<Option<String>> {
+        Ok(v.map(|s| s.resolve()).transpose()?)
+    };
     let value = match key {
-        "email" => primary.email,
-        "ssoId" => primary.sso_id,
-        "baseUrl" => primary.base_url,
-        "identityUrl" => primary.identity_url,
-        "uiUrl" => primary.ui_url,
-        "notificationsUrl" => primary.notifications_url,
+        "email" => resolve(primary.email)?,
+        "ssoId" => resolve(primary.sso_id)?,
+        "baseUrl" => resolve(primary.base_url)?,
+        "identityUrl" => resolve(primary.identity_url)?,
+        "uiUrl" => resolve(primary.ui_url)?,
+        "notificationsUrl" => resolve(primary.notifications_url)?,
         "clientCertPath" => {
             primary.client_cert_path.map(|p| p.display().to_string())
         }
@@ -2685,15 +2688,25 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
     let mut config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());
     match key {
-        "email" => config.primary_mut().email = Some(value.to_string()),
-        "ssoId" => config.primary_mut().sso_id = Some(value.to_string()),
-        "baseUrl" => config.primary_mut().base_url = Some(value.to_string()),
-        "identityUrl" => {
-            config.primary_mut().identity_url = Some(value.to_string());
+        "email" => {
+            config.primary_mut().email = Some(value.to_string().into());
         }
-        "uiUrl" => config.primary_mut().ui_url = Some(value.to_string()),
+        "ssoId" => {
+            config.primary_mut().sso_id = Some(value.to_string().into());
+        }
+        "baseUrl" => {
+            config.primary_mut().base_url = Some(value.to_string().into());
+        }
+        "identityUrl" => {
+            config.primary_mut().identity_url =
+                Some(value.to_string().into());
+        }
+        "uiUrl" => {
+            config.primary_mut().ui_url = Some(value.to_string().into());
+        }
         "notificationsUrl" => {
-            config.primary_mut().notifications_url = Some(value.to_string());
+            config.primary_mut().notifications_url =
+                Some(value.to_string().into());
         }
         "clientCertPath" => {
             config.primary_mut().client_cert_path =
@@ -3041,11 +3054,18 @@ pub fn account_list() {
     }
     for account in &accounts {
         let marker = if account.name == primary { " *" } else { "" };
-        let email = account.email.as_deref().unwrap_or("-");
+        // Best-effort: an unreadable secret file (e.g. not yet decrypted)
+        // shows as unset rather than failing the whole listing.
+        let email = account
+            .email
+            .as_ref()
+            .and_then(|v| v.resolve().ok())
+            .unwrap_or_else(|| "-".to_string());
         let server = account
             .base_url
-            .as_deref()
-            .unwrap_or("(public bitwarden.com)");
+            .as_ref()
+            .and_then(|v| v.resolve().ok())
+            .unwrap_or_else(|| "(public bitwarden.com)".to_string());
         println!("{}{marker}\t{email}\t{server}", account.name);
     }
 }
@@ -3067,9 +3087,9 @@ pub fn account_add(
     let first = config.accounts.is_empty();
     config.accounts.push(rbw::config::Account {
         name: name.to_string(),
-        email,
-        sso_id,
-        base_url,
+        email: email.map(Into::into),
+        sso_id: sso_id.map(Into::into),
+        base_url: base_url.map(Into::into),
         identity_url: None,
         ui_url: None,
         notifications_url: None,
@@ -3440,7 +3460,7 @@ fn resolve_from_credential_source(
         })?;
         (decrypted, item.to_string())
     } else {
-        let target_uri = target_account.ui_url();
+        let target_uri = target_account.ui_url()?;
         let needle = parse_needle(&target_uri).unwrap();
         let (_, decrypted) =
             find_entry(&db, vec![needle], None, None, None, None, false, false)
@@ -12470,12 +12490,20 @@ fn mirror_vault_with_options(
     eprintln!(
         "  from: {} ({})",
         style::name(from, c),
-        from_account.email.as_deref().unwrap_or("no email set")
+        from_account
+            .email
+            .as_ref()
+            .and_then(|v| v.resolve().ok())
+            .unwrap_or_else(|| "no email set".to_string())
     );
     eprintln!(
         "  to:   {} ({})",
         style::name(to, c),
-        to_account.email.as_deref().unwrap_or("no email set")
+        to_account
+            .email
+            .as_ref()
+            .and_then(|v| v.resolve().ok())
+            .unwrap_or_else(|| "no email set".to_string())
     );
     if let Some(needle) = collection {
         eprintln!("  scope: collection '{needle}'");
@@ -13551,7 +13579,7 @@ pub fn rename_org(org_id: Option<&str>, name: &str) -> anyhow::Result<()> {
         refresh_token,
         &org_id,
         name,
-        billing_email,
+        &billing_email,
     )? {
         db.access_token = Some(access_token);
         save_db(&db)?;
@@ -14607,7 +14635,7 @@ pub fn purge(yes: bool) -> anyhow::Result<()> {
     if !yes
         && !confirm(&format!(
             "Remove {what} for {}?",
-            style::name(account_email(&account)?, stdout_supports_color())
+            style::name(&account_email(&account)?, stdout_supports_color())
         ))?
     {
         return Ok(());
@@ -17515,11 +17543,16 @@ pub fn tui_accounts() -> anyhow::Result<Vec<TuiAccount>> {
             continue;
         }
         crate::actions::set_active_account(Some(account.name.clone()))?;
+        // Best-effort: an unreadable secret file (e.g. not yet decrypted)
+        // shows as unset rather than failing the whole accounts panel.
+        let base_url =
+            account.base_url.as_ref().and_then(|v| v.resolve().ok());
+        let email = account.email.as_ref().and_then(|v| v.resolve().ok());
         out.push(TuiAccount {
             unlocked: active_account_unlocked(),
             primary: account.name == primary,
-            server: tui_account_server(account.base_url.as_deref()),
-            email: account.email.clone(),
+            server: tui_account_server(base_url.as_deref()),
+            email,
             credential_source: account
                 .unlock
                 .credentials
@@ -17628,9 +17661,9 @@ pub fn tui_account_add(
     let first = config.accounts.is_empty();
     config.accounts.push(rbw::config::Account {
         name: name.to_string(),
-        email,
+        email: email.map(Into::into),
         sso_id: None,
-        base_url,
+        base_url: base_url.map(Into::into),
         identity_url: None,
         ui_url: None,
         notifications_url: None,
@@ -18072,27 +18105,28 @@ fn active_account() -> anyhow::Result<rbw::config::Account> {
         .map_err(anyhow::Error::new)
 }
 
-fn account_email(account: &rbw::config::Account) -> anyhow::Result<&str> {
-    account.email.as_deref().ok_or_else(|| {
+fn account_email(account: &rbw::config::Account) -> anyhow::Result<String> {
+    let email = account.email.as_ref().ok_or_else(|| {
         anyhow::anyhow!("failed to find email address in config")
-    })
+    })?;
+    Ok(email.resolve()?)
 }
 
 pub fn load_db() -> anyhow::Result<rbw::db::Db> {
     let account = active_account()?;
-    rbw::db::Db::load(&account.server_name(), account_email(&account)?)
+    rbw::db::Db::load(&account.server_name()?, &account_email(&account)?)
         .map_err(anyhow::Error::new)
 }
 
 fn save_db(db: &rbw::db::Db) -> anyhow::Result<()> {
     let account = active_account()?;
-    db.save(&account.server_name(), account_email(&account)?)
+    db.save(&account.server_name()?, &account_email(&account)?)
         .map_err(anyhow::Error::new)
 }
 
 fn remove_db() -> anyhow::Result<()> {
     let account = active_account()?;
-    rbw::db::Db::remove(&account.server_name(), account_email(&account)?)
+    rbw::db::Db::remove(&account.server_name()?, &account_email(&account)?)
         .map_err(anyhow::Error::new)
 }
 

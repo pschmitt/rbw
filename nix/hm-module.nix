@@ -35,19 +35,6 @@ let
     types
     ;
 
-  # Provides `genJqSecretsReplacementSnippet`: given a Nix value containing
-  # `{ _secret = "/path/to/file"; }` markers anywhere inside it (including
-  # nested inside lists), generates a shell snippet that renders the value to
-  # JSON with each marker replaced by that file's contents, read at
-  # activation time rather than baked into the Nix store. Used below so
-  # account fields like `email`/`baseUrl` can point at a sops-nix secret
-  # instead of embedding the value in `config.yaml` -- mirrors the same
-  # `_secret` convention used for `glab`'s config in this repo (see
-  # modules/home-manager/glab.nix).
-  utils = import "${pkgs.path}/nixos/lib/utils.nix" {
-    inherit lib config pkgs;
-  };
-
   cfg = config.programs.rbw.declarative;
 
   # Recursively drop `null` values from attrsets (including those nested
@@ -78,16 +65,19 @@ let
       inherit description;
     };
 
-  # A `{ _secret = "/path/to/file"; }` marker, resolved at activation time by
-  # `utils.genJqSecretsReplacementSnippet` (see `utils` above) into that
-  # file's contents -- e.g. a sops-nix secret's `config.sops.secrets.<name>.path`.
+  # A `{ file = "/path/to/file"; }` marker: written into config.yaml
+  # verbatim (never resolved by Nix or by home-manager) and read natively by
+  # rbw itself at runtime -- see the `SecretString` type in `src/config.rs`
+  # -- e.g. pointed at a sops-nix secret's `config.sops.secrets.<name>.path`.
+  # Since only the *path* ever touches the Nix store, not the secret's
+  # content, this is safe to render declaratively (see `config` below).
   secretRef = types.submodule {
-    options._secret = mkOption {
+    options.file = mkOption {
       type = types.either types.str types.path;
       description = ''
-        Path to a file whose contents become this value, resolved at
-        activation time instead of being embedded in the Nix store (e.g. a
-        sops-nix secret's `.path`).
+        Path to a file whose contents become this value at runtime (e.g. a
+        sops-nix secret's `.path`), instead of being embedded directly in
+        config.yaml.
       '';
     };
   };
@@ -551,6 +541,17 @@ in
         from the generated file rather than written as explicit `null`.
       '';
     };
+
+    renderedConfigFile = mkOption {
+      type = types.path;
+      internal = true;
+      readOnly = true;
+      description = ''
+        Internal: the rendered config.yaml, as a Nix store path. Set by
+        this module's own `config`; exposed only so the flake's smoke test
+        can check the rendered content directly.
+      '';
+    };
   };
 
   config = mkIf cfg.enable (
@@ -564,52 +565,37 @@ in
         }
       );
       configFile = "${config.xdg.configHome}/rbw/config.yaml";
-      configJson = "${config.xdg.configHome}/rbw/config.json.tmp";
+      # Plain JSON text -- valid YAML too, and rbw's `parse_config` accepts
+      # either based on the file's extension -- so no yq/jq step is needed
+      # to produce it. Any `secretRef` (`{ file = ...; }`) values in
+      # `rendered` end up in this text completely unresolved: only the
+      # *path* to a secret ever touches the Nix store, never the secret's
+      # own content, so this is safe to build like any other derivation.
+      renderedConfigFile = pkgs.writeText "rbw-config.json" (builtins.toJSON rendered);
     in
     {
       home.packages = [ cfg.package ];
 
-      # Rendered by a systemd user service (rather than `xdg.configFile`,
-      # which would symlink into the world-readable Nix store, or a
-      # `home.activation` script) so that any `_secret` markers in `rendered`
-      # -- see `secretRef` above -- get resolved from their source file at
-      # runtime instead of having their value embedded in the store.
-      #
-      # This used to be a `home.activation` script (entryAfter
-      # "writeBoundary"), matching the `_secret` convention originally used
-      # for `glab`'s config in the nixos-config repo this module was ported
-      # from (see modules/home-manager/glab.nix there). That approach can
-      # run as part of a system-level home-manager-<user>.service at boot,
-      # before the user's own systemd session (and its sops-nix.service)
-      # has decrypted the referenced secrets, aborting with "No such file or
-      # directory". A systemd.user.service ordered After/Wants
-      # sops-nix.service can't start before that user session (and
-      # sops-nix.service within it) exist, so the race is gone by
-      # construction; `reloadSystemd` already restarts changed user units on
-      # every home-manager switch, so this regenerates config.yaml whenever
-      # `rendered` or the underlying secrets change.
-      systemd.user.services.rbw-config = {
-        Unit = {
-          Description = "Generate rbw config.yaml from declarative settings";
-          After = [ "sops-nix.service" ];
-          Wants = [ "sops-nix.service" ];
-        };
-        Service = {
-          Type = "oneshot";
-          RemainAfterExit = true;
-          ExecStart = "${pkgs.writeShellScript "rbw-config-generate" ''
-            set -euo pipefail
-            umask 077
-            mkdir -p "$(dirname '${configFile}')"
-            rm -f '${configFile}' '${configJson}'
-            ${utils.genJqSecretsReplacementSnippet rendered configJson}
-            ${pkgs.yq-go}/bin/yq -P '.' '${configJson}' > '${configFile}'
-            rm -f '${configJson}'
-            chmod 600 '${configFile}'
-          ''}";
-        };
-        Install.WantedBy = [ "default.target" ];
-      };
+      # Exposed (read-only) purely so the flake's smoke test can check the
+      # rendered content without re-implementing the `rendered` expression.
+      programs.rbw.declarative.renderedConfigFile = renderedConfigFile;
+
+      # Copies the rendered file out of the read-only Nix store into a real,
+      # writable one -- `rbw config set`/`config edit`/`account add` (and
+      # the TUI's "add account" flow) all rewrite config.yaml in place at
+      # runtime, which a `xdg.configFile` symlink into the store wouldn't
+      # allow. Since nothing above ever needs a secret to actually be
+      # decrypted -- `renderedConfigFile` only ever holds `{ file = ...; }`
+      # path references, resolved by rbw itself at the point it's actually
+      # run -- this can run at any point in activation, including at boot
+      # before the user's own sops-nix service exists, with no race to
+      # guard against (contrast the old `_secret`-marker approach this
+      # replaced, which had to bake the *resolved* secret value into
+      # config.yaml during activation itself).
+      home.activation.rbw-config = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        $DRY_RUN_CMD mkdir -p "$(dirname '${configFile}')"
+        $DRY_RUN_CMD install -m 0600 '${renderedConfigFile}' '${configFile}'
+      '';
     }
   );
 }

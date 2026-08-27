@@ -163,6 +163,12 @@ pub enum Error {
         file: std::path::PathBuf,
     },
 
+    #[error("failed to load secret from {}", .file.display())]
+    LoadSecretFile {
+        source: std::io::Error,
+        file: std::path::PathBuf,
+    },
+
     #[error("invalid padding")]
     Padding,
 
