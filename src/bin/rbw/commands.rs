@@ -10316,7 +10316,7 @@ fn extract_vault_json(targz: &[u8]) -> anyhow::Result<String> {
         if !entry.header().entry_type().is_file() {
             continue;
         }
-        let is_json = entry.path().ok().is_some_and(|path| {
+        let is_json = entry.path().is_ok_and(|path| {
             path.extension().and_then(std::ffi::OsStr::to_str) == Some("json")
         });
         if !is_json && fallback.is_some() {
