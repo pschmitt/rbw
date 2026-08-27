@@ -1,5 +1,29 @@
 # Changelog
 
+## [2.17.4] - 2026-08-27
+
+### Added
+
+* Home Manager module (`programs.rbw.declarative`): `email`/`ssoId`/
+  `baseUrl`/`identityUrl`/`uiUrl`/`notificationsUrl` on an account can
+  now be given as `{ file = /path/to/secret; }` (e.g. a sops-nix
+  secret's `.path`) instead of a literal string. Resolved by `rbw`
+  itself the moment it actually needs the value (login, sync, TUI,
+  ...), with a clear error if the file isn't readable; round-trips
+  through `config.yaml` unchanged either way, so `config
+  set`/`config edit`/`account add` never bake the resolved value in.
+  The module now renders `config.yaml` as a plain declarative file
+  again instead of materializing it at activation time, so nothing
+  about home-manager rendering it can race a secrets manager's own
+  decrypt step.
+
+### Fixed
+
+* CI: fixed a clippy regression only newer toolchains flag
+  (`manual_is_variant_and`), and the e2e job's own build step, which
+  never actually built the `rbw`/`rbw-agent` binaries the script
+  needs -- every e2e run had been failing since it was added.
+
 ## [2.17.3] - 2026-08-17
 
 ### Fixed
