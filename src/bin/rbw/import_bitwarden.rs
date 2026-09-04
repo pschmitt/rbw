@@ -528,7 +528,7 @@ pub fn encrypt_encrypted_json(
     memory: Option<u32>,
     parallelism: Option<u32>,
 ) -> Result<String> {
-    use rand::RngCore as _;
+    use rand::Rng as _;
 
     let mut salt_bytes = [0_u8; 16];
     rand::rng().fill_bytes(&mut salt_bytes);

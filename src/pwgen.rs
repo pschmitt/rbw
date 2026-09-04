@@ -113,7 +113,7 @@ pub fn resolve(cli: GenFlags, policy: GenFlags) -> (usize, Type) {
     (len, ty)
 }
 
-fn diceware(rng: &mut impl rand::RngCore, len: usize) -> String {
+fn diceware(rng: &mut impl rand::Rng, len: usize) -> String {
     let mut words = vec![];
     for _ in 0..len {
         // unwrap is safe because choose only returns None for an empty slice
