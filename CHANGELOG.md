@@ -1,5 +1,44 @@
 # Changelog
 
+## [2.17.5] - 2026-09-05
+
+### Changed
+
+* Updated dependencies across the board via Renovate, including a
+  coordinated major-version bump of the `aes`/`aes-gcm`/`argon2`/`cbc`/
+  `hkdf`/`hmac`/`pbkdf2`/`rand`/`region`/`sha1`/`sha2`/`signature`/
+  `ssh-agent-lib`/`tokio-tungstenite`/`totp-rs` crate group (real API
+  breaks throughout, fixed and fully re-tested; `cbc` dropping its `std`
+  feature was the main one) plus dozens of smaller lockfile-only bumps
+  (anyhow, arrayvec, axum, base64, flate2, libc, log, rsa, rustix,
+  serde_json, terminal_size, tokio-stream, env_logger, open, regex,
+  tempfile, uuid, zeroize, and several GitHub Actions).
+
+### Fixed
+
+* Reverted `reqwest` to 0.12.28 (kept off the crypto bump above): 0.13
+  pulls in `aws-lc-rs` via rustls's feature-unification default, which
+  fails to link against musl (`undefined reference to
+  __isoc23_sscanf`/`__isoc23_strtol`). Renovate is now told to leave
+  that specific major bump alone.
+* `rbw config set`/`config edit`/`stop-agent`/`kill-agent` could hang
+  forever waiting for a just-stopped agent to disappear: the check used
+  (`kill(pid, 0)`) keeps reporting a zombie as present until something
+  reaps it, which containerized CI runners (GitHub Actions' own runner
+  included) don't always do promptly. Now gives up after a few seconds
+  instead.
+
+### Added
+
+* e2e coverage for `restore`, `archive`/`unarchive`, `history`, `code`
+  (TOTP), `attachment create/list/get/rm`, `add --yaml`, `export` ->
+  `purge-vault` -> `import`, and `lock`/`unlock` (the last driven through
+  a scripted fake pinentry, exercising the real agent-unlock code path
+  non-interactively on CI).
+* Converted the e2e suite from a hand-rolled bash script to
+  [bats](https://github.com/bats-core/bats-core), for per-test isolation
+  and granular pass/fail reporting.
+
 ## [2.17.4] - 2026-08-27
 
 ### Added
