@@ -7,5 +7,13 @@
   "extends": [
     "config:recommended",
     ":semanticCommits"
+  ],
+  "packageRules": [
+    {
+      "matchPackageNames": ["reqwest"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false,
+      "description": "reqwest 0.13's rustls backend unconditionally pulls in aws-lc-rs, which fails to link against musl (undefined reference to __isoc23_sscanf/__isoc23_strtol). Re-enable once aws-lc-rs's musl support improves or reqwest offers a non-aws-lc-rs rustls backend again."
+    }
   ]
 }
