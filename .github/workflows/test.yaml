@@ -76,7 +76,7 @@ jobs:
   # drive the built `rbw` binary against it over the real wire protocol,
   # to catch the class of bug unit tests can't see (e.g. a server round
   # trip silently dropping data an edit didn't touch). See
-  # .github/e2e/run.sh for what's covered and why.
+  # .github/e2e/e2e.bats for what's covered and why.
   e2e:
     runs-on: ubuntu-latest
     services:
@@ -98,9 +98,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # `--example` alone restricts the build to just that example; the
-      # e2e script also needs the `rbw`/`rbw-agent` bins (see run.sh's
+      # e2e suite also needs the `rbw`/`rbw-agent` bins (see e2e.bats'
       # assumption that `cargo build --workspace` already produced them).
       - run: cargo build --workspace --bins --example e2e_register_account
-      - run: .github/e2e/run.sh
+      # Installed from source at a pinned tag rather than the distro
+      # package, so the bats version (and its $BATS_FILE_TMPDIR support,
+      # needed by e2e.bats to share state across tests) doesn't drift with
+      # the runner image.
+      - run: |
+          git clone --depth 1 --branch v1.14.0 https://github.com/bats-core/bats-core.git /tmp/bats-core
+          sudo /tmp/bats-core/install.sh /usr/local
+      - run: bats .github/e2e/e2e.bats
         env:
           VAULTWARDEN_URL: http://localhost:8000
