@@ -25,11 +25,28 @@
       compares the sorted entry-name set before and after. Verified live
       against a scratch Vaultwarden container on rofl-13 (all 11 tests
       passing) and then again via real GitHub Actions CI on main.
-- [ ] `rbw lock`/`rbw unlock` cycle: deferred -- risks hanging CI if a
-      locked-vault access attempts an interactive pinentry prompt with no
-      pinentry backend configured in the runner. Needs a safe way to
-      assert "locked" without triggering that (or confirming it fails
-      fast rather than hanging) before it's worth adding.
+- [x] `rbw lock`/`rbw unlock` cycle: the concern was a locked-vault access
+      hanging CI on an interactive pinentry prompt with no pinentry backend
+      on the runner -- solved by pointing `rbw` at a *fake* pinentry instead
+      of avoiding the scenario. `src/pinentry.rs::getpin` speaks a small,
+      well-defined line-based protocol (`SETTITLE`/`SETPROMPT`/`SETDESC`/
+      `GETPIN`, each acked with `OK`, `GETPIN` answered with `D <value>`) --
+      confirmed by reading `getpin` itself and reusing the same fake-pinentry
+      shape its own unit test (`test_getpin_cancelled_when_client_disconnects`)
+      already uses. Test 12 writes a tiny shell script implementing just
+      enough of that protocol to answer `GETPIN` with the real test
+      password, points `rbw config set pinentry.command` at it (the agent
+      re-reads this from config.yaml on every unlock attempt, no restart
+      needed -- confirmed via `config_pinentry()` in
+      `src/bin/rbw-agent/actions.rs`), then: `rbw lock`, confirms `rbw
+      unlocked` now fails (proving lock actually blocks access, not just a
+      no-op), then `rbw get` on an entry -- which must trigger the agent's
+      real unlock-via-pinentry code path (not the `--stdin` shortcut every
+      other test in this suite uses) -- and confirms it succeeds and
+      `rbw unlocked` reports true afterward. No tty/DISPLAY/real pinentry
+      binary needed anywhere. Verified live against a scratch Vaultwarden on
+      rofl-13, twice (to rule out a fluke) before committing, then again via
+      real GitHub Actions CI on main.
 
 - [x] `rbw export --attachments`: include decrypted attachment contents in
       the export, not just entry data.

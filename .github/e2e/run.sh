@@ -299,4 +299,51 @@ if [ "$NAMES_AFTER" != "$NAMES_BEFORE" ]; then
 fi
 log "test 11 passed ($COUNT_BEFORE entries round-tripped)"
 
+log "test 12: lock must actually block access, and a locked vault must auto-unlock via pinentry"
+# Real pinentry needs a tty/DISPLAY, neither of which exist on a CI runner --
+# so rather than skipping lock/unlock entirely, point rbw at a fake pinentry
+# that speaks just enough of the real Assuan-ish protocol (see
+# `src/pinentry.rs::getpin` and its own `test_getpin_cancelled_when_client_disconnects`
+# fake pinentry, which this mirrors) to answer GETPIN with the real password
+# non-interactively. This exercises the real agent unlock-via-pinentry code
+# path instead of only the --stdin shortcut every other test in this suite
+# uses.
+FAKE_PINENTRY="$(mktemp)"
+cat >"$FAKE_PINENTRY" <<'SCRIPT'
+#!/bin/sh
+# Minimal pinentry stand-in: ack the startup greeting and every SET* command
+# with OK, then answer GETPIN with the (baked-in at test setup) password.
+printf 'OK\n'
+while IFS= read -r line; do
+    case "$line" in
+        GETPIN)
+            printf 'D %s\n' "__RBW_E2E_PINENTRY_PASSWORD__"
+            printf 'OK\n'
+            break
+            ;;
+        *)
+            printf 'OK\n'
+            ;;
+    esac
+done
+SCRIPT
+sed -i "s/__RBW_E2E_PINENTRY_PASSWORD__/$PASSWORD/" "$FAKE_PINENTRY"
+chmod +x "$FAKE_PINENTRY"
+"$RBW" config set pinentry.command "$FAKE_PINENTRY"
+
+"$RBW" lock
+if "$RBW" unlocked >/dev/null 2>&1; then
+    log "test 12 failed: vault reports unlocked immediately after rbw lock"
+    exit 1
+fi
+
+ID1_AFTER_REIMPORT="$("$RBW" list e2e-entry-1 --fields id | head -1)"
+"$RBW" get --json "$ID1_AFTER_REIMPORT" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+assert d['data']['password'], 'no password after auto-unlock via fake pinentry'
+"
+"$RBW" unlocked # must succeed now -- the fake pinentry unlock above should have left the vault unlocked
+log "test 12 passed"
+
 log "all e2e tests passed"
