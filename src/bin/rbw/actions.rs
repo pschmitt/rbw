@@ -430,8 +430,20 @@ fn agent_pid() -> anyhow::Result<rustix::process::Pid> {
     Ok(pid)
 }
 
+// `kill(pid, 0)` (what `test_kill_process` wraps) keeps reporting a zombie
+// as present until *something* reaps it -- and that's only ever the
+// process's parent (or whatever subreaper adopted it after its original
+// parent exited), never us. Most container-based CI runners (GitHub
+// Actions' own runner included, apparently) only sweep up orphaned
+// descendants at job teardown rather than continuously, so an agent we
+// just told to quit can sit as an unreaped zombie for the rest of the job
+// -- and this loop, unbounded, would then spin forever. Give up after a
+// few seconds instead: by then the agent has already been asked to exit,
+// which is all a caller can actually depend on anyway.
 fn wait_for_exit(pid: rustix::process::Pid) {
-    loop {
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
         if rustix::process::test_kill_process(pid).is_err() {
             break;
         }

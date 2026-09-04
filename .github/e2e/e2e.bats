@@ -74,6 +74,16 @@ setup_file() {
     } >"$BATS_FILE_TMPDIR/env.sh"
 }
 
+teardown_file() {
+    source "$BATS_FILE_TMPDIR/env.sh"
+    # Without this, bats itself never exits after the last test: the
+    # rbw-agent daemon spawned in setup_file outlives every test (that's
+    # the point of it), but bats' own process-tree bookkeeping apparently
+    # waits on it too. Confirmed empirically -- all 12 tests pass either
+    # way, but `bats` only returns once the agent is gone.
+    "$RBW" stop-agent --kill >/dev/null 2>&1 || true
+}
+
 @test "editing one field must not disturb any other field" {
     "$RBW" generate e2e-entry-1 e2e-user-1 --length 20 >/dev/null
     "$RBW" sync

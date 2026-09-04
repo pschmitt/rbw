@@ -79,6 +79,11 @@ jobs:
   # .github/e2e/e2e.bats for what's covered and why.
   e2e:
     runs-on: ubuntu-latest
+    # A stalled test here would otherwise ride GitHub's default 6h job
+    # timeout (see the `wait_for_exit` fix in src/bin/rbw/actions.rs for
+    # one real way this suite already managed to hang); every green run
+    # so far has taken well under a minute.
+    timeout-minutes: 60
     services:
       vaultwarden:
         image: vaultwarden/server:latest
