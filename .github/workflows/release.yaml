@@ -85,7 +85,7 @@ jobs:
       - name: Restore Android bionic runtime cache
         if: matrix.target == 'aarch64-linux-android'
         id: android-bionic-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: android-bionic-sysroot
           key: android-bionic-sysroot-api24-arm64-v1
