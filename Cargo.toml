@@ -14,7 +14,7 @@ license = "MIT"
 include = ["src/**/*", "bin/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 
 [dependencies]
-aes = "0.8.4"
+aes = "0.9.0"
 aes-gcm = "0.10.3"
 anyhow = "1.0.100"
 argon2 = "0.5.3"
