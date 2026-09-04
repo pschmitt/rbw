@@ -1,5 +1,36 @@
 # TODO
 
+## e2e coverage gaps (`.github/e2e/run.sh`)
+
+- [x] `rbw restore`/`rbw archive`/`rbw unarchive`/`rbw history`/`rbw code`/
+      `rbw attachment create,list,get,rm`/`rbw add --yaml`/`rbw export`+
+      `rbw import`+`rbw purge-vault`: added as e2e tests 5-11 in
+      `.github/e2e/run.sh`, closing every gap identified except `lock`
+      (below). Each test creates its own entry (`e2e-entry-5`..`8`) rather
+      than reusing earlier ones, except history/code which reuse
+      `e2e-entry-1` specifically because it already has a real superseded
+      password and a real TOTP secret from test 1 -- exercising the actual
+      "did this field really change/exist" case, not just a fresh no-op.
+      `code`'s assertion is deliberately loose (regex `^[0-9]{6}$`) rather
+      than cross-checking against an independently computed TOTP value,
+      to avoid flakiness at 30-second window boundaries; a previous
+      manual check during the totp-rs 5->6 migration (not committed to
+      this script) did cross-check against an independent RFC 6238
+      implementation and got an exact match, which is what actually
+      validates the algorithm -- this test only guards against a wired-up-
+      wrong/crashing code path regressing silently. The export/purge/
+      import test is last since it's destructive to every entry the
+      earlier tests created; it round-trips through `rbw export --output
+      FILE` -> `rbw purge-vault -y --stdin` -> `rbw import FILE` and
+      compares the sorted entry-name set before and after. Verified live
+      against a scratch Vaultwarden container on rofl-13 (all 11 tests
+      passing) and then again via real GitHub Actions CI on main.
+- [ ] `rbw lock`/`rbw unlock` cycle: deferred -- risks hanging CI if a
+      locked-vault access attempts an interactive pinentry prompt with no
+      pinentry backend configured in the runner. Needs a safe way to
+      assert "locked" without triggering that (or confirming it fails
+      fast rather than hanging) before it's worth adding.
+
 - [x] `rbw export --attachments`: include decrypted attachment contents in
       the export, not just entry data.
 - [x] `rbw export --encrypt PASSPHRASE`: produce a gpg-encrypted tar.gz

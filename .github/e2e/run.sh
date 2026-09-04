@@ -172,4 +172,131 @@ else
     log "test 4 skipped: docker not available to corrupt the service container's database"
 fi
 
+log "test 5: restore must undo remove, without disturbing other entries"
+"$RBW" generate e2e-entry-5 e2e-user-5 --length 20 >/dev/null
+"$RBW" sync
+ID5="$("$RBW" list e2e-entry-5 --fields id | head -1)"
+"$RBW" remove -y "$ID5"
+"$RBW" sync
+"$RBW" restore -y "$ID5"
+"$RBW" sync
+"$RBW" list --fields name | grep -qx 'e2e-entry-5' # restored entries are visible again by default
+if "$RBW" list --trashed --fields name | grep -qx 'e2e-entry-5'; then
+    log "test 5 failed: a restored entry still shows up in --trashed"
+    exit 1
+fi
+"$RBW" list e2e-entry-1 --fields id,name | grep -q e2e-entry-1 # an unrelated entry is unaffected
+log "test 5 passed"
+
+log "test 6: archive/unarchive must hide/show without disturbing other entries"
+"$RBW" generate e2e-entry-6 e2e-user-6 --length 20 >/dev/null
+"$RBW" sync
+ID6="$("$RBW" list e2e-entry-6 --fields id | head -1)"
+"$RBW" archive -y "$ID6"
+"$RBW" sync
+if "$RBW" list --fields name | grep -qx 'e2e-entry-6'; then
+    log "test 6 failed: an archived entry still shows up in the default list"
+    exit 1
+fi
+"$RBW" list --archived --fields name | grep -qx 'e2e-entry-6' # but visible with --archived
+"$RBW" unarchive -y "$ID6"
+"$RBW" sync
+"$RBW" list --fields name | grep -qx 'e2e-entry-6' # visible again after unarchiving
+"$RBW" list e2e-entry-1 --fields id,name | grep -q e2e-entry-1 # an unrelated entry is unaffected
+log "test 6 passed"
+
+log "test 7: history must record superseded passwords"
+"$RBW" history --json "$ID1" | python3 -c "
+import json, sys
+history = json.load(sys.stdin)
+assert history, 'history is empty'
+passwords = [h['password'] for h in history]
+assert 'aBrandNewPassword456!' in passwords, f'expected superseded password missing from history: {passwords}'
+"
+log "test 7 passed"
+
+log "test 8: code must generate a valid-looking TOTP code from a stored secret"
+CODE="$("$RBW" code "$ID1")"
+if ! [[ "$CODE" =~ ^[0-9]{6}$ ]]; then
+    log "test 8 failed: expected a 6-digit code, got: $CODE"
+    exit 1
+fi
+log "test 8 passed"
+
+log "test 9: attachments must round-trip byte-for-byte and be removable"
+"$RBW" generate e2e-entry-7 e2e-user-7 --length 20 >/dev/null
+"$RBW" sync
+ID7="$("$RBW" list e2e-entry-7 --fields id | head -1)"
+ATTACH_SRC="$(mktemp)"
+head -c 4096 /dev/urandom >"$ATTACH_SRC"
+"$RBW" attachment create "$ID7" "$ATTACH_SRC"
+"$RBW" sync
+"$RBW" attachment list "$ID7" --json | python3 -c "
+import json, sys
+attachments = json.load(sys.stdin)
+assert len(attachments) == 1, f'expected exactly 1 attachment, got {len(attachments)}'
+"
+ATTACH_DST="$(mktemp)"
+"$RBW" attachment get "$ID7" --raw >"$ATTACH_DST"
+cmp -s "$ATTACH_SRC" "$ATTACH_DST" || {
+    log "test 9 failed: downloaded attachment doesn't match the uploaded content"
+    exit 1
+}
+"$RBW" attachment rm -y "$ID7"
+"$RBW" sync
+REMAINING_ATTACHMENTS="$("$RBW" attachment list "$ID7" --json | python3 -c "import json, sys; print(len(json.load(sys.stdin)))")"
+if [ "$REMAINING_ATTACHMENTS" -ne 0 ]; then
+    log "test 9 failed: attachment survived rm"
+    exit 1
+fi
+log "test 9 passed"
+
+log "test 10: add must create an entry non-interactively from piped YAML"
+"$RBW" add --yaml e2e-entry-8 e2e-user-8 <<'YAML'
+name: e2e-entry-8
+notes: added via rbw add --yaml
+data:
+  type: login
+  username: e2e-user-8
+  password: manualAddPassword321!
+YAML
+"$RBW" sync
+ID8="$("$RBW" list e2e-entry-8 --fields id | head -1)"
+"$RBW" get --json "$ID8" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+assert d['data']['username'] == 'e2e-user-8', d
+assert d['data']['password'] == 'manualAddPassword321!', d
+assert d['notes'] == 'added via rbw add --yaml', d
+"
+log "test 10 passed"
+
+log "test 11: export -> purge-vault -> import must restore an equivalent vault"
+"$RBW" sync
+EXPORT_FILE="$(mktemp)"
+"$RBW" export --output "$EXPORT_FILE"
+NAMES_BEFORE="$(python3 -c "
+import json
+d = json.load(open('$EXPORT_FILE'))
+print('\n'.join(sorted(e['name'] for e in d['entries'])))
+")"
+COUNT_BEFORE="$(echo "$NAMES_BEFORE" | grep -c .)"
+echo "$PASSWORD" | "$RBW" purge-vault -y --stdin
+"$RBW" sync
+REMAINING="$("$RBW" list --include-trashed --include-archived --fields name | grep -c . || true)"
+if [ "$REMAINING" -ne 0 ]; then
+    log "test 11 failed: $REMAINING entries survived purge-vault"
+    exit 1
+fi
+"$RBW" import "$EXPORT_FILE"
+"$RBW" sync
+NAMES_AFTER="$("$RBW" list --include-trashed --include-archived --fields name | sort)"
+if [ "$NAMES_AFTER" != "$NAMES_BEFORE" ]; then
+    log "test 11 failed: imported vault entry names don't match the pre-purge export"
+    log "before: $NAMES_BEFORE"
+    log "after: $NAMES_AFTER"
+    exit 1
+fi
+log "test 11 passed ($COUNT_BEFORE entries round-tripped)"
+
 log "all e2e tests passed"
