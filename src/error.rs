@@ -37,7 +37,7 @@ pub enum Error {
     CredentialSourceSelfReference { name: String },
 
     #[error("failed to decrypt")]
-    Decrypt { source: block_padding::UnpadError },
+    Decrypt { source: block_padding::Error },
 
     #[error("failed to find free port in {range}")]
     FailedToFindFreePort { range: String },

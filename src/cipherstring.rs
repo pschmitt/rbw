@@ -1,11 +1,15 @@
 use crate::prelude::*;
 
 use aes::cipher::{
-    BlockDecryptMut as _, BlockEncryptMut as _, KeyIvInit as _,
+    BlockModeDecrypt as _, BlockModeEncrypt as _, KeyIvInit as _,
 };
-use hmac::Mac as _;
-use pkcs8::{DecodePrivateKey as _, DecodePublicKey as _};
-use rand::RngCore as _;
+use hmac::{KeyInit as _, Mac as _};
+// `rsa`'s own re-exported `pkcs8` (0.10-line), not our top-level `pkcs8`
+// (0.11): `rsa::RsaPrivateKey`/`RsaPublicKey` only implement the
+// `DecodePrivateKey`/`DecodePublicKey` traits from the version rsa itself
+// depends on.
+use rand::Rng as _;
+use rsa::pkcs8::{DecodePrivateKey as _, DecodePublicKey as _};
 use zeroize::Zeroize as _;
 
 pub enum CipherString {
@@ -103,12 +107,13 @@ impl CipherString {
     ) -> Result<Self> {
         let iv = random_iv();
 
-        let cipher = cbc::Encryptor::<aes::Aes256>::new(
-            keys.enc_key().into(),
-            iv.as_slice().into(),
-        );
+        let cipher = cbc::Encryptor::<aes::Aes256>::new_from_slices(
+            keys.enc_key(),
+            &iv,
+        )
+        .map_err(|source| Error::CreateBlockMode { source })?;
         let ciphertext =
-            cipher.encrypt_padded_vec_mut::<block_padding::Pkcs7>(plaintext);
+            cipher.encrypt_padded_vec::<block_padding::Pkcs7>(plaintext);
 
         let mut digest =
             hmac::Hmac::<sha2::Sha256>::new_from_slice(keys.mac_key())
@@ -142,7 +147,7 @@ impl CipherString {
                 mac.as_deref(),
             )?;
             cipher
-                .decrypt_padded_vec_mut::<block_padding::Pkcs7>(ciphertext)
+                .decrypt_padded_vec::<block_padding::Pkcs7>(ciphertext)
                 .map_err(|source| Error::Decrypt { source })
         } else {
             Err(Error::InvalidCipherString {
@@ -172,7 +177,7 @@ impl CipherString {
                 mac.as_deref(),
             )?;
             cipher
-                .decrypt_padded_mut::<block_padding::Pkcs7>(res.data_mut())
+                .decrypt_padded::<block_padding::Pkcs7>(res.data_mut())
                 .map_err(|source| Error::Decrypt { source })?;
             Ok(res)
         } else {
@@ -205,7 +210,7 @@ impl CipherString {
             let pkey = rsa::RsaPrivateKey::from_pkcs8_der(privkey_data)
                 .map_err(|source| Error::RsaPkcs8 { source })?;
             let mut bytes = pkey
-                .decrypt(rsa::Oaep::new::<sha1::Sha1>(), ciphertext)
+                .decrypt(rsa::Oaep::new::<sha1_10::Sha1>(), ciphertext)
                 .map_err(|source| Error::Rsa { source })?;
 
             // XXX it'd be great if the rsa crate would let us decrypt
@@ -239,7 +244,7 @@ impl CipherString {
         // `ssh_agent.rs` reaches for `rand_8` instead of `rand` here.
         let mut rng = rand_8::rngs::OsRng;
         let ciphertext = public_key
-            .encrypt(&mut rng, rsa::Oaep::new::<sha1::Sha1>(), plaintext)
+            .encrypt(&mut rng, rsa::Oaep::new::<sha1_10::Sha1>(), plaintext)
             .map_err(|source| Error::Rsa { source })?;
         Ok(Self::Asymmetric { ciphertext })
     }
@@ -272,12 +277,10 @@ pub fn encrypt_file_data(
     keys: &crate::locked::Keys,
 ) -> Result<Vec<u8>> {
     let iv = random_iv();
-    let cipher = cbc::Encryptor::<aes::Aes256>::new(
-        keys.enc_key().into(),
-        iv.as_slice().into(),
-    );
-    let ciphertext =
-        cipher.encrypt_padded_vec_mut::<block_padding::Pkcs7>(data);
+    let cipher =
+        cbc::Encryptor::<aes::Aes256>::new_from_slices(keys.enc_key(), &iv)
+            .map_err(|source| Error::CreateBlockMode { source })?;
+    let ciphertext = cipher.encrypt_padded_vec::<block_padding::Pkcs7>(data);
     let mut digest =
         hmac::Hmac::<sha2::Sha256>::new_from_slice(keys.mac_key())
             .map_err(|source| Error::CreateHmac { source })?;
@@ -294,7 +297,7 @@ pub fn encrypt_file_data(
 }
 
 pub fn generate_attachment_keys() -> crate::locked::Keys {
-    use rand::RngCore as _;
+    use rand::Rng as _;
     let mut key = crate::locked::Vec::new();
     key.extend(std::iter::repeat_n(0u8, 64));
     rand::rng().fill_bytes(key.data_mut());
@@ -319,7 +322,7 @@ pub fn decrypt_file_data(
             let cipher =
                 decrypt_common_symmetric(keys, iv, ciphertext, Some(mac))?;
             cipher
-                .decrypt_padded_vec_mut::<block_padding::Pkcs7>(ciphertext)
+                .decrypt_padded_vec::<block_padding::Pkcs7>(ciphertext)
                 .map_err(|source| Error::Decrypt { source })
         }
         0 => Err(Error::UnimplementedCipherStringType {
@@ -344,7 +347,7 @@ fn decrypt_common_symmetric(
         key.update(iv);
         key.update(ciphertext);
 
-        if key.verify(mac.into()).is_err() {
+        if key.verify_slice(mac).is_err() {
             return Err(Error::InvalidMac);
         }
     }

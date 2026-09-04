@@ -4,10 +4,10 @@
 //! random challenge as key material for an HKDF-derived AES-GCM key; the
 //! signature itself is not stored or treated as a secret at rest.
 
-use aes_gcm::{aead::Aead as _, aead::KeyInit as _, Aes256Gcm, Nonce};
+use aes_gcm::{aead::Aead as _, aead::KeyInit as _, Aes256Gcm};
 use anyhow::Context as _;
 use hkdf::Hkdf;
-use rand::RngCore as _;
+use rand::Rng as _;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::io::IsTerminal as _;
@@ -254,10 +254,12 @@ fn decrypt_bundle(
     }
 
     let mut key = derive_key(signature, &salt)?;
+    let nonce: aes_gcm::Nonce<_> = TryFrom::try_from(nonce.as_slice())
+        .expect("nonce length was already validated above");
     let result = Aes256Gcm::new_from_slice(&key)
         .expect("AES-256-GCM keys are always 32 bytes")
         .decrypt(
-            Nonce::from_slice(&nonce),
+            &nonce,
             aes_gcm::aead::Payload {
                 msg: ciphertext.as_ref(),
                 aad: AAD,
@@ -337,7 +339,7 @@ fn enroll_inner(
     let result = Aes256Gcm::new_from_slice(&key)
         .expect("AES-256-GCM keys are always 32 bytes")
         .encrypt(
-            Nonce::from_slice(&nonce),
+            (&nonce).into(),
             aes_gcm::aead::Payload {
                 msg: password,
                 aad: AAD,
@@ -485,7 +487,7 @@ mod tests {
         let ciphertext = Aes256Gcm::new_from_slice(&key)
             .unwrap()
             .encrypt(
-                Nonce::from_slice(&nonce),
+                (&nonce).into(),
                 aes_gcm::aead::Payload {
                     msg: b"master password",
                     aad: AAD,

@@ -36,20 +36,37 @@ fn main() {
         .map_or(600_000, |s| {
             s.parse().expect("--kdf-iterations must be a number")
         });
+    // Test-only escape hatch to exercise the Argon2id KDF path too (default
+    // stays PBKDF2 to match every existing caller's expectations).
+    let use_argon2 = arg(&args, "--kdf").as_deref() == Some("argon2id");
+    let argon2_memory = 64_u32; // MiB (matches Identity::new's MB-input convention)
+    let argon2_parallelism = 4_u32;
 
     let mut password_vec = rbw::locked::Vec::new();
     password_vec.extend(password.as_bytes().iter().copied());
     let password = rbw::locked::Password::new(password_vec);
 
-    let identity = rbw::identity::Identity::new(
-        &email,
-        &password,
-        rbw::api::KdfType::Pbkdf2,
-        kdf_iterations,
-        None,
-        None,
-    )
-    .expect("failed to derive master key");
+    let identity = if use_argon2 {
+        rbw::identity::Identity::new(
+            &email,
+            &password,
+            rbw::api::KdfType::Argon2id,
+            3, // iterations (argon2 "time cost", not pbkdf2 iterations)
+            Some(argon2_memory),
+            Some(argon2_parallelism),
+        )
+        .expect("failed to derive master key")
+    } else {
+        rbw::identity::Identity::new(
+            &email,
+            &password,
+            rbw::api::KdfType::Pbkdf2,
+            kdf_iterations,
+            None,
+            None,
+        )
+        .expect("failed to derive master key")
+    };
 
     // The vault's own symmetric key -- randomly generated, then wrapped
     // ("protected") under the master-password-derived key above. This
@@ -57,7 +74,7 @@ fn main() {
     // cipher in the vault.
     let mut user_key_vec = rbw::locked::Vec::new();
     let mut random_key = [0u8; 64];
-    rand::RngCore::fill_bytes(&mut rand::rng(), &mut random_key);
+    rand::Rng::fill_bytes(&mut rand::rng(), &mut random_key);
     user_key_vec.extend(random_key.iter().copied());
     let user_keys = rbw::locked::Keys::new(user_key_vec.clone());
 
@@ -100,10 +117,18 @@ fn main() {
             "publicKey": rbw::base64::encode(public_key_der.as_bytes()),
             "encryptedPrivateKey": encrypted_private_key.to_string(),
         },
-        "kdf": 0,
-        "kdfIterations": kdf_iterations,
-        "kdfMemory": serde_json::Value::Null,
-        "kdfParallelism": serde_json::Value::Null,
+        "kdf": i32::from(use_argon2),
+        "kdfIterations": if use_argon2 { 3 } else { kdf_iterations },
+        "kdfMemory": if use_argon2 {
+            serde_json::Value::from(argon2_memory)
+        } else {
+            serde_json::Value::Null
+        },
+        "kdfParallelism": if use_argon2 {
+            serde_json::Value::from(argon2_parallelism)
+        } else {
+            serde_json::Value::Null
+        },
     });
 
     let client = reqwest::blocking::Client::new();

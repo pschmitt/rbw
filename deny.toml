@@ -40,19 +40,51 @@ skip = [
     { name = "thiserror", version = "2.0.17" },
     { name = "thiserror-impl", version = "1.0.69" },
     { name = "thiserror-impl", version = "2.0.17" },
-    # until the rand 0.8 -> 0.9 transition finished making its way through
-    # the crate ecosystem
-    { name = "rand", version = "0.8.5" },
-    { name = "rand", version = "0.9.2" },
+    # until the rand 0.8 -> 0.9 -> 0.10 transition finished making its way
+    # through the crate ecosystem (rand_8 is pinned to 0.8 for `rsa`; some
+    # transitive deps are still on 0.9 for other target platforms; rbw's own
+    # direct dependency is 0.10)
+    { name = "rand", version = "0.8.6" },
+    { name = "rand", version = "0.9.4" },
+    { name = "rand", version = "0.10.2" },
     { name = "rand_core", version = "0.6.4" },
     { name = "rand_core", version = "0.9.3" },
+    { name = "rand_core", version = "0.10.1" },
     { name = "rand_chacha", version = "0.3.1" },
     { name = "rand_chacha", version = "0.9.0" },
     { name = "getrandom", version = "0.2.16" },
     { name = "getrandom", version = "0.3.4" },
+    { name = "getrandom", version = "0.4.3" },
     # ratatui's dependency tree pulls this older/extra version in addition to
     # the one the rest of the vault code already uses
     { name = "hashbrown", version = "0.17.1" },
+    # `rsa` (and, transitively through it and `ssh-key`, several elliptic
+    # curve / ed25519 crates) is still on the digest-0.10-era stack; rbw's
+    # own direct dependency on each of these is the newer major. See the
+    # `sha1_10`/`rsa::sha2`/`rsa::signature`/`rsa::pkcs8` workarounds in
+    # cipherstring.rs and ssh_agent.rs.
+    { name = "block-buffer", version = "0.10.4" },
+    { name = "block-buffer", version = "0.12.1" },
+    { name = "cipher", version = "0.4.4" },
+    { name = "cipher", version = "0.5.2" },
+    { name = "const-oid", version = "0.9.6" },
+    { name = "const-oid", version = "0.10.2" },
+    { name = "cpufeatures", version = "0.2.17" },
+    { name = "cpufeatures", version = "0.3.1" },
+    { name = "crypto-common", version = "0.1.7" },
+    { name = "crypto-common", version = "0.2.2" },
+    { name = "digest", version = "0.10.7" },
+    { name = "digest", version = "0.11.3" },
+    { name = "hmac", version = "0.12.1" },
+    { name = "hmac", version = "0.13.0" },
+    { name = "inout", version = "0.1.4" },
+    { name = "inout", version = "0.2.2" },
+    { name = "sha1", version = "0.10.6" },
+    { name = "sha1", version = "0.11.0" },
+    { name = "sha2", version = "0.10.9" },
+    { name = "sha2", version = "0.11.0" },
+    { name = "signature", version = "2.2.0" },
+    { name = "signature", version = "3.0.0" },
 ]
 
 [licenses]
