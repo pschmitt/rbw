@@ -3,7 +3,7 @@
 # Build stage: compile the two binaries this repo produces (`rbw` and
 # `rbw-agent`, both under src/bin/) with plain cargo. The version pinned
 # here should track Cargo.toml's `rust-version` (MSRV); bump both together.
-FROM rust:1.88-bookworm AS build
+FROM rust:1.98-bookworm AS build
 WORKDIR /build
 
 COPY Cargo.toml Cargo.lock ./
