@@ -50,7 +50,7 @@ percent-encoding = "2.3.2"
 pkcs8 = "0.10.2"
 # TODO: necessary because some packages still depend on old rand
 rand_8 = { package = "rand", version = "0.8.5" }
-rand = "0.9.2"
+rand = "0.10.0"
 ratatui = "0.30.2"
 regex = "1.12.2"
 region = "3.0.2"
