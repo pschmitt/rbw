@@ -19,7 +19,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # `:latest` tracks every push to main, not just tagged releases; the
       # raw Cargo.toml version (e.g. `2.11.0`, deliberately without the `v`
       # prefix git tags use, matching the tarball naming in release.yaml)
