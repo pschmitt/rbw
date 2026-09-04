@@ -32,6 +32,8 @@ deny = [
     { name = "openssl-sys" },
 ]
 skip = [
+    # reqwest/hyper-util still depend on the older base64 major
+    { name = "base64", version = "0.22.1" },
     # https://github.com/darfink/region-rs/pull/25
     { name = "bitflags", version = "1.3.2" },
     { name = "bitflags", version = "2.4.1" },
