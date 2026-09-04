@@ -23,7 +23,7 @@ axum = "0.8.8"
 base32 = "0.5.1"
 base64 = "0.22.1"
 block-padding = "0.3.3"
-cbc = { version = "0.1.2", features = ["alloc", "std"] }
+cbc = { version = "0.2.0", features = ["alloc", "std"] }
 csv = "1.4.0"
 clap_complete = "4.5.62"
 clap = { version = "4.5.53", features = ["wrap_help", "derive"] }
