@@ -98,7 +98,31 @@ assert d['notes'], f'notes lost for {d[\"id\"]}'
 done
 log "test 2 passed"
 
-log "test 3: one corrupted entry must not break list/get for every other entry"
+log "test 3: remove must trash, --force must permanently delete, and neither may disturb other entries"
+"$RBW" generate e2e-entry-4 e2e-user-4 --length 20 >/dev/null
+"$RBW" sync
+ID4="$("$RBW" list e2e-entry-4 --fields id | head -1)"
+"$RBW" remove -y "$ID4"
+"$RBW" sync
+if "$RBW" list --fields name | grep -qx 'e2e-entry-4'; then
+    log "test 3 failed: a trashed entry still shows up in the default list"
+    exit 1
+fi
+"$RBW" list --trashed --fields name | grep -qx 'e2e-entry-4' # but recoverable from the trash
+"$RBW" list e2e-entry-3 --fields id,name | grep -q e2e-entry-3 # an unrelated entry is unaffected
+"$RBW" remove --force -y "$ID4"
+"$RBW" sync
+if "$RBW" list --trashed --fields name | grep -q '^e2e-entry-4$'; then
+    log "test 3 failed: entry survived a --force removal"
+    exit 1
+fi
+if "$RBW" get --json "$ID4" >/dev/null 2>&1; then
+    log "test 3 failed: a permanently-removed entry is still gettable"
+    exit 1
+fi
+log "test 3 passed"
+
+log "test 4: one corrupted entry must not break list/get for every other entry"
 if command -v docker >/dev/null 2>&1 &&
     CONTAINER="$(docker ps --filter ancestor=vaultwarden/server:latest -q | head -1)" &&
     [ -n "$CONTAINER" ]; then
@@ -143,9 +167,9 @@ PYEOF
     "$RBW" get --json "$ID2" >/dev/null # must not error even though its history is now unreadable
     "$RBW" get --json "$ID1" >/dev/null # a totally unrelated entry must still work
     "$RBW" list e2e-entry-3 --fields id,name | grep -q e2e-entry-3
-    log "test 3 passed"
+    log "test 4 passed"
 else
-    log "test 3 skipped: docker not available to corrupt the service container's database"
+    log "test 4 skipped: docker not available to corrupt the service container's database"
 fi
 
 log "all e2e tests passed"
