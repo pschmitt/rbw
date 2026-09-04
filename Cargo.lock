@@ -3056,8 +3056,7 @@ dependencies = [
  "serde_path_to_error",
  "serde_repr",
  "serde_yaml",
- "sha1 0.10.7",
- "sha1 0.11.0",
+ "sha1",
  "sha2 0.11.0",
  "signature 3.0.0",
  "ssh-agent-lib",
@@ -3533,17 +3532,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25663b9d8b83193ef83183edb3fd01e5447adb3e5baa35466ff9a6cd2408d6e8"
 dependencies = [
  "raunch",
-]
-
-[[package]]
-name = "sha1"
-version = "0.10.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.2.17",
- "digest 0.10.7",
 ]
 
 [[package]]
@@ -4147,7 +4135,7 @@ dependencies = [
  "hmac 0.13.0",
  "rand 0.10.2",
  "serde",
- "sha1 0.11.0",
+ "sha1",
  "sha2 0.11.0",
  "zeroize",
 ]
@@ -4249,7 +4237,7 @@ dependencies = [
  "rand 0.10.2",
  "rustls",
  "rustls-pki-types",
- "sha1 0.11.0",
+ "sha1",
  "thiserror 2.0.20",
  "url",
 ]

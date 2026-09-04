@@ -81,7 +81,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 # `Sha1`/`Digest`/`DecodePrivateKey`/`DecodePublicKey` impls for its OAEP and
 # PKCS1v15 signing APIs; it re-exports a compatible `sha2` and `pkcs8` itself
 # (used as `rsa::sha2`/`rsa::pkcs8`) but not `sha1`, hence this alias.
-sha1_10 = { package = "sha1", version = "0.10.6" }
+sha1_10 = { package = "sha1", version = "0.11.0" }
 sha1 = "0.11.0"
 sha2 = "0.11.0"
 signature = "3"
