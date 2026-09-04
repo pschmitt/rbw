@@ -15,7 +15,7 @@ include = ["src/**/*", "bin/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 
 [dependencies]
 aes = "0.8.4"
-aes-gcm = "0.10.3"
+aes-gcm = "0.11.0"
 anyhow = "1.0.100"
 argon2 = "0.5.3"
 arrayvec = "0.7.6"
