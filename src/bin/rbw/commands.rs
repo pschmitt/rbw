@@ -16973,7 +16973,20 @@ pub fn tui_entry_scope(
                 .find(|collection| collection.id == *id)
                 .map_or_else(
                     || id.clone(),
-                    |collection| collection.name.clone(),
+                    |collection| {
+                        // Unlike organization names, collection names are
+                        // encrypted with the org key in the sync response
+                        // (see the comment on `Collection` in db.rs) --
+                        // fall back to the raw (still-encrypted) name
+                        // rather than hiding the collection entirely if a
+                        // stale/missing org key ever makes this fail.
+                        crate::actions::decrypt(
+                            &collection.name,
+                            None,
+                            Some(&collection.org_id),
+                        )
+                        .unwrap_or_else(|_| collection.name.clone())
+                    },
                 )
         })
         .collect();
