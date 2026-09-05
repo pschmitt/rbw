@@ -386,6 +386,13 @@ pub struct App {
 
     // Full per-entry detail, decrypted lazily, keyed by (owning vault, id).
     detail_cache: HashMap<(usize, String), DecryptedCipher>,
+    // Org/collection names for the detail pane, decrypted alongside
+    // `detail_cache` in `ensure_detail` rather than fresh on every draw --
+    // collection names need a decrypt round-trip through the agent same as
+    // any other field, and re-running it every single redraw made the
+    // still-encrypted name visibly flash before the real one landed.
+    // Invalidated everywhere `detail_cache` is.
+    scope_cache: HashMap<(usize, String), commands::TuiEntryScope>,
     pub filter: Input,
     // Indices into the flattened view, filtered by the search term and sorted
     // by (folder, name, user).
@@ -595,6 +602,7 @@ impl App {
             owner: Vec::new(),
             slot: Vec::new(),
             detail_cache: HashMap::new(),
+            scope_cache: HashMap::new(),
             filter: initial_term.map_or_else(Input::default, Input::new),
             filtered: Vec::new(),
             selected: 0,
@@ -733,8 +741,20 @@ impl App {
         ))
     }
 
+    // Reads the cache `ensure_detail` populates instead of calling
+    // `scope_for_index` fresh (falling back to that only if the entry
+    // somehow isn't cached yet, e.g. a decrypt error): the detail pane is
+    // redrawn far more often than the selection actually changes, and
+    // re-decrypting the collection name from scratch on every redraw made
+    // its still-encrypted form visibly flash before the real name landed.
     pub fn current_scope(&self) -> Option<commands::TuiEntryScope> {
-        self.current_index().and_then(|i| self.scope_for_index(i))
+        let i = self.current_index()?;
+        let o = *self.owner.get(i)?;
+        let id = self.search[i].id.clone();
+        self.scope_cache
+            .get(&(o, id))
+            .cloned()
+            .or_else(|| self.scope_for_index(i))
     }
 
     pub fn current_detail(&self) -> Option<&DecryptedCipher> {
@@ -803,6 +823,11 @@ impl App {
         }
         if let Some(decrypted) = &self.vaults[o].decrypted {
             if let Some(detail) = decrypted.get(&id).cloned() {
+                let scope = self.vaults[o].file_save.as_ref().map_or_else(
+                    commands::TuiEntryScope::default,
+                    |target| commands::tui_file_entry_scope(target, &id),
+                );
+                self.scope_cache.insert((o, id.clone()), scope);
                 self.detail_cache.insert((o, id), detail);
             }
             return;
@@ -816,6 +841,9 @@ impl App {
         }
         match commands::decrypt_cipher(&entry) {
             Ok(detail) => {
+                let scope =
+                    commands::tui_entry_scope(&self.vaults[o].db, &entry);
+                self.scope_cache.insert((o, id.clone()), scope);
                 self.detail_cache.insert((o, id), detail);
             }
             Err(e) => self.set_status(Level::Error, format!("{e:#}")),
@@ -1062,6 +1090,7 @@ impl App {
                 self.vaults[owner].db = db;
                 self.vaults[owner].search = search;
                 self.detail_cache.retain(|(o, _), _| *o != owner);
+                self.scope_cache.retain(|(o, _), _| *o != owner);
                 self.rebuild_flat();
                 self.recompute_filter();
                 self.restore_selection(keep);
@@ -1086,6 +1115,7 @@ impl App {
         self.vaults[owner].db.entries = entries;
         self.vaults[owner].search = search;
         self.detail_cache.retain(|(o, _), _| *o != owner);
+        self.scope_cache.retain(|(o, _), _| *o != owner);
         self.rebuild_flat();
         self.recompute_filter();
         self.restore_selection(keep);
@@ -1127,6 +1157,7 @@ impl App {
             }
         }
         self.detail_cache.clear();
+        self.scope_cache.clear();
         self.rebuild_flat();
         self.recompute_filter();
         self.restore_selection(keep);
@@ -1635,6 +1666,7 @@ impl App {
             self.vaults[pos].db = vault.db;
             self.vaults[pos].search = vault.search;
             self.detail_cache.retain(|(o, _), _| *o != pos);
+            self.scope_cache.retain(|(o, _), _| *o != pos);
         } else {
             self.vaults.push(AccountVault {
                 name: vault.account,
@@ -1679,6 +1711,7 @@ impl App {
             });
         }
         self.detail_cache.clear();
+        self.scope_cache.clear();
         self.rebuild_flat();
         self.recompute_filter();
         self.ensure_detail();
@@ -1768,6 +1801,7 @@ impl App {
         // folder) is left alone; it's not secret material and keeping it
         // lets the list stay populated (read-only) while the modal is up.
         self.detail_cache.clear();
+        self.scope_cache.clear();
         // Force anything currently displayed unmasked back to hidden.
         self.reveal = false;
         self.mode = Mode::LockedPrompt(name);
@@ -1779,6 +1813,7 @@ impl App {
     // dismiss-and-retry flow, while a manual screen lock must stay blocking.
     fn show_screen_locked(&mut self, name: String) {
         self.detail_cache.clear();
+        self.scope_cache.clear();
         self.reveal = false;
         self.mode = Mode::ScreenLocked(name);
     }
