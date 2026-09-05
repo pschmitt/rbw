@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.17.6] - 2026-09-05
+
+### Fixed
+
+* TUI: the detail pane's "collection" rows showed the collection's raw
+  encrypted name (e.g. `2.tiYZYAaSuZRJLMJHOpqStw==|...`) instead of its
+  actual name -- unlike organization names, collection names are org-key
+  -encrypted in the sync response, and this one display path never
+  decrypted them.
+* TUI: fixed a visible flash of that same still-encrypted collection name
+  before the real one replaced it, introduced by the fix above -- the
+  detail pane now decrypts the org/collection scope once per entry
+  (alongside the rest of the entry's detail) instead of redoing it on
+  every redraw.
+
 ## [2.17.5] - 2026-09-05
 
 ### Changed
