@@ -156,7 +156,7 @@ pub async fn sync(
     access_token: &str,
     refresh_token: &str,
 ) -> Result<(
-    Option<String>,
+    Option<RefreshedTokens>,
     (
         String,
         String,
@@ -195,9 +195,9 @@ pub async fn purge_vault(
     access_token: &str,
     refresh_token: &str,
     master_password_hash: &crate::locked::PasswordHash,
-) -> Result<Option<String>> {
+) -> Result<Option<RefreshedTokens>> {
     let hash = crate::base64::encode(master_password_hash.hash());
-    let (new_access_token, ()) = with_exchange_refresh_token_async(
+    let (tokens, ()) = with_exchange_refresh_token_async(
         access_token,
         refresh_token,
         move |access_token| {
@@ -209,7 +209,7 @@ pub async fn purge_vault(
         },
     )
     .await?;
-    Ok(new_access_token)
+    Ok(tokens)
 }
 
 async fn purge_vault_once(
@@ -225,9 +225,9 @@ pub async fn delete_org(
     refresh_token: &str,
     org_id: &str,
     master_password_hash: &crate::locked::PasswordHash,
-) -> Result<Option<String>> {
+) -> Result<Option<RefreshedTokens>> {
     let hash = crate::base64::encode(master_password_hash.hash());
-    let (new_access_token, ()) = with_exchange_refresh_token_async(
+    let (tokens, ()) = with_exchange_refresh_token_async(
         access_token,
         refresh_token,
         move |access_token| {
@@ -240,7 +240,7 @@ pub async fn delete_org(
         },
     )
     .await?;
-    Ok(new_access_token)
+    Ok(tokens)
 }
 
 async fn delete_org_once(
@@ -262,7 +262,7 @@ pub async fn create_org(
     billing_email: &str,
     encrypted_key: &str,
     encrypted_collection_name: &str,
-) -> Result<(Option<String>, String)> {
+) -> Result<(Option<RefreshedTokens>, String)> {
     with_exchange_refresh_token_async(
         access_token,
         refresh_token,
@@ -315,7 +315,7 @@ pub fn add(
     fields: &[crate::db::Field],
     notes: Option<&str>,
     folder_id: Option<&str>,
-) -> Result<(Option<String>, String)> {
+) -> Result<(Option<RefreshedTokens>, String)> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         add_once(access_token, name, data, fields, notes, folder_id)
     })
@@ -352,7 +352,7 @@ pub fn import_ciphers(
     access_token: &str,
     refresh_token: &str,
     entries: &[ImportCipherEntry],
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         let (client, _) = api_client()?;
         client.import_ciphers(access_token, entries)
@@ -364,7 +364,7 @@ pub fn import_organization_ciphers(
     refresh_token: &str,
     org_id: &str,
     entries: &[ImportCipherEntry],
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         let (client, _) = api_client()?;
         client.import_organization_ciphers(access_token, org_id, entries)
@@ -383,7 +383,7 @@ pub fn edit(
     notes: Option<&str>,
     folder_uuid: Option<&str>,
     history: &[crate::db::HistoryEntry],
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         edit_once(
             access_token,
@@ -432,7 +432,7 @@ pub fn remove(
     access_token: &str,
     refresh_token: &str,
     id: &str,
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         remove_once(access_token, id)
     })
@@ -448,7 +448,7 @@ pub fn delete_permanently(
     access_token: &str,
     refresh_token: &str,
     id: &str,
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         delete_permanently_once(access_token, id)
     })
@@ -464,7 +464,7 @@ pub fn archive(
     access_token: &str,
     refresh_token: &str,
     id: &str,
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         archive_once(access_token, id)
     })
@@ -480,7 +480,7 @@ pub fn unarchive(
     access_token: &str,
     refresh_token: &str,
     id: &str,
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         unarchive_once(access_token, id)
     })
@@ -496,7 +496,7 @@ pub fn archive_multiple(
     access_token: &str,
     refresh_token: &str,
     ids: &[String],
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         archive_multiple_once(access_token, ids)
     })
@@ -512,7 +512,7 @@ pub fn unarchive_multiple(
     access_token: &str,
     refresh_token: &str,
     ids: &[String],
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         unarchive_multiple_once(access_token, ids)
     })
@@ -528,7 +528,7 @@ pub fn restore(
     access_token: &str,
     refresh_token: &str,
     id: &str,
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         restore_once(access_token, id)
     })
@@ -544,7 +544,7 @@ pub fn restore_multiple(
     access_token: &str,
     refresh_token: &str,
     ids: &[String],
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         restore_multiple_once(access_token, ids)
     })
@@ -561,7 +561,7 @@ pub fn edit_collections(
     refresh_token: &str,
     id: &str,
     collection_ids: &[String],
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         edit_collections_once(access_token, id, collection_ids)
     })
@@ -582,7 +582,7 @@ pub fn attachment_url(
     refresh_token: &str,
     cipher_id: &str,
     attachment_id: &str,
-) -> Result<(Option<String>, String)> {
+) -> Result<(Option<RefreshedTokens>, String)> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         attachment_url_once(access_token, cipher_id, attachment_id)
     })
@@ -607,7 +607,7 @@ pub fn delete_attachment(
     refresh_token: &str,
     cipher_id: &str,
     attachment_id: &str,
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         delete_attachment_once(access_token, cipher_id, attachment_id)
     })
@@ -629,7 +629,7 @@ pub fn create_attachment(
     encrypted_filename: &str,
     encrypted_key: &str,
     encrypted_data: &[u8],
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         create_attachment_once(
             access_token,
@@ -665,7 +665,7 @@ pub fn rename_org(
     org_id: &str,
     name: &str,
     billing_email: &str,
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         rename_org_once(access_token, org_id, name, billing_email)
     })
@@ -688,7 +688,7 @@ pub fn rename_collection(
     org_id: &str,
     collection_id: &str,
     encrypted_name: &str,
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         rename_collection_once(
             access_token,
@@ -720,7 +720,7 @@ pub fn create_collection(
     refresh_token: &str,
     org_id: &str,
     encrypted_name: &str,
-) -> Result<(Option<String>, String)> {
+) -> Result<(Option<RefreshedTokens>, String)> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         create_collection_once(access_token, org_id, encrypted_name)
     })
@@ -740,7 +740,7 @@ pub fn delete_collection(
     refresh_token: &str,
     org_id: &str,
     collection_id: &str,
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         delete_collection_once(access_token, org_id, collection_id)
     })
@@ -759,7 +759,7 @@ pub fn org_users(
     access_token: &str,
     refresh_token: &str,
     org_id: &str,
-) -> Result<(Option<String>, Vec<crate::api::OrgUser>)> {
+) -> Result<(Option<RefreshedTokens>, Vec<crate::api::OrgUser>)> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         org_users_once(access_token, org_id)
     })
@@ -779,7 +779,7 @@ pub fn invite_org_user(
     org_id: &str,
     email: &str,
     role: i32,
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         invite_org_user_once(access_token, org_id, email, role)
     })
@@ -800,7 +800,7 @@ pub fn remove_org_user(
     refresh_token: &str,
     org_id: &str,
     user_id: &str,
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         remove_org_user_once(access_token, org_id, user_id)
     })
@@ -821,7 +821,7 @@ pub fn accept_org_invite(
     org_id: &str,
     user_id: &str,
     token: &str,
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         accept_org_invite_once(access_token, org_id, user_id, token)
     })
@@ -841,7 +841,7 @@ pub fn user_public_key(
     access_token: &str,
     refresh_token: &str,
     user_id: &str,
-) -> Result<(Option<String>, String)> {
+) -> Result<(Option<RefreshedTokens>, String)> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         user_public_key_once(access_token, user_id)
     })
@@ -858,8 +858,8 @@ pub async fn confirm_org_user(
     org_id: &str,
     user_id: &str,
     encrypted_key: &str,
-) -> Result<Option<String>> {
-    let (new_access_token, ()) = with_exchange_refresh_token_async(
+) -> Result<Option<RefreshedTokens>> {
+    let (tokens, ()) = with_exchange_refresh_token_async(
         access_token,
         refresh_token,
         move |access_token| {
@@ -879,7 +879,7 @@ pub async fn confirm_org_user(
         },
     )
     .await?;
-    Ok(new_access_token)
+    Ok(tokens)
 }
 
 async fn confirm_org_user_once(
@@ -898,7 +898,7 @@ pub fn collections_details(
     access_token: &str,
     refresh_token: &str,
     org_id: &str,
-) -> Result<(Option<String>, Vec<crate::api::CollectionDetail>)> {
+) -> Result<(Option<RefreshedTokens>, Vec<crate::api::CollectionDetail>)> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         collections_details_once(access_token, org_id)
     })
@@ -921,7 +921,7 @@ pub fn set_collection_users(
     external_id: Option<&str>,
     groups: &[serde_json::Value],
     users: &[crate::api::CollectionUser],
-) -> Result<(Option<String>, ())> {
+) -> Result<(Option<RefreshedTokens>, ())> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         set_collection_users_once(
             access_token,
@@ -959,7 +959,7 @@ fn set_collection_users_once(
 pub fn list_folders(
     access_token: &str,
     refresh_token: &str,
-) -> Result<(Option<String>, Vec<(String, String)>)> {
+) -> Result<(Option<RefreshedTokens>, Vec<(String, String)>)> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         list_folders_once(access_token)
     })
@@ -974,7 +974,7 @@ pub fn create_folder(
     access_token: &str,
     refresh_token: &str,
     name: &str,
-) -> Result<(Option<String>, String)> {
+) -> Result<(Option<RefreshedTokens>, String)> {
     with_exchange_refresh_token(access_token, refresh_token, |access_token| {
         create_folder_once(access_token, name)
     })
@@ -985,20 +985,30 @@ fn create_folder_once(access_token: &str, name: &str) -> Result<String> {
     client.create_folder(access_token, name)
 }
 
+/// Tokens returned by a successful refresh.
+///
+/// `refresh_token` is `None` against servers that do not rotate it, in which
+/// case the stored one stays valid and should be left alone.
+#[derive(Debug, Clone)]
+pub struct RefreshedTokens {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+}
+
 fn with_exchange_refresh_token<F, T>(
     access_token: &str,
     refresh_token: &str,
     f: F,
-) -> Result<(Option<String>, T)>
+) -> Result<(Option<RefreshedTokens>, T)>
 where
     F: Fn(&str) -> Result<T>,
 {
     match f(access_token) {
         Ok(t) => Ok((None, t)),
         Err(Error::RequestUnauthorized) => {
-            let access_token = exchange_refresh_token(refresh_token)?;
-            let t = f(&access_token)?;
-            Ok((Some(access_token), t))
+            let tokens = exchange_refresh_token(refresh_token)?;
+            let t = f(&tokens.access_token)?;
+            Ok((Some(tokens), t))
         }
         Err(e) => Err(e),
     }
@@ -1008,7 +1018,7 @@ async fn with_exchange_refresh_token_async<F, T>(
     access_token: &str,
     refresh_token: &str,
     f: F,
-) -> Result<(Option<String>, T)>
+) -> Result<(Option<RefreshedTokens>, T)>
 where
     F: Fn(
             &str,
@@ -1021,23 +1031,34 @@ where
     match f(access_token).await {
         Ok(t) => Ok((None, t)),
         Err(Error::RequestUnauthorized) => {
-            let access_token =
-                exchange_refresh_token_async(refresh_token).await?;
-            let t = f(&access_token).await?;
-            Ok((Some(access_token), t))
+            let tokens = exchange_refresh_token_async(refresh_token).await?;
+            let t = f(&tokens.access_token).await?;
+            Ok((Some(tokens), t))
         }
         Err(e) => Err(e),
     }
 }
 
-fn exchange_refresh_token(refresh_token: &str) -> Result<String> {
+fn exchange_refresh_token(refresh_token: &str) -> Result<RefreshedTokens> {
     let (client, _) = api_client()?;
-    client.exchange_refresh_token(refresh_token)
+    let (access_token, refresh_token) =
+        client.exchange_refresh_token(refresh_token)?;
+    Ok(RefreshedTokens {
+        access_token,
+        refresh_token,
+    })
 }
 
-async fn exchange_refresh_token_async(refresh_token: &str) -> Result<String> {
+async fn exchange_refresh_token_async(
+    refresh_token: &str,
+) -> Result<RefreshedTokens> {
     let (client, _) = api_client()?;
-    client.exchange_refresh_token_async(refresh_token).await
+    let (access_token, refresh_token) =
+        client.exchange_refresh_token_async(refresh_token).await?;
+    Ok(RefreshedTokens {
+        access_token,
+        refresh_token,
+    })
 }
 
 tokio::task_local! {

@@ -4470,9 +4470,12 @@ pub fn attachment_get(
         &entry.id,
         &attachment.id,
     ) {
-        Ok((new_access_token, url)) => {
-            if let Some(new_access_token) = new_access_token {
-                db.access_token = Some(new_access_token);
+        Ok((tokens, url)) => {
+            if let Some(tokens) = tokens {
+                db.access_token = Some(tokens.access_token);
+                if let Some(refresh_token) = tokens.refresh_token {
+                    db.refresh_token = Some(refresh_token);
+                }
                 save_db(&db)?;
             }
             url
@@ -4666,7 +4669,7 @@ pub fn attachment_create(
             entry.org_id.as_deref(),
         )?;
 
-    if let (Some(new_token), ()) = rbw::actions::create_attachment(
+    if let (Some(tokens), ()) = rbw::actions::create_attachment(
         &access_token,
         &refresh_token,
         &entry.id,
@@ -4674,7 +4677,10 @@ pub fn attachment_create(
         &encrypted_key,
         &encrypted_data,
     )? {
-        db.access_token = Some(new_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -4859,13 +4865,16 @@ pub fn attachment_rm(
         }
     }
 
-    if let (Some(new_token), ()) = rbw::actions::delete_attachment(
+    if let (Some(tokens), ()) = rbw::actions::delete_attachment(
         &access_token,
         &refresh_token,
         &entry.id,
         &attachment_id,
     )? {
-        db.access_token = Some(new_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -5606,7 +5615,7 @@ pub fn generate(
         // unwrap is safe here because the call to unlock above is guaranteed
         // to populate these or error
         let mut access_token = db.access_token.as_ref().unwrap().clone();
-        let refresh_token = db.refresh_token.as_ref().unwrap();
+        let mut refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
         let name = crate::actions::encrypt(name, None, None)?;
         let username = username
@@ -5625,11 +5634,15 @@ pub fn generate(
 
         let mut folder_id = None;
         if let Some(folder_name) = folder {
-            let (new_access_token, folders) =
-                rbw::actions::list_folders(&access_token, refresh_token)?;
-            if let Some(new_access_token) = new_access_token {
-                access_token.clone_from(&new_access_token);
-                db.access_token = Some(new_access_token);
+            let (tokens, folders) =
+                rbw::actions::list_folders(&access_token, &refresh_token)?;
+            if let Some(tokens) = tokens {
+                access_token = tokens.access_token;
+                db.access_token = Some(access_token.clone());
+                if let Some(new_refresh_token) = tokens.refresh_token {
+                    refresh_token = new_refresh_token;
+                    db.refresh_token = Some(refresh_token.clone());
+                }
                 save_db(&db)?;
             }
 
@@ -5647,23 +5660,27 @@ pub fn generate(
                 }
             }
             if folder_id.is_none() {
-                let (new_access_token, id) = rbw::actions::create_folder(
+                let (tokens, id) = rbw::actions::create_folder(
                     &access_token,
-                    refresh_token,
+                    &refresh_token,
                     &crate::actions::encrypt(folder_name, None, None)?,
                 )?;
-                if let Some(new_access_token) = new_access_token {
-                    access_token.clone_from(&new_access_token);
-                    db.access_token = Some(new_access_token);
+                if let Some(tokens) = tokens {
+                    access_token = tokens.access_token;
+                    db.access_token = Some(access_token.clone());
+                    if let Some(new_refresh_token) = tokens.refresh_token {
+                        refresh_token = new_refresh_token;
+                        db.refresh_token = Some(refresh_token.clone());
+                    }
                     save_db(&db)?;
                 }
                 folder_id = Some(id);
             }
         }
 
-        if let (Some(access_token), _) = rbw::actions::add(
+        if let (Some(tokens), _) = rbw::actions::add(
             &access_token,
-            refresh_token,
+            &refresh_token,
             &name,
             &rbw::db::EntryData::Login {
                 username,
@@ -5676,7 +5693,10 @@ pub fn generate(
             None,
             folder_id.as_deref(),
         )? {
-            db.access_token = Some(access_token);
+            db.access_token = Some(tokens.access_token);
+            if let Some(refresh_token) = tokens.refresh_token {
+                db.refresh_token = Some(refresh_token);
+            }
             save_db(&db)?;
         }
 
@@ -6035,8 +6055,11 @@ pub fn remove(
     } else {
         rbw::actions::remove(access_token, refresh_token, &entry.id)?
     };
-    if let (Some(access_token), ()) = rotated {
-        db.access_token = Some(access_token);
+    if let (Some(tokens), ()) = rotated {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -6413,8 +6436,11 @@ fn archive_or_unarchive(
                 &ids,
             )?
         };
-        if let (Some(access_token), ()) = rotated {
-            db.access_token = Some(access_token);
+        if let (Some(tokens), ()) = rotated {
+            db.access_token = Some(tokens.access_token);
+            if let Some(refresh_token) = tokens.refresh_token {
+                db.refresh_token = Some(refresh_token);
+            }
             save_db(&db)?;
         }
 
@@ -6480,8 +6506,11 @@ fn archive_or_unarchive(
     } else {
         rbw::actions::unarchive(access_token, refresh_token, &entry.id)?
     };
-    if let (Some(access_token), ()) = rotated {
-        db.access_token = Some(access_token);
+    if let (Some(tokens), ()) = rotated {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -6737,10 +6766,13 @@ pub fn restore(
         let ids: Vec<String> =
             pending.iter().map(|(entry, _)| entry.id.clone()).collect();
 
-        if let (Some(access_token), ()) =
+        if let (Some(tokens), ()) =
             rbw::actions::restore_multiple(access_token, refresh_token, &ids)?
         {
-            db.access_token = Some(access_token);
+            db.access_token = Some(tokens.access_token);
+            if let Some(refresh_token) = tokens.refresh_token {
+                db.refresh_token = Some(refresh_token);
+            }
             save_db(&db)?;
         }
 
@@ -6789,10 +6821,13 @@ pub fn restore(
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
 
-    if let (Some(access_token), ()) =
+    if let (Some(tokens), ()) =
         rbw::actions::restore(access_token, refresh_token, &entry.id)?
     {
-        db.access_token = Some(access_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -7054,7 +7089,7 @@ fn edit_structured(
         entry.folder_id.clone()
     };
 
-    if let (Some(new_token), ()) = rbw::actions::edit(
+    if let (Some(tokens), ()) = rbw::actions::edit(
         &access_token,
         &refresh_token,
         &entry.id,
@@ -7067,7 +7102,10 @@ fn edit_structured(
         folder_id.as_deref(),
         &history,
     )? {
-        db.access_token = Some(new_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -7190,7 +7228,7 @@ fn add_structured(
         None
     };
 
-    if let (Some(new_token), _) = rbw::actions::add(
+    if let (Some(tokens), _) = rbw::actions::add(
         &access_token,
         &refresh_token,
         &encrypted_name,
@@ -7199,7 +7237,10 @@ fn add_structured(
         encrypted_notes.as_deref(),
         folder_id.as_deref(),
     )? {
-        db.access_token = Some(new_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -8034,7 +8075,7 @@ fn apply_entry_update(
     };
 
     if has_field_changes {
-        if let (Some(new_token), ()) = rbw::actions::edit(
+        if let (Some(tokens), ()) = rbw::actions::edit(
             &access_token,
             &refresh_token,
             &entry.id,
@@ -8047,7 +8088,10 @@ fn apply_entry_update(
             entry.folder_id.as_deref(),
             &history,
         )? {
-            db.access_token = Some(new_token);
+            db.access_token = Some(tokens.access_token);
+            if let Some(refresh_token) = tokens.refresh_token {
+                db.refresh_token = Some(refresh_token);
+            }
             save_db(db)?;
         }
     }
@@ -8070,7 +8114,7 @@ fn apply_entry_update(
                 entry.key.as_deref(),
                 entry.org_id.as_deref(),
             )?;
-        if let (Some(new_token), ()) = rbw::actions::create_attachment(
+        if let (Some(tokens), ()) = rbw::actions::create_attachment(
             &access_token,
             &refresh_token,
             &entry.id,
@@ -8078,7 +8122,10 @@ fn apply_entry_update(
             &encrypted_key,
             &encrypted_data,
         )? {
-            db.access_token = Some(new_token);
+            db.access_token = Some(tokens.access_token);
+            if let Some(refresh_token) = tokens.refresh_token {
+                db.refresh_token = Some(refresh_token);
+            }
             save_db(db)?;
         }
     }
@@ -8400,10 +8447,13 @@ fn resolve_folder_id(
     refresh_token: &str,
     folder_name: &str,
 ) -> anyhow::Result<Option<String>> {
-    let (new_access_token, folders) =
+    let (tokens, folders) =
         rbw::actions::list_folders(access_token, refresh_token)?;
-    if let Some(new_access_token) = new_access_token {
-        db.access_token = Some(new_access_token);
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(db)?;
     }
     let access_token = db.access_token.as_deref().unwrap();
@@ -8423,13 +8473,16 @@ fn resolve_folder_id(
         }
     }
 
-    let (new_access_token, id) = rbw::actions::create_folder(
+    let (tokens, id) = rbw::actions::create_folder(
         access_token,
         refresh_token_str,
         &crate::actions::encrypt(folder_name, None, None)?,
     )?;
-    if let Some(new_access_token) = new_access_token {
-        db.access_token = Some(new_access_token);
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(db)?;
     }
     Ok(Some(id))
@@ -8564,9 +8617,12 @@ fn export_attachments(
             &entry.id,
             &attachment.id,
         ) {
-            Ok((new_access_token, url)) => {
-                if let Some(new_access_token) = new_access_token {
-                    db.access_token = Some(new_access_token);
+            Ok((tokens, url)) => {
+                if let Some(tokens) = tokens {
+                    db.access_token = Some(tokens.access_token);
+                    if let Some(refresh_token) = tokens.refresh_token {
+                        db.refresh_token = Some(refresh_token);
+                    }
                     save_db(db)?;
                 }
                 url
@@ -10765,7 +10821,7 @@ fn to_exported_entry(
 fn upload_imported_attachments(
     db: &mut rbw::db::Db,
     access_token: &mut String,
-    refresh_token: &str,
+    refresh_token: &mut String,
     entry: &rbw::db::Entry,
     attachments: &[serde_json::Value],
     skip_names: &std::collections::HashSet<String>,
@@ -10853,10 +10909,14 @@ fn upload_imported_attachments(
             &encrypted_key,
             &encrypted_data,
         ) {
-            Ok((new_token, ())) => {
-                if let Some(new_token) = new_token {
-                    access_token.clone_from(&new_token);
-                    db.access_token = Some(new_token);
+            Ok((tokens, ())) => {
+                if let Some(tokens) = tokens {
+                    access_token.clone_from(&tokens.access_token);
+                    db.access_token = Some(tokens.access_token);
+                    if let Some(new_refresh_token) = tokens.refresh_token {
+                        refresh_token.clone_from(&new_refresh_token);
+                        db.refresh_token = Some(new_refresh_token);
+                    }
                     save_db(db)?;
                 }
                 restored += 1;
@@ -10887,7 +10947,7 @@ fn upload_imported_attachments(
 fn apply_imported_status(
     db: &mut rbw::db::Db,
     access_token: &mut String,
-    refresh_token: &str,
+    refresh_token: &mut String,
     id: &str,
     mut archived: bool,
     mut deleted: bool,
@@ -10895,36 +10955,48 @@ fn apply_imported_status(
     target_deleted: bool,
 ) -> anyhow::Result<()> {
     if deleted && (!target_deleted || archived != target_archived) {
-        let (new_token, ()) =
+        let (tokens, ()) =
             rbw::actions::restore(access_token, refresh_token, id)?;
-        if let Some(new_token) = new_token {
-            access_token.clone_from(&new_token);
-            db.access_token = Some(new_token);
+        if let Some(tokens) = tokens {
+            access_token.clone_from(&tokens.access_token);
+            db.access_token = Some(tokens.access_token);
+            if let Some(new_refresh_token) = tokens.refresh_token {
+                refresh_token.clone_from(&new_refresh_token);
+                db.refresh_token = Some(new_refresh_token);
+            }
             save_db(db)?;
         }
         deleted = false;
     }
 
     if archived != target_archived {
-        let (new_token, ()) = if target_archived {
+        let (tokens, ()) = if target_archived {
             rbw::actions::archive(access_token, refresh_token, id)?
         } else {
             rbw::actions::unarchive(access_token, refresh_token, id)?
         };
-        if let Some(new_token) = new_token {
-            access_token.clone_from(&new_token);
-            db.access_token = Some(new_token);
+        if let Some(tokens) = tokens {
+            access_token.clone_from(&tokens.access_token);
+            db.access_token = Some(tokens.access_token);
+            if let Some(new_refresh_token) = tokens.refresh_token {
+                refresh_token.clone_from(&new_refresh_token);
+                db.refresh_token = Some(new_refresh_token);
+            }
             save_db(db)?;
         }
         archived = target_archived;
     }
 
     if deleted != target_deleted {
-        let (new_token, ()) =
+        let (tokens, ()) =
             rbw::actions::remove(access_token, refresh_token, id)?;
-        if let Some(new_token) = new_token {
-            access_token.clone_from(&new_token);
-            db.access_token = Some(new_token);
+        if let Some(tokens) = tokens {
+            access_token.clone_from(&tokens.access_token);
+            db.access_token = Some(tokens.access_token);
+            if let Some(new_refresh_token) = tokens.refresh_token {
+                refresh_token.clone_from(&new_refresh_token);
+                db.refresh_token = Some(new_refresh_token);
+            }
             save_db(db)?;
         }
         deleted = true;
@@ -10970,7 +11042,7 @@ fn import_create_entry(
         None
     };
 
-    let (new_token, new_entry_id) = rbw::actions::add(
+    let (tokens, new_entry_id) = rbw::actions::add(
         access_token,
         refresh_token,
         &encrypted_name,
@@ -10979,9 +11051,13 @@ fn import_create_entry(
         encrypted_notes.as_deref(),
         folder_id.as_deref(),
     )?;
-    if let Some(new_token) = new_token {
-        access_token.clone_from(&new_token);
-        db.access_token = Some(new_token);
+    if let Some(tokens) = tokens {
+        access_token.clone_from(&tokens.access_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(new_refresh_token) = tokens.refresh_token {
+            refresh_token.clone_from(&new_refresh_token);
+            db.refresh_token = Some(new_refresh_token);
+        }
         save_db(db)?;
     }
 
@@ -11006,7 +11082,7 @@ fn import_create_entry(
         let history =
             imported_history_to_encrypted(&imported.history, None, org_id)?;
 
-        if let (Some(new_token), ()) = rbw::actions::edit(
+        if let (Some(tokens), ()) = rbw::actions::edit(
             access_token,
             refresh_token,
             &new_entry_id,
@@ -11019,8 +11095,12 @@ fn import_create_entry(
             folder_id.as_deref(),
             &history,
         )? {
-            access_token.clone_from(&new_token);
-            db.access_token = Some(new_token);
+            access_token.clone_from(&tokens.access_token);
+            db.access_token = Some(tokens.access_token);
+            if let Some(new_refresh_token) = tokens.refresh_token {
+                refresh_token.clone_from(&new_refresh_token);
+                db.refresh_token = Some(new_refresh_token);
+            }
             save_db(db)?;
         }
     }
@@ -11032,14 +11112,18 @@ fn import_create_entry(
             .filter_map(|id| collection_id_map.get(id).cloned())
             .collect();
         if !resolved_collections.is_empty() {
-            if let (Some(new_token), ()) = rbw::actions::edit_collections(
+            if let (Some(tokens), ()) = rbw::actions::edit_collections(
                 access_token,
                 refresh_token,
                 &new_entry_id,
                 &resolved_collections,
             )? {
-                access_token.clone_from(&new_token);
-                db.access_token = Some(new_token);
+                access_token.clone_from(&tokens.access_token);
+                db.access_token = Some(tokens.access_token);
+                if let Some(new_refresh_token) = tokens.refresh_token {
+                    refresh_token.clone_from(&new_refresh_token);
+                    db.refresh_token = Some(new_refresh_token);
+                }
                 save_db(db)?;
             }
         }
@@ -11131,7 +11215,7 @@ fn import_overwrite_entry(
         existing.folder_id.clone()
     };
 
-    if let (Some(new_token), ()) = rbw::actions::edit(
+    if let (Some(tokens), ()) = rbw::actions::edit(
         access_token,
         refresh_token,
         &existing.id,
@@ -11144,8 +11228,12 @@ fn import_overwrite_entry(
         folder_id.as_deref(),
         &history,
     )? {
-        access_token.clone_from(&new_token);
-        db.access_token = Some(new_token);
+        access_token.clone_from(&tokens.access_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(new_refresh_token) = tokens.refresh_token {
+            refresh_token.clone_from(&new_refresh_token);
+            db.refresh_token = Some(new_refresh_token);
+        }
         save_db(db)?;
     }
 
@@ -11541,10 +11629,14 @@ fn bulk_create_batch(
                 attachments_failed + af2,
             ));
         }
-        Ok((new_token, ())) => {
-            if let Some(new_token) = new_token {
-                access_token.clone_from(&new_token);
-                db.access_token = Some(new_token);
+        Ok((tokens, ())) => {
+            if let Some(tokens) = tokens {
+                access_token.clone_from(&tokens.access_token);
+                db.access_token = Some(tokens.access_token);
+                if let Some(new_refresh_token) = tokens.refresh_token {
+                    refresh_token.clone_from(&new_refresh_token);
+                    db.refresh_token = Some(new_refresh_token);
+                }
                 save_db(db)?;
             }
         }
@@ -11891,10 +11983,14 @@ fn import_vault(
             &imported_col.org_id,
             &encrypted_name,
         ) {
-            Ok((new_token, new_id)) => {
-                if let Some(new_token) = new_token {
-                    access_token.clone_from(&new_token);
-                    db.access_token = Some(new_token);
+            Ok((tokens, new_id)) => {
+                if let Some(tokens) = tokens {
+                    access_token.clone_from(&tokens.access_token);
+                    db.access_token = Some(tokens.access_token);
+                    if let Some(new_refresh_token) = tokens.refresh_token {
+                        refresh_token.clone_from(&new_refresh_token);
+                        db.refresh_token = Some(new_refresh_token);
+                    }
                     save_db(&db)?;
                 }
                 if let Some(orig_id) = &imported_col.id {
@@ -12180,7 +12276,7 @@ fn purge_collection_entries(
 ) -> anyhow::Result<()> {
     let mut db = load_db()?;
     let mut access_token = db.access_token.as_ref().unwrap().clone();
-    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+    let mut refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
     let dest_org_id = dest_org
         .map(|needle| {
@@ -12231,9 +12327,13 @@ fn purge_collection_entries(
             &refresh_token,
             &entry.id,
         ) {
-            Ok((Some(new_token), ())) => {
-                access_token.clone_from(&new_token);
-                db.access_token = Some(new_token);
+            Ok((Some(tokens), ())) => {
+                access_token.clone_from(&tokens.access_token);
+                db.access_token = Some(tokens.access_token);
+                if let Some(new_refresh_token) = tokens.refresh_token {
+                    refresh_token.clone_from(&new_refresh_token);
+                    db.refresh_token = Some(new_refresh_token);
+                }
                 save_db(&db)?;
             }
             Ok((None, ())) => {}
@@ -12673,14 +12773,17 @@ fn ensure_destination_collection(
         .refresh_token
         .as_ref()
         .context("destination account has no refresh token")?;
-    let (new_access_token, _) = rbw::actions::create_collection(
+    let (tokens, _) = rbw::actions::create_collection(
         access_token,
         refresh_token,
         &org_id,
         &encrypted_name,
     )?;
-    if let Some(new_access_token) = new_access_token {
-        db.access_token = Some(new_access_token);
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
     crate::actions::sync()?;
@@ -12875,7 +12978,7 @@ fn move_entry_to_personal(
     entry: &rbw::db::Entry,
     decrypted: &DecryptedCipher,
     access_token: &mut String,
-    refresh_token: &str,
+    refresh_token: &mut String,
     db: &mut rbw::db::Db,
 ) -> anyhow::Result<()> {
     let editable = decrypted_to_editable(decrypted);
@@ -12887,7 +12990,7 @@ fn move_entry_to_personal(
         .map(|n| crate::actions::encrypt(n, None, None))
         .transpose()?;
 
-    let (new_token, new_entry_id) = rbw::actions::add(
+    let (tokens, new_entry_id) = rbw::actions::add(
         access_token,
         refresh_token,
         &encrypted_name,
@@ -12896,9 +12999,13 @@ fn move_entry_to_personal(
         encrypted_notes.as_deref(),
         entry.folder_id.as_deref(),
     )?;
-    if let Some(new_token) = new_token {
-        access_token.clone_from(&new_token);
-        db.access_token = Some(new_token);
+    if let Some(tokens) = tokens {
+        access_token.clone_from(&tokens.access_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(new_refresh_token) = tokens.refresh_token {
+            refresh_token.clone_from(&new_refresh_token);
+            db.refresh_token = Some(new_refresh_token);
+        }
         save_db(db)?;
     }
 
@@ -12918,7 +13025,7 @@ fn move_entry_to_personal(
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        if let (Some(new_token), ()) = rbw::actions::edit(
+        if let (Some(tokens), ()) = rbw::actions::edit(
             access_token,
             refresh_token,
             &new_entry_id,
@@ -12931,19 +13038,27 @@ fn move_entry_to_personal(
             entry.folder_id.as_deref(),
             &history,
         )? {
-            access_token.clone_from(&new_token);
-            db.access_token = Some(new_token);
+            access_token.clone_from(&tokens.access_token);
+            db.access_token = Some(tokens.access_token);
+            if let Some(new_refresh_token) = tokens.refresh_token {
+                refresh_token.clone_from(&new_refresh_token);
+                db.refresh_token = Some(new_refresh_token);
+            }
             save_db(db)?;
         }
     }
 
-    if let (Some(new_token), ()) = rbw::actions::delete_permanently(
+    if let (Some(tokens), ()) = rbw::actions::delete_permanently(
         access_token,
         refresh_token,
         &entry.id,
     )? {
-        access_token.clone_from(&new_token);
-        db.access_token = Some(new_token);
+        access_token.clone_from(&tokens.access_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(new_refresh_token) = tokens.refresh_token {
+            refresh_token.clone_from(&new_refresh_token);
+            db.refresh_token = Some(new_refresh_token);
+        }
         save_db(db)?;
     }
 
@@ -13072,7 +13187,7 @@ pub fn assign_collections(
     };
 
     let mut access_token = db.access_token.as_ref().unwrap().clone();
-    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+    let mut refresh_token = db.refresh_token.as_ref().unwrap().clone();
     let all_collections = decrypt_collections(&db)?;
 
     let mut failed = 0_usize;
@@ -13116,7 +13231,7 @@ pub fn assign_collections(
                 entry,
                 decrypted,
                 &mut access_token,
-                &refresh_token,
+                &mut refresh_token,
                 &mut db,
             ) {
                 Ok(()) => {
@@ -13174,10 +13289,14 @@ pub fn assign_collections(
             &entry.id,
             &collection_ids,
         ) {
-            Ok((new_access_token, ())) => {
-                if let Some(new_access_token) = new_access_token {
-                    access_token.clone_from(&new_access_token);
-                    db.access_token = Some(new_access_token);
+            Ok((tokens, ())) => {
+                if let Some(tokens) = tokens {
+                    access_token.clone_from(&tokens.access_token);
+                    db.access_token = Some(tokens.access_token);
+                    if let Some(new_refresh_token) = tokens.refresh_token {
+                        refresh_token.clone_from(&new_refresh_token);
+                        db.refresh_token = Some(new_refresh_token);
+                    }
                     save_db(&db)?;
                 }
                 pb.println(format!(
@@ -13320,7 +13439,7 @@ pub fn unassign_collections(
     };
 
     let mut access_token = db.access_token.as_ref().unwrap().clone();
-    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+    let mut refresh_token = db.refresh_token.as_ref().unwrap().clone();
     let all_collections = decrypt_collections(&db)?;
 
     let mut failed = 0_usize;
@@ -13383,10 +13502,14 @@ pub fn unassign_collections(
             &entry.id,
             &new_ids,
         ) {
-            Ok((new_access_token, ())) => {
-                if let Some(new_access_token) = new_access_token {
-                    access_token.clone_from(&new_access_token);
-                    db.access_token = Some(new_access_token);
+            Ok((tokens, ())) => {
+                if let Some(tokens) = tokens {
+                    access_token.clone_from(&tokens.access_token);
+                    db.access_token = Some(tokens.access_token);
+                    if let Some(new_refresh_token) = tokens.refresh_token {
+                        refresh_token.clone_from(&new_refresh_token);
+                        db.refresh_token = Some(new_refresh_token);
+                    }
                     save_db(&db)?;
                 }
                 pb.println(format!(
@@ -13439,14 +13562,17 @@ pub fn create_collection(
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
 
-    let (new_access_token, id) = rbw::actions::create_collection(
+    let (tokens, id) = rbw::actions::create_collection(
         access_token,
         refresh_token,
         &org_id,
         &encrypted_name,
     )?;
-    if let Some(new_access_token) = new_access_token {
-        db.access_token = Some(new_access_token);
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -13482,13 +13608,16 @@ pub fn delete_collection(
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
 
-    if let (Some(access_token), ()) = rbw::actions::delete_collection(
+    if let (Some(tokens), ()) = rbw::actions::delete_collection(
         access_token,
         refresh_token,
         &org_id,
         &collection.id,
     )? {
-        db.access_token = Some(access_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -13574,14 +13703,17 @@ pub fn rename_org(org_id: Option<&str>, name: &str) -> anyhow::Result<()> {
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
 
-    if let (Some(access_token), ()) = rbw::actions::rename_org(
+    if let (Some(tokens), ()) = rbw::actions::rename_org(
         access_token,
         refresh_token,
         &org_id,
         name,
         &billing_email,
     )? {
-        db.access_token = Some(access_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -13608,14 +13740,17 @@ pub fn rename_collection(
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
 
-    if let (Some(access_token), ()) = rbw::actions::rename_collection(
+    if let (Some(tokens), ()) = rbw::actions::rename_collection(
         access_token,
         refresh_token,
         &org_id,
         &collection.id,
         &encrypted_name,
     )? {
-        db.access_token = Some(access_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -13876,15 +14011,18 @@ pub fn accept_org_invite(
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
 
-    let (new_access_token, ()) = rbw::actions::accept_org_invite(
+    let (tokens, ()) = rbw::actions::accept_org_invite(
         access_token,
         refresh_token,
         &org_id,
         &user_id,
         &token,
     )?;
-    if let Some(new_access_token) = new_access_token {
-        db.access_token = Some(new_access_token);
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -13962,15 +14100,18 @@ pub fn invite_org_user(
     let access_token = db.access_token.as_ref().unwrap();
     let refresh_token = db.refresh_token.as_ref().unwrap();
 
-    let (new_access_token, ()) = rbw::actions::invite_org_user(
+    let (tokens, ()) = rbw::actions::invite_org_user(
         access_token,
         refresh_token,
         &org_id,
         email,
         role,
     )?;
-    if let Some(new_access_token) = new_access_token {
-        db.access_token = Some(new_access_token);
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -13993,13 +14134,17 @@ pub fn remove_org_user(
     let org_id = resolve_org(&db, org_id)?;
 
     let mut access_token = db.access_token.as_ref().unwrap().clone();
-    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+    let mut refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
-    let (new_access_token, users) =
+    let (tokens, users) =
         rbw::actions::org_users(&access_token, &refresh_token, &org_id)?;
-    if let Some(new_access_token) = new_access_token {
-        access_token.clone_from(&new_access_token);
-        db.access_token = Some(new_access_token);
+    if let Some(tokens) = tokens {
+        access_token.clone_from(&tokens.access_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(new_refresh_token) = tokens.refresh_token {
+            refresh_token.clone_from(&new_refresh_token);
+            db.refresh_token = Some(new_refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -14020,14 +14165,17 @@ pub fn remove_org_user(
         return Ok(());
     }
 
-    let (new_access_token, ()) = rbw::actions::remove_org_user(
+    let (tokens, ()) = rbw::actions::remove_org_user(
         &access_token,
         &refresh_token,
         &org_id,
         &target.id,
     )?;
-    if let Some(new_access_token) = new_access_token {
-        db.access_token = Some(new_access_token);
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -14056,13 +14204,17 @@ pub fn confirm_org_user(
     let org_id = resolve_org(&db, org_id)?;
 
     let mut access_token = db.access_token.as_ref().unwrap().clone();
-    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+    let mut refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
-    let (new_access_token, users) =
+    let (tokens, users) =
         rbw::actions::org_users(&access_token, &refresh_token, &org_id)?;
-    if let Some(new_access_token) = new_access_token {
-        access_token.clone_from(&new_access_token);
-        db.access_token = Some(new_access_token);
+    if let Some(tokens) = tokens {
+        access_token.clone_from(&tokens.access_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(new_refresh_token) = tokens.refresh_token {
+            refresh_token.clone_from(&new_refresh_token);
+            db.refresh_token = Some(new_refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -14085,14 +14237,16 @@ pub fn confirm_org_user(
         )
     })?;
 
-    let (new_access_token, public_key_der_b64) =
-        rbw::actions::user_public_key(
-            &access_token,
-            &refresh_token,
-            target_user_id,
-        )?;
-    if let Some(new_access_token) = new_access_token {
-        db.access_token = Some(new_access_token);
+    let (tokens, public_key_der_b64) = rbw::actions::user_public_key(
+        &access_token,
+        &refresh_token,
+        target_user_id,
+    )?;
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -14149,13 +14303,17 @@ pub fn grant_collection_access(
         .context("collection disappeared from the local db")?;
 
     let mut access_token = db.access_token.as_ref().unwrap().clone();
-    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+    let mut refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
-    let (new_token, members) =
+    let (tokens, members) =
         rbw::actions::org_users(&access_token, &refresh_token, &org_id)?;
-    if let Some(t) = new_token {
-        access_token.clone_from(&t);
-        db.access_token = Some(t);
+    if let Some(tokens) = tokens {
+        access_token.clone_from(&tokens.access_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(new_refresh_token) = tokens.refresh_token {
+            refresh_token.clone_from(&new_refresh_token);
+            db.refresh_token = Some(new_refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -14169,14 +14327,18 @@ pub fn grant_collection_access(
             anyhow::anyhow!("no organization member found for '{user}'")
         })?;
 
-    let (new_token, details) = rbw::actions::collections_details(
+    let (tokens, details) = rbw::actions::collections_details(
         &access_token,
         &refresh_token,
         &org_id,
     )?;
-    if let Some(t) = new_token {
-        access_token.clone_from(&t);
-        db.access_token = Some(t);
+    if let Some(tokens) = tokens {
+        access_token.clone_from(&tokens.access_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(new_refresh_token) = tokens.refresh_token {
+            refresh_token.clone_from(&new_refresh_token);
+            db.refresh_token = Some(new_refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -14205,7 +14367,7 @@ pub fn grant_collection_access(
         manage,
     });
 
-    let (new_token, ()) = rbw::actions::set_collection_users(
+    let (tokens, ()) = rbw::actions::set_collection_users(
         &access_token,
         &refresh_token,
         &org_id,
@@ -14215,8 +14377,11 @@ pub fn grant_collection_access(
         &detail.groups,
         &users,
     )?;
-    if let Some(t) = new_token {
-        db.access_token = Some(t);
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -14255,24 +14420,32 @@ pub fn propagate_collection_permissions(
     }
 
     let mut access_token = db.access_token.as_ref().unwrap().clone();
-    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+    let mut refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
-    let (new_token, members) =
+    let (tokens, members) =
         rbw::actions::org_users(&access_token, &refresh_token, &org_id)?;
-    if let Some(t) = new_token {
-        access_token.clone_from(&t);
-        db.access_token = Some(t);
+    if let Some(tokens) = tokens {
+        access_token.clone_from(&tokens.access_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(new_refresh_token) = tokens.refresh_token {
+            refresh_token.clone_from(&new_refresh_token);
+            db.refresh_token = Some(new_refresh_token);
+        }
         save_db(&db)?;
     }
 
-    let (new_token, details) = rbw::actions::collections_details(
+    let (tokens, details) = rbw::actions::collections_details(
         &access_token,
         &refresh_token,
         &org_id,
     )?;
-    if let Some(t) = new_token {
-        access_token.clone_from(&t);
-        db.access_token = Some(t);
+    if let Some(tokens) = tokens {
+        access_token.clone_from(&tokens.access_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(new_refresh_token) = tokens.refresh_token {
+            refresh_token.clone_from(&new_refresh_token);
+            db.refresh_token = Some(new_refresh_token);
+        }
         save_db(&db)?;
     }
 
@@ -14450,10 +14623,15 @@ pub fn propagate_collection_permissions(
                 &new_users,
             );
             match res {
-                Ok((new_token, ())) => {
-                    if let Some(t) = new_token {
-                        access_token.clone_from(&t);
-                        db.access_token = Some(t);
+                Ok((tokens, ())) => {
+                    if let Some(tokens) = tokens {
+                        access_token.clone_from(&tokens.access_token);
+                        db.access_token = Some(tokens.access_token);
+                        if let Some(new_refresh_token) = tokens.refresh_token
+                        {
+                            refresh_token.clone_from(&new_refresh_token);
+                            db.refresh_token = Some(new_refresh_token);
+                        }
                         save_db(&db)?;
                     }
                     applied.push(coll_id.clone());
@@ -17608,7 +17786,7 @@ pub fn tui_attachment_create(
             entry.org_id.as_deref(),
         )?;
 
-    if let (Some(new_token), ()) = rbw::actions::create_attachment(
+    if let (Some(tokens), ()) = rbw::actions::create_attachment(
         &access_token,
         &refresh_token,
         &entry.id,
@@ -17616,7 +17794,10 @@ pub fn tui_attachment_create(
         &encrypted_key,
         &encrypted_data,
     )? {
-        db.access_token = Some(new_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(db)?;
     }
 
@@ -17639,13 +17820,16 @@ pub fn tui_attachment_delete(
         .clone()
         .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
 
-    if let (Some(new_token), ()) = rbw::actions::delete_attachment(
+    if let (Some(tokens), ()) = rbw::actions::delete_attachment(
         &access_token,
         &refresh_token,
         &entry.id,
         attachment_id,
     )? {
-        db.access_token = Some(new_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(db)?;
     }
 
@@ -17889,7 +18073,7 @@ pub fn tui_save_edit(
             entry.folder_id.clone()
         };
 
-    if let (Some(new_token), ()) = rbw::actions::edit(
+    if let (Some(tokens), ()) = rbw::actions::edit(
         &access_token,
         &refresh_token,
         &entry.id,
@@ -17902,7 +18086,10 @@ pub fn tui_save_edit(
         folder_id.as_deref(),
         &history,
     )? {
-        db.access_token = Some(new_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(db)?;
     }
 
@@ -17942,7 +18129,7 @@ pub fn tui_save_add(
             None
         };
 
-    if let (Some(new_token), _) = rbw::actions::add(
+    if let (Some(tokens), _) = rbw::actions::add(
         &access_token,
         &refresh_token,
         &encrypted_name,
@@ -17951,7 +18138,10 @@ pub fn tui_save_add(
         encrypted_notes.as_deref(),
         folder_id.as_deref(),
     )? {
-        db.access_token = Some(new_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(db)?;
     }
 
@@ -17973,10 +18163,13 @@ pub fn tui_delete(
         .clone()
         .ok_or_else(|| anyhow::anyhow!("not logged in"))?;
 
-    if let (Some(new_token), ()) =
+    if let (Some(tokens), ()) =
         rbw::actions::remove(&access_token, &refresh_token, &entry.id)?
     {
-        db.access_token = Some(new_token);
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(db)?;
     }
 
@@ -18005,8 +18198,11 @@ pub fn tui_toggle_archived(
     } else {
         rbw::actions::archive(&access_token, &refresh_token, &entry.id)?
     };
-    if let (Some(new_token), ()) = rotated {
-        db.access_token = Some(new_token);
+    if let (Some(tokens), ()) = rotated {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(db)?;
     }
 
@@ -18076,9 +18272,12 @@ pub fn tui_attachment_get(
         &entry.id,
         &attachment.id,
     ) {
-        Ok((new_access_token, url)) => {
-            if let Some(new_access_token) = new_access_token {
-                db.access_token = Some(new_access_token);
+        Ok((tokens, url)) => {
+            if let Some(tokens) = tokens {
+                db.access_token = Some(tokens.access_token);
+                if let Some(refresh_token) = tokens.refresh_token {
+                    db.refresh_token = Some(refresh_token);
+                }
                 save_db(db)?;
             }
             url

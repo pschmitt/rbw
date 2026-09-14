@@ -826,7 +826,7 @@ pub async fn purge_vault(
         .clone()
         .context("failed to find refresh token in db")?;
 
-    let new_access_token = rbw::actions::purge_vault(
+    let tokens = rbw::actions::purge_vault(
         &access_token,
         &refresh_token,
         &identity.master_password_hash,
@@ -834,8 +834,11 @@ pub async fn purge_vault(
     .await
     .context("failed to purge vault (wrong master password?)")?;
 
-    if let Some(new_access_token) = new_access_token {
-        db.access_token = Some(new_access_token);
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(account, &db).await?;
     }
 
@@ -900,7 +903,7 @@ pub async fn create_org(
         .clone()
         .context("failed to find refresh token in db")?;
 
-    let (new_access_token, id) = rbw::actions::create_org(
+    let (tokens, id) = rbw::actions::create_org(
         &access_token,
         &refresh_token,
         name,
@@ -911,8 +914,11 @@ pub async fn create_org(
     .await
     .context("failed to create organization")?;
 
-    if let Some(new_access_token) = new_access_token {
-        db.access_token = Some(new_access_token);
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(account, &db).await?;
     }
 
@@ -975,7 +981,7 @@ pub async fn confirm_org_user(
         .clone()
         .context("failed to find refresh token in db")?;
 
-    let new_access_token = rbw::actions::confirm_org_user(
+    let tokens = rbw::actions::confirm_org_user(
         &access_token,
         &refresh_token,
         org_id,
@@ -985,8 +991,11 @@ pub async fn confirm_org_user(
     .await
     .context("failed to confirm organization member")?;
 
-    if let Some(new_access_token) = new_access_token {
-        db.access_token = Some(new_access_token);
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(account, &db).await?;
     }
 
@@ -1063,7 +1072,7 @@ pub async fn delete_org(
         .clone()
         .context("failed to find refresh token in db")?;
 
-    let new_access_token = rbw::actions::delete_org(
+    let tokens = rbw::actions::delete_org(
         &access_token,
         &refresh_token,
         org_id,
@@ -1072,8 +1081,11 @@ pub async fn delete_org(
     .await
     .context("failed to delete organization (wrong master password?)")?;
 
-    if let Some(new_access_token) = new_access_token {
-        db.access_token = Some(new_access_token);
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
         save_db(account, &db).await?;
     }
 
@@ -1137,7 +1149,7 @@ pub async fn sync(
         return Err(anyhow::anyhow!("failed to find refresh token in db"));
     };
     let (
-        access_token,
+        tokens,
         (
             protected_key,
             protected_private_key,
@@ -1168,8 +1180,11 @@ pub async fn sync(
         .lock()
         .await
         .set_master_password_reprompt(&account.name, &entries);
-    if let Some(access_token) = access_token {
-        db.access_token = Some(access_token);
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
     }
     db.protected_key = Some(protected_key);
     db.protected_private_key = Some(protected_private_key);
