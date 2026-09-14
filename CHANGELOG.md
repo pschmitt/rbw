@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.17.7] - 2026-09-14
+
+### Fixed
+
+* rbw only deserialized `access_token` from the OAuth token-refresh
+  response, so a `refresh_token` rotated by an SSO-backed Vaultwarden (via
+  an external identity provider consuming the previous one on exchange)
+  was silently dropped, and rbw kept replaying the stale token -- breaking
+  every refresh after the first rotation. Now persisted at every call site
+  that already persists a rotated access token, across this fork's larger
+  surface of token-refreshing actions (org/collection management, bulk
+  import, mirror, TUI) than upstream. Adapted from
+  [doy/rbw#378](https://github.com/doy/rbw/pull/378).
+
 ## [2.17.6] - 2026-09-05
 
 ### Fixed
