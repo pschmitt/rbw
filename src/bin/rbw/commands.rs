@@ -17605,7 +17605,7 @@ fn list_target_accounts(
                 Err(e) if account.name == primary => return Err(e),
                 Err(e) => {
                     log::warn!(
-                        "failed to auto-unlock secondary account '{}': {e:#}; \
+                        "failed to auto-unlock account '{}': {e:#}; \
                          continuing without its entries",
                         account.name
                     );
@@ -17666,7 +17666,7 @@ where
                     return Err(e);
                 }
                 log::warn!(
-                    "failed to auto-unlock secondary account '{}': {e:#}; \
+                    "failed to auto-unlock account '{}': {e:#}; \
                      leaving it locked",
                     account.name
                 );
