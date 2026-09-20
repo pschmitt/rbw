@@ -17585,6 +17585,7 @@ fn list_target_accounts(
 
     let config = rbw::config::Config::load()?;
     let accounts = config.accounts();
+    let primary = config.primary_account_name();
     if accounts.len() <= 1 {
         if unlock_single_account {
             unlock(None, None)?;
@@ -17599,8 +17600,17 @@ fn list_target_accounts(
         }
         crate::actions::set_active_account(Some(account.name.clone()))?;
         if should_unlock_for_merge(account.unlock.policy, all) {
-            unlock(None, None)?;
-            out.push(account.name.clone());
+            match unlock(None, None) {
+                Ok(()) => out.push(account.name.clone()),
+                Err(e) if account.name == primary => return Err(e),
+                Err(e) => {
+                    log::warn!(
+                        "failed to auto-unlock secondary account '{}': {e:#}; \
+                         continuing without its entries",
+                        account.name
+                    );
+                }
+            }
         } else if active_account_unlocked() {
             out.push(account.name.clone());
         }
@@ -17651,7 +17661,18 @@ where
         if should_unlock && !active_account_unlocked() {
             let msg = format!("unlocking '{}'...", account.name);
             progress(&msg);
-            unlock(None, None)?;
+            if let Err(e) = unlock(None, None) {
+                if account.name == target {
+                    return Err(e);
+                }
+                log::warn!(
+                    "failed to auto-unlock secondary account '{}': {e:#}; \
+                     leaving it locked",
+                    account.name
+                );
+                locked.push(account.name.clone());
+                continue;
+            }
         }
         if active_account_unlocked() {
             let msg = format!("syncing '{}'...", account.name);
