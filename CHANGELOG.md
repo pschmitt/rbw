@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.17.11] - 2026-09-22
+
+### Changed
+
+* `rbw account list`: rendered as a proper aligned, colored table (same
+  renderer `rbw list` uses) instead of plain tab-separated `println!`.
+* `rbw account list`: added a `status` column showing each configured
+  account's current locked/unlocked state (green "unlocked" / red
+  "locked"), queried from `rbw-agent` the same way `rbw unlocked` and the
+  TUI's lock poll already do.
+* `rbw account list`: the primary-account marker is now a bold yellow `*`
+  suffixed directly to the name with no space (`name*`), instead of a
+  plain trailing `" *"`.
+
 ## [2.17.10] - 2026-09-22
 
 ### Changed
