@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.17.8] - 2026-09-22
+
+### Fixed
+
+* Editing a login item holding a FIDO2/passkey credential failed against
+  the official Bitwarden server with `Cannot edit item. Update to the
+  latest version of Bitwarden and try again.` The server rejects such
+  edits when the request's `Bitwarden-Client-Version` sorts below its
+  `Fido2KeyCipherMinimumVersion` gate (`2023.10.0`), and a missing header
+  counts as no version at all. rbw's shared async HTTP client sent its own
+  crate version there (which will always sort below that), and
+  `Client::edit()`'s separate blocking HTTP client sent no client-version
+  header whatsoever. Both now send a fixed, modern version string, kept
+  below `MinimumClientVersionForV2Encryption` (`2025.11.0`) since rbw
+  doesn't support V2 encryption yet.
+* When syncing/unlocking multiple accounts, a secondary (non-primary,
+  non-target) account failing to auto-unlock aborted the whole operation.
+  It's now logged as a warning and skipped, so the other accounts' entries
+  are still available.
+
 ## [2.17.7] - 2026-09-14
 
 ### Fixed
