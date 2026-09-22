@@ -2537,6 +2537,12 @@ impl Client {
         let res = client
             .put(self.api_url(&format!("/ciphers/{id}")))
             .header("Authorization", format!("Bearer {access_token}"))
+            // Bare reqwest::blocking clients (unlike self.reqwest_client())
+            // don't get Bitwarden-Client-Version by default, and a missing
+            // header parses server-side as no version at all, which fails
+            // the server's FIDO2-cipher-edit version gate (see
+            // BITWARDEN_CLIENT_VERSION's doc comment).
+            .header("Bitwarden-Client-Version", BITWARDEN_CLIENT_VERSION)
             .json(&req)
             .send()
             .map_err(|source| Error::Reqwest { source })?;
