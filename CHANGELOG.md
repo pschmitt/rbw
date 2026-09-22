@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.17.9] - 2026-09-22
+
+### Changed
+
+* Bumped `rustls` 0.23.43 -> 0.23.45, fixing
+  [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+  (TLS 1.3 handshake messages incorrectly accepted across encryption level
+  boundaries).
+
 ## [2.17.8] - 2026-09-22
 
 ### Fixed
