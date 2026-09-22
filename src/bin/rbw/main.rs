@@ -2778,10 +2778,7 @@ fn main() {
             Config::Edit => commands::config_edit(),
         },
         Opt::Account { account } => match account {
-            AccountCmd::List => {
-                commands::account_list();
-                Ok(())
-            }
+            AccountCmd::List => commands::account_list(),
             AccountCmd::Add {
                 name,
                 email,

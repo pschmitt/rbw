@@ -3043,31 +3043,54 @@ pub fn termux_remove(yes: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn account_list() {
+pub fn account_list() -> anyhow::Result<()> {
     let config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());
     let primary = config.primary_account_name();
     let accounts = config.accounts();
     if accounts.is_empty() {
         eprintln!("no accounts configured");
-        return;
+        return Ok(());
     }
-    for account in &accounts {
-        let marker = if account.name == primary { " *" } else { "" };
-        // Best-effort: an unreadable secret file (e.g. not yet decrypted)
-        // shows as unset rather than failing the whole listing.
-        let email = account
-            .email
-            .as_ref()
-            .and_then(|v| v.resolve().ok())
-            .unwrap_or_else(|| "-".to_string());
-        let server = account
-            .base_url
-            .as_ref()
-            .and_then(|v| v.resolve().ok())
-            .unwrap_or_else(|| "(public bitwarden.com)".to_string());
-        println!("{}{marker}\t{email}\t{server}", account.name);
-    }
+
+    let columns = [
+        TableColumn {
+            header: "name",
+            style: TableColumnStyle::Name,
+        },
+        TableColumn {
+            header: "email",
+            style: TableColumnStyle::User,
+        },
+        TableColumn {
+            header: "server",
+            style: TableColumnStyle::Folder,
+        },
+    ];
+
+    let rows = accounts
+        .iter()
+        .map(|account| {
+            let marker = if account.name == primary { " *" } else { "" };
+            // Best-effort: an unreadable secret file (e.g. not yet
+            // decrypted) shows as unset rather than failing the whole
+            // listing. "N/A" matches `TableColumnStyle::User`'s existing
+            // empty-value treatment in `colorize_table_cell`.
+            let email = account
+                .email
+                .as_ref()
+                .and_then(|v| v.resolve().ok())
+                .unwrap_or_else(|| "N/A".to_string());
+            let server = account
+                .base_url
+                .as_ref()
+                .and_then(|v| v.resolve().ok())
+                .unwrap_or_else(|| "(public bitwarden.com)".to_string());
+            vec![format!("{}{marker}", account.name), email, server]
+        })
+        .collect::<Vec<_>>();
+
+    print_table(&columns, &rows, "")
 }
 
 pub fn account_add(
