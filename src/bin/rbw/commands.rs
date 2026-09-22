@@ -2032,9 +2032,9 @@ fn colorize_table_cell(
     // The primary-account marker (`rbw account list`): bold yellow star,
     // distinct from the name's own bold-only styling.
     if col_style == TableColumnStyle::Name {
-        if let Some(rest) = text.strip_prefix('*') {
-            let mut out = style::warning("*", color);
-            out.push_str(&style::name(rest, color));
+        if let Some(rest) = text.strip_suffix('*') {
+            let mut out = style::name(rest, color);
+            out.push_str(&style::warning("*", color));
             return out;
         }
     }
@@ -3127,7 +3127,7 @@ pub fn account_list() -> anyhow::Result<()> {
                 .and_then(|v| v.resolve().ok())
                 .unwrap_or_else(|| "(public bitwarden.com)".to_string());
             vec![
-                format!("{marker}{}", account.name),
+                format!("{}{marker}", account.name),
                 status.to_string(),
                 email,
                 server,
