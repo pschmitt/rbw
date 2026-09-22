@@ -2029,6 +2029,16 @@ fn colorize_table_cell(
         };
     }
 
+    // The primary-account marker (`rbw account list`): bold yellow star,
+    // distinct from the name's own bold-only styling.
+    if col_style == TableColumnStyle::Name {
+        if let Some(rest) = text.strip_prefix('*') {
+            let mut out = style::warning("*", color);
+            out.push_str(&style::name(rest, color));
+            return out;
+        }
+    }
+
     let code = match col_style {
         TableColumnStyle::Id => "2;36",
         TableColumnStyle::Name => "1",
@@ -3088,7 +3098,7 @@ pub fn account_list() -> anyhow::Result<()> {
     let rows = accounts
         .iter()
         .map(|account| {
-            let marker = if account.name == primary { " *" } else { "" };
+            let marker = if account.name == primary { "*" } else { "" };
             // Queries the agent over its usual IPC socket (same mechanism
             // as `rbw unlocked`/the TUI's lock poll) -- if the agent isn't
             // running at all, every account correctly shows as locked.
@@ -3117,7 +3127,7 @@ pub fn account_list() -> anyhow::Result<()> {
                 .and_then(|v| v.resolve().ok())
                 .unwrap_or_else(|| "(public bitwarden.com)".to_string());
             vec![
-                format!("{}{marker}", account.name),
+                format!("{marker}{}", account.name),
                 status.to_string(),
                 email,
                 server,
