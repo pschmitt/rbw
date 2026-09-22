@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.17.10] - 2026-09-22
+
+### Changed
+
+* Merged the outstanding Renovate dependency PRs: `textwrap` 0.16.2 ->
+  0.16.4, `uuid` 1.26.0 -> 1.26.1, `open` 5.4.3 -> 5.4.4, `clap`/
+  `clap_builder`/`clap_derive` 4.6.6/4.6.6/4.6.4 -> 4.6.7, `clap_complete`
+  4.6.9 -> 4.6.11, `rustix` 1.1.4 -> 1.1.5, `rand` 0.10.2 -> 0.10.3, and
+  `DeterminateSystems/nix-installer-action` v22 -> v23 in CI. Applied
+  fresh against the current lockfile rather than merging the PRs' own
+  diffs, which were based on a stale `Cargo.lock` and would have
+  regressed several `windows-sys` transitive versions as a side effect.
+
 ## [2.17.9] - 2026-09-22
 
 ### Changed
