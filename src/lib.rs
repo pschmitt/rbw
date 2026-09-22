@@ -3,6 +3,7 @@ pub mod api;
 pub mod base64;
 pub mod cipherstring;
 pub mod config;
+pub mod cose;
 pub mod db;
 pub mod dirs;
 pub mod edit;

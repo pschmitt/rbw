@@ -109,9 +109,15 @@ pub fn unlock<S: std::hash::BuildHasher>(
 
     let protected_key =
         crate::cipherstring::CipherString::new(protected_key)?;
-    let key = match protected_key.decrypt_locked_symmetric(&identity.keys) {
+    let decrypted_key = match &protected_key {
+        crate::cipherstring::CipherString::CoseEncrypt0 { .. } => {
+            protected_key.decrypt_locked_cose_symmetric(&identity.keys)
+        }
+        _ => protected_key.decrypt_locked_symmetric(&identity.keys),
+    };
+    let key = match decrypted_key {
         Ok(master_keys) => crate::locked::Keys::new(master_keys),
-        Err(Error::InvalidMac) => {
+        Err(Error::InvalidMac | Error::CoseDecrypt) => {
             return Err(Error::IncorrectPassword {
                 message: "Password is incorrect. Try again.".to_string(),
             })
@@ -121,9 +127,13 @@ pub fn unlock<S: std::hash::BuildHasher>(
 
     let protected_private_key =
         crate::cipherstring::CipherString::new(protected_private_key)?;
-    let private_key = crate::locked::PrivateKey::new(
-        protected_private_key.decrypt_locked_symmetric(&key)?,
-    );
+    let decrypted_private_key = match &protected_private_key {
+        crate::cipherstring::CipherString::CoseEncrypt0 { .. } => {
+            protected_private_key.decrypt_locked_cose_symmetric(&key)
+        }
+        _ => protected_private_key.decrypt_locked_symmetric(&key),
+    };
+    let private_key = crate::locked::PrivateKey::new(decrypted_private_key?);
 
     let org_keys = decrypt_org_keys(&private_key, protected_org_keys)?;
 

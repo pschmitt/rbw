@@ -25,6 +25,17 @@ pub enum Error {
     CreateSSOCallbackServer { err: std::io::Error },
 
     #[error(
+        "failed to decrypt COSE_Encrypt0 (wrong password, or corrupted data)"
+    )]
+    CoseDecrypt,
+
+    #[error("failed to parse COSE_Encrypt0 structure")]
+    CoseParse { source: coset::CoseError },
+
+    #[error("unsupported COSE algorithm for account encryption: {alg}")]
+    CoseUnsupportedAlgorithm { alg: String },
+
+    #[error(
         "credential_source for account {name:?} forms a cycle (an account's \
         credentials can't ultimately depend on themselves)"
     )]

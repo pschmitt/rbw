@@ -29,12 +29,28 @@ bump locally only — never push that repo unless separately asked.
   `tui_keybindings`, etc.) should stay configurable through the
   home-manager module — when adding a new config option, add the matching
   Nix option in the same change.
-- Add V2 encryption support (Bitwarden's newer per-item/account encryption
-  scheme, server-gated by `MinimumClientVersionForV2Encryption =
-  "2025.11.0"` in `bitwarden/server`'s `Constants.cs`). Until this lands,
-  keep `BITWARDEN_CLIENT_VERSION` in `src/api.rs` below that threshold —
-  bumping it without implementing V2 encryption would make the server
-  start sending/expecting data rbw can't decrypt/encrypt correctly.
+- V2 encryption (Bitwarden's COSE/XChaCha20-Poly1305 account-key wrapping,
+  CipherString type 7 / `CoseEncrypt0B64`) read-only decrypt support has
+  landed: `src/cose.rs` (new module), `CipherString::CoseEncrypt0` +
+  `decrypt_locked_cose_symmetric` in `src/cipherstring.rs`, and
+  `actions::unlock()` dispatches per-field on whichever CipherString
+  variant `protected_key`/`protected_private_key` actually parse as.
+  **Not yet verified against a real V2-migrated account** (none exist for
+  this user yet — all 4 configured accounts are still V1, and Vaultwarden
+  doesn't support V2 at all). The specific unverified assumption: a V2
+  account's decrypted user key is a native 32-byte XChaCha20-Poly1305 key
+  (so `wrapping_key.enc_key()`, the first 32 bytes of the existing 64-byte
+  `locked::Keys` shape, is the right thing to feed `crate::cose::decrypt`)
+  rather than something requiring a different key-derivation step. If
+  that's wrong, decryption fails cleanly (`Error::CoseDecrypt`, an AEAD
+  auth-tag mismatch) rather than silently corrupting data — but it does
+  mean this hasn't actually been proven correct end-to-end. Re-verify (or
+  get this confirmed by someone with a real V2 account) before leaning on
+  it. Server-gated by `MinimumClientVersionForV2Encryption = "2025.11.0"`
+  in `bitwarden/server`'s `Constants.cs` — keep `BITWARDEN_CLIENT_VERSION`
+  in `src/api.rs` below that threshold until the above is confirmed;
+  bumping it prematurely would make the server start expecting a client
+  that can actually handle V2 traffic correctly.
 - Every `reqwest::blocking::Client::new()` call site in `src/api.rs` (~30
   of them, for cipher/folder/attachment/etc. CRUD) builds a bare client
   with no default headers, unlike `self.reqwest_client()` (used by

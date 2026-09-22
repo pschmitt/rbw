@@ -23,6 +23,12 @@ pub enum CipherString {
         // ty: 4 (RSA_2048_OAEP_SHA1)
         ciphertext: Vec<u8>,
     },
+    CoseEncrypt0 {
+        // ty: 7 (CoseEncrypt0B64) -- Bitwarden's "Encryption V2". A COSE
+        // structure (RFC 9052), not the pipe-delimited format types 2/4/6
+        // use -- see `crate::cose`.
+        bytes: Vec<u8>,
+    },
 }
 
 impl CipherString {
@@ -88,6 +94,13 @@ impl CipherString {
                 let ciphertext = crate::base64::decode(contents)
                     .map_err(|source| Error::InvalidBase64 { source })?;
                 Ok(Self::Asymmetric { ciphertext })
+            }
+            7 => {
+                // unlike 2/4/6, this is a single base64 blob -- no
+                // `|`-delimited parts
+                let bytes = crate::base64::decode(contents)
+                    .map_err(|source| Error::InvalidBase64 { source })?;
+                Ok(Self::CoseEncrypt0 { bytes })
             }
             _ => {
                 if ty < 6 {
@@ -185,6 +198,38 @@ impl CipherString {
                 reason:
                     "found an asymmetric cipherstring, expecting symmetric"
                         .to_string(),
+            })
+        }
+    }
+
+    // The type-7 (COSE_Encrypt0 / "Encryption V2") counterpart to
+    // `decrypt_locked_symmetric`: same call shape (a locked key in, locked
+    // bytes out), but the wire format and cipher are entirely different --
+    // see `crate::cose`. Used by `actions::unlock` to independently unwrap
+    // either the account's user key or its private key when the
+    // corresponding CipherString parses as this variant rather than
+    // `Symmetric`.
+    pub fn decrypt_locked_cose_symmetric(
+        &self,
+        wrapping_key: &crate::locked::Keys,
+    ) -> Result<crate::locked::Vec> {
+        if let Self::CoseEncrypt0 { bytes } = self {
+            let mut plaintext =
+                crate::cose::decrypt(bytes, wrapping_key.enc_key())?;
+            // `crate::cose::decrypt` hands back an ordinary (unzeroized)
+            // Vec -- copy into the locked buffer, then scrub the
+            // intermediate, matching `decrypt_locked_asymmetric`'s pattern
+            // for the same reason (the underlying crypto crates hand back
+            // plain Vecs, not our locked type).
+            let mut res = crate::locked::Vec::new();
+            res.extend(plaintext.iter().copied());
+            plaintext.zeroize();
+            Ok(res)
+        } else {
+            Err(Error::InvalidCipherString {
+                reason: "found a non-COSE cipherstring, expecting \
+                         CoseEncrypt0"
+                    .to_string(),
             })
         }
     }
@@ -377,6 +422,10 @@ impl std::fmt::Display for CipherString {
                 let ciphertext = crate::base64::encode(ciphertext);
                 write!(f, "4.{ciphertext}")
             }
+            Self::CoseEncrypt0 { bytes } => {
+                let bytes = crate::base64::encode(bytes);
+                write!(f, "7.{bytes}")
+            }
         }
     }
 }
@@ -460,6 +509,23 @@ fn test_decrypt_file_data() {
     data.extend(ciphertext);
 
     assert_eq!(decrypt_file_data(&data, &keys).unwrap(), plaintext);
+}
+
+#[test]
+fn test_parse_cose_cipherstring() {
+    let bytes = vec![1, 2, 3, 4, 5];
+    let encoded = crate::base64::encode(&bytes);
+    let s = format!("7.{encoded}");
+
+    let parsed = CipherString::new(&s).unwrap();
+    let CipherString::CoseEncrypt0 {
+        bytes: parsed_bytes,
+    } = &parsed
+    else {
+        panic!("expected a CoseEncrypt0 cipherstring");
+    };
+    assert_eq!(parsed_bytes, &bytes);
+    assert_eq!(parsed.to_string(), s);
 }
 
 #[test]
