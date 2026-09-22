@@ -1820,6 +1820,10 @@ mod style {
     pub fn warning(s: &str, c: bool) -> String {
         paint(s, "1;33", c)
     }
+    // danger  bold red       — locked / blocked / failed states
+    pub fn danger(s: &str, c: bool) -> String {
+        paint(s, "1;31", c)
+    }
     // size    dim            — file sizes (same weight as dim)
     pub fn size(s: &str, c: bool) -> String {
         paint(s, "2", c)
@@ -2017,6 +2021,14 @@ fn colorize_table_cell(
         return style::empty(text, color);
     }
 
+    if col_style == TableColumnStyle::Status {
+        return if text == "unlocked" {
+            style::success(text, color)
+        } else {
+            style::danger(text, color)
+        };
+    }
+
     let code = match col_style {
         TableColumnStyle::Id => "2;36",
         TableColumnStyle::Name => "1",
@@ -2028,7 +2040,7 @@ fn colorize_table_cell(
         | TableColumnStyle::Size
         | TableColumnStyle::Account => "2",
         TableColumnStyle::Attachments => "36",
-        TableColumnStyle::Default => "",
+        TableColumnStyle::Status | TableColumnStyle::Default => "",
     };
     style::paint_with_matches(text, code, ranges, color)
 }
@@ -2521,6 +2533,7 @@ enum TableColumnStyle {
     Attachments,
     Size,
     Account,
+    Status,
     Default,
 }
 
@@ -3059,6 +3072,10 @@ pub fn account_list() -> anyhow::Result<()> {
             style: TableColumnStyle::Name,
         },
         TableColumn {
+            header: "status",
+            style: TableColumnStyle::Status,
+        },
+        TableColumn {
             header: "email",
             style: TableColumnStyle::User,
         },
@@ -3072,6 +3089,19 @@ pub fn account_list() -> anyhow::Result<()> {
         .iter()
         .map(|account| {
             let marker = if account.name == primary { " *" } else { "" };
+            // Queries the agent over its usual IPC socket (same mechanism
+            // as `rbw unlocked`/the TUI's lock poll) -- if the agent isn't
+            // running at all, every account correctly shows as locked.
+            // Leaves the process-global active-account pointer on the
+            // last-checked account, which is harmless here since this
+            // process exits right after printing (see
+            // `tui_account_unlocked`'s own doc comment).
+            let status =
+                if matches!(tui_account_unlocked(&account.name), Ok(true)) {
+                    "unlocked"
+                } else {
+                    "locked"
+                };
             // Best-effort: an unreadable secret file (e.g. not yet
             // decrypted) shows as unset rather than failing the whole
             // listing. "N/A" matches `TableColumnStyle::User`'s existing
@@ -3086,7 +3116,12 @@ pub fn account_list() -> anyhow::Result<()> {
                 .as_ref()
                 .and_then(|v| v.resolve().ok())
                 .unwrap_or_else(|| "(public bitwarden.com)".to_string());
-            vec![format!("{}{marker}", account.name), email, server]
+            vec![
+                format!("{}{marker}", account.name),
+                status.to_string(),
+                email,
+                server,
+            ]
         })
         .collect::<Vec<_>>();
 
