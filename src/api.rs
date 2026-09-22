@@ -1561,6 +1561,16 @@ const BITWARDEN_CLIENT: &str = "cli";
 // DeviceType.LinuxDesktop, as per Bitwarden API device types.
 const DEVICE_TYPE: u8 = 8;
 
+// Sent as the Bitwarden-Client-Version header. This must NOT be
+// CARGO_PKG_VERSION: the server rejects edits to ciphers holding FIDO2
+// credentials when this header sorts below Fido2KeyCipherMinimumVersion
+// ("2023.10.0" as of bitwarden/server's Constants.cs), and rbw's own
+// version numbering will always sort below that. Kept below
+// MinimumClientVersionForV2Encryption ("2025.11.0") since rbw doesn't
+// implement V2 encryption yet and claiming support for it would let the
+// server send data rbw can't handle.
+const BITWARDEN_CLIENT_VERSION: &str = "2024.6.0";
+
 // Build an Error from a non-OK, non-401 blocking response, including the body
 // when the server sent one.
 fn request_failed(
@@ -1608,7 +1618,7 @@ impl Client {
         );
         default_headers.insert(
             "Bitwarden-Client-Version",
-            axum::http::HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
+            axum::http::HeaderValue::from_static(BITWARDEN_CLIENT_VERSION),
         );
         default_headers.append(
             "Device-Type",

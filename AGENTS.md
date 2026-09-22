@@ -25,3 +25,9 @@ repo unless separately asked.
   `tui_keybindings`, etc.) should stay configurable through the
   home-manager module — when adding a new config option, add the matching
   Nix option in the same change.
+- Add V2 encryption support (Bitwarden's newer per-item/account encryption
+  scheme, server-gated by `MinimumClientVersionForV2Encryption =
+  "2025.11.0"` in `bitwarden/server`'s `Constants.cs`). Until this lands,
+  keep `BITWARDEN_CLIENT_VERSION` in `src/api.rs` below that threshold —
+  bumping it without implementing V2 encryption would make the server
+  start sending/expecting data rbw can't decrypt/encrypt correctly.
