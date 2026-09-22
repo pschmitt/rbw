@@ -34,23 +34,34 @@ bump locally only — never push that repo unless separately asked.
   landed: `src/cose.rs` (new module), `CipherString::CoseEncrypt0` +
   `decrypt_locked_cose_symmetric` in `src/cipherstring.rs`, and
   `actions::unlock()` dispatches per-field on whichever CipherString
-  variant `protected_key`/`protected_private_key` actually parse as.
-  **Not yet verified against a real V2-migrated account** (none exist for
-  this user yet — all 4 configured accounts are still V1, and Vaultwarden
-  doesn't support V2 at all). The specific unverified assumption: a V2
-  account's decrypted user key is a native 32-byte XChaCha20-Poly1305 key
-  (so `wrapping_key.enc_key()`, the first 32 bytes of the existing 64-byte
-  `locked::Keys` shape, is the right thing to feed `crate::cose::decrypt`)
-  rather than something requiring a different key-derivation step. If
-  that's wrong, decryption fails cleanly (`Error::CoseDecrypt`, an AEAD
-  auth-tag mismatch) rather than silently corrupting data — but it does
-  mean this hasn't actually been proven correct end-to-end. Re-verify (or
-  get this confirmed by someone with a real V2 account) before leaning on
-  it. Server-gated by `MinimumClientVersionForV2Encryption = "2025.11.0"`
-  in `bitwarden/server`'s `Constants.cs` — keep `BITWARDEN_CLIENT_VERSION`
-  in `src/api.rs` below that threshold until the above is confirmed;
-  bumping it prematurely would make the server start expecting a client
-  that can actually handle V2 traffic correctly.
+  variant `protected_key`/`protected_private_key` actually parse as. The
+  outer COSE_Encrypt0 envelope decrypt (`crate::cose::decrypt`) is verified
+  against a real, byte-for-byte test vector generated from Bitwarden's own
+  `bitwarden-crypto` Rust crate (`cose::test_real_bitwarden_crypto_vector`
+  in `src/cose.rs`) — this isn't just a self-roundtrip, it proves rbw's
+  parsing/algorithm-id validation/AEAD decrypt actually matches real
+  Bitwarden wire output. `crate::cose::unwrap_symmetric_key` additionally
+  handles a real, confirmed subtlety: a decrypted "key" CipherString isn't
+  always raw key bytes — per `bitwarden-crypto`'s own
+  `TryFrom<&BitwardenLegacyKeyBytes>`, length ≤64 means the legacy shape
+  (used as-is), length >64 means a PKCS7-padded, CBOR-serialized COSE_Key
+  that must be unpadded and parsed to extract the actual 32-byte key. This
+  is also tested against a real `coset`-constructed COSE key, not guessed.
+  **Still not verified against an actual live V2-migrated account's
+  `/sync` response** (none exist for this user — all 4 configured accounts
+  are still V1, and Vaultwarden doesn't support V2 at all), so the exact
+  field-level placement (does `profile.key`'s outer CipherString ever
+  actually become type 7, or does it stay type 2 with only its *decrypted
+  content* becoming COSE-shaped, per the current code's assumption) is
+  still unconfirmed in practice, just well-supported by the cited
+  `bitwarden-crypto` source. If wrong, decryption fails cleanly
+  (`Error::CoseDecrypt`/`Error::CoseParse`) rather than silently
+  corrupting data. Server-gated by `MinimumClientVersionForV2Encryption =
+  "2025.11.0"` in `bitwarden/server`'s `Constants.cs` — keep
+  `BITWARDEN_CLIENT_VERSION` in `src/api.rs` below that threshold until
+  this has actually been exercised against a live V2 account; bumping it
+  prematurely would make the server start expecting a client that can
+  handle V2 traffic when that's still unconfirmed.
 - Every `reqwest::blocking::Client::new()` call site in `src/api.rs` (~30
   of them, for cipher/folder/attachment/etc. CRUD) builds a bare client
   with no default headers, unlike `self.reqwest_client()` (used by

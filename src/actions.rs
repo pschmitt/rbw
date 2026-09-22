@@ -116,7 +116,12 @@ pub fn unlock<S: std::hash::BuildHasher>(
         _ => protected_key.decrypt_locked_symmetric(&identity.keys),
     };
     let key = match decrypted_key {
-        Ok(master_keys) => crate::locked::Keys::new(master_keys),
+        // The decrypted bytes aren't necessarily already `locked::Keys`-
+        // shaped: on a V2 account whose user key has itself been upgraded
+        // to a native XChaCha20-Poly1305 key, they're instead a padded
+        // COSE_Key structure that needs a further unwrap step. See
+        // `crate::cose::unwrap_symmetric_key`.
+        Ok(master_keys) => crate::cose::unwrap_symmetric_key(&master_keys)?,
         Err(Error::InvalidMac | Error::CoseDecrypt) => {
             return Err(Error::IncorrectPassword {
                 message: "Password is incorrect. Try again.".to_string(),
