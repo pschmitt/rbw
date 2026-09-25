@@ -1254,6 +1254,14 @@ enum Opt {
         pwgen: PasswordGenArgs,
         #[arg(
             long,
+            conflicts_with_all = ["user", "uri", "generate"],
+            help = "Create a secure note instead of a login. If stdin is \
+                piped, it is stored verbatim as the note (NAME is then \
+                required) instead of being parsed as a YAML/JSON entry"
+        )]
+        secure_note: bool,
+        #[arg(
+            long,
             value_name = "FILE",
             help = "Add the entry directly to a `rbw export` file instead \
                 of a configured account -- no config/agent/account is \
@@ -3226,6 +3234,7 @@ fn main() {
             yaml,
             generate,
             pwgen,
+            secure_note,
             from_file,
             from_file_passphrase,
         } => {
@@ -3252,6 +3261,7 @@ fn main() {
                 generate,
                 len,
                 ty,
+                secure_note,
                 from_file.as_deref(),
                 from_file_passphrase.as_deref(),
             )

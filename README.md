@@ -332,6 +332,12 @@ policy, then to a 20-character password from the full character set. This
 is mutually exclusive with piping a fully-formed entry into `rbw create` via
 stdin.
 
+`rbw create --secure-note NAME` creates a secure note instead of a login:
+the editor opens with an empty `notes` field and a `secure_note` data type.
+Piped stdin is stored verbatim as the note (`echo foo | rbw create
+--secure-note NAME`) rather than parsed as a YAML/JSON entry. It conflicts
+with the `USER` argument, `--uri`, and password generation.
+
 ### Archiving and trash
 
 Entries can be archived (hidden from `list`/`search` without deleting them)

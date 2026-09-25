@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+* `rbw add --secure-note`: create a secure note instead of a login (the
+  counterpart of upstream doy/rbw#381). The editor template switches to
+  `data: {type: secure_note}` with an empty `notes` field; piped stdin is
+  stored verbatim as the note (`NAME` is then required). Conflicts with
+  `USER`, `--uri`, and `--generate`/pwgen flags. Works with `--from-file`
+  too.
+
 ## [2.17.11] - 2026-09-22
 
 ### Changed

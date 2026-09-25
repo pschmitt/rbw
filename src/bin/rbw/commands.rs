@@ -5506,9 +5506,20 @@ pub fn add(
     generate: bool,
     gen_len: usize,
     gen_ty: rbw::pwgen::Type,
+    secure_note: bool,
     from_file: Option<&std::path::Path>,
     from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
+    if secure_note && generate {
+        // clap only rejects an explicit `-g`; the pwgen flags that imply
+        // it (`-l`, `--diceware`, ...) end up here.
+        anyhow::bail!(
+            "--secure-note cannot be combined with password generation"
+        );
+    }
+    if secure_note && name.is_none() && !std::io::stdin().is_terminal() {
+        anyhow::bail!("--secure-note with a piped note requires a NAME");
+    }
     if generate && !std::io::stdin().is_terminal() {
         // The editor ignores its template entirely and reads the entry
         // straight from stdin when it isn't a tty (see `rbw::edit::edit`),
@@ -5529,48 +5540,49 @@ pub fn add(
             folder,
             json,
             generated.as_deref(),
+            secure_note,
             from_file_passphrase,
         );
     }
-    add_structured(name, username, uris, folder, json, generated.as_deref())
+    add_structured(
+        name,
+        username,
+        uris,
+        folder,
+        json,
+        generated.as_deref(),
+        secure_note,
+    )
 }
 
-// `add --from-file`'s counterpart to `add_structured`: same
-// template/`$EDITOR`/reparse flow, but `editable_to_decrypted` into a
-// fresh `DecryptedCipher` (a locally-generated id -- there's no server
-// here to assign one) instead of encrypting and pushing to the server.
-#[allow(clippy::too_many_arguments)]
-fn add_from_file(
-    path: &std::path::Path,
+// Initial `EditableCipher` shown in the editor by `rbw add`: a login
+// prefilled from the CLI args, or an empty secure note with
+// `--secure-note`.
+fn new_entry_template(
     name: Option<&str>,
     username: Option<&str>,
     uris: &[(String, Option<rbw::api::UriMatchType>)],
     folder: Option<&str>,
-    json: bool,
     generated_password: Option<&str>,
-    passphrase: Option<&str>,
-) -> anyhow::Result<()> {
-    let mut vault = load_from_file(path, passphrase)?;
-
-    let editable_uris: Vec<EditableUri> = if uris.is_empty() {
-        vec![EditableUri {
-            uri: String::new(),
-            match_type: None,
-        }]
+    secure_note: bool,
+) -> EditableCipher {
+    let data = if secure_note {
+        EditableData::SecureNote
     } else {
-        uris.iter()
-            .map(|(uri, mt)| EditableUri {
-                uri: uri.clone(),
-                match_type: mt.map(|m| uri_match_type_str(m).to_string()),
-            })
-            .collect()
-    };
-
-    let template = EditableCipher {
-        name: name.unwrap_or("").to_string(),
-        folder: folder.map(std::string::ToString::to_string),
-        notes: None,
-        data: EditableData::Login {
+        let editable_uris: Vec<EditableUri> = if uris.is_empty() {
+            vec![EditableUri {
+                uri: String::new(),
+                match_type: None,
+            }]
+        } else {
+            uris.iter()
+                .map(|(uri, mt)| EditableUri {
+                    uri: uri.clone(),
+                    match_type: mt.map(|m| uri_match_type_str(m).to_string()),
+                })
+                .collect()
+        };
+        EditableData::Login {
             username: Some(username.unwrap_or("").to_string()),
             password: Some(
                 generated_password.unwrap_or_default().to_string(),
@@ -5578,9 +5590,41 @@ fn add_from_file(
             uris: editable_uris,
             totp: None,
             fido2_credentials: Vec::new(),
-        },
-        fields: Vec::new(),
+        }
     };
+    EditableCipher {
+        name: name.unwrap_or("").to_string(),
+        folder: folder.map(std::string::ToString::to_string),
+        // Serialized as `notes: ''` so the field is visible in the
+        // editor -- it's the whole point of a secure note.
+        notes: secure_note.then(String::new),
+        data,
+        fields: Vec::new(),
+    }
+}
+
+// Runs the `rbw add` template through `$EDITOR` (or stdin) and parses the
+// result. `Ok(None)` means the buffer came back unchanged and the add
+// should be cancelled.
+fn edit_new_entry(
+    template: EditableCipher,
+    json: bool,
+    prefilled: bool,
+) -> anyhow::Result<Option<EditableCipher>> {
+    if matches!(template.data, EditableData::SecureNote)
+        && !std::io::stdin().is_terminal()
+    {
+        // `echo ... | rbw add --secure-note NAME`: the piped text is the
+        // note itself, not a YAML/JSON entry.
+        let notes = std::io::read_to_string(std::io::stdin())?;
+        if notes.is_empty() {
+            anyhow::bail!("no note content on stdin");
+        }
+        return Ok(Some(EditableCipher {
+            notes: Some(notes),
+            ..template
+        }));
+    }
 
     let serialized = if json {
         serde_json::to_string_pretty(&template)?
@@ -5610,11 +5654,14 @@ fn add_from_file(
             s
         });
 
-    if generated_password.is_none()
-        && contents_trimmed.trim() == serialized.trim()
-    {
+    // With `--generate`, the template already has a real (generated)
+    // password filled in, so leaving the editor untouched means "accept the
+    // generated entry as shown", not "I opened this by accident" -- only
+    // treat an unmodified buffer as a no-op cancel when there's nothing
+    // pre-filled worth keeping.
+    if !prefilled && contents_trimmed.trim() == serialized.trim() {
         eprintln!("{}", paint_no_changes());
-        return Ok(());
+        return Ok(None);
     }
 
     let cipher: EditableCipher = if json {
@@ -5628,6 +5675,41 @@ fn add_from_file(
     if cipher.name.is_empty() {
         return Err(anyhow::anyhow!("name cannot be empty"));
     }
+
+    Ok(Some(cipher))
+}
+
+// `add --from-file`'s counterpart to `add_structured`: same
+// template/`$EDITOR`/reparse flow, but `editable_to_decrypted` into a
+// fresh `DecryptedCipher` (a locally-generated id -- there's no server
+// here to assign one) instead of encrypting and pushing to the server.
+#[allow(clippy::too_many_arguments)]
+fn add_from_file(
+    path: &std::path::Path,
+    name: Option<&str>,
+    username: Option<&str>,
+    uris: &[(String, Option<rbw::api::UriMatchType>)],
+    folder: Option<&str>,
+    json: bool,
+    generated_password: Option<&str>,
+    secure_note: bool,
+    passphrase: Option<&str>,
+) -> anyhow::Result<()> {
+    let mut vault = load_from_file(path, passphrase)?;
+
+    let template = new_entry_template(
+        name,
+        username,
+        uris,
+        folder,
+        generated_password,
+        secure_note,
+    );
+    let Some(cipher) =
+        edit_new_entry(template, json, generated_password.is_some())?
+    else {
+        return Ok(());
+    };
 
     let (data, fields, notes) = editable_to_decrypted(&cipher);
     let id = uuid::Uuid::new_v4().to_string();
@@ -7188,88 +7270,21 @@ fn add_structured(
     folder: Option<&str>,
     json: bool,
     generated_password: Option<&str>,
+    secure_note: bool,
 ) -> anyhow::Result<()> {
-    let editable_uris: Vec<EditableUri> = if uris.is_empty() {
-        vec![EditableUri {
-            uri: String::new(),
-            match_type: None,
-        }]
-    } else {
-        uris.iter()
-            .map(|(uri, mt)| EditableUri {
-                uri: uri.clone(),
-                match_type: mt.map(|m| uri_match_type_str(m).to_string()),
-            })
-            .collect()
-    };
-
-    let template = EditableCipher {
-        name: name.unwrap_or("").to_string(),
-        folder: folder.map(std::string::ToString::to_string),
-        notes: None,
-        data: EditableData::Login {
-            username: Some(username.unwrap_or("").to_string()),
-            password: Some(
-                generated_password.unwrap_or_default().to_string(),
-            ),
-            uris: editable_uris,
-            totp: None,
-            fido2_credentials: Vec::new(),
-        },
-        fields: Vec::new(),
-    };
-
-    let serialized = if json {
-        serde_json::to_string_pretty(&template)?
-    } else {
-        serde_yaml::to_string(&template)?
-    };
-
-    let (help, ext) = if json {
-        (
-            "# Fill in the JSON below. Lines starting with # are ignored.",
-            "json",
-        )
-    } else {
-        (
-            "# Fill in the YAML below. Lines starting with # are ignored.",
-            "yaml",
-        )
-    };
-
-    let contents = rbw::edit::edit(&serialized, help, ext)?;
-    let contents_trimmed = contents
-        .lines()
-        .filter(|l| !l.starts_with('#'))
-        .fold(String::new(), |mut s, l| {
-            s.push_str(l);
-            s.push('\n');
-            s
-        });
-
-    // With `--generate`, the template already has a real (generated)
-    // password filled in, so leaving the editor untouched means "accept the
-    // generated entry as shown", not "I opened this by accident" -- only
-    // treat an unmodified buffer as a no-op cancel when there's nothing
-    // pre-filled worth keeping.
-    if generated_password.is_none()
-        && contents_trimmed.trim() == serialized.trim()
-    {
-        eprintln!("{}", paint_no_changes());
+    let template = new_entry_template(
+        name,
+        username,
+        uris,
+        folder,
+        generated_password,
+        secure_note,
+    );
+    let Some(cipher) =
+        edit_new_entry(template, json, generated_password.is_some())?
+    else {
         return Ok(());
-    }
-
-    let cipher: EditableCipher = if json {
-        serde_json::from_str(&contents_trimmed)
-            .map_err(|e| anyhow::anyhow!("failed to parse JSON: {e}"))?
-    } else {
-        serde_yaml::from_str(&contents_trimmed)
-            .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?
     };
-
-    if cipher.name.is_empty() {
-        return Err(anyhow::anyhow!("name cannot be empty"));
-    }
 
     unlock(None, None)?;
 
