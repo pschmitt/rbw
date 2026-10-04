@@ -31,7 +31,7 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
         in
-        rec {
+        let
           rbw = pkgs.rustPlatform.buildRustPackage {
             pname = "rbw";
             inherit (cargoToml.package) version;
@@ -54,7 +54,86 @@
             '';
           };
 
+          rbwTermux =
+            let
+              androidPkgs =
+                (import nixpkgs {
+                  inherit system;
+                  config = {
+                    allowUnfree = true;
+                    android_sdk.accept_license = true;
+                  };
+                }).pkgsCross.aarch64-android-prebuilt;
+              androidRbw = androidPkgs.rustPlatform.buildRustPackage {
+                pname = "rbw";
+                inherit (cargoToml.package) version;
+
+                src = self;
+                cargoLock.lockFile = ./Cargo.lock;
+                cargoBuildFlags = [ "--no-default-features" ];
+                doCheck = false;
+              };
+            in
+            pkgs.runCommand "rbw-termux-${cargoToml.package.version}"
+              {
+                passthru.termuxNative = {
+                  abi = "android-bionic";
+                  files = [
+                    "bin/rbw"
+                    "bin/rbw-agent"
+                    "bin/git-credential-rbw"
+                    "share/bash-completion/completions/rbw"
+                    "share/fish/vendor_completions.d/rbw.fish"
+                    "share/zsh/site-functions/_rbw"
+                    "share/licenses/rbw/LICENSE"
+                  ];
+                  binaries = [
+                    "bin/rbw"
+                    "bin/rbw-agent"
+                  ];
+                  scripts = [ "bin/git-credential-rbw" ];
+                  trees = [ ];
+                };
+                meta = {
+                  description = "Termux-native Android/Bionic build of the pschmitt rbw fork";
+                  mainProgram = "rbw";
+                  # The derivation executes on the Linux builder; its declared
+                  # payload is Android/Bionic and is described by termuxNative.
+                  platforms = pkgs.lib.platforms.linux;
+                };
+              }
+              ''
+                mkdir -p \
+                  "$out/bin" \
+                  "$out/share/bash-completion/completions" \
+                  "$out/share/fish/vendor_completions.d" \
+                  "$out/share/zsh/site-functions" \
+                  "$out/share/licenses/rbw"
+                install -m755 ${androidRbw}/bin/rbw "$out/bin/rbw"
+                install -m755 ${androidRbw}/bin/rbw-agent "$out/bin/rbw-agent"
+                sed '1c#!/data/data/com.termux/files/usr/bin/sh' \
+                  ${rbw}/bin/git-credential-rbw > "$out/bin/git-credential-rbw"
+                chmod 755 "$out/bin/git-credential-rbw"
+                install -m644 ${rbw}/share/bash-completion/completions/rbw \
+                  "$out/share/bash-completion/completions/rbw"
+                install -m644 ${rbw}/share/fish/vendor_completions.d/rbw.fish \
+                  "$out/share/fish/vendor_completions.d/rbw.fish"
+                install -m644 ${rbw}/share/zsh/site-functions/_rbw \
+                  "$out/share/zsh/site-functions/_rbw"
+                install -m644 ${self}/LICENSE \
+                  "$out/share/licenses/rbw/LICENSE"
+              '';
+        in
+        {
+          inherit rbw;
+
+          # This output is built on Linux by Nix's Android cross set. Its
+          # metadata describes files for the Termux bundle exporter, which
+          # strips store paths and installs the files under the Termux prefix.
           default = rbw;
+        }
+        // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          rbw-termux = rbwTermux;
         }
       );
 
