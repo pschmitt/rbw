@@ -71,6 +71,10 @@
                 src = self;
                 cargoLock.lockFile = ./Cargo.lock;
                 cargoBuildFlags = [ "--no-default-features" ];
+                RUSTFLAGS = nixpkgs.lib.concatStringsSep " " [
+                  "-C link-arg=-Wl,-z,max-page-size=16384"
+                  "-C link-arg=-Wl,-z,common-page-size=16384"
+                ];
                 doCheck = false;
               };
             in
