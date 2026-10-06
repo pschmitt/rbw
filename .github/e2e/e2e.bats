@@ -274,6 +274,142 @@ assert d['notes'] == 'added via rbw add --yaml', d
 "
 }
 
+@test "set must take secrets from stdin/file/env/--generate and set custom fields" {
+    "$RBW" generate e2e-entry-9 e2e-user-9 --length 20 >/dev/null
+    "$RBW" sync
+    ID9="$("$RBW" list e2e-entry-9 --fields id | head -1)"
+    pw() { "$RBW" get --json "$ID9" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["password"])'; }
+
+    echo "stdinPassword1!" | "$RBW" set -y --password-stdin "$ID9"
+    "$RBW" sync
+    [ "$(pw)" = "stdinPassword1!" ]
+
+    printf 'filePassword2!\n' >"$BATS_TEST_TMPDIR/pw"
+    "$RBW" set -y --password-file "$BATS_TEST_TMPDIR/pw" "$ID9"
+    "$RBW" sync
+    [ "$(pw)" = "filePassword2!" ]
+
+    E2E_PW="envPassword3!" "$RBW" set -y --password-env E2E_PW "$ID9"
+    "$RBW" sync
+    [ "$(pw)" = "envPassword3!" ]
+
+    # nothing printed; the password only goes to --output-file (0600)
+    OUT="$BATS_TEST_TMPDIR/generated"
+    run --separate-stderr "$RBW" set -y -g -l 32 --output-file "$OUT" "$ID9"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"$(cat "$OUT")"* ]]
+    [ "$(stat -c %a "$OUT")" = 600 ]
+    "$RBW" sync
+    [ "$(pw)" = "$(cat "$OUT")" ]
+    [ "$(wc -m <"$OUT")" -eq 33 ] # 32 chars + newline
+    "$RBW" history --json "$ID9" | python3 -c "
+import json, sys
+h = [e['password'] for e in json.load(sys.stdin)]
+assert h[:3] == ['envPassword3!', 'filePassword2!', 'stdinPassword1!'], h
+"
+
+    E2E_FIELD="from-env" "$RBW" set -y --field api-token=tok1 \
+        --field-env other=E2E_FIELD "$ID9"
+    "$RBW" set -y --field api-token=tok2 "$ID9"
+    "$RBW" sync
+    "$RBW" get --json "$ID9" | python3 -c "
+import json, sys
+fields = {f['name']: f for f in json.load(sys.stdin)['fields']}
+assert set(fields) == {'api-token', 'other'}, fields
+assert fields['api-token']['value'] == 'tok2', fields
+assert fields['api-token']['type'] == 'hidden', fields
+assert fields['other']['value'] == 'from-env', fields
+"
+    save ID9 "$ID9"
+}
+
+@test "revision dates must guard set --if-revision, filter list --older-than, and history --restore must roll back" {
+    rev() { "$RBW" get --json "$ID9" | python3 -c 'import json,sys; print(json.load(sys.stdin)["revision_date"])'; }
+    REV="$(rev)"
+    [ -n "$REV" ]
+
+    "$RBW" set -y --if-revision "$REV" --notes "guarded 1" "$ID9"
+    "$RBW" sync
+    [ "$(rev)" != "$REV" ]
+    # stale revision: must refuse and leave the entry alone
+    run ! "$RBW" set -y --if-revision "$REV" --notes "guarded 2" "$ID9"
+    "$RBW" sync
+    "$RBW" get --json "$ID9" | python3 -c "
+import json, sys
+assert json.load(sys.stdin)['notes'] == 'guarded 1'
+"
+
+    ! "$RBW" list --older-than 1h --fields name | grep -qx e2e-entry-9
+    sleep 2
+    "$RBW" list --older-than 1s --fields name | grep -qx e2e-entry-9
+    "$RBW" list --fields name,modified | grep -q "^e2e-entry-9[[:space:]]*20[0-9][0-9]-"
+
+    "$RBW" history -y --restore "$ID9"
+    "$RBW" sync
+    "$RBW" get --json "$ID9" | python3 -c "
+import json, sys
+assert json.load(sys.stdin)['data']['password'] == 'envPassword3!'
+"
+}
+
+@test "an edit based on a stale local copy must be rejected, not revert a newer change" {
+    # a second client (own HOME/agent) changes the entry server-side ...
+    H2="$(mktemp -d)"
+    sleep 2 # Vaultwarden tolerates <=1s of revision date skew
+    (
+        # own config/cache/agent socket, not just HOME: the agent socket
+        # lives in $XDG_RUNTIME_DIR, which both clients would share
+        export HOME="$H2" RBW_PROFILE=e2e-second-client
+        "$RBW" account add e2e --email "$EMAIL" --base-url "$BASE_URL" --primary
+        echo "$PASSWORD" | "$RBW" login --stdin
+        echo "$PASSWORD" | "$RBW" unlock --stdin
+        "$RBW" set -y --notes "from the other client" "$ID9"
+        "$RBW" stop-agent --kill >/dev/null 2>&1 || true
+    )
+    # ... so this client's cached copy is stale: the full-object PUT must
+    # be refused (lastKnownRevisionDate) instead of reverting that change
+    run ! "$RBW" set -y --notes "from a stale copy" "$ID9"
+    "$RBW" sync
+    "$RBW" get --json "$ID9" | python3 -c "
+import json, sys
+assert json.load(sys.stdin)['notes'] == 'from the other client'
+"
+}
+
+@test "audit must report weak and reused passwords without printing them" {
+    "$RBW" generate e2e-entry-10 e2e-user-10 --length 20 >/dev/null
+    "$RBW" generate e2e-entry-11 e2e-user-11 --length 20 >/dev/null
+    "$RBW" sync
+    for n in 10 11; do
+        "$RBW" set -y --password "aaaaaaaa" "$("$RBW" list "e2e-entry-$n" --fields id | head -1)"
+    done
+    "$RBW" sync
+    run --separate-stderr "$RBW" audit --json
+    [ "$status" -eq 0 ]
+    [[ "$output" != *aaaaaaaa* ]]
+    python3 -c "
+import json, sys
+findings = {f['name']: {i['kind'] for i in f['issues']} for f in json.loads(sys.argv[1])}
+for name in ('e2e-entry-10', 'e2e-entry-11'):
+    assert findings.get(name) == {'weak', 'reused'}, findings
+assert 'e2e-entry-9' not in findings, findings
+" "$output"
+    run ! "$RBW" audit --fail
+}
+
+@test "audit --hibp must flag a known-breached password" {
+    # opt-in: talks to the real Have I Been Pwned range API
+    [ "${RBW_E2E_HIBP:-}" = 1 ] || skip "set RBW_E2E_HIBP=1 to query api.pwnedpasswords.com"
+    run --separate-stderr "$RBW" audit --hibp --json
+    [ "$status" -eq 0 ]
+    python3 -c "
+import json, sys
+findings = {f['name']: f['issues'] for f in json.loads(sys.argv[1])}
+breached = [i for i in findings['e2e-entry-10'] if i['kind'] == 'breached']
+assert breached and breached[0]['count'] > 0, findings
+" "$output"
+}
+
 @test "export -> purge-vault -> import must restore an equivalent vault" {
     "$RBW" sync
     EXPORT_FILE="$(mktemp)"
