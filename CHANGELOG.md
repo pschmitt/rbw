@@ -46,6 +46,12 @@
   N-th previous password (default: the most recent one) current again,
   e.g. to roll back a rotation that failed verification. Goes through the
   regular `rbw set` path, so the replaced password lands in the history.
+* `rbw audit`: report weak (rough character-class estimate below
+  `--min-bits`, default 60) and reused passwords across the active
+  account's live Login entries; `--hibp` also checks Have I Been Pwned via
+  its k-anonymity range API (only the first 5 hex characters of each
+  password's SHA-1 are sent). Reports entries only, never passwords;
+  `--output json/yaml` for scripts, `--fail` to exit non-zero on findings.
 
 ## [2.17.12] - 2026-09-25
 

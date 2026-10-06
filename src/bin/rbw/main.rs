@@ -11,6 +11,7 @@ use anyhow::Context as _;
 use clap::{CommandFactory as _, FromArgMatches as _};
 
 mod actions;
+mod audit;
 mod commands;
 mod export_info;
 mod import_bitwarden;
@@ -283,6 +284,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
             "show",
             "code",
             "history",
+            "audit",
             "add",
             "generate",
             "edit",
@@ -1661,6 +1663,45 @@ enum Opt {
         org: Org,
     },
 
+    #[command(
+        about = "Report weak, reused and (with --hibp) breached passwords",
+        long_about = "Report weak, reused and (with --hibp) breached \
+            passwords\n\n\
+            Checks every live Login entry of the active account. Only \
+            entries are reported, never passwords. The strength check is a \
+            rough character-class estimate; --hibp additionally queries \
+            Have I Been Pwned's range API, which only ever receives the \
+            first 5 hex characters of each password's SHA-1 hash."
+    )]
+    Audit {
+        #[arg(
+            long,
+            value_name = "BITS",
+            default_value_t = 60,
+            help = "Flag passwords with an estimated strength below BITS"
+        )]
+        min_bits: u32,
+        #[arg(
+            long,
+            help = "Also check passwords against Have I Been Pwned \
+                (k-anonymity range lookup)"
+        )]
+        hibp: bool,
+        #[arg(long, help = "Exit non-zero if any issue was found")]
+        fail: bool,
+        #[arg(short, long, value_enum, help = "Output mode: json, yaml")]
+        output: Option<OutputArg>,
+        #[arg(
+            short = 'j',
+            long,
+            visible_alias = "json",
+            help = "Display output as JSON"
+        )]
+        raw: bool,
+        #[arg(long, help = "Display output as YAML")]
+        yaml: bool,
+    },
+
     #[command(about = "View the password history for a given entry")]
     History {
         #[command(flatten)]
@@ -1990,6 +2031,7 @@ impl Opt {
             }
             Self::Org { org } => format!("org {}", org.subcommand_name()),
             Self::History { .. } => "history".to_string(),
+            Self::Audit { .. } => "audit".to_string(),
             Self::Lock { .. } => "lock".to_string(),
             Self::Purge { .. } => "purge".to_string(),
             Self::PurgeVault { .. } => "purge-vault".to_string(),
@@ -3878,6 +3920,15 @@ fn main() {
                 commands::rename_org(org_id.as_deref(), &name)
             }
         },
+        Opt::Audit {
+            min_bits,
+            hibp,
+            fail,
+            output,
+            raw,
+            yaml,
+        } => resolve_output_mode(output, raw, yaml)
+            .and_then(|output| commands::audit(min_bits, hibp, output, fail)),
         Opt::History {
             find_args,
             restore,
