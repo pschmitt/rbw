@@ -23788,7 +23788,7 @@ mod test {
         assert_eq!(entry.name, "example");
         assert_eq!(entry.folder.as_deref(), Some("Work"));
         assert_eq!(entry.collection_ids, vec!["c1".to_string()]);
-        assert!(entry.attachments.is_empty());
+        assert_eq!(entry.attachments.len(), 0);
         assert_eq!(entry.history.len(), 1);
         assert_eq!(entry.history[0].password, "old");
 
@@ -23828,7 +23828,7 @@ mod test {
 
         let vault: ImportedVault = serde_json::from_str(json).unwrap();
         assert_eq!(vault.entries.len(), 1);
-        assert!(vault.entries[0].attachments.is_empty());
+        assert_eq!(vault.entries[0].attachments.len(), 0);
         assert!(matches!(vault.entries[0].data, ImportedData::SecureNote));
     }
 
@@ -24164,7 +24164,7 @@ mod test {
         };
 
         let (bw, attachments) = exported_vault_to_bw(&vault);
-        assert!(attachments.is_empty());
+        assert_eq!(attachments.len(), 0);
 
         assert_eq!(bw.collections.len(), 1);
         assert_eq!(
@@ -24265,7 +24265,7 @@ mod test {
         assert!(!all.contains_key("email_ p@x.dev"));
 
         // An item with no matching folder just gets no attachments.
-        assert!(bw_item_attachments("nothing here", &mut all).is_empty());
+        assert_eq!(bw_item_attachments("nothing here", &mut all).len(), 0);
     }
 
     // Builds an in-memory tar.gz containing the given (name, contents)

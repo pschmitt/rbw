@@ -1392,7 +1392,7 @@ mod test {
     #[test]
     fn aliases_default_to_empty_and_are_skipped_when_empty() {
         let c: Config = serde_json::from_str("{}").unwrap();
-        assert!(c.aliases.is_empty());
+        assert_eq!(c.aliases.len(), 0);
         let yaml = serde_yaml::to_string(&c).unwrap();
         assert!(!yaml.contains("aliases"));
     }

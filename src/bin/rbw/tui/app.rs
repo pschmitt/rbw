@@ -3566,7 +3566,7 @@ mod test {
         let SettingValue::Text(length) = &view.fields[0].value else {
             panic!("expected the length field to stay text");
         };
-        assert!(length.value().is_empty());
+        assert_eq!(length.value(), "");
     }
 
     // Typed digits land in the (initially focused) length field.

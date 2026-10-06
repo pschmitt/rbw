@@ -144,7 +144,7 @@ mod test {
     fn test_reused_groups() {
         let groups = reused_groups(["a", "b", "a", "c", "b", "a"]);
         assert_eq!(groups, vec![vec![0, 2, 5], vec![1, 4]]);
-        assert!(reused_groups(["a", "b"]).is_empty());
+        assert_eq!(reused_groups(["a", "b"]).len(), 0);
     }
 
     #[test]
