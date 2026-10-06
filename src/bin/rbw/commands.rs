@@ -15025,6 +15025,74 @@ fn history_from_file(
     Ok(())
 }
 
+// `rbw history --restore[=N]`: re-applies a previous password through the
+// regular `rbw set` path, so the current one lands in the history and the
+// confirmation shows the (censored) change.
+#[allow(clippy::too_many_arguments)]
+pub fn history_restore(
+    needles: Vec<Needle>,
+    username: Option<&str>,
+    folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+    n: usize,
+    yes: bool,
+) -> anyhow::Result<()> {
+    unlock(None, None)?;
+    let mut db = load_db()?;
+    let (entry, decrypted) = find_entry(
+        &db,
+        needles,
+        username,
+        folder,
+        collection,
+        org,
+        ignore_case,
+        force_exact,
+    )?;
+    let previous = restore_candidate(&decrypted, n)?.to_string();
+    set_entry(
+        &mut db,
+        &entry,
+        &decrypted,
+        None,
+        None,
+        Some(&previous),
+        None,
+        &[],
+        None,
+        &[],
+        false,
+        &[],
+        yes,
+    )
+}
+
+fn restore_candidate(
+    decrypted: &DecryptedCipher,
+    n: usize,
+) -> anyhow::Result<&str> {
+    if !matches!(decrypted.data, DecryptedData::Login { .. }) {
+        return Err(anyhow::anyhow!(
+            "{} is not a Login entry and has no password to restore",
+            decrypted.name
+        ));
+    }
+    decrypted
+        .history
+        .get(n.saturating_sub(1))
+        .map(|h| h.password.as_str())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{} has only {} previous password(s), can't restore #{n}",
+                decrypted.name,
+                decrypted.history.len()
+            )
+        })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn history(
     needles: Vec<Needle>,
@@ -21561,6 +21629,25 @@ mod test {
             value: value.map(str::to_string),
             ty: Some(ty),
         }
+    }
+
+    #[test]
+    fn test_restore_candidate() {
+        let mut cipher = login_cipher(Some("current"), None);
+        assert!(restore_candidate(&cipher, 1).is_err());
+        cipher.history = vec![
+            DecryptedHistoryEntry {
+                last_used_date: "2026-10-01T00:00:00Z".to_string(),
+                password: "previous".to_string(),
+            },
+            DecryptedHistoryEntry {
+                last_used_date: "2026-09-01T00:00:00Z".to_string(),
+                password: "older".to_string(),
+            },
+        ];
+        assert_eq!(restore_candidate(&cipher, 1).unwrap(), "previous");
+        assert_eq!(restore_candidate(&cipher, 2).unwrap(), "older");
+        assert!(restore_candidate(&cipher, 3).is_err());
     }
 
     #[test]

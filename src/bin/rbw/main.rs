@@ -1666,6 +1666,26 @@ enum Opt {
         #[command(flatten)]
         find_args: FindArgs,
         #[arg(
+            long,
+            value_name = "N",
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "1",
+            value_parser = clap::value_parser!(u32).range(1..),
+            conflicts_with = "from_file",
+            help = "Make the N-th previous password (1 = most recent, the \
+                default) current again, e.g. to roll back a rotation. The \
+                replaced password moves to the history as usual"
+        )]
+        restore: Option<u32>,
+        #[arg(
+            short = 'y',
+            long,
+            requires = "restore",
+            help = "With --restore, skip the confirmation prompt"
+        )]
+        yes: bool,
+        #[arg(
             short,
             long,
             value_enum,
@@ -3860,6 +3880,8 @@ fn main() {
         },
         Opt::History {
             find_args,
+            restore,
+            yes,
             output,
             raw,
             yaml,
@@ -3867,6 +3889,19 @@ fn main() {
             from_file_passphrase,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
+            if let Some(n) = restore {
+                return commands::history_restore(
+                    find_args.needles,
+                    find_args.user.as_deref(),
+                    find_args.folder.as_deref(),
+                    find_args.collection.as_deref(),
+                    find_args.org.as_deref(),
+                    find_args.ignorecase,
+                    find_args.exact,
+                    usize::try_from(n)?,
+                    yes,
+                );
+            }
             commands::history(
                 find_args.needles,
                 find_args.user.as_deref(),
@@ -4666,6 +4701,31 @@ mod test {
             &["rbw", "list", "--older-than", "1d", "--from-file", "f"][..],
             &["rbw", "set", "e", "--if-revision", "x", "--bulk"][..],
             &["rbw", "set", "e", "--if-revision", "x", "--from-file", "f"][..],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn test_history_restore_args() {
+        for (args, want) in [
+            (&["rbw", "history", "e"][..], None),
+            (&["rbw", "history", "--restore", "e"][..], Some(1)),
+            (&["rbw", "history", "e", "--restore=2", "-y"][..], Some(2)),
+        ] {
+            let Opt::History {
+                restore, find_args, ..
+            } = parse(args).command
+            else {
+                panic!("expected Opt::History");
+            };
+            assert_eq!(restore, want, "{args:?}");
+            assert_eq!(find_args.needles.len(), 1, "{args:?}");
+        }
+        for args in [
+            &["rbw", "history", "e", "-y"][..],
+            &["rbw", "history", "e", "--restore=0"][..],
+            &["rbw", "history", "e", "--restore", "--from-file", "f"][..],
         ] {
             assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
         }

@@ -31,6 +31,10 @@
 * `rbw set --if-revision REVISION_DATE`: syncs, then refuses to update an
   entry whose revision date no longer matches, so a change made elsewhere
   between looking at an entry and updating it isn't silently overwritten.
+* `rbw history ENTRY --restore[=N]` (`-y` to skip the prompt): make the
+  N-th previous password (default: the most recent one) current again,
+  e.g. to roll back a rotation that failed verification. Goes through the
+  regular `rbw set` path, so the replaced password lands in the history.
 
 ## [2.17.12] - 2026-09-25
 
