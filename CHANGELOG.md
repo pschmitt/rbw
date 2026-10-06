@@ -4,6 +4,15 @@
 
 ### Fixed
 
+* Vaultwarden 1.37.4 compatibility: cipher writes (`add`, `generate`,
+  `set`, `edit`, `import`, ...) now send `encryptedFor` (the account's
+  user id, taken from the access token's `sub` claim), which Vaultwarden
+  1.37.4 requires on every cipher create/update -- without it all of them
+  failed with `422 Unprocessable Entity`.
+* e2e: register the test account through the `send-verification-email`
+  -> `finish` flow (Vaultwarden 1.37.4 dropped the legacy
+  `/identity/accounts/register`), falling back to the legacy endpoint on
+  older servers.
 * Cipher edits (`rbw set`, `rbw edit`, and friends) now send Bitwarden's
   `lastKnownRevisionDate`, so the server rejects an update built from an
   outdated local copy instead of letting the full-object replace silently

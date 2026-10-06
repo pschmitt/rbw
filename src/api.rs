@@ -682,6 +682,20 @@ mod tests {
     }
 
     #[test]
+    fn user_id_from_access_token_reads_sub_claim() {
+        let payload = crate::base64::encode_url_safe_no_pad(
+            br#"{"sub":"0b2c4d6e-user-id","email":"e@example.com"}"#,
+        );
+        let token = format!("eyJhbGciOiJSUzI1NiJ9.{payload}.signature");
+        assert_eq!(
+            user_id_from_access_token(&token).as_deref(),
+            Some("0b2c4d6e-user-id")
+        );
+        assert_eq!(user_id_from_access_token("not-a-jwt"), None);
+        assert_eq!(user_id_from_access_token("a.!!!.c"), None);
+    }
+
+    #[test]
     fn sync_cipher_keeps_revision_date() {
         let cipher: SyncResCipher =
             serde_json::from_value(serde_json::json!({
@@ -729,6 +743,7 @@ mod tests {
             fields: Vec::new(),
             secure_note: None,
             ssh_key: Some(test_ssh_key()),
+            encrypted_for: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
@@ -761,6 +776,7 @@ mod tests {
             password_history: Vec::new(),
             key: None,
             last_known_revision_date: None,
+            encrypted_for: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
@@ -1244,6 +1260,18 @@ fn cipher_type_and_fields(
     (ty, login, card, identity, secure_note, ssh_key)
 }
 
+// The user id is the `sub` claim of the (JWT) access token, so it doesn't
+// need to be stored or fetched separately. Only decoded, not verified --
+// the server does that; this just echoes the id back to it.
+fn user_id_from_access_token(access_token: &str) -> Option<String> {
+    let payload = access_token.split('.').nth(1)?;
+    let payload =
+        crate::base64::decode_url_safe_no_pad(payload.trim_end_matches('='))
+            .ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+    claims.get("sub")?.as_str().map(str::to_string)
+}
+
 #[derive(serde::Serialize, Debug)]
 struct CiphersPostReq {
     #[serde(rename = "type")]
@@ -1260,6 +1288,14 @@ struct CiphersPostReq {
     secure_note: Option<CipherSecureNote>,
     #[serde(rename = "sshKey")]
     ssh_key: Option<CipherSshKey>,
+    // The account's user id, which Vaultwarden >= 1.37.4 (and Bitwarden,
+    // since web-v2025.6.0) require on every cipher write and check against
+    // the authenticated user. Omitted if it can't be determined.
+    #[serde(
+        rename = "encryptedFor",
+        skip_serializing_if = "Option::is_none"
+    )]
+    encrypted_for: Option<String>,
 }
 
 #[derive(serde::Serialize, Debug)]
@@ -1299,6 +1335,14 @@ struct CiphersPutReq {
         skip_serializing_if = "Option::is_none"
     )]
     last_known_revision_date: Option<String>,
+    // The account's user id, which Vaultwarden >= 1.37.4 (and Bitwarden,
+    // since web-v2025.6.0) require on every cipher write and check against
+    // the authenticated user. Omitted if it can't be determined.
+    #[serde(
+        rename = "encryptedFor",
+        skip_serializing_if = "Option::is_none"
+    )]
+    encrypted_for: Option<String>,
 }
 
 #[derive(serde::Serialize, Debug)]
@@ -1341,6 +1385,14 @@ struct ImportCipherReq {
     ssh_key: Option<CipherSshKey>,
     #[serde(rename = "passwordHistory")]
     password_history: Vec<CiphersPutReqHistory>,
+    // The account's user id, which Vaultwarden >= 1.37.4 (and Bitwarden,
+    // since web-v2025.6.0) require on every cipher write and check against
+    // the authenticated user. Omitted if it can't be determined.
+    #[serde(
+        rename = "encryptedFor",
+        skip_serializing_if = "Option::is_none"
+    )]
+    encrypted_for: Option<String>,
 }
 
 // An entry in `ImportCipherReq`/`ImportOrganizationCiphersReq`'s
@@ -2200,6 +2252,7 @@ impl Client {
                 .collect(),
             secure_note,
             ssh_key,
+            encrypted_for: user_id_from_access_token(access_token),
         };
         let client = reqwest::blocking::Client::new();
         let res = client
@@ -2236,6 +2289,7 @@ impl Client {
         entry: &crate::actions::ImportCipherEntry,
         organization_id: Option<String>,
         folder_id: Option<String>,
+        encrypted_for: Option<String>,
     ) -> ImportCipherReq {
         let (ty, login, card, identity, secure_note, ssh_key) =
             cipher_type_and_fields(&entry.data);
@@ -2268,6 +2322,7 @@ impl Client {
                     password: h.password.clone(),
                 })
                 .collect(),
+            encrypted_for,
         }
     }
 
@@ -2304,7 +2359,14 @@ impl Client {
         let req = ImportCiphersReq {
             ciphers: entries
                 .iter()
-                .map(|entry| Self::import_cipher_req(entry, None, None))
+                .map(|entry| {
+                    Self::import_cipher_req(
+                        entry,
+                        None,
+                        None,
+                        user_id_from_access_token(access_token),
+                    )
+                })
                 .collect(),
             folders: folder_ids
                 .into_iter()
@@ -2359,6 +2421,7 @@ impl Client {
                         entry,
                         Some(org_id.to_string()),
                         None,
+                        user_id_from_access_token(access_token),
                     )
                 })
                 .collect(),
@@ -2463,6 +2526,7 @@ impl Client {
                 .collect(),
             last_known_revision_date: last_known_revision_date
                 .map(std::string::ToString::to_string),
+            encrypted_for: user_id_from_access_token(access_token),
         };
         match data {
             crate::db::EntryData::Login {

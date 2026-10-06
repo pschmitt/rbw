@@ -132,11 +132,53 @@ fn main() {
     });
 
     let client = reqwest::blocking::Client::new();
+    // Vaultwarden >= 1.37.4 only has the two-step flow: request a
+    // verification token (returned directly when the server can't send
+    // mail), then finish with it. Older servers only have the legacy
+    // one-shot `/identity/accounts/register`.
     let res = client
-        .post(format!("{base_url}/identity/accounts/register"))
-        .json(&body)
+        .post(format!(
+            "{base_url}/identity/accounts/register/send-verification-email"
+        ))
+        .json(&serde_json::json!({
+            "email": email,
+            "name": name,
+            "receiveMarketingEmails": false,
+        }))
         .send()
-        .expect("registration request failed to send");
+        .expect("verification request failed to send");
+    let res = if res.status() == reqwest::StatusCode::NOT_FOUND {
+        client
+            .post(format!("{base_url}/identity/accounts/register"))
+            .json(&body)
+            .send()
+            .expect("registration request failed to send")
+    } else {
+        let status = res.status();
+        let text = res.text().unwrap_or_default();
+        if !status.is_success() {
+            eprintln!("verification request failed ({status}): {text}");
+            std::process::exit(1);
+        }
+        let token: String = serde_json::from_str(&text).unwrap_or(text);
+        if token.is_empty() {
+            eprintln!(
+                "server sent a verification mail instead of returning a \
+                 token; disable mail/signup verification for e2e"
+            );
+            std::process::exit(1);
+        }
+        // same body; `key`/`keys` are what Vaultwarden's `finish` also
+        // accepts (as aliases of userSymmetricKey/userAsymmetricKeys --
+        // sending both spellings is a duplicate-field error)
+        let mut finish = body;
+        finish["emailVerificationToken"] = token.into();
+        client
+            .post(format!("{base_url}/identity/accounts/register/finish"))
+            .json(&finish)
+            .send()
+            .expect("registration request failed to send")
+    };
     let status = res.status();
     let text = res.text().unwrap_or_default();
     if status.is_success() {
