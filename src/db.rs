@@ -28,6 +28,10 @@ pub struct Entry {
     pub collection_ids: Vec<String>,
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    // Server-side last-modified timestamp (RFC 3339), absent in local
+    // databases synced before rbw started storing it.
+    #[serde(default)]
+    pub revision_date: Option<String>,
 }
 
 #[derive(

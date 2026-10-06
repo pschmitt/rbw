@@ -444,6 +444,8 @@ struct SyncResCipher {
     deleted_date: Option<String>,
     #[serde(rename = "ArchivedDate", alias = "archivedDate")]
     archived_date: Option<String>,
+    #[serde(rename = "RevisionDate", alias = "revisionDate", default)]
+    revision_date: Option<String>,
     #[serde(rename = "Key", alias = "key")]
     key: Option<String>,
     #[serde(rename = "Reprompt", alias = "reprompt")]
@@ -634,6 +636,7 @@ impl SyncResCipher {
                     size_name: attachment.size_name.clone(),
                 })
                 .collect(),
+            revision_date: self.revision_date.clone(),
         })
     }
 }
@@ -676,6 +679,33 @@ mod tests {
             .unwrap();
 
         assert!(cipher.attachments.is_empty());
+    }
+
+    #[test]
+    fn sync_cipher_keeps_revision_date() {
+        let cipher: SyncResCipher =
+            serde_json::from_value(serde_json::json!({
+                "id": "cipher-id",
+                "name": "example",
+                "secureNote": {},
+                "reprompt": 0,
+                "revisionDate": "2026-09-25T08:03:10.1234567Z",
+            }))
+            .unwrap();
+        assert_eq!(
+            cipher.revision_date.as_deref(),
+            Some("2026-09-25T08:03:10.1234567Z")
+        );
+
+        let cipher: SyncResCipher =
+            serde_json::from_value(serde_json::json!({
+                "id": "cipher-id",
+                "name": "example",
+                "secureNote": {},
+                "reprompt": 0,
+            }))
+            .unwrap();
+        assert_eq!(cipher.revision_date, None);
     }
 
     fn test_ssh_key() -> CipherSshKey {

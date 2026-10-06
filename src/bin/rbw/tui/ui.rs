@@ -1934,6 +1934,7 @@ mod test {
             archived: false,
             deleted: false,
             account: None,
+            revision_date: None,
         };
 
         // Masked: the password value must not appear in plain text.
@@ -1983,6 +1984,7 @@ mod test {
             archived: false,
             deleted: false,
             account: None,
+            revision_date: None,
         };
         let scope = TuiEntryScope {
             organization: Some("Acme".to_string()),
@@ -2029,6 +2031,7 @@ mod test {
             archived: false,
             deleted: false,
             account: None,
+            revision_date: None,
         };
 
         // A span whose content is exactly `text` and whose style carries the
@@ -2085,6 +2088,7 @@ mod test {
             archived: false,
             deleted: false,
             account: None,
+            revision_date: None,
         };
 
         let text_of = |lines: &[super::Line<'_>]| -> String {

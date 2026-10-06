@@ -214,6 +214,8 @@ struct DecryptedListCipher {
     entry_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     collection_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision_date: Option<String>,
     #[serde(flatten)]
     attachment_metadata: AttachmentMetadata,
     archived: bool,
@@ -810,6 +812,7 @@ impl From<DecryptedSearchCipher> for DecryptedListCipher {
             folder: value.folder,
             uris: Some(value.uris.into_iter().map(|(s, _)| s).collect()),
             collection_ids: None,
+            revision_date: None,
             attachment_metadata,
             archived: value.archived,
             deleted: value.deleted,
@@ -859,6 +862,10 @@ pub struct DecryptedCipher {
     pub attachment_metadata: AttachmentMetadata,
     pub archived: bool,
     pub deleted: bool,
+    // Server-side last-modified timestamp (RFC 3339); `None` for entries
+    // synced by an older rbw and for `--from-file` exports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_date: Option<String>,
     // Set when this entry was merged in from a non-active account (multi-
     // account `list`/`search`); omitted otherwise so single-account output is
     // unchanged.
@@ -2529,6 +2536,7 @@ enum ListField {
     Uri,
     EntryType,
     Collections,
+    Modified,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -2572,6 +2580,7 @@ impl std::convert::TryFrom<&String> for ListField {
             "folder" => Self::Folder,
             "type" => Self::EntryType,
             "collections" => Self::Collections,
+            "modified" | "revision" => Self::Modified,
             _ => return Err(anyhow::anyhow!("unknown field {s}")),
         })
     }
@@ -3689,6 +3698,29 @@ fn list_from_file(
 }
 
 #[allow(clippy::too_many_arguments)]
+// Bitwarden/Vaultwarden send .NET-style RFC 3339 timestamps (up to 7
+// fractional digits, `Z` suffix), which humantime's weak parser accepts.
+fn parse_revision_date(date: &str) -> anyhow::Result<std::time::SystemTime> {
+    humantime::parse_rfc3339_weak(date.trim_end_matches('Z'))
+        .with_context(|| format!("invalid revision date '{date}'"))
+}
+
+// `rbw list --fields modified`: just the (UTC) day; the full timestamp is
+// in the structured output.
+fn format_revision_date(date: &str) -> String {
+    date.get(..10).unwrap_or(date).to_string()
+}
+
+fn warn_undated_entries(undated: usize) {
+    if undated > 0 {
+        eprintln!(
+            "note: skipped {undated} {} without a revision date (synced by an \
+             older rbw); run `rbw sync` to fetch them",
+            if undated == 1 { "entry" } else { "entries" }
+        );
+    }
+}
+
 pub fn list(
     fields: &[String],
     with_attachments: bool,
@@ -3699,9 +3731,35 @@ pub fn list(
     all: bool,
     archived_filter: ArchivedFilter,
     trash_filter: TrashFilter,
+    older_than: Option<std::time::Duration>,
     from_file: Option<&std::path::Path>,
     from_file_passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
+    let cutoff = older_than
+        .map(|age| {
+            std::time::SystemTime::now()
+                .checked_sub(age)
+                .ok_or_else(|| anyhow::anyhow!("--older-than is too large"))
+        })
+        .transpose()?;
+    let mut undated = 0_usize;
+    let mut modified_before = |entry: &rbw::db::Entry| {
+        let Some(cutoff) = cutoff else {
+            return true;
+        };
+        match entry.revision_date.as_deref().map(parse_revision_date) {
+            Some(Ok(modified)) => modified < cutoff,
+            Some(Err(e)) => {
+                log::warn!("unparseable revision date on {}: {e}", entry.id);
+                false
+            }
+            None => {
+                undated += 1;
+                false
+            }
+        }
+    };
+
     if let Some(path) = from_file {
         return list_from_file(
             path,
@@ -3744,6 +3802,7 @@ pub fn list(
                         org_id.as_deref(),
                     )
                 })
+                .filter(|entry| modified_before(entry))
                 // One corrupt entry must not fail listing the rest of the
                 // vault -- skip it and warn instead.
                 .filter_map(|entry| match decrypt_cipher(entry) {
@@ -3768,6 +3827,7 @@ pub fn list(
         entries.retain(|entry| archived_filter.matches(entry.archived));
         entries.retain(|entry| trash_filter.matches(entry.deleted));
         entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        warn_undated_entries(undated);
         return write_serialized_pretty(
             &entries,
             output,
@@ -3813,6 +3873,7 @@ pub fn list(
                     org_id.as_deref(),
                 )
             })
+            .filter(|entry| modified_before(entry))
             .map(|entry| ListCipherPlan::build(entry, &fields, &mut requests))
             .collect();
 
@@ -3846,6 +3907,7 @@ pub fn list(
     entries.retain(|entry| trash_filter.matches(entry.deleted));
     entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
+    warn_undated_entries(undated);
     print_entry_list(&entries, &fields, output, "")?;
 
     Ok(())
@@ -5007,6 +5069,10 @@ fn print_entry_list(
                     header: "collections",
                     style: TableColumnStyle::Collections,
                 },
+                ListField::Modified => TableColumn {
+                    header: "modified",
+                    style: TableColumnStyle::Default,
+                },
                 ListField::Password => TableColumn {
                     header: "password",
                     style: TableColumnStyle::Password,
@@ -5062,6 +5128,10 @@ fn print_entry_list(
                             .collection_ids
                             .as_ref()
                             .map_or_else(String::new, |ids| ids.join(",")),
+                        ListField::Modified => entry
+                            .revision_date
+                            .as_deref()
+                            .map_or_else(String::new, format_revision_date),
                         ListField::Password => {
                             entry.password.as_ref().map_or_else(
                                 String::new,
@@ -5726,6 +5796,7 @@ fn add_from_file(
         archived: false,
         deleted: false,
         account: None,
+        revision_date: None,
     });
 
     backup_file(path)?;
@@ -7349,6 +7420,7 @@ pub fn set(
     new_fields: &[(String, String)],
     diff: bool,
     new_attachments: &[std::path::PathBuf],
+    if_revision: Option<&str>,
     bulk: bool,
     yes: bool,
     force_exact: bool,
@@ -7575,6 +7647,7 @@ pub fn set(
         new_fields,
         diff,
         new_attachments,
+        if_revision,
         yes,
         force_exact,
     )
@@ -7885,6 +7958,34 @@ fn set_from_file_bulk(
 }
 
 #[allow(clippy::too_many_arguments)]
+// `rbw set --if-revision`: refuses the update when the entry changed since
+// the caller looked at it. Timestamps are compared as points in time, so a
+// differently formatted but equal date still matches.
+fn check_revision(
+    entry_name: &str,
+    actual: Option<&str>,
+    expected: &str,
+) -> anyhow::Result<()> {
+    let Some(actual) = actual else {
+        return Err(anyhow::anyhow!(
+            "{entry_name} has no revision date to compare against"
+        ));
+    };
+    let same = actual == expected
+        || matches!(
+            (parse_revision_date(actual), parse_revision_date(expected)),
+            (Ok(a), Ok(b)) if a == b
+        );
+    if same {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "{entry_name} was modified since revision {expected} (now \
+             {actual}); not updating"
+        ))
+    }
+}
+
 fn set_one(
     needles: Vec<Needle>,
     username: Option<&str>,
@@ -7901,10 +8002,15 @@ fn set_one(
     new_fields: &[(String, String)],
     diff: bool,
     new_attachments: &[std::path::PathBuf],
+    if_revision: Option<&str>,
     yes: bool,
     force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None, None)?;
+    if if_revision.is_some() {
+        // compare against the server's current state, not a stale cache
+        crate::actions::sync()?;
+    }
 
     let mut db = load_db()?;
 
@@ -7930,6 +8036,14 @@ fn set_one(
         force_exact,
     )
     .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    if let Some(expected) = if_revision {
+        check_revision(
+            &decrypted.name,
+            entry.revision_date.as_deref(),
+            expected,
+        )?;
+    }
 
     set_entry(
         &mut db,
@@ -10818,6 +10932,7 @@ fn file_vault_from_imported(
                 archived: imported.archived,
                 deleted: imported.deleted,
                 account: None,
+                revision_date: None,
             }
         })
         .collect();
@@ -15764,6 +15879,7 @@ struct ListCipherPlan {
     uris: Option<Vec<usize>>,
     entry_type: Option<String>,
     collection_ids: Option<Vec<String>>,
+    revision_date: Option<String>,
     attachment_count: usize,
     archived: bool,
     deleted: bool,
@@ -15864,6 +15980,7 @@ impl ListCipherPlan {
             uris,
             entry_type,
             collection_ids,
+            revision_date: entry.revision_date.clone(),
             attachment_count: entry.attachments.len(),
             archived: entry.archived,
             deleted: entry.deleted,
@@ -15911,6 +16028,7 @@ impl ListCipherPlan {
             uris,
             entry_type: self.entry_type,
             collection_ids: self.collection_ids,
+            revision_date: self.revision_date,
             attachment_metadata,
             archived: self.archived,
             deleted: self.deleted,
@@ -16784,6 +16902,7 @@ pub fn decrypt_cipher(
         archived: entry.archived,
         deleted: entry.deleted,
         account: None,
+        revision_date: entry.revision_date.clone(),
     })
 }
 
@@ -17602,6 +17721,7 @@ pub fn tui_save_edit_to_file(
             archived,
             deleted,
             account: None,
+            revision_date: None,
         },
     );
 
@@ -17700,6 +17820,7 @@ fn placeholder_entry(id: String) -> rbw::db::Entry {
         deleted: false,
         collection_ids: Vec::new(),
         attachments: Vec::new(),
+        revision_date: None,
     }
 }
 
@@ -20287,6 +20408,7 @@ mod test {
                 archived: false,
                 deleted: false,
                 account: None,
+                revision_date: None,
             };
         let login = |password: Option<&str>| DecryptedData::Login {
             username: None,
@@ -21425,6 +21547,7 @@ mod test {
             archived: false,
             deleted: false,
             account: None,
+            revision_date: None,
         }
     }
 
@@ -21438,6 +21561,34 @@ mod test {
             value: value.map(str::to_string),
             ty: Some(ty),
         }
+    }
+
+    #[test]
+    fn test_revision_dates() {
+        let a = parse_revision_date("2026-09-25T08:03:10.1234567Z").unwrap();
+        let b =
+            parse_revision_date("2026-09-25T08:03:10.123456700Z").unwrap();
+        assert_eq!(a, b);
+        assert!(parse_revision_date("2026-09-25T08:03:10Z").unwrap() < a);
+        assert!(parse_revision_date("yesterday").is_err());
+        assert_eq!(
+            format_revision_date("2026-09-25T08:03:10.1234567Z"),
+            "2026-09-25"
+        );
+
+        let rev = "2026-09-25T08:03:10.1234567Z";
+        assert!(check_revision("e", Some(rev), rev).is_ok());
+        // same instant, different formatting
+        assert!(check_revision(
+            "e",
+            Some(rev),
+            "2026-09-25T08:03:10.12345670Z"
+        )
+        .is_ok());
+        assert!(
+            check_revision("e", Some(rev), "2026-09-25T08:03:10Z").is_err()
+        );
+        assert!(check_revision("e", None, rev).is_err());
     }
 
     #[test]
@@ -21546,6 +21697,7 @@ mod test {
             archived: false,
             deleted: false,
             account: None,
+            revision_date: None,
         };
         assert!(credential_source_login_fields(&cipher, "entry", "account")
             .is_err());
@@ -21924,6 +22076,7 @@ mod test {
             archived: false,
             deleted: false,
             account: None,
+            revision_date: None,
         }
     }
 
@@ -22119,6 +22272,7 @@ mod test {
                 deleted: false,
                 collection_ids: vec![],
                 attachments: vec![],
+                revision_date: None,
             },
             DecryptedSearchCipher {
                 id: id.to_string(),
@@ -22901,6 +23055,7 @@ mod test {
                 archived: false,
                 deleted: false,
                 account: None,
+                revision_date: None,
             };
 
             assert_eq!(

@@ -823,8 +823,8 @@ enum Opt {
         #[arg(
             long,
             help = "Fields to display. \
-                Available options are id, name, user, folder, type, collections. \
-                Multiple fields will be separated by tabs.",
+                Available options are id, name, user, folder, type, collections, \
+                modified. Multiple fields will be separated by tabs.",
             default_value = "id,name,user",
             use_value_delimiter = true
         )]
@@ -903,6 +903,17 @@ enum Opt {
                 false in config.yaml)"
         )]
         include_trashed: bool,
+        #[arg(
+            long,
+            value_name = "AGE",
+            value_parser = humantime::parse_duration,
+            conflicts_with_all = ["term", "from_file"],
+            help = "Only list entries last modified more than AGE ago \
+                (e.g. `90d`, `1year`), based on the server's revision \
+                date. Entries synced before rbw stored that date are \
+                skipped until the next `rbw sync`"
+        )]
+        older_than: Option<std::time::Duration>,
         #[arg(
             long,
             help = "With multiple accounts configured, unlock (prompting as \
@@ -1464,6 +1475,16 @@ enum Opt {
         diff: bool,
         #[arg(long, number_of_values = 1, help = "File(s) to attach")]
         attachment: Vec<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "REVISION_DATE",
+            conflicts_with_all = ["bulk", "from_file"],
+            help = "Only update the entry if its server revision date \
+                (`revision_date` in `rbw get --output json`) still equals \
+                REVISION_DATE, i.e. nobody changed it in the meantime. \
+                Syncs first"
+        )]
+        if_revision: Option<String>,
         #[arg(
             long,
             help = "Treat each needle as an independent entry to update"
@@ -3178,6 +3199,7 @@ fn main() {
             include_archived,
             trashed,
             include_trashed,
+            older_than,
             all,
             from_file,
             from_file_passphrase,
@@ -3198,6 +3220,7 @@ fn main() {
                         all,
                         archived_filter,
                         trash_filter,
+                        older_than,
                         from_file.as_deref(),
                         from_file_passphrase.as_deref(),
                     )
@@ -3557,6 +3580,7 @@ fn main() {
             field_env,
             diff,
             attachment,
+            if_revision,
             bulk,
             yes,
             from_file,
@@ -3608,6 +3632,7 @@ fn main() {
                 &fields,
                 diff,
                 &attachment,
+                if_revision.as_deref(),
                 bulk,
                 yes,
                 find_args.exact,
@@ -4603,6 +4628,44 @@ mod test {
             &["rbw", "set", "e", "--output-file", "f", "-y"][..],
             // one generated password must not land on several entries
             &["rbw", "set", "e", "f", "-g", "--bulk", "-y"][..],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn test_list_older_than_and_set_if_revision() {
+        let Opt::List { older_than, .. } =
+            parse(&["rbw", "list", "--older-than", "90d"]).command
+        else {
+            panic!("expected Opt::List");
+        };
+        assert_eq!(
+            older_than,
+            Some(std::time::Duration::from_secs(90 * 24 * 60 * 60))
+        );
+        parse(&[
+            "rbw",
+            "list",
+            "--older-than",
+            "1year",
+            "--fields",
+            "name,modified",
+        ]);
+        parse(&[
+            "rbw",
+            "set",
+            "e",
+            "-g",
+            "--if-revision",
+            "2026-01-01T00:00:00Z",
+        ]);
+        for args in [
+            &["rbw", "list", "--older-than", "soon"][..],
+            &["rbw", "list", "term", "--older-than", "1d"][..],
+            &["rbw", "list", "--older-than", "1d", "--from-file", "f"][..],
+            &["rbw", "set", "e", "--if-revision", "x", "--bulk"][..],
+            &["rbw", "set", "e", "--if-revision", "x", "--from-file", "f"][..],
         ] {
             assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
         }

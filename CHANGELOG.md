@@ -21,6 +21,16 @@
   NAME=VAR` (repeatable): set custom fields. An existing field of that
   name keeps its type; otherwise a new hidden field is added. Linked
   fields are refused. Works with `--bulk` and `--from-file` too.
+* Entries now keep the server's `revisionDate` (stored in the local
+  database from the next `rbw sync` on) and expose it as `revision_date`
+  in `rbw get`/`rbw list --output json`.
+* `rbw list --older-than AGE` (e.g. `90d`, `1year`): only list entries
+  last modified more than AGE ago -- e.g. to find credentials due for
+  rotation. Entries without a stored revision date are skipped with a note
+  to run `rbw sync`. `rbw list --fields ...,modified` shows the date.
+* `rbw set --if-revision REVISION_DATE`: syncs, then refuses to update an
+  entry whose revision date no longer matches, so a change made elsewhere
+  between looking at an entry and updating it isn't silently overwritten.
 
 ## [2.17.12] - 2026-09-25
 

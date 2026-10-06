@@ -3317,6 +3317,7 @@ mod test {
                 deleted: false,
                 collection_ids: vec![],
                 attachments: vec![],
+                revision_date: None,
             });
         }
         let mut db = rbw::db::Db::new();
@@ -3658,6 +3659,7 @@ mod test {
                 archived: false,
                 deleted: false,
                 account: None,
+                revision_date: None,
             },
         );
         a.reveal = true;
