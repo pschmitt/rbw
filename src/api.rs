@@ -760,9 +760,11 @@ mod tests {
             fields: Vec::new(),
             password_history: Vec::new(),
             key: None,
+            last_known_revision_date: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("lastKnownRevisionDate").is_none());
         assert_eq!(json["type"], 5);
         assert!(json["login"].is_null());
         assert!(json["card"].is_null());
@@ -773,6 +775,18 @@ mod tests {
         assert_eq!(json["sshKey"]["privateKey"], "private");
         assert_eq!(json["sshKey"]["publicKey"], "public");
         assert_eq!(json["sshKey"]["keyFingerprint"], "fingerprint");
+
+        let req = CiphersPutReq {
+            last_known_revision_date: Some(
+                "2026-09-25T08:03:10.1234567Z".to_string(),
+            ),
+            ..req
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(
+            json["lastKnownRevisionDate"],
+            "2026-09-25T08:03:10.1234567Z"
+        );
     }
 
     #[test]
@@ -1276,6 +1290,15 @@ struct CiphersPutReq {
     // now-abandoned key permanently undecryptable everywhere.
     #[serde(rename = "Key", alias = "key")]
     key: Option<String>,
+    // The revision date of the copy this edit is based on. Bitwarden and
+    // Vaultwarden reject the PUT ("out of date, resync") if the cipher
+    // changed server-side since, instead of letting this full-object
+    // replace silently revert someone else's (or our own unsynced) change.
+    #[serde(
+        rename = "lastKnownRevisionDate",
+        skip_serializing_if = "Option::is_none"
+    )]
+    last_known_revision_date: Option<String>,
 }
 
 #[derive(serde::Serialize, Debug)]
@@ -2402,6 +2425,7 @@ impl Client {
         notes: Option<&str>,
         folder_uuid: Option<&str>,
         history: &[crate::db::HistoryEntry],
+        last_known_revision_date: Option<&str>,
     ) -> Result<()> {
         let mut req = CiphersPutReq {
             ty: match data {
@@ -2437,6 +2461,8 @@ impl Client {
                     password: entry.password.clone(),
                 })
                 .collect(),
+            last_known_revision_date: last_known_revision_date
+                .map(std::string::ToString::to_string),
         };
         match data {
             crate::db::EntryData::Login {

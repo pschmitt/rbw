@@ -7322,6 +7322,7 @@ fn edit_structured(
         encrypted_notes.as_deref(),
         folder_id.as_deref(),
         &history,
+        entry.revision_date.as_deref(),
     )? {
         db.access_token = Some(tokens.access_token);
         if let Some(refresh_token) = tokens.refresh_token {
@@ -7624,6 +7625,10 @@ pub fn set(
             pb.inc(1);
         }
         pb.finish_and_clear();
+        // same as `set_entry`: don't leave the local cache stale
+        if new_attachments.is_empty() {
+            crate::actions::sync()?;
+        }
 
         return if any_err {
             Err(anyhow::anyhow!("one or more entries failed to update"))
@@ -8389,6 +8394,7 @@ fn apply_entry_update(
             encrypted_notes.as_deref(),
             entry.folder_id.as_deref(),
             &history,
+            entry.revision_date.as_deref(),
         )? {
             db.access_token = Some(tokens.access_token);
             if let Some(refresh_token) = tokens.refresh_token {
@@ -8743,6 +8749,12 @@ fn set_entry(
         !changes.is_empty(),
         new_attachments,
     )?;
+    // Refresh the local cache (`apply_entry_update` already did if it
+    // uploaded attachments), so a follow-up `rbw set` doesn't build its
+    // full-object update from the pre-edit copy.
+    if new_attachments.is_empty() {
+        crate::actions::sync()?;
+    }
     let c = stdout_supports_color();
     println!("Item {} was updated", style::name(&entry_name, c));
     if diff {
@@ -11405,6 +11417,7 @@ fn import_create_entry(
             org_encrypted_notes.as_deref(),
             folder_id.as_deref(),
             &history,
+            None,
         )? {
             access_token.clone_from(&tokens.access_token);
             db.access_token = Some(tokens.access_token);
@@ -11538,6 +11551,7 @@ fn import_overwrite_entry(
         encrypted_notes.as_deref(),
         folder_id.as_deref(),
         &history,
+        None,
     )? {
         access_token.clone_from(&tokens.access_token);
         db.access_token = Some(tokens.access_token);
@@ -13348,6 +13362,7 @@ fn move_entry_to_personal(
             encrypted_notes.as_deref(),
             entry.folder_id.as_deref(),
             &history,
+            None,
         )? {
             access_token.clone_from(&tokens.access_token);
             db.access_token = Some(tokens.access_token);
@@ -18491,6 +18506,7 @@ pub fn tui_save_edit(
         encrypted_notes.as_deref(),
         folder_id.as_deref(),
         &history,
+        entry.revision_date.as_deref(),
     )? {
         db.access_token = Some(tokens.access_token);
         if let Some(refresh_token) = tokens.refresh_token {

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Cipher edits (`rbw set`, `rbw edit`, and friends) now send Bitwarden's
+  `lastKnownRevisionDate`, so the server rejects an update built from an
+  outdated local copy instead of letting the full-object replace silently
+  revert a newer change made elsewhere.
+* `rbw set` now syncs after updating (it previously only did after
+  uploading attachments), so a follow-up `rbw set` no longer builds its
+  update from the pre-edit copy -- e.g. `rbw set --password-file ...`
+  followed by `rbw set --field ...` reverted the password.
+
 ### Added
 
 * `rbw set --password-stdin`/`--password-file FILE`/`--password-env VAR`
