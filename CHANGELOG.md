@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+* `rbw set --password-stdin`/`--password-file FILE`/`--password-env VAR`
+  (and `--totp-file`/`--totp-env`): pass a new secret without it showing
+  up in the process list or shell history, as `--password`/`--totp` do.
+  A single trailing newline is stripped from stdin/file input; empty
+  values are refused. `--password-stdin` requires `-y`, since stdin can't
+  also answer the confirmation prompt.
+* `rbw set --generate` (`-g`, with the usual pwgen flags and configured
+  policy): generate and store a new password in one step; the old one
+  moves to the password history as usual. Nothing is printed unless
+  `--output-file FILE` (mode 0600, `-` for stdout) is given, which writes
+  the password only after it was saved -- e.g. to pipe it into `sops
+  set`. `--output-file` requires `-y`; `--generate` conflicts with
+  `--bulk`.
+* `rbw set --field NAME=VALUE`/`--field-file NAME=FILE`/`--field-env
+  NAME=VAR` (repeatable): set custom fields. An existing field of that
+  name keeps its type; otherwise a new hidden field is added. Linked
+  fields are refused. Works with `--bulk` and `--from-file` too.
+
 ## [2.17.12] - 2026-09-25
 
 ### Added

@@ -1347,8 +1347,62 @@ enum Opt {
         name: Option<String>,
         #[arg(long, help = "New username (Login entries only)")]
         username: Option<String>,
-        #[arg(long, help = "New password (Login entries only)")]
+        #[arg(
+            long,
+            group = "password_source",
+            help = "New password (Login entries only). Visible in the \
+                process list and shell history -- prefer \
+                --password-stdin/--password-file/--password-env/--generate \
+                for real secrets"
+        )]
         password: Option<String>,
+        #[arg(
+            long,
+            group = "password_source",
+            requires = "yes",
+            help = "Read the new password from stdin (first line; a \
+                single trailing newline is stripped). Requires -y, since \
+                stdin can't also answer the confirmation prompt"
+        )]
+        password_stdin: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            group = "password_source",
+            help = "Read the new password from FILE (a single trailing \
+                newline is stripped)"
+        )]
+        password_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "VAR",
+            group = "password_source",
+            help = "Read the new password from environment variable VAR"
+        )]
+        password_env: Option<String>,
+        #[arg(
+            short = 'g',
+            long = "generate",
+            group = "password_source",
+            conflicts_with = "bulk",
+            help = "Generate a new password (using the configured password \
+                generation policy, overridable with the pwgen flags) and \
+                store it. Nothing is printed unless --output-file is given"
+        )]
+        generate: bool,
+        #[command(flatten)]
+        pwgen: PasswordGenArgs,
+        #[arg(
+            long,
+            value_name = "FILE",
+            requires = "generate",
+            requires = "yes",
+            help = "With --generate, write the new password to FILE (mode \
+                0600, `-` for stdout) once it has been stored, e.g. to \
+                pipe it into `sops set`. Requires -y, so the file is only \
+                ever written for a password that was actually saved"
+        )]
+        output_file: Option<std::path::PathBuf>,
         #[arg(
             long,
             alias = "note",
@@ -1361,8 +1415,51 @@ enum Opt {
             help = "Replace URIs (Login entries only; can be repeated)"
         )]
         uri: Vec<String>,
-        #[arg(long, help = "New TOTP secret (Login entries only)")]
+        #[arg(
+            long,
+            group = "totp_source",
+            help = "New TOTP secret (Login entries only)"
+        )]
         totp: Option<String>,
+        #[arg(
+            long,
+            value_name = "FILE",
+            group = "totp_source",
+            help = "Read the new TOTP secret from FILE"
+        )]
+        totp_file: Option<std::path::PathBuf>,
+        #[arg(
+            long,
+            value_name = "VAR",
+            group = "totp_source",
+            help = "Read the new TOTP secret from environment variable VAR"
+        )]
+        totp_env: Option<String>,
+        #[arg(
+            long,
+            value_name = "NAME=VALUE",
+            number_of_values = 1,
+            help = "Set custom field NAME (replacing the first field of \
+                that name, keeping its type; otherwise adding a new hidden \
+                field). Can be repeated"
+        )]
+        field: Vec<String>,
+        #[arg(
+            long,
+            value_name = "NAME=FILE",
+            number_of_values = 1,
+            help = "Like --field, but read the value from FILE (a single \
+                trailing newline is stripped). Can be repeated"
+        )]
+        field_file: Vec<String>,
+        #[arg(
+            long,
+            value_name = "NAME=VAR",
+            number_of_values = 1,
+            help = "Like --field, but read the value from environment \
+                variable VAR. Can be repeated"
+        )]
+        field_env: Vec<String>,
         #[arg(long, help = "Show old \u{2192} new diff after updating")]
         diff: bool,
         #[arg(long, number_of_values = 1, help = "File(s) to attach")]
@@ -2730,6 +2827,125 @@ fn read_stdin_password() -> String {
     buf.trim_end_matches('\n').to_string()
 }
 
+// Strips exactly one trailing line ending, so a file written with `echo`
+// or a heredoc stores the secret itself, while any other whitespace (which
+// may be part of the secret) is kept verbatim.
+fn strip_one_newline(s: &str) -> &str {
+    s.strip_suffix("\r\n")
+        .or_else(|| s.strip_suffix('\n'))
+        .unwrap_or(s)
+}
+
+// Resolves `rbw set`'s mutually exclusive (enforced by clap) ways of
+// passing a secret: inline, stdin, file, or environment variable. Only the
+// inline form exposes the value in the process list / shell history.
+fn read_secret_source(
+    what: &str,
+    inline: Option<String>,
+    stdin: bool,
+    file: Option<&std::path::Path>,
+    env: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    let value = if stdin {
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_line(&mut buf)
+            .with_context(|| format!("failed to read {what} from stdin"))?;
+        strip_one_newline(&buf).to_string()
+    } else if let Some(path) = file {
+        let raw = std::fs::read_to_string(path).with_context(|| {
+            format!("failed to read {what} from {}", path.display())
+        })?;
+        strip_one_newline(&raw).to_string()
+    } else if let Some(var) = env {
+        std::env::var(var)
+            .with_context(|| format!("failed to read {what} from ${var}"))?
+    } else {
+        return Ok(inline);
+    };
+    if value.is_empty() {
+        return Err(anyhow::anyhow!("refusing to set an empty {what}"));
+    }
+    Ok(Some(value))
+}
+
+// Splits `NAME=REST` on the first `=` (so values may contain `=`).
+fn split_field_arg<'a>(
+    flag: &str,
+    arg: &'a str,
+) -> anyhow::Result<(&'a str, &'a str)> {
+    match arg.split_once('=') {
+        Some((name, rest)) if !name.is_empty() => Ok((name, rest)),
+        _ => Err(anyhow::anyhow!("{flag} expects NAME=..., got '{arg}'")),
+    }
+}
+
+// Resolves `rbw set --field/--field-file/--field-env` into (name, value)
+// pairs, in that order. Setting the same field twice is rejected rather
+// than silently letting the last one win.
+fn read_field_sources(
+    inline: &[String],
+    files: &[String],
+    envs: &[String],
+) -> anyhow::Result<Vec<(String, String)>> {
+    let mut fields: Vec<(String, String)> = Vec::new();
+    for arg in inline {
+        let (name, value) = split_field_arg("--field", arg)?;
+        fields.push((name.to_string(), value.to_string()));
+    }
+    for arg in files {
+        let (name, path) = split_field_arg("--field-file", arg)?;
+        let raw = std::fs::read_to_string(path).with_context(|| {
+            format!("failed to read field '{name}' from {path}")
+        })?;
+        fields.push((name.to_string(), strip_one_newline(&raw).to_string()));
+    }
+    for arg in envs {
+        let (name, var) = split_field_arg("--field-env", arg)?;
+        let value = std::env::var(var).with_context(|| {
+            format!("failed to read field '{name}' from ${var}")
+        })?;
+        fields.push((name.to_string(), value));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (name, _) in &fields {
+        if !seen.insert(name.as_str()) {
+            return Err(anyhow::anyhow!(
+                "field '{name}' given more than once"
+            ));
+        }
+    }
+    Ok(fields)
+}
+
+// `rbw set --generate --output-file`: hands the freshly stored password to
+// another tool (e.g. `sops set`) without it ever appearing on a command
+// line. Created 0600 from the start rather than chmod-ed afterwards.
+fn write_secret_output(
+    path: &std::path::Path,
+    secret: &str,
+) -> anyhow::Result<()> {
+    use std::io::Write as _;
+
+    if path == std::path::Path::new("-") {
+        let mut stdout = std::io::stdout().lock();
+        writeln!(stdout, "{secret}")?;
+        return stdout.flush().context("failed to write to stdout");
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(0o600);
+    }
+    let mut file = opts
+        .open(path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    writeln!(file, "{secret}")
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
 fn main() {
     let cli = parse_cli();
     let opt = cli.command;
@@ -3325,36 +3541,84 @@ fn main() {
             name,
             username,
             password,
+            password_stdin,
+            password_file,
+            password_env,
+            generate,
+            pwgen,
+            output_file,
             notes,
             uri,
             totp,
+            totp_file,
+            totp_env,
+            field,
+            field_file,
+            field_env,
             diff,
             attachment,
             bulk,
             yes,
             from_file,
             from_file_passphrase,
-        } => commands::set(
-            find_args.needles,
-            find_args.user.as_deref(),
-            find_args.folder.as_deref(),
-            find_args.collection.as_deref(),
-            find_args.org.as_deref(),
-            find_args.ignorecase,
-            name.as_deref(),
-            username.as_deref(),
-            password.as_deref(),
-            notes.as_deref(),
-            &uri,
-            totp.as_deref(),
-            diff,
-            &attachment,
-            bulk,
-            yes,
-            find_args.exact,
-            from_file.as_deref(),
-            from_file_passphrase.as_deref(),
-        ),
+        } => (|| {
+            let pwgen_requested = pwgen.length.is_some()
+                || pwgen.no_symbols
+                || pwgen.only_numbers
+                || pwgen.nonconfusables
+                || pwgen.diceware;
+            if pwgen_requested && !generate {
+                return Err(anyhow::anyhow!(
+                    "password generation flags require --generate"
+                ));
+            }
+            let password = if generate {
+                let (len, ty) = resolve_pwgen(&pwgen);
+                Some(rbw::pwgen::pwgen(ty, len))
+            } else {
+                read_secret_source(
+                    "password",
+                    password,
+                    password_stdin,
+                    password_file.as_deref(),
+                    password_env.as_deref(),
+                )?
+            };
+            let totp = read_secret_source(
+                "TOTP secret",
+                totp,
+                false,
+                totp_file.as_deref(),
+                totp_env.as_deref(),
+            )?;
+            let fields = read_field_sources(&field, &field_file, &field_env)?;
+            commands::set(
+                find_args.needles,
+                find_args.user.as_deref(),
+                find_args.folder.as_deref(),
+                find_args.collection.as_deref(),
+                find_args.org.as_deref(),
+                find_args.ignorecase,
+                name.as_deref(),
+                username.as_deref(),
+                password.as_deref(),
+                notes.as_deref(),
+                &uri,
+                totp.as_deref(),
+                &fields,
+                diff,
+                &attachment,
+                bulk,
+                yes,
+                find_args.exact,
+                from_file.as_deref(),
+                from_file_passphrase.as_deref(),
+            )?;
+            if let (Some(path), Some(password)) = (output_file, password) {
+                write_secret_output(&path, &password)?;
+            }
+            Ok(())
+        })(),
         Opt::Remove {
             find_args,
             force,
@@ -4310,5 +4574,133 @@ mod test {
             resolve_output_mode(Some(OutputArg::Name), true, false).is_err()
         );
         assert!(resolve_output_mode(None, true, true).is_err());
+    }
+
+    #[test]
+    fn test_set_secret_source_flags_are_mutually_exclusive() {
+        parse(&["rbw", "set", "e", "--password-file", "f"]);
+        parse(&["rbw", "set", "e", "--password-env", "V"]);
+        parse(&["rbw", "set", "e", "--password-stdin", "-y"]);
+        parse(&[
+            "rbw",
+            "set",
+            "e",
+            "-g",
+            "-l",
+            "32",
+            "--output-file",
+            "-",
+            "-y",
+        ]);
+        for args in [
+            &["rbw", "set", "e", "--password", "x", "--password-env", "V"][..],
+            &["rbw", "set", "e", "--password-file", "f", "-g"][..],
+            &["rbw", "set", "e", "--totp", "x", "--totp-file", "f"][..],
+            // stdin can't also answer the confirmation prompt
+            &["rbw", "set", "e", "--password-stdin"][..],
+            // never write a password that might not have been saved
+            &["rbw", "set", "e", "-g", "--output-file", "f"][..],
+            &["rbw", "set", "e", "--output-file", "f", "-y"][..],
+            // one generated password must not land on several entries
+            &["rbw", "set", "e", "f", "-g", "--bulk", "-y"][..],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn test_strip_one_newline() {
+        assert_eq!(strip_one_newline("pw\n"), "pw");
+        assert_eq!(strip_one_newline("pw\r\n"), "pw");
+        assert_eq!(strip_one_newline("pw\n\n"), "pw\n");
+        assert_eq!(strip_one_newline(" pw "), " pw ");
+    }
+
+    #[test]
+    fn test_read_secret_source() {
+        let dir = std::env::temp_dir()
+            .join(format!("rbw-test-secret-source-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("pw");
+        std::fs::write(&file, "s3cr=t\n").unwrap();
+        assert_eq!(
+            read_secret_source("password", None, false, Some(&file), None)
+                .unwrap()
+                .as_deref(),
+            Some("s3cr=t")
+        );
+        std::fs::write(&file, "\n").unwrap();
+        assert!(read_secret_source(
+            "password",
+            None,
+            false,
+            Some(&file),
+            None
+        )
+        .is_err());
+        assert_eq!(
+            read_secret_source(
+                "password",
+                Some("x".into()),
+                false,
+                None,
+                None
+            )
+            .unwrap()
+            .as_deref(),
+            Some("x")
+        );
+        assert!(read_secret_source(
+            "password",
+            None,
+            false,
+            None,
+            Some("RBW_TEST_SURELY_UNSET_VAR")
+        )
+        .is_err());
+
+        let fields = read_field_sources(
+            &["a=b=c".to_string()],
+            &[format!("f={}", dir.join("missing").display())],
+            &[],
+        );
+        assert!(fields.is_err());
+        std::fs::write(&file, "from-file\n").unwrap();
+        let fields = read_field_sources(
+            &["a=b=c".to_string()],
+            &[format!("f={}", file.display())],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            fields,
+            vec![
+                ("a".to_string(), "b=c".to_string()),
+                ("f".to_string(), "from-file".to_string()),
+            ]
+        );
+        assert!(
+            read_field_sources(&["noequals".to_string()], &[], &[]).is_err()
+        );
+        assert!(read_field_sources(&["=v".to_string()], &[], &[]).is_err());
+        assert!(read_field_sources(
+            &["a=1".to_string(), "a=2".to_string()],
+            &[],
+            &[]
+        )
+        .is_err());
+
+        let out = dir.join("out");
+        write_secret_output(&out, "generated").unwrap();
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "generated\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(&out).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

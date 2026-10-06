@@ -7346,6 +7346,7 @@ pub fn set(
     new_notes: Option<&str>,
     new_uris: &[String],
     new_totp: Option<&str>,
+    new_fields: &[(String, String)],
     diff: bool,
     new_attachments: &[std::path::PathBuf],
     bulk: bool,
@@ -7376,6 +7377,7 @@ pub fn set(
                 new_notes,
                 new_uris,
                 new_totp,
+                new_fields,
                 diff,
                 new_attachments,
                 yes,
@@ -7394,6 +7396,7 @@ pub fn set(
             new_notes,
             new_uris,
             new_totp,
+            new_fields,
             diff,
             new_attachments,
             yes,
@@ -7434,6 +7437,7 @@ pub fn set(
                             new_notes,
                             new_uris,
                             new_totp,
+                            new_fields,
                         ) {
                             Err(e) => {
                                 eprintln!("{entry_name}: {e:#}");
@@ -7520,6 +7524,7 @@ pub fn set(
                 new_notes,
                 new_uris,
                 new_totp,
+                new_fields,
                 !pu.changes.is_empty(),
                 new_attachments,
             );
@@ -7567,6 +7572,7 @@ pub fn set(
         new_notes,
         new_uris,
         new_totp,
+        new_fields,
         diff,
         new_attachments,
         yes,
@@ -7702,6 +7708,7 @@ fn set_from_file_bulk(
     new_notes: Option<&str>,
     new_uris: &[String],
     new_totp: Option<&str>,
+    new_fields: &[(String, String)],
     diff: bool,
     new_attachments: &[std::path::PathBuf],
     yes: bool,
@@ -7742,6 +7749,7 @@ fn set_from_file_bulk(
                 new_notes,
                 new_uris,
                 new_totp,
+                new_fields,
             ) {
                 Err(e) => {
                     eprintln!("{entry_name}: {e:#}");
@@ -7827,6 +7835,7 @@ fn set_from_file_bulk(
             new_notes,
             new_uris,
             new_totp,
+            new_fields,
             new_attachments,
         ) {
             Ok((updated, new_attachment_bytes)) => {
@@ -7889,6 +7898,7 @@ fn set_one(
     new_notes: Option<&str>,
     new_uris: &[String],
     new_totp: Option<&str>,
+    new_fields: &[(String, String)],
     diff: bool,
     new_attachments: &[std::path::PathBuf],
     yes: bool,
@@ -7931,6 +7941,7 @@ fn set_one(
         new_notes,
         new_uris,
         new_totp,
+        new_fields,
         diff,
         new_attachments,
         yes,
@@ -7946,6 +7957,7 @@ fn compute_entry_changes(
     new_notes: Option<&str>,
     new_uris: &[String],
     new_totp: Option<&str>,
+    new_fields: &[(String, String)],
 ) -> anyhow::Result<Vec<(&'static str, String, String)>> {
     let login_fields_requested = new_username.is_some()
         || new_password.is_some()
@@ -8038,7 +8050,93 @@ fn compute_entry_changes(
             }
         }
     }
+    for (name, value) in new_fields {
+        let current = decrypted
+            .fields
+            .iter()
+            .find(|f| f.name.as_deref() == Some(name.as_str()));
+        if current.is_some_and(|f| f.ty == Some(rbw::api::FieldType::Linked))
+        {
+            return Err(anyhow::anyhow!(
+                "field '{name}' is a linked field and has no value to set"
+            ));
+        }
+        let cur_value = current.and_then(|f| f.value.as_deref());
+        if current.is_some() && cur_value == Some(value.as_str()) {
+            continue;
+        }
+        let old = match (current, cur_value) {
+            (None, _) => format!("{name} (none)"),
+            (Some(_), None) => format!("{name} (empty)"),
+            (Some(_), Some(v)) => format!("{name}=\"{}\"", censor(v)),
+        };
+        changes.push(("field", old, format!("{name}=\"{}\"", censor(value))));
+    }
     Ok(changes)
+}
+
+// `rbw set --field NAME=VALUE`: replaces the value of the first existing
+// custom field named NAME (keeping its type), or appends a new hidden
+// field if there is none. Field names are matched on their decrypted
+// value, so this needs the entry's key just like the value encryption.
+fn apply_field_updates_encrypted(
+    fields: &[rbw::db::Field],
+    new_fields: &[(String, String)],
+    entry_key: Option<&str>,
+    org_id: Option<&str>,
+) -> anyhow::Result<Vec<rbw::db::Field>> {
+    let mut fields = fields.to_vec();
+    if new_fields.is_empty() {
+        return Ok(fields);
+    }
+    let mut names = fields
+        .iter()
+        .map(|f| {
+            f.name
+                .as_deref()
+                .map(|n| crate::actions::decrypt(n, entry_key, org_id))
+                .transpose()
+        })
+        .collect::<anyhow::Result<Vec<Option<String>>>>()?;
+    for (name, value) in new_fields {
+        let enc_value = crate::actions::encrypt(value, entry_key, org_id)?;
+        if let Some(pos) = names
+            .iter()
+            .position(|n| n.as_deref() == Some(name.as_str()))
+        {
+            fields[pos].value = Some(enc_value);
+        } else {
+            fields.push(rbw::db::Field {
+                ty: Some(rbw::api::FieldType::Hidden),
+                name: Some(crate::actions::encrypt(name, entry_key, org_id)?),
+                value: Some(enc_value),
+                linked_id: None,
+            });
+            names.push(Some(name.clone()));
+        }
+    }
+    Ok(fields)
+}
+
+// `--from-file` counterpart of `apply_field_updates_encrypted`.
+fn apply_field_updates_decrypted(
+    fields: &mut Vec<DecryptedField>,
+    new_fields: &[(String, String)],
+) {
+    for (name, value) in new_fields {
+        if let Some(field) = fields
+            .iter_mut()
+            .find(|f| f.name.as_deref() == Some(name.as_str()))
+        {
+            field.value = Some(value.clone());
+        } else {
+            fields.push(DecryptedField {
+                name: Some(name.clone()),
+                value: Some(value.clone()),
+                ty: Some(rbw::api::FieldType::Hidden),
+            });
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8051,6 +8149,7 @@ fn apply_entry_update(
     new_notes: Option<&str>,
     new_uris: &[String],
     new_totp: Option<&str>,
+    new_fields: &[(String, String)],
     has_field_changes: bool,
     new_attachments: &[std::path::PathBuf],
 ) -> anyhow::Result<()> {
@@ -8158,6 +8257,12 @@ fn apply_entry_update(
     };
 
     if has_field_changes {
+        let fields = apply_field_updates_encrypted(
+            &entry.fields,
+            new_fields,
+            entry_key,
+            org_id,
+        )?;
         if let (Some(tokens), ()) = rbw::actions::edit(
             &access_token,
             &refresh_token,
@@ -8166,7 +8271,7 @@ fn apply_entry_update(
             entry_key,
             &encrypted_name,
             &data,
-            &entry.fields,
+            &fields,
             encrypted_notes.as_deref(),
             entry.folder_id.as_deref(),
             &history,
@@ -8284,6 +8389,7 @@ fn apply_entry_update_decrypted(
     new_notes: Option<&str>,
     new_uris: &[String],
     new_totp: Option<&str>,
+    new_fields: &[(String, String)],
     new_attachments: &[std::path::PathBuf],
 ) -> anyhow::Result<(DecryptedCipher, Vec<(String, Vec<u8>)>)> {
     let mut updated = decrypted.clone();
@@ -8338,6 +8444,7 @@ fn apply_entry_update_decrypted(
             *totp = new_totp.map(str::to_string);
         }
     }
+    apply_field_updates_decrypted(&mut updated.fields, new_fields);
 
     let mut new_attachment_bytes = Vec::new();
     for file in new_attachments {
@@ -8378,6 +8485,7 @@ fn set_from_file(
     new_notes: Option<&str>,
     new_uris: &[String],
     new_totp: Option<&str>,
+    new_fields: &[(String, String)],
     diff: bool,
     new_attachments: &[std::path::PathBuf],
     yes: bool,
@@ -8416,6 +8524,7 @@ fn set_from_file(
         new_notes,
         new_uris,
         new_totp,
+        new_fields,
     )?;
 
     if changes.is_empty() && new_attachments.is_empty() {
@@ -8435,6 +8544,7 @@ fn set_from_file(
         new_notes,
         new_uris,
         new_totp,
+        new_fields,
         new_attachments,
     )?;
     for (id, bytes) in new_attachment_bytes {
@@ -8479,6 +8589,7 @@ fn set_entry(
     new_notes: Option<&str>,
     new_uris: &[String],
     new_totp: Option<&str>,
+    new_fields: &[(String, String)],
     diff: bool,
     new_attachments: &[std::path::PathBuf],
     yes: bool,
@@ -8493,6 +8604,7 @@ fn set_entry(
         new_notes,
         new_uris,
         new_totp,
+        new_fields,
     )?;
 
     if changes.is_empty() && new_attachments.is_empty() {
@@ -8513,6 +8625,7 @@ fn set_entry(
         new_notes,
         new_uris,
         new_totp,
+        new_fields,
         !changes.is_empty(),
         new_attachments,
     )?;
@@ -21313,6 +21426,78 @@ mod test {
             deleted: false,
             account: None,
         }
+    }
+
+    fn custom_field(
+        name: &str,
+        value: Option<&str>,
+        ty: rbw::api::FieldType,
+    ) -> DecryptedField {
+        DecryptedField {
+            name: Some(name.to_string()),
+            value: value.map(str::to_string),
+            ty: Some(ty),
+        }
+    }
+
+    #[test]
+    fn test_set_field_changes_and_updates() {
+        let mut cipher = login_cipher(Some("hunter2"), None);
+        cipher.fields = vec![
+            custom_field(
+                "api-token",
+                Some("old-token-value"),
+                rbw::api::FieldType::Text,
+            ),
+            custom_field("same", Some("v"), rbw::api::FieldType::Hidden),
+        ];
+        let updates = vec![
+            ("api-token".to_string(), "new-token-value".to_string()),
+            ("same".to_string(), "v".to_string()),
+            ("fresh".to_string(), "x".to_string()),
+        ];
+        let changes = compute_entry_changes(
+            &cipher,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            &updates,
+        )
+        .unwrap();
+        // the unchanged field is not reported, values are censored
+        assert_eq!(changes.len(), 2);
+        assert!(changes.iter().all(|(label, _, _)| *label == "field"));
+        assert!(changes
+            .iter()
+            .all(|(_, old, new)| !old.contains("old-token-value")
+                && !new.contains("new-token-value")));
+        assert_eq!(changes[1].1, "fresh (none)");
+
+        let mut fields = cipher.fields.clone();
+        apply_field_updates_decrypted(&mut fields, &updates);
+        assert_eq!(fields.len(), 3);
+        // existing field keeps its type, new one is hidden
+        assert_eq!(fields[0].value.as_deref(), Some("new-token-value"));
+        assert_eq!(fields[0].ty, Some(rbw::api::FieldType::Text));
+        assert_eq!(fields[2].name.as_deref(), Some("fresh"));
+        assert_eq!(fields[2].ty, Some(rbw::api::FieldType::Hidden));
+
+        cipher.fields =
+            vec![custom_field("link", None, rbw::api::FieldType::Linked)];
+        assert!(compute_entry_changes(
+            &cipher,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            &[("link".to_string(), "x".to_string())],
+        )
+        .is_err());
     }
 
     #[test]
