@@ -39,6 +39,11 @@
             src = self;
             cargoLock.lockFile = ./Cargo.lock;
 
+            # WebAuthn/FIDO2 2FA login; links libudev on Linux.
+            buildFeatures = [ "fido2" ];
+            nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.pkg-config ];
+            buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.udev ];
+
             postInstall = ''
               install -Dm755 bin/git-credential-rbw -t "$out/bin"
               mkdir -p \

@@ -350,9 +350,14 @@ async fn login_interactively(
             }
             Err(rbw::error::Error::TwoFactorRequired {
                 providers,
+                #[cfg(feature = "fido2")]
+                webauthn,
                 sso_email_2fa_session_token,
+                ..
             }) => {
                 let supported_types = vec![
+                    #[cfg(feature = "fido2")]
+                    rbw::api::TwoFactorProviderType::WebAuthn,
                     rbw::api::TwoFactorProviderType::Authenticator,
                     rbw::api::TwoFactorProviderType::Yubikey,
                     rbw::api::TwoFactorProviderType::Email,
@@ -380,14 +385,41 @@ async fn login_interactively(
                             memory,
                             parallelism,
                             protected_key,
-                        ) = two_factor(
-                            sock,
-                            environment,
-                            &email,
-                            password.clone(),
-                            provider,
-                        )
-                        .await?;
+                        ) = match provider {
+                            #[cfg(feature = "fido2")]
+                            rbw::api::TwoFactorProviderType::WebAuthn => {
+                                let challenge = webauthn.as_ref().context(
+                                    "server did not provide a WebAuthn challenge",
+                                )?;
+                                let token = crate::webauthn::authenticate(
+                                    sock,
+                                    environment,
+                                    account,
+                                    challenge.clone(),
+                                )
+                                .await?;
+                                rbw::actions::login(
+                                    &email,
+                                    password.clone(),
+                                    Some(&token),
+                                    Some(provider),
+                                )
+                                .await
+                                .context(
+                                    "FIDO authentication failed; run login again for a new challenge",
+                                )?
+                            }
+                            _ => {
+                                two_factor(
+                                    sock,
+                                    environment,
+                                    &email,
+                                    password.clone(),
+                                    provider,
+                                )
+                                .await?
+                            }
+                        };
                         login_success(
                             state.clone(),
                             access_token,
@@ -405,6 +437,14 @@ async fn login_interactively(
                         .await?;
                         break 'attempts;
                     }
+                }
+                if !cfg!(feature = "fido2")
+                    && providers
+                        .contains(&rbw::api::TwoFactorProviderType::WebAuthn)
+                {
+                    anyhow::bail!(
+                        "FIDO 2FA requires rbw to be built with --features fido2"
+                    );
                 }
                 return Err(anyhow::anyhow!(
                     "unsupported two factor methods: {providers:?}"
@@ -1749,14 +1789,14 @@ async fn save_db(
         .map_err(anyhow::Error::new)
 }
 
-async fn config_pinentry() -> anyhow::Result<String> {
+pub async fn config_pinentry() -> anyhow::Result<String> {
     let config = rbw::config::Config::load_async().await?;
     Ok(config.pinentry.command)
 }
 
 // See `PinentryConfig::timeout`. Passed straight through to pinentry's own
 // `--timeout` flag, so `0` means "no timeout" there too.
-async fn config_pinentry_timeout() -> anyhow::Result<u64> {
+pub async fn config_pinentry_timeout() -> anyhow::Result<u64> {
     let config = rbw::config::Config::load_async().await?;
     Ok(config.pinentry.timeout)
 }

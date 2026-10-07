@@ -10,6 +10,10 @@ targets = [
 version = 2
 yanked = "deny"
 ignore = [
+    # Mozilla's authenticator 0.5 (optional `fido2` feature) uses serde_cbor.
+    # This advisory reports maintenance status, not a known vulnerability;
+    # drop it once authenticator moves off serde_cbor.
+    "RUSTSEC-2021-0127",
     # this is a timing attack against using the rsa crate for encryption, but
     # we only use rsa decryption here
     "RUSTSEC-2023-0071",
@@ -34,6 +38,14 @@ deny = [
 skip = [
     # reqwest/hyper-util still depend on the older base64 major
     { name = "base64", version = "0.22.1" },
+    # authenticator 0.5 (optional `fido2` feature) still uses these older
+    # versions of crates rbw itself depends on newer majors of
+    { name = "aes", version = "0.8.4" },
+    { name = "base64", version = "0.21.7" },
+    { name = "block-padding", version = "0.3.3" },
+    { name = "cbc", version = "0.1.2" },
+    { name = "core-foundation", version = "0.9.4" },
+    { name = "hkdf", version = "0.12.4" },
     # https://github.com/darfink/region-rs/pull/25
     { name = "bitflags", version = "1.3.2" },
     { name = "bitflags", version = "2.4.1" },

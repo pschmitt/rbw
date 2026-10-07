@@ -20,6 +20,7 @@ anyhow = "1.0.100"
 argon2 = "0.6.0"
 arrayvec = "0.7.6"
 axum = "0.8.8"
+authenticator = { version = "0.5.0", default-features = false, features = ["crypto_rust"], optional = true }
 base32 = "0.5.1"
 base64 = "0.23.0"
 block-padding = "0.4.0"
@@ -112,6 +113,7 @@ dotenvy = "0.15.7"
 
 [features]
 default = ["clipboard"]
+fido2 = ["dep:authenticator"]
 clipboard = ["arboard"]
 
 [lints.clippy]

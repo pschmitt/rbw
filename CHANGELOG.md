@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+* WebAuthn / FIDO2 security key 2FA for `rbw login` (behind the new
+  optional `fido2` cargo feature, enabled in the Nix package; needs libudev
+  on Linux). The agent streams progress ("touch your security key")
+  back to the client and asks for the key's PIN via pinentry when needed.
+  Ported from doy/rbw#383 by Frederik Schwan.
+
 ## [2.18.0] - 2026-10-06
 
 ### Fixed

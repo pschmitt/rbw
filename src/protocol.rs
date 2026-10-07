@@ -289,6 +289,9 @@ pub enum Action {
 #[serde(tag = "type")]
 pub enum Response {
     Ack,
+    Progress {
+        message: String,
+    },
     Error {
         error: String,
     },

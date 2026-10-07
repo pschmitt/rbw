@@ -27,7 +27,8 @@ pub async fn getpin(
     timeout: u64,
 ) -> Result<crate::locked::Password> {
     let mut opts = tokio::process::Command::new(pinentry);
-    opts.stdin(std::process::Stdio::piped())
+    opts.kill_on_drop(true)
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped());
     let mut args = vec!["--timeout".into(), timeout.to_string().into()];
     if let Some(tty) = environment.tty() {

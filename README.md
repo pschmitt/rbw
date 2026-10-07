@@ -785,8 +785,10 @@ If you're using a profile, the socket will be located at
 * Email
 * Authenticator App
 * Yubico OTP security key (https://support.yubico.com/hc/en-us/articles/360013712639-Testing-Yubico-OTP)
+* WebAuthn / Passkey (FIDO2 security key; requires building with
+  `--features fido2`, which needs libudev on Linux)
 
-WebAuthn / Passkey and Duo security are unsupported 2FA mechanisms.
+Duo security is an unsupported 2FA mechanism.
 
 If you use only unsupported 2FA mechanism, you need to add a supported 2FA
 mechanism on your bitwarden account to use rbw. It allows you to use rbw

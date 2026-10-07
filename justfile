@@ -12,6 +12,15 @@ default-host := "rofl-13"
 remote-build-base := "~/build/rbw"
 remote-cargo-tools := "nixpkgs#cargo nixpkgs#rustc nixpkgs#clippy nixpkgs#pkg-config nixpkgs#openssl nixpkgs#gcc"
 
+# The optional `fido2` feature links libudev; `nix shell` doesn't set up
+# PKG_CONFIG_PATH, so point it at systemd's dev output by hand.
+# (Escaped so the substitution runs on the remote host, not locally.)
+remote-cargo-env := 'PKG_CONFIG_PATH=\$(nix build --no-link --print-out-paths nixpkgs#systemd.dev)/lib/pkgconfig'
+
+# libudev isn't available for musl, so musl builds stick to the default
+# features (no `fido2`), like CI does.
+musl-features := "--no-default-features --features clipboard"
+
 # Running just without arguments lists the available recipes.
 [private]
 default:
@@ -29,7 +38,7 @@ build target=default-target host=default-host:
     }
     trap cleanup EXIT
     just _sync "$host" "$remote_dir"
-    ssh -- "$host" "cd '$remote_dir' && nix shell {{ remote-cargo-tools }} -c cargo build --locked --all-targets --all-features --target '$target'"
+    ssh -- "$host" "cd '$remote_dir' && {{ remote-cargo-env }} nix shell {{ remote-cargo-tools }} -c cargo build --locked --all-targets {{ if target =~ "musl" { musl-features } else { "--all-features" } }} --target '$target'"
     just _fetch "$target" "$host" debug "$remote_dir"
 
 # Build release binaries remotely, then fetch both binaries locally.
@@ -44,15 +53,15 @@ release target=default-target host=default-host:
     }
     trap cleanup EXIT
     just _sync "$host" "$remote_dir"
-    ssh -- "$host" "cd '$remote_dir' && nix shell {{ remote-cargo-tools }} -c cargo build --locked --all-targets --all-features --release --target '$target'"
+    ssh -- "$host" "cd '$remote_dir' && {{ remote-cargo-env }} nix shell {{ remote-cargo-tools }} -c cargo build --locked --all-targets {{ if target =~ "musl" { musl-features } else { "--all-features" } }} --release --target '$target'"
     just _fetch "$target" "$host" release "$remote_dir"
 
 # Explicit local equivalents for hosts where compiling locally is appropriate.
 build-local target=default-target:
-    cargo build --locked --all-targets --all-features --target "{{ target }}"
+    cargo build --locked --all-targets {{ if target =~ "musl" { musl-features } else { "--all-features" } }} --target "{{ target }}"
 
 release-local target=default-target:
-    cargo build --locked --all-targets --all-features --release --target "{{ target }}"
+    cargo build --locked --all-targets {{ if target =~ "musl" { musl-features } else { "--all-features" } }} --release --target "{{ target }}"
 
 # Run the test suite on the remote build host.
 test target=native-target host=default-host:
@@ -66,7 +75,7 @@ test target=native-target host=default-host:
     }
     trap cleanup EXIT
     just _sync "$host" "$remote_dir"
-    ssh -- "$host" "cd '$remote_dir' && nix shell {{ remote-cargo-tools }} -c cargo test --locked --all-features --target '$target'"
+    ssh -- "$host" "cd '$remote_dir' && {{ remote-cargo-env }} nix shell {{ remote-cargo-tools }} -c cargo test --locked --all-features --target '$target'"
 
 # Run cargo check on the remote build host.
 cargo-check target=native-target host=default-host:
@@ -80,7 +89,7 @@ cargo-check target=native-target host=default-host:
     }
     trap cleanup EXIT
     just _sync "$host" "$remote_dir"
-    ssh -- "$host" "cd '$remote_dir' && nix shell {{ remote-cargo-tools }} -c cargo check --locked --all-targets --all-features --target '$target'"
+    ssh -- "$host" "cd '$remote_dir' && {{ remote-cargo-env }} nix shell {{ remote-cargo-tools }} -c cargo check --locked --all-targets --all-features --target '$target'"
 
 # Run clippy with warnings promoted to errors on the remote build host.
 clippy target=native-target host=default-host:
@@ -94,7 +103,7 @@ clippy target=native-target host=default-host:
     }
     trap cleanup EXIT
     just _sync "$host" "$remote_dir"
-    ssh -- "$host" "cd '$remote_dir' && nix shell {{ remote-cargo-tools }} -c cargo clippy --locked --all-targets --all-features --target '$target' -- -Dwarnings"
+    ssh -- "$host" "cd '$remote_dir' && {{ remote-cargo-env }} nix shell {{ remote-cargo-tools }} -c cargo clippy --locked --all-targets --all-features --target '$target' -- -Dwarnings"
 
 # Build documentation and run doctests on the remote build host.
 doc target=native-target host=default-host:
@@ -108,8 +117,8 @@ doc target=native-target host=default-host:
     }
     trap cleanup EXIT
     just _sync "$host" "$remote_dir"
-    ssh -- "$host" "cd '$remote_dir' && nix shell {{ remote-cargo-tools }} -c env RUSTDOCFLAGS=-Dwarnings cargo doc --locked --all-features --target '$target'"
-    ssh -- "$host" "cd '$remote_dir' && nix shell {{ remote-cargo-tools }} -c cargo test --locked --doc --all-features --target '$target'"
+    ssh -- "$host" "cd '$remote_dir' && {{ remote-cargo-env }} nix shell {{ remote-cargo-tools }} -c env RUSTDOCFLAGS=-Dwarnings cargo doc --locked --all-features --target '$target'"
+    ssh -- "$host" "cd '$remote_dir' && {{ remote-cargo-env }} nix shell {{ remote-cargo-tools }} -c cargo test --locked --doc --all-features --target '$target'"
 
 # Format Rust, justfile, and Nix sources.
 format:
@@ -125,7 +134,7 @@ format-check:
 
 # Run cargo-deny locally; it only analyzes dependency metadata.
 deny:
-    cargo deny check
+    cargo deny --all-features check
 
 # Evaluate all flake checks remotely and show build logs.
 nix-check host=default-host:
