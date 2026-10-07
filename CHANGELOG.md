@@ -10,6 +10,12 @@
   back to the client and asks for the key's PIN via pinentry when needed.
   Ported from doy/rbw#383 by Frederik Schwan.
 
+### Changed
+
+* Dependency updates: region 4.0.1, thiserror 2.0.21, libc 0.2.190,
+  uuid 1.27.0, tokio 1.53.2, zeroize 1.9.1; Docker build image
+  rust:1.99-bookworm.
+
 ## [2.18.0] - 2026-10-06
 
 ### Fixed
