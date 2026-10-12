@@ -321,6 +321,27 @@ whatever passkeys an entry already has -- important given the destination
 server stores an item's `login` object as one unit, so a request that
 omitted this field entirely would otherwise silently delete the passkey.
 
+`rbw passkey counter ENTRY --rp-id example.com` reads a credential's counter;
+add `--set N` to advance it without exposing or changing key material.
+Decreasing a counter is rejected.
+
+`rbw passkey inject ENTRY --rp-id example.com --cdp-url http://localhost:9222
+--page-id TARGET_ID` installs a virtual authenticator in exactly that Chromium
+page. It reserves the next counter in the vault before enabling assertions,
+waits for one assertion, synchronizes its counter back to the vault, and removes
+the authenticator. The private key travels directly over the CDP connection;
+it is never printed or served over HTTP. Use a trusted debugging endpoint and
+keep the command running while driving the browser. `--timeout SECONDS` defaults
+to 120. A timeout retains the reserved counter, so an interrupted login cannot
+cause counter reuse. Synchronize your ordinary Bitwarden client after first
+enabling a counter on a credential previously stored with counter zero.
+
+Local item locks prevent simultaneous injections; revision checks reject
+competing vault updates. Avoid concurrent logins with the same passkey across
+clients: vault synchronization does not serialize assertion delivery. Existing
+relying-party clone flags may need separate recovery even after fixing the
+vault counter.
+
 For commands that support formatted output, use `-o name`, `-o json`, or
 `-o yaml`. `-o json` is equivalent to `--json`, and `-o yaml` emits YAML.
 

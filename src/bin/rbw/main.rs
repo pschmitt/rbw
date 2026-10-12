@@ -16,6 +16,7 @@ mod commands;
 mod export_info;
 mod import_bitwarden;
 mod osc52;
+mod passkey;
 mod sock;
 mod tui;
 
@@ -1352,6 +1353,14 @@ enum Opt {
         from_file_passphrase: Option<String>,
     },
 
+    #[command(
+        about = "Use passkeys in automated browsers and synchronize counters"
+    )]
+    Passkey {
+        #[command(subcommand)]
+        passkey: Passkey,
+    },
+
     #[command(about = "Set specific fields of an existing entry")]
     Set {
         #[command(flatten)]
@@ -1987,6 +1996,37 @@ enum Opt {
     },
 }
 
+#[derive(Debug, clap::Subcommand)]
+enum Passkey {
+    #[command(about = "Read or advance a passkey counter in the vault")]
+    Counter {
+        #[command(flatten)]
+        find_args: FindArgs,
+        #[arg(long, help = "Select the passkey by relying party")]
+        rp_id: Option<String>,
+        #[arg(long, help = "Advance the counter (never decrease it)")]
+        set: Option<u32>,
+    },
+    #[command(
+        about = "Inject a passkey via CDP and sync its assertion counter"
+    )]
+    Inject {
+        #[command(flatten)]
+        find_args: FindArgs,
+        #[arg(long, help = "Select the passkey by relying party")]
+        rp_id: Option<String>,
+        #[arg(
+            long,
+            help = "Chromium HTTP debugging endpoint (trusted browser only)"
+        )]
+        cdp_url: String,
+        #[arg(long, help = "Exact target page ID from Chromium /json/list")]
+        page_id: String,
+        #[arg(long, default_value_t = 120, value_parser = clap::value_parser!(u64).range(1..=3600), help = "Seconds to wait for one assertion")]
+        timeout: u64,
+    },
+}
+
 impl Opt {
     fn subcommand_name(&self) -> String {
         match self {
@@ -2021,6 +2061,7 @@ impl Opt {
             Self::Add { .. } => "add".to_string(),
             Self::Generate { .. } => "generate".to_string(),
             Self::Edit { .. } => "edit".to_string(),
+            Self::Passkey { .. } => "passkey".to_string(),
             Self::Set { .. } => "set".to_string(),
             Self::Remove { .. } => "remove".to_string(),
             Self::Archive { .. } => "archive".to_string(),
@@ -3306,6 +3347,26 @@ fn main() {
                 },
             )
         })(),
+        Opt::Passkey { passkey } => match passkey {
+            Passkey::Counter {
+                find_args,
+                rp_id,
+                set,
+            } => passkey::counter(&find_args, rp_id.as_deref(), set),
+            Passkey::Inject {
+                find_args,
+                rp_id,
+                cdp_url,
+                page_id,
+                timeout,
+            } => passkey::inject(
+                &find_args,
+                rp_id.as_deref(),
+                &cdp_url,
+                &page_id,
+                timeout,
+            ),
+        },
         Opt::Attachment { attachment } => match attachment {
             Attachment::List {
                 find_args,
