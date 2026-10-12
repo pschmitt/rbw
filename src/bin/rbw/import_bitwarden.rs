@@ -623,7 +623,10 @@ pub fn parse_zip(
         if !entry.is_file() {
             continue;
         }
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .context("failed to decode a filename in the zip archive")?
+            .into_owned();
 
         if let Some(folder_name) = name
             .strip_prefix("attachments/")
