@@ -295,6 +295,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
             "unarchive",
             "restore",
             "attachment",
+            "passkey",
         ],
     ),
     (
