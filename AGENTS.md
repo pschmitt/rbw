@@ -9,7 +9,23 @@ nixpkgs#cargo nixpkgs#rustc nixpkgs#clippy nixpkgs#pkg-config
 nixpkgs#openssl nixpkgs#gcc -c cargo <build|test|clippy>`. Run `cargo fmt
 --all` before committing.
 
+## Post-push CI follow-up
+
+After every push, follow GitHub Actions for the exact pushed commit through to
+completion. Inspect failing jobs, fix problems within the task's scope, push
+the correction, and follow the new runs again. Do not stop at a successful
+push or infer success from local checks, an older commit, or a few passing jobs.
+If CI cannot finish because of an external blocker, report the specific blocker
+and leave release and deployment actions pending.
+
 ## Deploy
+
+Never release a version with failing CI. Before publishing a version tag or
+release, updating the consumer's flake pin, or deploying that version, verify
+that every release CI workflow (`build`, `test`, and `docker`) has completed
+successfully for the exact commit being released. Pending, running, cancelled,
+or missing checks do not count as green. A version-bump commit may be pushed
+to trigger CI; fix failures and wait for green checks before releasing it.
 
 This repo is consumed by `nixos-config` (flake input `rbw`). After pushing
 to `main`: bump the lock (`nix flake lock --update-input rbw` in
