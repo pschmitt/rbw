@@ -15498,7 +15498,7 @@ fn version_or_quit() -> anyhow::Result<u32> {
     })
 }
 
-fn find_entry(
+pub fn find_entry(
     db: &rbw::db::Db,
     mut needles: Vec<Needle>,
     username: Option<&str>,
@@ -18933,7 +18933,7 @@ pub fn load_db() -> anyhow::Result<rbw::db::Db> {
         .map_err(anyhow::Error::new)
 }
 
-fn save_db(db: &rbw::db::Db) -> anyhow::Result<()> {
+pub fn save_db(db: &rbw::db::Db) -> anyhow::Result<()> {
     let account = active_account()?;
     db.save(&account.server_name()?, &account_email(&account)?)
         .map_err(anyhow::Error::new)
