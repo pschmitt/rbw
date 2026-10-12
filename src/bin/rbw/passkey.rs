@@ -447,7 +447,7 @@ mod tests {
         let mut cdp = Cdp {
             socket,
             sequence: 0,
-            events: Default::default(),
+            events: std::collections::VecDeque::default(),
         };
         cdp.send("WebAuthn.setAutomaticPresenceSimulation", json!({}))
             .await
