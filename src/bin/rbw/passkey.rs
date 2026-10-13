@@ -98,7 +98,7 @@ fn advance(selected: &Selected, counter: u32) -> anyhow::Result<()> {
         .refresh_token
         .as_deref()
         .context("missing refresh token")?;
-    if let (Some(tokens), ()) = rbw::actions::edit(
+    let (tokens, ()) = rbw::actions::edit(
         access,
         refresh,
         &entry.id,
@@ -110,16 +110,9 @@ fn advance(selected: &Selected, counter: u32) -> anyhow::Result<()> {
         entry.notes.as_deref(),
         entry.folder_id.as_deref(),
         &entry.history,
-        entry.revision_date.as_deref(),
-    )? {
-        db.access_token = Some(tokens.access_token);
-        if let Some(refresh) = tokens.refresh_token {
-            db.refresh_token = Some(refresh);
-        }
-        commands::save_db(&db)?;
-    }
-    actions::sync()?;
-    Ok(())
+        &entry.cipher_write_meta(),
+    )?;
+    commands::after_server_write(&mut db, tokens)
 }
 
 pub fn counter(
@@ -131,11 +124,18 @@ pub fn counter(
     let selected = select(args, rp_id)?;
     if let Some(value) = set {
         advance(&selected, value)?;
+        warn_counter_enabled(stored_counter(&selected.credential)?, value);
         println!("{value}");
     } else {
         println!("{}", stored_counter(&selected.credential)?);
     }
     Ok(())
+}
+
+fn warn_counter_enabled(previous: u32, current: u32) {
+    if previous == 0 && current > 0 {
+        eprintln!("Warning: passkey counter tracking has been enabled. Sync every Bitwarden client before using this passkey there; a client still holding counter zero may skip syncing and trigger a clone warning.");
+    }
 }
 
 fn normalize_base64(value: &str) -> anyhow::Result<String> {
@@ -193,6 +193,41 @@ struct Cdp {
 }
 
 impl Cdp {
+    async fn final_counter(
+        &mut self,
+        authenticator: &str,
+        credential: &str,
+        asserted: u32,
+    ) -> anyhow::Result<u32> {
+        self.send(
+            "WebAuthn.setAutomaticPresenceSimulation",
+            json!({
+                "authenticatorId": authenticator, "enabled": false,
+            }),
+        )
+        .await?;
+        // Another assertion may have completed before presence was disabled.
+        // Read the credential after the disable acknowledgement rather than
+        // trusting the first event. The response includes key material: never
+        // include it in errors or logs.
+        let result = self.send("WebAuthn.getCredential", json!({
+            "authenticatorId": authenticator, "credentialId": credential,
+        })).await?;
+        anyhow::ensure!(
+            result["credential"]["credentialId"].as_str() == Some(credential),
+            "browser returned a different passkey"
+        );
+        let count = result["credential"]["signCount"]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .context("missing final browser counter")?;
+        anyhow::ensure!(
+            count >= asserted,
+            "final browser counter is behind its assertion"
+        );
+        Ok(count)
+    }
+
     async fn receive(&mut self) -> anyhow::Result<Value> {
         if let Some(event) = self.events.pop_front() {
             return Ok(event);
@@ -281,8 +316,13 @@ pub fn inject(
     // Refresh under the lock to avoid using a selection made before a prior
     // session finished its writeback.
     let selected = select(args, rp_id)?;
-    let reserved = next_counter(stored_counter(&selected.credential)?)?;
+    let previous = stored_counter(&selected.credential)?;
+    let reserved = next_counter(previous)?;
     let credential = cdp_credential(&selected, reserved)?;
+    let injected_id = credential["credentialId"]
+        .as_str()
+        .context("missing injected credential ID")?
+        .to_string();
 
     // Fetch target metadata without logging websocket URLs or query tokens.
     let endpoint = url::Url::parse(cdp_url)
@@ -349,10 +389,12 @@ pub fn inject(
             "defaultBackupEligibility": true, "defaultBackupState": true,
         }})).await?;
         let authenticator = result["authenticatorId"].as_str().context("missing authenticator ID")?.to_string();
+        let mut removed = false;
         let operation = async {
             cdp.send("WebAuthn.addCredential", json!({"authenticatorId": authenticator, "credential": credential})).await?;
             // The blocking vault API cannot run on an async runtime thread.
             tokio::task::block_in_place(|| advance(&selected, reserved))?;
+            warn_counter_enabled(previous, reserved);
             cdp.send("WebAuthn.setAutomaticPresenceSimulation", json!({"authenticatorId": authenticator, "enabled": true})).await?;
             println!("Passkey ready; reserved counter {reserved}. Waiting for one browser assertion.");
             std::io::stdout().flush()?;
@@ -363,16 +405,22 @@ pub fn inject(
                     let count = event["params"]["credential"]["signCount"].as_u64()
                         .and_then(|n| u32::try_from(n).ok()).context("missing assertion counter")?;
                     anyhow::ensure!(count >= reserved, "browser counter is behind its reservation");
-                    // Stop further assertions before syncing the final value.
-                    cdp.send("WebAuthn.setAutomaticPresenceSimulation", json!({"authenticatorId": authenticator, "enabled": false})).await?;
+                    let count = cdp.final_counter(&authenticator, &injected_id, count).await?;
+                    // Remove the authenticator before the vault writeback so
+                    // it cannot assert again while that update is in flight.
+                    let removal = cdp.send("WebAuthn.removeVirtualAuthenticator", json!({"authenticatorId": authenticator})).await;
+                    removed = removal.is_ok();
                     tokio::task::block_in_place(|| {
                         let current = select(args, rp_id)?;
                         anyhow::ensure!(current.entry.id == selected.entry.id
                             && current.credential.credential_id == selected.credential.credential_id,
                             "passkey changed during the browser session");
                         advance(&current, count.max(stored_counter(&current.credential)?))
-                    })?;
-                    println!("Browser asserted counter {count}; vault synchronized.");
+                    }).with_context(|| format!("failed to synchronize final browser counter {count}; reconcile the vault before another login"))?;
+                    // Even if removal fails, preserve the counter we already
+                    // observed before reporting that cleanup needs attention.
+                    removal.context("vault counter synchronized but authenticator removal failed; close the browser page")?;
+                    println!("Final browser counter {count}; vault synchronized. Check the page to confirm the site accepted the login.");
                     return Ok::<(), anyhow::Error>(());
                 }
             }
@@ -380,10 +428,12 @@ pub fn inject(
         let outcome = tokio::time::timeout(std::time::Duration::from_secs(timeout), operation)
             .await.map_err(|_| anyhow::anyhow!("no assertion before timeout; reserved counter retained"))
             .and_then(std::convert::identity);
-        let cleanup = tokio::time::timeout(std::time::Duration::from_secs(5),
-            cdp.send("WebAuthn.removeVirtualAuthenticator", json!({"authenticatorId": authenticator}))).await;
-        if !matches!(cleanup, Ok(Ok(_))) {
-            eprintln!("Could not remove virtual authenticator; close the browser page.");
+        if !removed {
+            let cleanup = tokio::time::timeout(std::time::Duration::from_secs(5),
+                cdp.send("WebAuthn.removeVirtualAuthenticator", json!({"authenticatorId": authenticator}))).await;
+            if !matches!(cleanup, Ok(Ok(_))) {
+                eprintln!("Could not remove virtual authenticator; close the browser page.");
+            }
         }
         outcome
     })
@@ -405,6 +455,85 @@ mod tests {
             ..Default::default()
         };
         assert!(stored_counter(&malformed).is_err());
+    }
+
+    #[tokio::test]
+    async fn final_counter_captures_racing_assertions_and_rejects_bad_state()
+    {
+        for (credential_id, final_count, expected) in [
+            ("AQID", json!(7), Some(7)),
+            ("AQID", json!(8), Some(8)),
+            ("AQID", json!(6), None),
+            ("AQID", Value::Null, None),
+            ("AQID", json!(4_294_967_296_u64), None),
+            ("different", json!(8), None),
+        ] {
+            let listener =
+                tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut ws =
+                    tokio_tungstenite::accept_async(stream).await.unwrap();
+                let request: Value = serde_json::from_str(
+                    ws.next().await.unwrap().unwrap().to_text().unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    request["method"],
+                    "WebAuthn.setAutomaticPresenceSimulation"
+                );
+                assert_eq!(
+                    request["params"],
+                    json!({"authenticatorId": "test", "enabled": false})
+                );
+                // The first event reported 7. A second assertion completes
+                // before the disable acknowledgement and raises the count to 8.
+                ws.send(Message::Text(json!({
+                    "method": "WebAuthn.credentialAsserted",
+                    "params": {"authenticatorId": "test", "credential": {"signCount": 8}},
+                }).to_string().into())).await.unwrap();
+                ws.send(Message::Text(
+                    json!({"id": request["id"], "result": {}})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+                let request: Value = serde_json::from_str(
+                    ws.next().await.unwrap().unwrap().to_text().unwrap(),
+                )
+                .unwrap();
+                assert_eq!(request["method"], "WebAuthn.getCredential");
+                assert_eq!(
+                    request["params"],
+                    json!({"authenticatorId": "test", "credentialId": "AQID"})
+                );
+                ws.send(Message::Text(json!({
+                    "id": request["id"], "result": {"credential": {
+                        "credentialId": credential_id, "signCount": final_count,
+                        "privateKey": "DO-NOT-ECHO",
+                    }},
+                }).to_string().into())).await.unwrap();
+            });
+            let (socket, _) =
+                tokio_tungstenite::connect_async(format!("ws://{address}"))
+                    .await
+                    .unwrap();
+            let mut cdp = Cdp {
+                socket,
+                sequence: 0,
+                events: std::collections::VecDeque::default(),
+            };
+            let result = cdp.final_counter("test", "AQID", 7).await;
+            if let Some(expected) = expected {
+                assert_eq!(result.unwrap(), expected);
+            } else {
+                let error = result.unwrap_err().to_string();
+                assert!(!error.contains("DO-NOT-ECHO"));
+            }
+            server.await.unwrap();
+        }
     }
 
     #[tokio::test]

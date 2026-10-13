@@ -3313,6 +3313,8 @@ mod test {
                 history: vec![],
                 key: None,
                 master_password_reprompt: rbw::api::CipherRepromptType::None,
+                archived_date: None,
+                favorite: false,
                 archived: false,
                 deleted: false,
                 collection_ids: vec![],

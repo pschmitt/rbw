@@ -3764,7 +3764,13 @@ fn main() {
                 from_file_passphrase.as_deref(),
             )?;
             if let (Some(path), Some(password)) = (output_file, password) {
-                write_secret_output(&path, &password)?;
+                write_secret_output(&path, &password).map_err(|err| {
+                    if from_file.is_none() {
+                        commands::write_committed_error(err)
+                    } else {
+                        err
+                    }
+                })?;
             }
             Ok(())
         })(),
@@ -4152,7 +4158,7 @@ fn main() {
             && std::env::var_os("NO_COLOR").is_none();
         let msg = format!("{e:#}");
         eprintln!("{}", commands::style_error(&msg, c));
-        std::process::exit(1);
+        std::process::exit(commands::exit_status(&e));
     }
 }
 
