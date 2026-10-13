@@ -54,6 +54,7 @@ percent-encoding = "2.3.2"
 # independently of `rsa` breaks the build with no upside -- removed.
 # TODO: necessary because `rsa` (not in the lockstep bump group) still
 # depends on rand_core 0.6 via rand 0.8
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 rand_8 = { package = "rand", version = "0.8.5" }
 rand = "0.10.0"
 ratatui = "0.30.2"

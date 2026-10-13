@@ -4,6 +4,11 @@
 
 ### Added
 
+* `rbw passkey assert --origin ORIGIN --challenge CHALLENGE [--rp-id RP]
+  [--allow ID]... [ENTRY]` signs one WebAuthn assertion (ES256) and prints it
+  as JSON for a caller that answers the page's `navigator.credentials.get()`
+  itself, in any browser. The origin must belong to the passkey's relying
+  party; the key never leaves rbw; the counter is reserved in the vault first.
 * `rbw passkey find [--rp-id RP] [ENTRY]` prints, as a JSON array without any
   secret, the entries whose passkey would be used (id, name, username,
   relying party): every candidate for `--rp-id` when no entry is named, so a

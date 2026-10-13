@@ -403,6 +403,149 @@ impl Cdp {
     }
 }
 
+/// The page's origin, if it may use a passkey of `rp` (its host is the relying
+/// party or a subdomain of it; https, or http on localhost).
+fn checked_origin(origin: &str, rp: &str) -> anyhow::Result<String> {
+    let page = url::Url::parse(origin)
+        .map_err(|_| anyhow::anyhow!("invalid --origin"))?;
+    let host = page.host_str().context("--origin has no host")?;
+    anyhow::ensure!(
+        page.scheme() == "https"
+            || (page.scheme() == "http" && host == "localhost"),
+        "passkeys need an https origin"
+    );
+    anyhow::ensure!(
+        host == rp || host.ends_with(&format!(".{rp}")),
+        "{host} may not use a passkey for {rp}"
+    );
+    Ok(page.origin().ascii_serialization())
+}
+
+/// `clientDataJSON`, `authenticatorData` and the DER signature over both, as a
+/// passkey provider produces them for a `get()` request.
+fn sign_assertion(
+    key: &p256::ecdsa::SigningKey,
+    rp: &str,
+    origin: &str,
+    challenge: &str,
+    counter: u32,
+) -> anyhow::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    use p256::ecdsa::signature::Signer as _;
+    use sha2::Digest as _;
+    let client_data = serde_json::to_vec(&json!({
+        "type": "webauthn.get",
+        "challenge": challenge,
+        "origin": origin,
+        "crossOrigin": false,
+    }))?;
+    // Flags: user present, user verified, backup eligible, backed up (synced).
+    let mut auth_data = sha2::Sha256::digest(rp.as_bytes()).to_vec();
+    auth_data.push(0x01 | 0x04 | 0x08 | 0x10);
+    auth_data.extend_from_slice(&counter.to_be_bytes());
+    let mut signed = auth_data.clone();
+    signed.extend_from_slice(&sha2::Sha256::digest(&client_data));
+    let signature: p256::ecdsa::Signature = key.sign(&signed);
+    Ok((
+        client_data,
+        auth_data,
+        signature.to_der().as_bytes().to_vec(),
+    ))
+}
+
+/// Sign one `WebAuthn` assertion and print it as JSON (base64url fields), for a
+/// caller that answers the page's `navigator.credentials.get()` itself, in any
+/// browser. `origin` must be the page's real origin as the browser reports it,
+/// never one taken from page script: only then can a page not obtain a
+/// signature for another site. The key never leaves rbw; the counter is
+/// reserved in the vault before signing, like inject.
+pub fn assert(
+    args: &FindArgs,
+    rp_id: Option<&str>,
+    origin: &str,
+    challenge: &str,
+    allow: &[String],
+) -> anyhow::Result<()> {
+    use base64::Engine as _;
+    use p256::pkcs8::DecodePrivateKey as _;
+    let b64url = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let std_b64 = |v: &str| -> anyhow::Result<Vec<u8>> {
+        rbw::base64::decode(normalize_base64(v)?)
+            .map_err(|_| anyhow::anyhow!("invalid passkey encoding"))
+    };
+
+    log::set_max_level(log::LevelFilter::Off);
+    commands::unlocked().context("the vault is locked")?;
+    rbw::dirs::make_all()?;
+    let selected = select(args, rp_id)?;
+    let lock_path = rbw::dirs::pid_file()
+        .with_file_name(format!("passkey-{}.lock", selected.entry.id));
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .open(lock_path)?;
+    lock.try_lock().map_err(|_| {
+        anyhow::anyhow!("another passkey injection is active for this item")
+    })?;
+    let selected = select(args, rp_id)?;
+    let c = &selected.credential;
+    anyhow::ensure!(
+        c.key_type.as_deref() == Some("public-key")
+            && c.key_algorithm.as_deref() == Some("ECDSA")
+            && c.key_curve.as_deref() == Some("P-256"),
+        "unsupported passkey key type"
+    );
+    let rp = c.rp_id.as_deref().context("missing relying party")?;
+
+    let origin = checked_origin(origin, rp)?;
+
+    let raw_id = std_b64(&credential_id(
+        c.credential_id
+            .as_deref()
+            .context("missing credential ID")?,
+    )?)?;
+    if !allow.is_empty() {
+        let mine = b64url.encode(&raw_id);
+        anyhow::ensure!(
+            allow.iter().any(|a| a.trim_end_matches('=') == mine),
+            "the site asks for another passkey than this entry's"
+        );
+    }
+    let key = p256::ecdsa::SigningKey::from_pkcs8_der(&std_b64(
+        c.key_value.as_deref().context("missing passkey key")?,
+    )?)
+    .map_err(|_| anyhow::anyhow!("unreadable passkey key"))?;
+
+    let previous = stored_counter(c)?;
+    let reserved = next_counter(previous)?;
+    advance(&selected, reserved)?;
+    warn_counter_enabled(previous, reserved);
+
+    let (client_data, auth_data, signature) =
+        sign_assertion(&key, rp, &origin, challenge, reserved)?;
+    let user_handle = c.user_handle.as_deref().map(std_b64).transpose()?;
+
+    println!(
+        "{}",
+        json!({
+            "id": b64url.encode(&raw_id),
+            "rawId": b64url.encode(&raw_id),
+            "type": "public-key",
+            "authenticatorAttachment": "platform",
+            "response": {
+                "clientDataJSON": b64url.encode(&client_data),
+                "authenticatorData": b64url.encode(&auth_data),
+                "signature": b64url.encode(&signature),
+                "userHandle": user_handle.map(|u| b64url.encode(u)),
+            },
+            "counter": reserved,
+        })
+    );
+    Ok(())
+}
+
 pub fn inject(
     args: &FindArgs,
     rp_id: Option<&str>,
@@ -708,5 +851,53 @@ mod tests {
             "CDP command failed: WebAuthn.addCredential"
         );
         server.await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod assertion_tests {
+    use super::*;
+
+    #[test]
+    fn origin_must_belong_to_the_relying_party() {
+        assert_eq!(
+            checked_origin("https://accounts.google.com/x?y", "google.com")
+                .unwrap(),
+            "https://accounts.google.com"
+        );
+        assert!(checked_origin("https://evil.example", "google.com").is_err());
+        assert!(
+            checked_origin("https://notgoogle.com", "google.com").is_err()
+        );
+        assert!(checked_origin("http://google.com", "google.com").is_err());
+    }
+
+    #[test]
+    fn assertion_verifies_with_the_public_key() {
+        use p256::ecdsa::signature::Verifier as _;
+        use sha2::Digest as _;
+        let key = p256::ecdsa::SigningKey::from_slice(&[7u8; 32]).unwrap();
+        let (client, auth, sig) = sign_assertion(
+            &key,
+            "example.com",
+            "https://example.com",
+            "Y2hhbGxlbmdl",
+            42,
+        )
+        .unwrap();
+        assert_eq!(
+            &auth[..32],
+            sha2::Sha256::digest(b"example.com").as_slice()
+        );
+        assert_eq!(auth[32], 0x1d);
+        assert_eq!(&auth[33..], &42u32.to_be_bytes());
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&client).unwrap();
+        assert_eq!(parsed["type"], "webauthn.get");
+        assert_eq!(parsed["challenge"], "Y2hhbGxlbmdl");
+        let mut signed = auth.clone();
+        signed.extend_from_slice(&sha2::Sha256::digest(&client));
+        let sig = p256::ecdsa::Signature::from_der(&sig).unwrap();
+        key.verifying_key().verify(&signed, &sig).unwrap();
     }
 }

@@ -2008,6 +2008,27 @@ enum Passkey {
         #[arg(long, help = "Select the passkey by relying party")]
         rp_id: Option<String>,
     },
+    #[command(
+        about = "Sign one assertion for a page's passkey request (JSON); for callers answering navigator.credentials.get() themselves"
+    )]
+    Assert {
+        #[command(flatten)]
+        find_args: FindArgs,
+        #[arg(long, help = "Select the passkey by relying party")]
+        rp_id: Option<String>,
+        #[arg(
+            long,
+            help = "The page's origin as the browser reports it (never from page script)"
+        )]
+        origin: String,
+        #[arg(long, help = "The request's challenge, base64url")]
+        challenge: String,
+        #[arg(
+            long = "allow",
+            help = "Credential IDs the site accepts (base64url; repeatable)"
+        )]
+        allow: Vec<String>,
+    },
     #[command(about = "Read or advance a passkey counter in the vault")]
     Counter {
         #[command(flatten)]
@@ -3361,6 +3382,19 @@ fn main() {
             Passkey::Find { find_args, rp_id } => {
                 passkey::find(&find_args, rp_id.as_deref())
             }
+            Passkey::Assert {
+                find_args,
+                rp_id,
+                origin,
+                challenge,
+                allow,
+            } => passkey::assert(
+                &find_args,
+                rp_id.as_deref(),
+                &origin,
+                &challenge,
+                &allow,
+            ),
             Passkey::Counter {
                 find_args,
                 rp_id,
