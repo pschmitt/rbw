@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+* Passkey injection reads Chromium's final counter after disabling presence,
+  including assertions that raced with the disable command, before vault
+  writeback. It removes the authenticator before starting that writeback.
+* Warn when injection or `passkey counter --set` enables tracking on a
+  zero-counter credential: other Bitwarden clients must sync before use.
+
 ## [2.20.0] - 2026-10-12
 
 ### Added
