@@ -623,7 +623,10 @@ pub fn parse_zip(
         if !entry.is_file() {
             continue;
         }
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .context("failed to decode a filename in the zip archive")?
+            .into_owned();
 
         if let Some(folder_name) = name
             .strip_prefix("attachments/")
@@ -876,6 +879,46 @@ mod test {
         let raw = serde_json::to_vec(&envelope).unwrap();
 
         assert!(decrypt_encrypted_json(&raw, "wrong password").is_err());
+    }
+
+    #[test]
+    fn test_zip_preserves_unicode_attachment_names() {
+        let json = r#"{"items":[{"id":"1","type":2,"name":"café"}]}"#;
+        let attachments = vec![(
+            "café".to_string(),
+            "été.txt".to_string(),
+            b"content".to_vec(),
+        )];
+        let zip = write_zip(json, &attachments).unwrap();
+        let (_, parsed) = parse_zip(&zip).unwrap();
+        assert_eq!(parsed["café"][0].file_name, "été.txt");
+        assert_eq!(parsed["café"][0].data, b"content");
+    }
+
+    #[test]
+    fn test_zip_preserves_legacy_cp437_attachment_names() {
+        let attachments = vec![(
+            "folder".to_string(),
+            "cafX.txt".to_string(),
+            b"content".to_vec(),
+        )];
+        let mut raw = write_zip(r#"{"items":[]}"#, &attachments).unwrap();
+        // ASCII names carry no UTF-8 flag. Replace X in both the local and
+        // central header names with the CP437 encoding of é.
+        let name = b"attachments/folder/cafX.txt";
+        let offsets: Vec<_> = raw
+            .windows(name.len())
+            .enumerate()
+            .filter_map(|(i, w)| (w == name).then_some(i))
+            .collect();
+        assert_eq!(offsets.len(), 2);
+        for offset in offsets {
+            raw[offset + name.iter().position(|b| *b == b'X').unwrap()] =
+                0x82;
+        }
+        let (_, parsed) = parse_zip(&raw).unwrap();
+        assert_eq!(parsed["folder"][0].file_name, "café.txt");
+        assert_eq!(parsed["folder"][0].data, b"content");
     }
 
     #[test]
