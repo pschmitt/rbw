@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+* `rbw passkey inject --rp-id RP` without an entry name picks the one live
+  login holding a passkey for that relying party (only entries carrying
+  passkeys are decrypted). Several matches are an error that asks for a name.
+
 ## [2.20.0] - 2026-10-13
 
 ### Added

@@ -21,16 +21,21 @@ struct Selected {
 fn select(args: &FindArgs, rp_id: Option<&str>) -> anyhow::Result<Selected> {
     actions::sync()?;
     let db = commands::load_db()?;
-    let (entry, decrypted) = commands::find_entry(
-        &db,
-        args.needles.clone(),
-        args.user.as_deref(),
-        args.folder.as_deref(),
-        args.collection.as_deref(),
-        args.org.as_deref(),
-        args.ignorecase,
-        args.exact,
-    )?;
+    let (entry, decrypted) = if args.needles.is_empty() {
+        let rp = rp_id.context("name an entry or give --rp-id")?;
+        find_by_rp_id(&db, rp)?
+    } else {
+        commands::find_entry(
+            &db,
+            args.needles.clone(),
+            args.user.as_deref(),
+            args.folder.as_deref(),
+            args.collection.as_deref(),
+            args.org.as_deref(),
+            args.ignorecase,
+            args.exact,
+        )?
+    };
     let commands::DecryptedData::Login {
         fido2_credentials, ..
     } = decrypted.data
@@ -52,6 +57,44 @@ fn select(args: &FindArgs, rp_id: Option<&str>) -> anyhow::Result<Selected> {
         credential,
         index,
     })
+}
+
+/// The one live login holding a passkey for `rp_id`. Only entries that carry
+/// passkeys at all are decrypted.
+fn find_by_rp_id(
+    db: &rbw::db::Db,
+    rp_id: &str,
+) -> anyhow::Result<(rbw::db::Entry, commands::DecryptedCipher)> {
+    let mut found = Vec::new();
+    for entry in &db.entries {
+        let has_passkeys = matches!(
+            &entry.data,
+            rbw::db::EntryData::Login { fido2_credentials, .. }
+                if !fido2_credentials.is_empty()
+        );
+        if entry.deleted || entry.archived || !has_passkeys {
+            continue;
+        }
+        let decrypted = commands::decrypt_cipher(entry)?;
+        if let commands::DecryptedData::Login {
+            fido2_credentials, ..
+        } = &decrypted.data
+        {
+            if fido2_credentials
+                .iter()
+                .any(|c| c.rp_id.as_deref() == Some(rp_id))
+            {
+                found.push((entry.clone(), decrypted));
+            }
+        }
+    }
+    anyhow::ensure!(
+        found.len() < 2,
+        "several entries hold a passkey for {rp_id}; name one"
+    );
+    found
+        .pop()
+        .with_context(|| format!("no passkey for {rp_id} in the vault"))
 }
 
 fn stored_counter(
