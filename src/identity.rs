@@ -92,3 +92,45 @@ impl Identity {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use hmac::{KeyInit as _, Mac as _};
+    use sha2::Digest as _;
+
+    fn decode_hex(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    // Fixed answers from an independent implementation (Python/OpenSSL).
+    // Round trips alone would miss a consistently incorrect hash backend.
+    #[test]
+    fn sha256_known_answers_cover_short_and_multiple_blocks() {
+        for (input, expected) in [
+            (b"abc".to_vec(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+            (vec![b'a'; 1_000_000], "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"),
+        ] {
+            assert_eq!(sha2::Sha256::digest(&input).as_slice(), decode_hex(expected));
+        }
+    }
+
+    #[test]
+    fn hmac_and_pbkdf2_sha256_match_independent_answers() {
+        let mut mac =
+            hmac::Hmac::<sha2::Sha256>::new_from_slice(&[0x0b; 20]).unwrap();
+        mac.update(b"Hi There");
+        assert_eq!(mac.finalize().into_bytes().as_slice(), decode_hex("b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"));
+        let mut derived = [0u8; 32];
+        pbkdf2::pbkdf2::<hmac::Hmac<sha2::Sha256>>(
+            b"password",
+            b"salt",
+            4096,
+            &mut derived,
+        )
+        .unwrap();
+        assert_eq!(derived.as_slice(), decode_hex("c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a"));
+    }
+}
