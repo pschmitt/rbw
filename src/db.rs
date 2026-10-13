@@ -23,6 +23,10 @@ pub struct Entry {
     #[serde(default)]
     pub archived: bool,
     #[serde(default)]
+    pub archived_date: Option<String>,
+    #[serde(default)]
+    pub favorite: bool,
+    #[serde(default)]
     pub deleted: bool,
     #[serde(default)]
     pub collection_ids: Vec<String>,
@@ -32,6 +36,26 @@ pub struct Entry {
     // databases synced before rbw started storing it.
     #[serde(default)]
     pub revision_date: Option<String>,
+}
+
+/// Metadata that must survive a full cipher replacement.
+#[derive(Debug, Clone, Copy)]
+pub struct CipherWriteMeta<'a> {
+    pub reprompt: crate::api::CipherRepromptType,
+    pub favorite: bool,
+    pub archived_date: Option<&'a str>,
+    pub last_known_revision_date: Option<&'a str>,
+}
+
+impl Entry {
+    pub fn cipher_write_meta(&self) -> CipherWriteMeta<'_> {
+        CipherWriteMeta {
+            reprompt: self.master_password_reprompt,
+            favorite: self.favorite,
+            archived_date: self.archived_date.as_deref(),
+            last_known_revision_date: self.revision_date.as_deref(),
+        }
+    }
 }
 
 #[derive(

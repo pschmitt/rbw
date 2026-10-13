@@ -468,6 +468,8 @@ struct SyncResCipher {
     key: Option<String>,
     #[serde(rename = "Reprompt", alias = "reprompt")]
     reprompt: CipherRepromptType,
+    #[serde(default, rename = "Favorite", alias = "favorite")]
+    favorite: bool,
     #[serde(rename = "CollectionIds", alias = "collectionIds", default)]
     collection_ids: Vec<String>,
     #[serde(
@@ -640,6 +642,8 @@ impl SyncResCipher {
             key: self.key.clone(),
             master_password_reprompt: self.reprompt,
             archived: self.archived_date.is_some(),
+            archived_date: self.archived_date.clone(),
+            favorite: self.favorite,
             deleted: self.deleted_date.is_some(),
             collection_ids: self.collection_ids.clone(),
             attachments: self
@@ -683,6 +687,105 @@ struct CipherAttachment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_put_preserves_metadata_and_classifies_revision_conflicts() {
+        use std::io::{BufRead as _, Read as _, Write as _};
+        for (status, response, conflict) in [
+            ("200 OK", "{}", false),
+            (
+                "400 Bad Request",
+                r#"{"message":"The client copy is out of date."}"#,
+                true,
+            ),
+            ("409 Conflict", "{}", true),
+        ] {
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = std::io::BufReader::new(&stream);
+                let mut line = String::new();
+                assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                assert!(line.starts_with("PUT /ciphers/id "));
+                let mut length = 0;
+                loop {
+                    line.clear();
+                    assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line
+                        .to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                    {
+                        length = value.trim().parse::<usize>().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                drop(reader);
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+                let body: serde_json::Value =
+                    serde_json::from_slice(&body).unwrap();
+                assert_eq!(body["reprompt"], 1);
+                assert_eq!(body["favorite"], true);
+                assert_eq!(body["archivedDate"], "archive-date");
+                assert_eq!(body["lastKnownRevisionDate"], "revision");
+                assert_eq!(body["Key"], "item-key");
+            });
+            let client = Client::new(&url, &url, &url, None);
+            let result = client.edit(
+                "dummy",
+                "id",
+                None,
+                Some("item-key"),
+                "name",
+                &crate::db::EntryData::SecureNote,
+                &[],
+                None,
+                None,
+                &[],
+                &crate::db::CipherWriteMeta {
+                    reprompt: CipherRepromptType::Password,
+                    favorite: true,
+                    archived_date: Some("archive-date"),
+                    last_known_revision_date: Some("revision"),
+                },
+            );
+            if conflict {
+                assert!(matches!(result, Err(Error::CipherRevisionConflict)));
+            } else {
+                result.unwrap();
+            }
+            server.join().unwrap();
+        }
+    }
+    #[test]
+    fn sync_metadata_survives_cache_round_trip_and_old_caches_load() {
+        let cipher: SyncResCipher = serde_json::from_value(serde_json::json!({
+            "id":"id", "name":"ciphertext", "secureNote":{}, "reprompt":1,
+            "favorite":true, "archivedDate":"2026-10-13T10:00:00Z", "revisionDate":"revision"
+        })).unwrap();
+        let entry = cipher.to_entry(&[]).unwrap();
+        let mut cached = serde_json::to_value(&entry).unwrap();
+        let restored: crate::db::Entry =
+            serde_json::from_value(cached.clone()).unwrap();
+        let meta = restored.cipher_write_meta();
+        assert_eq!(meta.reprompt, CipherRepromptType::Password);
+        assert!(meta.favorite);
+        assert_eq!(meta.archived_date, Some("2026-10-13T10:00:00Z"));
+        assert_eq!(meta.last_known_revision_date, Some("revision"));
+        cached.as_object_mut().unwrap().remove("favorite");
+        cached.as_object_mut().unwrap().remove("archived_date");
+        let old: crate::db::Entry = serde_json::from_value(cached).unwrap();
+        assert!(!old.favorite);
+        assert!(old.archived_date.is_none());
+    }
 
     #[test]
     fn sync_cipher_treats_null_attachments_as_empty() {
@@ -793,12 +896,18 @@ mod tests {
             fields: Vec::new(),
             password_history: Vec::new(),
             key: None,
+            reprompt: CipherRepromptType::Password,
+            favorite: true,
+            archived_date: Some("2026-10-13T10:00:00Z".to_string()),
             last_known_revision_date: None,
             encrypted_for: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
         assert!(json.get("lastKnownRevisionDate").is_none());
+        assert_eq!(json["reprompt"], 1);
+        assert_eq!(json["favorite"], true);
+        assert_eq!(json["archivedDate"], "2026-10-13T10:00:00Z");
         assert_eq!(json["type"], 5);
         assert!(json["login"].is_null());
         assert!(json["card"].is_null());
@@ -1336,6 +1445,10 @@ struct CiphersPutReq {
     ssh_key: Option<CipherSshKey>,
     #[serde(rename = "passwordHistory")]
     password_history: Vec<CiphersPutReqHistory>,
+    reprompt: CipherRepromptType,
+    favorite: bool,
+    #[serde(rename = "archivedDate")]
+    archived_date: Option<String>,
     // The cipher's own individual encryption key (already encrypted under
     // the account/org key), carried through verbatim from the entry being
     // edited. Bitwarden/Vaultwarden treat this PUT as a full-object
@@ -2506,7 +2619,7 @@ impl Client {
         notes: Option<&str>,
         folder_uuid: Option<&str>,
         history: &[crate::db::HistoryEntry],
-        last_known_revision_date: Option<&str>,
+        meta: &crate::db::CipherWriteMeta<'_>,
     ) -> Result<()> {
         let mut req = CiphersPutReq {
             ty: match data {
@@ -2542,8 +2655,12 @@ impl Client {
                     password: entry.password.clone(),
                 })
                 .collect(),
-            last_known_revision_date: last_known_revision_date
+            last_known_revision_date: meta
+                .last_known_revision_date
                 .map(std::string::ToString::to_string),
+            reprompt: meta.reprompt,
+            favorite: meta.favorite,
+            archived_date: meta.archived_date.map(str::to_owned),
             encrypted_for: user_id_from_access_token(access_token),
         };
         match data {
@@ -2693,6 +2810,12 @@ impl Client {
             _ => {
                 let code = status.as_u16();
                 let body = res.text().unwrap_or_default();
+                if status == reqwest::StatusCode::CONFLICT
+                    || (status == reqwest::StatusCode::BAD_REQUEST
+                        && body.to_ascii_lowercase().contains("out of date"))
+                {
+                    return Err(Error::CipherRevisionConflict);
+                }
                 if body.is_empty() {
                     Err(Error::RequestFailed { status: code })
                 } else {

@@ -98,7 +98,7 @@ fn advance(selected: &Selected, counter: u32) -> anyhow::Result<()> {
         .refresh_token
         .as_deref()
         .context("missing refresh token")?;
-    if let (Some(tokens), ()) = rbw::actions::edit(
+    let (tokens, ()) = rbw::actions::edit(
         access,
         refresh,
         &entry.id,
@@ -110,16 +110,9 @@ fn advance(selected: &Selected, counter: u32) -> anyhow::Result<()> {
         entry.notes.as_deref(),
         entry.folder_id.as_deref(),
         &entry.history,
-        entry.revision_date.as_deref(),
-    )? {
-        db.access_token = Some(tokens.access_token);
-        if let Some(refresh) = tokens.refresh_token {
-            db.refresh_token = Some(refresh);
-        }
-        commands::save_db(&db)?;
-    }
-    actions::sync()?;
-    Ok(())
+        &entry.cipher_write_meta(),
+    )?;
+    commands::after_server_write(&mut db, tokens)
 }
 
 pub fn counter(

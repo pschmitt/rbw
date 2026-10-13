@@ -829,3 +829,22 @@ with a supported mechanism, and use other clients with you preferred
 * [rbw-menu](https://github.com/rbuchberger/rbw-menu): Tiny menu picker for rbw
 * [ulauncher-rbw](https://0xacab.org/varac-projects/ulauncher-rbw): [Ulauncher](https://ulauncher.io/) rbw extension
 * [fuzzel-rbw](https://github.com/sammhansen/fuzzel-rbw): A fuzzel frontend for Bitwarden
+
+### Cipher write failures and editor recovery
+
+Full cipher edits preserve the item's master-password reprompt policy,
+favorite flag, archive timestamp, item key, and server revision. CLI `edit`
+and `set` synchronize before resolving selectors; revision checks still reject
+changes made while an editor or confirmation prompt is open.
+
+For `create`, `generate`, `edit`, `set`, and passkey counter writes, a failure
+exits with status 2 when a server write has succeeded but local follow-up work
+failed. Run `rbw sync` and inspect the affected entries
+before retrying. Bulk updates can also return 2 after partial success; do not
+repeat the entire batch blindly. Other failures return status 1.
+
+When an interactive `create` or `edit` fails before a confirmed write, rbw
+keeps the entered plaintext in its profile's data directory under
+`unsaved-edits` and reports the path. The directory has mode 0700 and files
+have mode 0600. Delete the recovery file after recovering the edit. Piped input
+is never saved as a recovery file, and confirmed writes do not leave one.
