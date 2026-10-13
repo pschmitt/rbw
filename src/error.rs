@@ -1,5 +1,10 @@
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error("failed to preserve unsaved editor buffer")]
+    UnsavedEdit { source: std::io::Error },
+    #[error("cipher changed on the server; run rbw sync and retry the edit")]
+    CipherRevisionConflict,
+
     #[error("email address not set")]
     ConfigMissingEmail,
 

@@ -10,6 +10,66 @@ use std::{fmt::Write as _, io::Write as _, os::unix::ffi::OsStrExt as _};
 use anyhow::Context as _;
 use is_terminal::IsTerminal as _;
 
+/// A remote write succeeded; repeating it can overwrite data or create duplicates.
+#[derive(Debug)]
+struct WriteCommitted;
+
+impl std::fmt::Display for WriteCommitted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a server write succeeded, but follow-up work failed; run `rbw sync` and inspect the vault before retrying")
+    }
+}
+impl std::error::Error for WriteCommitted {}
+
+pub fn write_committed_error(err: anyhow::Error) -> anyhow::Error {
+    err.context(WriteCommitted)
+}
+
+pub fn exit_status(err: &anyhow::Error) -> i32 {
+    if err.is::<WriteCommitted>() {
+        2
+    } else {
+        1
+    }
+}
+
+pub fn after_server_write(
+    db: &mut rbw::db::Db,
+    tokens: Option<rbw::actions::RefreshedTokens>,
+) -> anyhow::Result<()> {
+    if let Some(tokens) = tokens {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
+        save_db(db).context(WriteCommitted)?;
+    }
+    crate::actions::sync().context(WriteCommitted)?;
+    *db = load_db().context(WriteCommitted)?;
+    Ok(())
+}
+
+fn after_editor<T>(
+    contents: &str,
+    interactive: bool,
+    result: anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    result.map_err(|err| {
+        if !interactive || err.is::<WriteCommitted>() {
+            return err;
+        }
+        match rbw::edit::save_unsaved(contents) {
+            Ok(path) => err.context(format!(
+                "unsaved plaintext edit kept in {}; delete it after recovery",
+                path.display()
+            )),
+            Err(save_err) => err.context(format!(
+                "could not preserve unsaved edit: {save_err}"
+            )),
+        }
+    })
+}
+
 // The default number of seconds the generated TOTP
 // code lasts for before a new one must be generated
 const TOTP_DEFAULT_STEP: u64 = 30;
@@ -5680,7 +5740,7 @@ fn edit_new_entry(
     template: EditableCipher,
     json: bool,
     prefilled: bool,
-) -> anyhow::Result<Option<EditableCipher>> {
+) -> anyhow::Result<Option<(EditableCipher, Option<String>)>> {
     if matches!(template.data, EditableData::SecureNote)
         && !std::io::stdin().is_terminal()
     {
@@ -5690,10 +5750,13 @@ fn edit_new_entry(
         if notes.is_empty() {
             anyhow::bail!("no note content on stdin");
         }
-        return Ok(Some(EditableCipher {
-            notes: Some(notes),
-            ..template
-        }));
+        return Ok(Some((
+            EditableCipher {
+                notes: Some(notes),
+                ..template
+            },
+            None,
+        )));
     }
 
     let serialized = if json {
@@ -5714,39 +5777,45 @@ fn edit_new_entry(
         )
     };
 
+    let interactive = std::io::stdin().is_terminal();
     let contents = rbw::edit::edit(&serialized, help, ext)?;
-    let contents_trimmed = contents
-        .lines()
-        .filter(|l| !l.starts_with('#'))
-        .fold(String::new(), |mut s, l| {
-            s.push_str(l);
-            s.push('\n');
-            s
-        });
+    let result = (|| {
+        let contents_trimmed = contents
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .fold(String::new(), |mut s, l| {
+                s.push_str(l);
+                s.push('\n');
+                s
+            });
 
-    // With `--generate`, the template already has a real (generated)
-    // password filled in, so leaving the editor untouched means "accept the
-    // generated entry as shown", not "I opened this by accident" -- only
-    // treat an unmodified buffer as a no-op cancel when there's nothing
-    // pre-filled worth keeping.
-    if !prefilled && contents_trimmed.trim() == serialized.trim() {
-        eprintln!("{}", paint_no_changes());
-        return Ok(None);
-    }
+        // With `--generate`, the template already has a real (generated)
+        // password filled in, so leaving the editor untouched means "accept the
+        // generated entry as shown", not "I opened this by accident" -- only
+        // treat an unmodified buffer as a no-op cancel when there's nothing
+        // pre-filled worth keeping.
+        if !prefilled && contents_trimmed.trim() == serialized.trim() {
+            eprintln!("{}", paint_no_changes());
+            return Ok(None);
+        }
 
-    let cipher: EditableCipher = if json {
-        serde_json::from_str(&contents_trimmed)
-            .map_err(|e| anyhow::anyhow!("failed to parse JSON: {e}"))?
-    } else {
-        serde_yaml::from_str(&contents_trimmed)
-            .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?
-    };
+        let cipher: EditableCipher = if json {
+            serde_json::from_str(&contents_trimmed)
+                .map_err(|e| anyhow::anyhow!("failed to parse JSON: {e}"))?
+        } else {
+            serde_yaml::from_str(&contents_trimmed)
+                .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?
+        };
 
-    if cipher.name.is_empty() {
-        return Err(anyhow::anyhow!("name cannot be empty"));
-    }
+        if cipher.name.is_empty() {
+            return Err(anyhow::anyhow!("name cannot be empty"));
+        }
 
-    Ok(Some(cipher))
+        Ok(Some(cipher))
+    })();
+    after_editor(&contents, interactive, result).map(|cipher| {
+        cipher.map(|cipher| (cipher, interactive.then_some(contents)))
+    })
 }
 
 // `add --from-file`'s counterpart to `add_structured`: same
@@ -5775,47 +5844,58 @@ fn add_from_file(
         generated_password,
         secure_note,
     );
-    let Some(cipher) =
+    let Some((cipher, editor_buffer)) =
         edit_new_entry(template, json, generated_password.is_some())?
     else {
         return Ok(());
     };
 
-    let (data, fields, notes) = editable_to_decrypted(&cipher);
-    let id = uuid::Uuid::new_v4().to_string();
-    vault.entries.push(DecryptedCipher {
-        attachment_metadata: AttachmentMetadata::new(&id, 0),
-        id,
-        folder: cipher.folder.clone(),
-        name: cipher.name.clone(),
-        data,
-        fields,
-        notes,
-        history: Vec::new(),
-        attachments: Vec::new(),
-        archived: false,
-        deleted: false,
-        account: None,
-        revision_date: None,
-    });
+    let result = (|| {
+        let (data, fields, notes) = editable_to_decrypted(&cipher);
+        let id = uuid::Uuid::new_v4().to_string();
+        vault.entries.push(DecryptedCipher {
+            attachment_metadata: AttachmentMetadata::new(&id, 0),
+            id,
+            folder: cipher.folder.clone(),
+            name: cipher.name.clone(),
+            data,
+            fields,
+            notes,
+            history: Vec::new(),
+            attachments: Vec::new(),
+            archived: false,
+            deleted: false,
+            account: None,
+            revision_date: None,
+        });
 
-    backup_file(path)?;
-    let exported = vault
-        .entries
-        .iter()
-        .map(|e| {
-            to_exported_entry(e, &vault.attachment_data, &vault.entry_extra)
-        })
-        .collect();
-    save_to_file(
-        path,
-        exported,
-        vault.collections,
-        vault.passphrase.as_deref(),
-    )?;
+        backup_file(path)?;
+        let exported = vault
+            .entries
+            .iter()
+            .map(|e| {
+                to_exported_entry(
+                    e,
+                    &vault.attachment_data,
+                    &vault.entry_extra,
+                )
+            })
+            .collect();
+        save_to_file(
+            path,
+            exported,
+            vault.collections,
+            vault.passphrase.as_deref(),
+        )?;
 
-    print_created(&cipher.name);
-    Ok(())
+        print_created(&cipher.name);
+        Ok(())
+    })();
+    after_editor(
+        editor_buffer.as_deref().unwrap_or(""),
+        editor_buffer.is_some(),
+        result,
+    )
 }
 
 pub fn generate(
@@ -5899,7 +5979,7 @@ pub fn generate(
             }
         }
 
-        if let (Some(tokens), _) = rbw::actions::add(
+        let (tokens, _) = rbw::actions::add(
             &access_token,
             &refresh_token,
             &name,
@@ -5913,15 +5993,9 @@ pub fn generate(
             &[],
             None,
             folder_id.as_deref(),
-        )? {
-            db.access_token = Some(tokens.access_token);
-            if let Some(refresh_token) = tokens.refresh_token {
-                db.refresh_token = Some(refresh_token);
-            }
-            save_db(&db)?;
-        }
+        )?;
 
-        crate::actions::sync()?;
+        after_server_write(&mut db, tokens)?;
     }
 
     Ok(())
@@ -6024,83 +6098,92 @@ fn edit_from_file(
         )
     };
 
+    let interactive = std::io::stdin().is_terminal();
     let contents = rbw::edit::edit(&serialized, help, ext)?;
-    let contents_trimmed = contents
-        .lines()
-        .filter(|l| !l.starts_with('#'))
-        .fold(String::new(), |mut s, l| {
-            s.push_str(l);
-            s.push('\n');
-            s
-        });
+    let result = (|| {
+        let contents_trimmed = contents
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .fold(String::new(), |mut s, l| {
+                s.push_str(l);
+                s.push('\n');
+                s
+            });
 
-    if contents_trimmed.trim() == serialized.trim() {
-        eprintln!("{}", paint_no_changes());
-        return Ok(());
-    }
-
-    let updated: EditableCipher = if json {
-        serde_json::from_str(&contents_trimmed)
-            .map_err(|e| anyhow::anyhow!("failed to parse JSON: {e}"))?
-    } else {
-        serde_yaml::from_str(&contents_trimmed)
-            .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?
-    };
-
-    let (data, fields, notes) = editable_to_decrypted(&updated);
-
-    let mut new_entry = decrypted.clone();
-    new_entry.name = updated.name;
-    new_entry.folder = updated.folder;
-    new_entry.data = data;
-    new_entry.fields = fields;
-    new_entry.notes = notes;
-
-    if let (
-        DecryptedData::Login {
-            password: Some(old_pw),
-            ..
-        },
-        DecryptedData::Login {
-            password: new_pw, ..
-        },
-    ) = (&decrypted.data, &new_entry.data)
-    {
-        if Some(old_pw) != new_pw.as_ref() {
-            new_entry.history.insert(
-                0,
-                DecryptedHistoryEntry {
-                    last_used_date: format!(
-                        "{}",
-                        humantime::format_rfc3339(
-                            std::time::SystemTime::now()
-                        )
-                    ),
-                    password: old_pw.clone(),
-                },
-            );
+        if contents_trimmed.trim() == serialized.trim() {
+            eprintln!("{}", paint_no_changes());
+            return Ok(());
         }
-    }
 
-    if let Some(pos) = vault.entries.iter().position(|e| e.id == decrypted.id)
-    {
-        vault.entries[pos] = new_entry;
-    }
+        let updated: EditableCipher = if json {
+            serde_json::from_str(&contents_trimmed)
+                .map_err(|e| anyhow::anyhow!("failed to parse JSON: {e}"))?
+        } else {
+            serde_yaml::from_str(&contents_trimmed)
+                .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?
+        };
 
-    backup_file(path)?;
-    let exported = vault
-        .entries
-        .iter()
-        .map(|e| {
-            to_exported_entry(e, &vault.attachment_data, &vault.entry_extra)
-        })
-        .collect();
-    save_to_file(
-        path,
-        exported,
-        vault.collections,
-        vault.passphrase.as_deref(),
-    )
+        let (data, fields, notes) = editable_to_decrypted(&updated);
+
+        let mut new_entry = decrypted.clone();
+        new_entry.name = updated.name;
+        new_entry.folder = updated.folder;
+        new_entry.data = data;
+        new_entry.fields = fields;
+        new_entry.notes = notes;
+
+        if let (
+            DecryptedData::Login {
+                password: Some(old_pw),
+                ..
+            },
+            DecryptedData::Login {
+                password: new_pw, ..
+            },
+        ) = (&decrypted.data, &new_entry.data)
+        {
+            if Some(old_pw) != new_pw.as_ref() {
+                new_entry.history.insert(
+                    0,
+                    DecryptedHistoryEntry {
+                        last_used_date: format!(
+                            "{}",
+                            humantime::format_rfc3339(
+                                std::time::SystemTime::now()
+                            )
+                        ),
+                        password: old_pw.clone(),
+                    },
+                );
+            }
+        }
+
+        if let Some(pos) =
+            vault.entries.iter().position(|e| e.id == decrypted.id)
+        {
+            vault.entries[pos] = new_entry;
+        }
+
+        backup_file(path)?;
+        let exported = vault
+            .entries
+            .iter()
+            .map(|e| {
+                to_exported_entry(
+                    e,
+                    &vault.attachment_data,
+                    &vault.entry_extra,
+                )
+            })
+            .collect();
+        save_to_file(
+            path,
+            exported,
+            vault.collections,
+            vault.passphrase.as_deref(),
+        )
+    })();
+    after_editor(&contents, interactive, result)
 }
 
 // `remove --from-file`: same needle matching and confirmation prompt as
@@ -7178,6 +7261,7 @@ fn edit_structured(
     force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None, None)?;
+    crate::actions::sync()?;
 
     let mut db = load_db()?;
     let access_token = db.access_token.as_ref().unwrap().clone();
@@ -7226,113 +7310,111 @@ fn edit_structured(
         )
     };
 
+    let interactive = std::io::stdin().is_terminal();
     let contents = rbw::edit::edit(&serialized, help, ext)?;
-    let contents_trimmed = contents
-        .lines()
-        .filter(|l| !l.starts_with('#'))
-        .fold(String::new(), |mut s, l| {
-            s.push_str(l);
-            s.push('\n');
-            s
-        });
+    let result = (|| {
+        let contents_trimmed = contents
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .fold(String::new(), |mut s, l| {
+                s.push_str(l);
+                s.push('\n');
+                s
+            });
 
-    if contents_trimmed.trim() == serialized.trim() {
-        eprintln!("{}", paint_no_changes());
-        return Ok(());
-    }
-
-    let updated: EditableCipher = if json {
-        serde_json::from_str(&contents_trimmed)
-            .map_err(|e| anyhow::anyhow!("failed to parse JSON: {e}"))?
-    } else {
-        serde_yaml::from_str(&contents_trimmed)
-            .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?
-    };
-
-    let (data, fields, notes) = editable_to_encrypted(
-        &updated,
-        entry.key.as_deref(),
-        entry.org_id.as_deref(),
-    )?;
-
-    let encrypted_name = crate::actions::encrypt(
-        &updated.name,
-        entry.key.as_deref(),
-        entry.org_id.as_deref(),
-    )?;
-
-    let encrypted_notes = notes
-        .as_deref()
-        .map(|n| {
-            crate::actions::encrypt(
-                n,
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            )
-        })
-        .transpose()?;
-
-    let mut history = entry.history.clone();
-    if let (
-        rbw::db::EntryData::Login {
-            password: Some(old_pw),
-            ..
-        },
-        rbw::db::EntryData::Login {
-            password: new_pw, ..
-        },
-    ) = (&entry.data, &data)
-    {
-        if Some(old_pw) != new_pw.as_ref() {
-            history.insert(
-                0,
-                rbw::db::HistoryEntry {
-                    last_used_date: format!(
-                        "{}",
-                        humantime::format_rfc3339(
-                            std::time::SystemTime::now()
-                        )
-                    ),
-                    password: old_pw.clone(),
-                },
-            );
+        if contents_trimmed.trim() == serialized.trim() {
+            eprintln!("{}", paint_no_changes());
+            return Ok(());
         }
-    }
 
-    let folder_id = if let Some(folder_name) = updated.folder.as_deref() {
-        resolve_folder_id(
-            &mut db,
+        let updated: EditableCipher = if json {
+            serde_json::from_str(&contents_trimmed)
+                .map_err(|e| anyhow::anyhow!("failed to parse JSON: {e}"))?
+        } else {
+            serde_yaml::from_str(&contents_trimmed)
+                .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?
+        };
+
+        let (data, fields, notes) = editable_to_encrypted(
+            &updated,
+            entry.key.as_deref(),
+            entry.org_id.as_deref(),
+        )?;
+
+        let encrypted_name = crate::actions::encrypt(
+            &updated.name,
+            entry.key.as_deref(),
+            entry.org_id.as_deref(),
+        )?;
+
+        let encrypted_notes = notes
+            .as_deref()
+            .map(|n| {
+                crate::actions::encrypt(
+                    n,
+                    entry.key.as_deref(),
+                    entry.org_id.as_deref(),
+                )
+            })
+            .transpose()?;
+
+        let mut history = entry.history.clone();
+        if let (
+            rbw::db::EntryData::Login {
+                password: Some(old_pw),
+                ..
+            },
+            rbw::db::EntryData::Login {
+                password: new_pw, ..
+            },
+        ) = (&entry.data, &data)
+        {
+            if Some(old_pw) != new_pw.as_ref() {
+                history.insert(
+                    0,
+                    rbw::db::HistoryEntry {
+                        last_used_date: format!(
+                            "{}",
+                            humantime::format_rfc3339(
+                                std::time::SystemTime::now()
+                            )
+                        ),
+                        password: old_pw.clone(),
+                    },
+                );
+            }
+        }
+
+        let folder_id = if let Some(folder_name) = updated.folder.as_deref() {
+            resolve_folder_id(
+                &mut db,
+                &access_token,
+                &refresh_token,
+                folder_name,
+            )?
+        } else {
+            entry.folder_id.clone()
+        };
+
+        let (tokens, ()) = rbw::actions::edit(
             &access_token,
             &refresh_token,
-            folder_name,
-        )?
-    } else {
-        entry.folder_id.clone()
-    };
+            &entry.id,
+            entry.org_id.as_deref(),
+            entry.key.as_deref(),
+            &encrypted_name,
+            &data,
+            &fields,
+            encrypted_notes.as_deref(),
+            folder_id.as_deref(),
+            &history,
+            &entry.cipher_write_meta(),
+        )?;
 
-    if let (Some(tokens), ()) = rbw::actions::edit(
-        &access_token,
-        &refresh_token,
-        &entry.id,
-        entry.org_id.as_deref(),
-        entry.key.as_deref(),
-        &encrypted_name,
-        &data,
-        &fields,
-        encrypted_notes.as_deref(),
-        folder_id.as_deref(),
-        &history,
-        entry.revision_date.as_deref(),
-    )? {
-        db.access_token = Some(tokens.access_token);
-        if let Some(refresh_token) = tokens.refresh_token {
-            db.refresh_token = Some(refresh_token);
-        }
-        save_db(&db)?;
-    }
-
-    crate::actions::sync()?;
-    Ok(())
+        after_server_write(&mut db, tokens)?;
+        Ok(())
+    })();
+    after_editor(&contents, interactive, result)
 }
 
 fn add_structured(
@@ -7352,56 +7434,59 @@ fn add_structured(
         generated_password,
         secure_note,
     );
-    let Some(cipher) =
+    let Some((cipher, editor_buffer)) =
         edit_new_entry(template, json, generated_password.is_some())?
     else {
         return Ok(());
     };
 
-    unlock(None, None)?;
+    let result = (|| {
+        unlock(None, None)?;
 
-    let mut db = load_db()?;
-    let access_token = db.access_token.as_ref().unwrap().clone();
-    let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+        let mut db = load_db()?;
+        let access_token = db.access_token.as_ref().unwrap().clone();
+        let refresh_token = db.refresh_token.as_ref().unwrap().clone();
 
-    let (data, fields, notes) = editable_to_encrypted(&cipher, None, None)?;
+        let (data, fields, notes) =
+            editable_to_encrypted(&cipher, None, None)?;
 
-    let encrypted_name = crate::actions::encrypt(&cipher.name, None, None)?;
-    let encrypted_notes = notes
-        .as_deref()
-        .map(|n| crate::actions::encrypt(n, None, None))
-        .transpose()?;
+        let encrypted_name =
+            crate::actions::encrypt(&cipher.name, None, None)?;
+        let encrypted_notes = notes
+            .as_deref()
+            .map(|n| crate::actions::encrypt(n, None, None))
+            .transpose()?;
 
-    let folder_id = if let Some(folder_name) = cipher.folder.as_deref() {
-        resolve_folder_id(
-            &mut db,
+        let folder_id = if let Some(folder_name) = cipher.folder.as_deref() {
+            resolve_folder_id(
+                &mut db,
+                &access_token,
+                &refresh_token,
+                folder_name,
+            )?
+        } else {
+            None
+        };
+
+        let (tokens, _) = rbw::actions::add(
             &access_token,
             &refresh_token,
-            folder_name,
-        )?
-    } else {
-        None
-    };
+            &encrypted_name,
+            &data,
+            &fields,
+            encrypted_notes.as_deref(),
+            folder_id.as_deref(),
+        )?;
 
-    if let (Some(tokens), _) = rbw::actions::add(
-        &access_token,
-        &refresh_token,
-        &encrypted_name,
-        &data,
-        &fields,
-        encrypted_notes.as_deref(),
-        folder_id.as_deref(),
-    )? {
-        db.access_token = Some(tokens.access_token);
-        if let Some(refresh_token) = tokens.refresh_token {
-            db.refresh_token = Some(refresh_token);
-        }
-        save_db(&db)?;
-    }
-
-    crate::actions::sync()?;
-    print_created(&cipher.name);
-    Ok(())
+        after_server_write(&mut db, tokens)?;
+        print_created(&cipher.name);
+        Ok(())
+    })();
+    after_editor(
+        editor_buffer.as_deref().unwrap_or(""),
+        editor_buffer.is_some(),
+        result,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7480,8 +7565,10 @@ pub fn set(
 
     if bulk {
         unlock(None, None)?;
+        crate::actions::sync()?;
         let mut db = load_db()?;
         let mut any_err = false;
+        let mut committed = false;
 
         let mut pending: Vec<BulkPending> = Vec::new();
 
@@ -7619,19 +7706,21 @@ pub fn set(
                     }
                 }
             });
-            if result.is_err() {
-                any_err = true;
+            match result {
+                Ok(()) => committed = true,
+                Err(e) if e.is::<WriteCommitted>() => return Err(e),
+                Err(_) => any_err = true,
             }
             pb.inc(1);
         }
         pb.finish_and_clear();
-        // same as `set_entry`: don't leave the local cache stale
-        if new_attachments.is_empty() {
-            crate::actions::sync()?;
-        }
-
         return if any_err {
-            Err(anyhow::anyhow!("one or more entries failed to update"))
+            Err(if committed {
+                anyhow::anyhow!("one or more entries failed to update")
+                    .context(WriteCommitted)
+            } else {
+                anyhow::anyhow!("one or more entries failed to update")
+            })
         } else {
             Ok(())
         };
@@ -8012,10 +8101,7 @@ fn set_one(
     force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None, None)?;
-    if if_revision.is_some() {
-        // compare against the server's current state, not a stale cache
-        crate::actions::sync()?;
-    }
+    crate::actions::sync()?;
 
     let mut db = load_db()?;
 
@@ -8382,7 +8468,7 @@ fn apply_entry_update(
             entry_key,
             org_id,
         )?;
-        if let (Some(tokens), ()) = rbw::actions::edit(
+        let (tokens, ()) = rbw::actions::edit(
             &access_token,
             &refresh_token,
             &entry.id,
@@ -8394,58 +8480,64 @@ fn apply_entry_update(
             encrypted_notes.as_deref(),
             entry.folder_id.as_deref(),
             &history,
-            entry.revision_date.as_deref(),
-        )? {
-            db.access_token = Some(tokens.access_token);
-            if let Some(refresh_token) = tokens.refresh_token {
-                db.refresh_token = Some(refresh_token);
-            }
-            save_db(db)?;
-        }
+            &entry.cipher_write_meta(),
+        )?;
+        after_server_write(db, tokens)?;
     }
 
-    for file in new_attachments {
-        let filename = file
-            .file_name()
-            .and_then(std::ffi::OsStr::to_str)
-            .ok_or_else(|| {
-                anyhow::anyhow!("invalid filename: {}", file.display())
+    let mut committed = has_field_changes;
+    let follow_up = (|| {
+        for file in new_attachments {
+            let filename = file
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("invalid filename: {}", file.display())
+                })?;
+            let file_data = std::fs::read(file).with_context(|| {
+                format!("failed to read {}", file.display())
             })?;
-        let file_data = std::fs::read(file)
-            .with_context(|| format!("failed to read {}", file.display()))?;
-        let access_token = db.access_token.as_ref().unwrap().clone();
-        let refresh_token = db.refresh_token.as_ref().unwrap().clone();
-        let (encrypted_data, encrypted_key, encrypted_filename) =
-            crate::actions::encrypt_attachment(
-                file_data,
-                filename,
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
+            let access_token = db.access_token.as_ref().unwrap().clone();
+            let refresh_token = db.refresh_token.as_ref().unwrap().clone();
+            let (encrypted_data, encrypted_key, encrypted_filename) =
+                crate::actions::encrypt_attachment(
+                    file_data,
+                    filename,
+                    entry.key.as_deref(),
+                    entry.org_id.as_deref(),
+                )?;
+            let (tokens, ()) = rbw::actions::create_attachment(
+                &access_token,
+                &refresh_token,
+                &entry.id,
+                &encrypted_filename,
+                &encrypted_key,
+                &encrypted_data,
             )?;
-        if let (Some(tokens), ()) = rbw::actions::create_attachment(
-            &access_token,
-            &refresh_token,
-            &entry.id,
-            &encrypted_filename,
-            &encrypted_key,
-            &encrypted_data,
-        )? {
-            db.access_token = Some(tokens.access_token);
-            if let Some(refresh_token) = tokens.refresh_token {
-                db.refresh_token = Some(refresh_token);
+            committed = true;
+            if let Some(tokens) = tokens {
+                db.access_token = Some(tokens.access_token);
+                if let Some(refresh_token) = tokens.refresh_token {
+                    db.refresh_token = Some(refresh_token);
+                }
+                save_db(db)?;
             }
-            save_db(db)?;
         }
-    }
 
-    // Nothing after this call in any caller depends on a freshly-synced
-    // `db` -- only skip when there were no attachments uploaded above,
-    // since that's the one thing here the local cache doesn't already
-    // reflect (same reasoning as `import_create_entry`'s sync-skip).
-    if !new_attachments.is_empty() {
-        crate::actions::sync()?;
+        // Nothing after this call in any caller depends on a freshly-synced
+        // `db` -- only skip when there were no attachments uploaded above,
+        // since that's the one thing here the local cache doesn't already
+        // reflect (same reasoning as `import_create_entry`'s sync-skip).
+        if !new_attachments.is_empty() {
+            crate::actions::sync()?;
+        }
+        Ok(())
+    })();
+    if committed {
+        follow_up.context(WriteCommitted)
+    } else {
+        follow_up
     }
-    Ok(())
 }
 
 // Shared by `set_entry` (live account) and `set_from_file`: prints the
@@ -8752,9 +8844,7 @@ fn set_entry(
     // Refresh the local cache (`apply_entry_update` already did if it
     // uploaded attachments), so a follow-up `rbw set` doesn't build its
     // full-object update from the pre-edit copy.
-    if new_attachments.is_empty() {
-        crate::actions::sync()?;
-    }
+
     let c = stdout_supports_color();
     println!("Item {} was updated", style::name(&entry_name, c));
     if diff {
@@ -11417,7 +11507,12 @@ fn import_create_entry(
             org_encrypted_notes.as_deref(),
             folder_id.as_deref(),
             &history,
-            None,
+            &rbw::db::CipherWriteMeta {
+                reprompt: rbw::api::CipherRepromptType::None,
+                favorite: false,
+                archived_date: None,
+                last_known_revision_date: None,
+            },
         )? {
             access_token.clone_from(&tokens.access_token);
             db.access_token = Some(tokens.access_token);
@@ -11551,7 +11646,7 @@ fn import_overwrite_entry(
         encrypted_notes.as_deref(),
         folder_id.as_deref(),
         &history,
-        None,
+        &existing.cipher_write_meta(),
     )? {
         access_token.clone_from(&tokens.access_token);
         db.access_token = Some(tokens.access_token);
@@ -13362,7 +13457,10 @@ fn move_entry_to_personal(
             encrypted_notes.as_deref(),
             entry.folder_id.as_deref(),
             &history,
-            None,
+            &rbw::db::CipherWriteMeta {
+                last_known_revision_date: None,
+                ..entry.cipher_write_meta()
+            },
         )? {
             access_token.clone_from(&tokens.access_token);
             db.access_token = Some(tokens.access_token);
@@ -18080,6 +18178,8 @@ fn placeholder_entry(id: String) -> rbw::db::Entry {
         history: Vec::new(),
         key: None,
         master_password_reprompt: rbw::api::CipherRepromptType::None,
+        archived_date: None,
+        favorite: false,
         archived: false,
         deleted: false,
         collection_ids: Vec::new(),
@@ -18675,7 +18775,7 @@ pub fn tui_save_edit(
             entry.folder_id.clone()
         };
 
-    if let (Some(tokens), ()) = rbw::actions::edit(
+    let (tokens, ()) = rbw::actions::edit(
         &access_token,
         &refresh_token,
         &entry.id,
@@ -18687,16 +18787,10 @@ pub fn tui_save_edit(
         encrypted_notes.as_deref(),
         folder_id.as_deref(),
         &history,
-        entry.revision_date.as_deref(),
-    )? {
-        db.access_token = Some(tokens.access_token);
-        if let Some(refresh_token) = tokens.refresh_token {
-            db.refresh_token = Some(refresh_token);
-        }
-        save_db(db)?;
-    }
+        &entry.cipher_write_meta(),
+    )?;
 
-    crate::actions::sync()?;
+    after_server_write(db, tokens)?;
     Ok(())
 }
 
@@ -18732,7 +18826,7 @@ pub fn tui_save_add(
             None
         };
 
-    if let (Some(tokens), _) = rbw::actions::add(
+    let (tokens, _) = rbw::actions::add(
         &access_token,
         &refresh_token,
         &encrypted_name,
@@ -18740,15 +18834,9 @@ pub fn tui_save_add(
         &fields,
         encrypted_notes.as_deref(),
         folder_id.as_deref(),
-    )? {
-        db.access_token = Some(tokens.access_token);
-        if let Some(refresh_token) = tokens.refresh_token {
-            db.refresh_token = Some(refresh_token);
-        }
-        save_db(db)?;
-    }
+    )?;
 
-    crate::actions::sync()?;
+    after_server_write(db, tokens)?;
     Ok(())
 }
 
@@ -18826,24 +18914,28 @@ pub fn tui_edit_in_editor(
     let serialized = serde_yaml::to_string(&editable)?;
     let help = "# Edit the YAML below. Lines starting with # are ignored.";
 
+    let interactive = std::io::stdin().is_terminal();
     let contents = rbw::edit::edit(&serialized, help, "yaml")?;
-    let contents_trimmed = contents
-        .lines()
-        .filter(|l| !l.starts_with('#'))
-        .fold(String::new(), |mut s, l| {
-            s.push_str(l);
-            s.push('\n');
-            s
-        });
+    let result = (|| {
+        let contents_trimmed = contents
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .fold(String::new(), |mut s, l| {
+                s.push_str(l);
+                s.push('\n');
+                s
+            });
 
-    if contents_trimmed.trim() == serialized.trim() {
-        return Ok(false);
-    }
+        if contents_trimmed.trim() == serialized.trim() {
+            return Ok(false);
+        }
 
-    let updated: EditableCipher = serde_yaml::from_str(&contents_trimmed)
-        .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?;
-    tui_save_edit(db, entry, &updated)?;
-    Ok(true)
+        let updated: EditableCipher = serde_yaml::from_str(&contents_trimmed)
+            .map_err(|e| anyhow::anyhow!("failed to parse YAML: {e}"))?;
+        tui_save_edit(db, entry, &updated)?;
+        Ok(true)
+    })();
+    after_editor(&contents, interactive, result)
 }
 
 // Download and decrypt a single attachment (identified by id) into `dest_dir`,
@@ -19896,6 +19988,26 @@ pub fn generate_totp(secret: &str) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod test {
+    #[test]
+    fn write_outcomes_survive_context_and_do_not_stash_committed_edits() {
+        let err = anyhow::anyhow!("sync failed")
+            .context(super::WriteCommitted)
+            .context("outer caller");
+        assert_eq!(super::exit_status(&err), 2);
+        let err = super::after_editor::<()>("dummy buffer", true, Err(err))
+            .unwrap_err();
+        assert_eq!(super::exit_status(&err), 2);
+        assert!(!format!("{err:#}").contains("unsaved plaintext"));
+        let err = super::after_editor::<()>(
+            "dummy pipe",
+            false,
+            Err(anyhow::anyhow!("PUT failed")),
+        )
+        .unwrap_err();
+        assert_eq!(super::exit_status(&err), 1);
+        assert_eq!(format!("{err:#}"), "PUT failed");
+    }
+
     use super::*;
 
     #[test]
@@ -22552,6 +22664,8 @@ mod test {
                 history: vec![],
                 key: None,
                 master_password_reprompt: rbw::api::CipherRepromptType::None,
+                archived_date: None,
+                favorite: false,
                 archived: false,
                 deleted: false,
                 collection_ids: vec![],

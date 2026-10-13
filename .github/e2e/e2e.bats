@@ -204,17 +204,24 @@ PYEOF
 }
 
 @test "archive/unarchive must hide/show without disturbing other entries" {
-    "$RBW" generate e2e-entry-6 e2e-user-6 --length 20 >/dev/null
-    "$RBW" sync
-    ID6="$("$RBW" list e2e-entry-6 --fields id | head -1)"
-    "$RBW" archive -y "$ID6"
-    "$RBW" sync
-    ! "$RBW" list --fields name | grep -qx 'e2e-entry-6' # an archived entry must not show up in the default list
-    "$RBW" list --archived --fields name | grep -qx 'e2e-entry-6' # but visible with --archived
-    "$RBW" unarchive -y "$ID6"
-    "$RBW" sync
-    "$RBW" list --fields name | grep -qx 'e2e-entry-6' # visible again after unarchiving
-    "$RBW" list e2e-entry-1 --fields id,name | grep -q e2e-entry-1 # an unrelated entry is unaffected
+  "$RBW" generate e2e-entry-6 e2e-user-6 --length 20 >/dev/null
+  "$RBW" sync
+  ID6="$("$RBW" list e2e-entry-6 --fields id | head -1)"
+  "$RBW" archive -y "$ID6"
+  "$RBW" sync
+  run "$RBW" list --fields name
+  [[ "$status" -eq 0 ]]
+  [[ "$output" != *e2e-entry-6* ]] # an archived entry must not show up in the default list
+  "$RBW" list --archived --fields name | grep -qx 'e2e-entry-6' # but visible with --archived
+  "$RBW" set -y --notes "edited while archived" "$ID6"
+  "$RBW" list --archived --fields name | grep -qx 'e2e-entry-6'
+  run "$RBW" list --fields name
+  [[ "$status" -eq 0 ]]
+  [[ "$output" != *e2e-entry-6* ]]
+  "$RBW" unarchive -y "$ID6"
+  "$RBW" sync
+  "$RBW" list --fields name | grep -qx 'e2e-entry-6' # visible again after unarchiving
+  "$RBW" list e2e-entry-1 --fields id,name | grep -q e2e-entry-1 # an unrelated entry is unaffected
 }
 
 @test "history must record superseded passwords" {
@@ -352,25 +359,29 @@ assert json.load(sys.stdin)['data']['password'] == 'envPassword3!'
 "
 }
 
-@test "an edit based on a stale local copy must be rejected, not revert a newer change" {
-    # a second client (own HOME/agent) changes the entry server-side ...
-    H2="$(mktemp -d)"
-    sleep 2 # Vaultwarden tolerates <=1s of revision date skew
-    (
-        # own config/cache/agent socket, not just HOME: the agent socket
-        # lives in $XDG_RUNTIME_DIR, which both clients would share
-        export HOME="$H2" RBW_PROFILE=e2e-second-client
-        "$RBW" account add e2e --email "$EMAIL" --base-url "$BASE_URL" --primary
-        echo "$PASSWORD" | "$RBW" login --stdin
-        echo "$PASSWORD" | "$RBW" unlock --stdin
-        "$RBW" set -y --notes "from the other client" "$ID9"
-        "$RBW" stop-agent --kill >/dev/null 2>&1 || true
-    )
-    # ... so this client's cached copy is stale: the full-object PUT must
-    # be refused (lastKnownRevisionDate) instead of reverting that change
-    run ! "$RBW" set -y --notes "from a stale copy" "$ID9"
-    "$RBW" sync
-    "$RBW" get --json "$ID9" | python3 -c "
+@test "set rejects an explicit stale revision and otherwise preserves fresh server fields" {
+  OLD_REVISION="$("$RBW" get --json "$ID9" | python3 -c 'import json,sys; print(json.load(sys.stdin)["revision_date"])')"
+  # a second client (own HOME/agent) changes the entry server-side ...
+  H2="$(mktemp -d)"
+  sleep 2 # Vaultwarden tolerates <=1s of revision date skew
+  (
+    # own config/cache/agent socket, not just HOME: the agent socket
+    # lives in $XDG_RUNTIME_DIR, which both clients would share
+    export HOME="$H2" RBW_PROFILE=e2e-second-client
+    "$RBW" account add e2e --email "$EMAIL" --base-url "$BASE_URL" --primary
+    echo "$PASSWORD" | "$RBW" login --stdin
+    echo "$PASSWORD" | "$RBW" unlock --stdin
+    "$RBW" set -y --notes "from the other client" "$ID9"
+    "$RBW" stop-agent --kill >/dev/null 2>&1 || true
+  )
+  # A caller's explicit revision guard must reject changes since planning.
+  run "$RBW" set -y --if-revision "$OLD_REVISION" --notes "from a stale copy" "$ID9"
+  [[ "$status" -ne 0 ]]
+  # Without a guard, sync before resolving the selector preserves unrelated
+  # changes made by the other client.
+  "$RBW" set -y --username "fresh-user" "$ID9"
+  "$RBW" sync
+  "$RBW" get --json "$ID9" | python3 -c "
 import json, sys
 assert json.load(sys.stdin)['notes'] == 'from the other client'
 "

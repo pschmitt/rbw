@@ -1216,10 +1216,6 @@ pub async fn sync(
                 .context("failed to sync database from server"));
         }
     };
-    state
-        .lock()
-        .await
-        .set_master_password_reprompt(&account.name, &entries);
     if let Some(tokens) = tokens {
         db.access_token = Some(tokens.access_token);
         if let Some(refresh_token) = tokens.refresh_token {
@@ -1233,6 +1229,10 @@ pub async fn sync(
     db.collections = collections;
     db.organizations = organizations;
     save_db(account, &db).await?;
+    state
+        .lock()
+        .await
+        .set_master_password_reprompt(&account.name, &db.entries);
 
     // A newly created/joined org's key would otherwise stay undecryptable
     // (and its collections unusable) until the next full lock+unlock --

@@ -1,5 +1,31 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+* Preserve reprompt, favorite and the original archive timestamp on full
+  cipher PUTs, including passkey counter updates and imported-item edits.
+* Persist a synced vault before replacing the agent's reprompt ciphertext set.
+* Refresh CLI edit/set selectors before use and report stale cipher revisions
+  clearly instead of a generic API error.
+* Exit 2 after confirmed writes with failed local follow-up, and after partially
+  successful bulk updates, so callers can avoid repeating a write.
+* Retain failed interactive create/edit buffers with private permissions;
+  piped input and edits already confirmed by the server are not retained.
+* Passkey injection reads Chromium's final counter after disabling presence,
+  including assertions that raced with the disable command, before vault
+  writeback. It removes the authenticator before starting that writeback.
+* Warn when injection or `passkey counter --set` enables tracking on a
+  zero-counter credential: other Bitwarden clients must sync before use.
+
+### Changed
+
+* The Rust `actions::edit` and `api::Client::edit` methods require
+  `CipherWriteMeta`; `db::Entry` also stores favorite and archive timestamp.
+  Older serialized caches remain readable, but downstream Rust struct literals
+  and edit callers need updating.
+
 ## [2.20.0] - 2026-10-12
 
 ### Added

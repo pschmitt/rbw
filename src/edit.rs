@@ -102,3 +102,53 @@ fn contains_shell_metacharacters(cmd: &std::ffi::OsStr) -> bool {
     cmd.to_str()
         .is_some_and(|s| s.contains(&[' ', '$', '\'', '"'][..]))
 }
+
+/// Retain only interactive edits. Piped credentials must never reach this path.
+pub fn save_unsaved(contents: &str) -> Result<std::path::PathBuf> {
+    save_unsaved_in(&crate::dirs::unsaved_edit_dir(), contents)
+}
+
+fn save_unsaved_in(
+    dir: &std::path::Path,
+    contents: &str,
+) -> Result<std::path::PathBuf> {
+    crate::dirs::create_dir_all_with_permissions(dir, 0o700)?;
+    let mut file = tempfile::Builder::new()
+        .prefix("unsaved-")
+        .suffix(".txt")
+        .tempfile_in(dir)
+        .map_err(|err| Error::UnsavedEdit { source: err })?;
+    file.write_all(contents.as_bytes())
+        .map_err(|err| Error::UnsavedEdit { source: err })?;
+    file.as_file()
+        .sync_all()
+        .map_err(|err| Error::UnsavedEdit { source: err })?;
+    file.keep()
+        .map(|(_, path)| path)
+        .map_err(|err| Error::UnsavedEdit { source: err.error })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    #[test]
+    fn recovery_files_are_private_unique_and_complete() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("unsaved");
+        let first = save_unsaved_in(&dir, "first edit").unwrap();
+        let second = save_unsaved_in(&dir, "second edit").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "first edit");
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "second edit");
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&first).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+}

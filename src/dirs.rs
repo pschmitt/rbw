@@ -10,7 +10,7 @@ pub fn make_all() -> Result<()> {
     Ok(())
 }
 
-fn create_dir_all_with_permissions(
+pub(crate) fn create_dir_all_with_permissions(
     path: &std::path::Path,
     mode: u32,
 ) -> Result<()> {
@@ -125,6 +125,10 @@ pub fn profile() -> String {
         Ok(profile) if !profile.is_empty() => format!("rbw-{profile}"),
         _ => "rbw".to_string(),
     }
+}
+
+pub fn unsaved_edit_dir() -> std::path::PathBuf {
+    data_dir().join("unsaved-edits")
 }
 
 #[cfg(test)]
