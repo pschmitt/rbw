@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [2.20.0] - 2026-10-13
+
+### Added
+
+* `rbw passkey counter` reads or advances a credential counter;
+  `rbw passkey inject` sends a passkey directly to a Chromium page over CDP,
+  reserves its next counter before use, and synchronizes the browser assertion
+  counter back to the vault. Prevents fresh automated browser sessions from
+  resetting counters and triggering relying-party clone detection.
+
 ### Fixed
 
 * Preserve reprompt, favorite and the original archive timestamp on full
@@ -25,16 +35,9 @@
   `CipherWriteMeta`; `db::Entry` also stores favorite and archive timestamp.
   Older serialized caches remain readable, but downstream Rust struct literals
   and edit callers need updating.
-
-## [2.20.0] - 2026-10-12
-
-### Added
-
-* `rbw passkey counter` reads or advances a credential counter;
-  `rbw passkey inject` sends a passkey directly to a Chromium page over CDP,
-  reserves its next counter before use, and synchronizes the browser assertion
-  counter back to the vault. Prevents fresh automated browser sessions from
-  resetting counters and triggering relying-party clone detection.
+* Dependency updates: zip 9.0 (attachment filenames are now decoded
+  fallibly; legacy CP437 names remain supported), sha2 0.11.1,
+  uuid 1.28.0, serde_json 1.0.154.
 
 ## [2.19.0] - 2026-10-07
 
