@@ -14,6 +14,9 @@ use super::{actions, commands, FindArgs};
 
 struct Selected {
     entry: rbw::db::Entry,
+    /// The entry's name and username, for telling the user which one is used.
+    name: String,
+    user: Option<String>,
     credential: commands::DecryptedFido2Credential,
     index: usize,
 }
@@ -36,8 +39,11 @@ fn select(args: &FindArgs, rp_id: Option<&str>) -> anyhow::Result<Selected> {
             args.exact,
         )?
     };
+    let name = decrypted.name;
     let commands::DecryptedData::Login {
-        fido2_credentials, ..
+        fido2_credentials,
+        username: user,
+        ..
     } = decrypted.data
     else {
         anyhow::bail!("passkeys require a login item");
@@ -54,17 +60,19 @@ fn select(args: &FindArgs, rp_id: Option<&str>) -> anyhow::Result<Selected> {
     );
     Ok(Selected {
         entry,
+        name,
+        user,
         credential,
         index,
     })
 }
 
-/// The one live login holding a passkey for `rp_id`. Only entries that carry
-/// passkeys at all are decrypted.
-fn find_by_rp_id(
+/// Live logins holding a passkey for `rp_id`. Only entries that carry passkeys
+/// at all are decrypted.
+fn candidates(
     db: &rbw::db::Db,
     rp_id: &str,
-) -> anyhow::Result<(rbw::db::Entry, commands::DecryptedCipher)> {
+) -> anyhow::Result<Vec<(rbw::db::Entry, commands::DecryptedCipher)>> {
     let mut found = Vec::new();
     for entry in &db.entries {
         let has_passkeys = matches!(
@@ -88,6 +96,15 @@ fn find_by_rp_id(
             }
         }
     }
+    Ok(found)
+}
+
+/// The one live login holding a passkey for `rp_id`.
+fn find_by_rp_id(
+    db: &rbw::db::Db,
+    rp_id: &str,
+) -> anyhow::Result<(rbw::db::Entry, commands::DecryptedCipher)> {
+    let mut found = candidates(db, rp_id)?;
     anyhow::ensure!(
         found.len() < 2,
         "several entries hold a passkey for {rp_id}; name one"
@@ -156,6 +173,62 @@ fn advance(selected: &Selected, counter: u32) -> anyhow::Result<()> {
         &entry.cipher_write_meta(),
     )?;
     commands::after_server_write(&mut db, tokens)
+}
+
+/// The entries whose passkey would be used, as a JSON array without any secret:
+/// all candidates for `--rp-id` when no entry is named (pick one by its id), else
+/// the named one. Never prompts for the master password: a locked vault is an
+/// error.
+pub fn find(args: &FindArgs, rp_id: Option<&str>) -> anyhow::Result<()> {
+    commands::unlocked().context("the vault is locked")?;
+    let describe =
+        |id: &str,
+         name: &str,
+         user: Option<&String>,
+         c: Option<&commands::DecryptedFido2Credential>| {
+            json!({
+                "id": id,
+                "name": name,
+                "user": user,
+                "rp_id": c.and_then(|c| c.rp_id.as_ref()),
+                "passkey_user": c.and_then(|c| c.user_name.as_ref().or(c.user_display_name.as_ref())),
+            })
+        };
+    let list: Vec<Value> = match rp_id {
+        Some(rp) if args.needles.is_empty() => {
+            actions::sync()?;
+            let db = commands::load_db()?;
+            candidates(&db, rp)?
+                .iter()
+                .map(|(entry, d)| {
+                    let (user, creds) = match &d.data {
+                        commands::DecryptedData::Login {
+                            username,
+                            fido2_credentials,
+                            ..
+                        } => {
+                            (username.as_ref(), fido2_credentials.as_slice())
+                        }
+                        _ => (None, &[][..]),
+                    };
+                    let c =
+                        creds.iter().find(|c| c.rp_id.as_deref() == Some(rp));
+                    describe(&entry.id, &d.name, user, c)
+                })
+                .collect()
+        }
+        _ => {
+            let s = select(args, rp_id)?;
+            vec![describe(
+                &s.entry.id,
+                &s.name,
+                s.user.as_ref(),
+                Some(&s.credential),
+            )]
+        }
+    };
+    println!("{}", Value::Array(list));
+    Ok(())
 }
 
 pub fn counter(

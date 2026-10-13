@@ -1999,6 +1999,15 @@ enum Opt {
 
 #[derive(Debug, clap::Subcommand)]
 enum Passkey {
+    #[command(
+        about = "Show which entry and passkey would be used (JSON, no secrets; fails when locked)"
+    )]
+    Find {
+        #[command(flatten)]
+        find_args: FindArgs,
+        #[arg(long, help = "Select the passkey by relying party")]
+        rp_id: Option<String>,
+    },
     #[command(about = "Read or advance a passkey counter in the vault")]
     Counter {
         #[command(flatten)]
@@ -3349,6 +3358,9 @@ fn main() {
             )
         })(),
         Opt::Passkey { passkey } => match passkey {
+            Passkey::Find { find_args, rp_id } => {
+                passkey::find(&find_args, rp_id.as_deref())
+            }
             Passkey::Counter {
                 find_args,
                 rp_id,
