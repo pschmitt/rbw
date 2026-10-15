@@ -175,6 +175,36 @@ fn advance(selected: &Selected, counter: u32) -> anyhow::Result<()> {
     commands::after_server_write(&mut db, tokens)
 }
 
+/// After a counter write: pull the vault from the server again and check that it
+/// holds at least `expected` for this very passkey, so a lost or rejected write
+/// is an error before the counter is relied on. Then remind the user that other
+/// Bitwarden clients must sync before they sign in with the passkey themselves:
+/// a client still holding an older counter is rejected by the site as a clone.
+fn confirm_synced(
+    args: &FindArgs,
+    rp_id: Option<&str>,
+    selected: &Selected,
+    expected: u32,
+) -> anyhow::Result<()> {
+    let fresh = select(args, rp_id)?;
+    anyhow::ensure!(
+        fresh.entry.id == selected.entry.id
+            && fresh.credential.credential_id
+                == selected.credential.credential_id,
+        "passkey changed while synchronizing its counter"
+    );
+    let stored = stored_counter(&fresh.credential)?;
+    anyhow::ensure!(
+        stored >= expected,
+        "the server holds passkey counter {stored} after the update, expected at least {expected}; reconcile the vault before another login"
+    );
+    eprintln!(
+        "Vault synchronized: passkey counter {stored} for {}. Sync every other Bitwarden client (extension, desktop, mobile) before using this passkey there; a client still on an older counter is rejected as a clone.",
+        fresh.name
+    );
+    Ok(())
+}
+
 /// The entries whose passkey would be used, as a JSON array without any secret:
 /// all candidates for `--rp-id` when no entry is named (pick one by its id), else
 /// the named one. Never prompts for the master password: a locked vault is an
@@ -241,6 +271,7 @@ pub fn counter(
     if let Some(value) = set {
         advance(&selected, value)?;
         warn_counter_enabled(stored_counter(&selected.credential)?, value);
+        confirm_synced(args, rp_id, &selected, value)?;
         println!("{value}");
     } else {
         println!("{}", stored_counter(&selected.credential)?);
@@ -522,6 +553,7 @@ pub fn assert(
     let reserved = next_counter(previous)?;
     advance(&selected, reserved)?;
     warn_counter_enabled(previous, reserved);
+    confirm_synced(args, rp_id, &selected, reserved)?;
 
     let (client_data, auth_data, signature) =
         sign_assertion(&key, rp, &origin, challenge, reserved)?;
@@ -652,7 +684,10 @@ pub fn inject(
         let operation = async {
             cdp.send("WebAuthn.addCredential", json!({"authenticatorId": authenticator, "credential": credential})).await?;
             // The blocking vault API cannot run on an async runtime thread.
-            tokio::task::block_in_place(|| advance(&selected, reserved))?;
+            tokio::task::block_in_place(|| {
+                advance(&selected, reserved)?;
+                confirm_synced(args, rp_id, &selected, reserved)
+            })?;
             warn_counter_enabled(previous, reserved);
             cdp.send("WebAuthn.setAutomaticPresenceSimulation", json!({"authenticatorId": authenticator, "enabled": true})).await?;
             println!("Passkey ready; reserved counter {reserved}. Waiting for one browser assertion.");
@@ -674,7 +709,9 @@ pub fn inject(
                         anyhow::ensure!(current.entry.id == selected.entry.id
                             && current.credential.credential_id == selected.credential.credential_id,
                             "passkey changed during the browser session");
-                        advance(&current, count.max(stored_counter(&current.credential)?))
+                        let target = count.max(stored_counter(&current.credential)?);
+                        advance(&current, target)?;
+                        confirm_synced(args, rp_id, &current, target)
                     }).with_context(|| format!("failed to synchronize final browser counter {count}; reconcile the vault before another login"))?;
                     // Even if removal fails, preserve the counter we already
                     // observed before reporting that cleanup needs attention.
