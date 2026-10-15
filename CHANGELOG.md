@@ -9,6 +9,9 @@
   missing): the value is read from piped stdin, e.g. `rbw edit --field
   token ENTRY <<< value`, or from `$EDITOR` prefilled with the current value,
   then saved through the same path as `rbw set`. Ported from doy/rbw#367.
+* `rbw set --field NAME ENTRY` without `=VALUE` reads the value from stdin
+  (a single trailing newline is stripped), e.g. `rbw set --field token ENTRY
+  <<< value`.
 * `rbw passkey assert --origin ORIGIN --challenge CHALLENGE [--rp-id RP]
   [--allow ID]... [ENTRY]` signs one WebAuthn assertion (ES256) and prints it
   as JSON for a caller that answers the page's `navigator.credentials.get()`
@@ -25,6 +28,9 @@
 
 ### Fixed
 
+* `rbw set` asks for confirmation on the terminal when stdin already carried
+  the value (`--password-stdin`, `--field NAME`) instead of reading EOF as
+  "no" and aborting; without a terminal it fails asking for `--yes`.
 * The agent seeds its fallback pinentry environment from its own process, so
   an ssh-agent unlock that arrives before any rbw command no longer runs
   pinentry without DISPLAY/WAYLAND_DISPLAY/TERM. Ported from doy/rbw#388.

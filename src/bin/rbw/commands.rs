@@ -7855,9 +7855,7 @@ pub fn set(
             eprint!("Apply all ({})? [y/N] ", pending.len());
             let _ = std::io::stderr().flush();
             let mut answer = String::new();
-            std::io::stdin()
-                .read_line(&mut answer)
-                .context("failed to read confirmation")?;
+            read_set_confirmation(&mut answer)?;
             if !matches!(answer.trim(), "y" | "Y") {
                 eprintln!("Aborted.");
                 return Ok(());
@@ -8171,9 +8169,7 @@ fn set_from_file_bulk(
         eprint!("Apply all ({})? [y/N] ", pending.len());
         let _ = std::io::stderr().flush();
         let mut answer = String::new();
-        std::io::stdin()
-            .read_line(&mut answer)
-            .context("failed to read confirmation")?;
+        read_set_confirmation(&mut answer)?;
         if !matches!(answer.trim(), "y" | "Y") {
             eprintln!("Aborted.");
             return Ok(());
@@ -8739,6 +8735,30 @@ fn apply_entry_update(
 // Shared by `set_entry` (live account) and `set_from_file`: prints the
 // pending changes and asks to confirm, unless `yes`. `Ok(false)` means the
 // caller should abort without applying anything.
+// Reads a `[y/N]` answer for `rbw set`. When stdin is already drained
+// (it carried the new value, as in `rbw set --field NAME ENTRY <<< value`
+// or `--password-stdin`), asks on the terminal instead of reading EOF as
+// "no".
+fn read_set_confirmation(answer: &mut String) -> anyhow::Result<()> {
+    use std::io::BufRead as _;
+
+    let n = std::io::stdin()
+        .read_line(answer)
+        .context("failed to read confirmation")?;
+    if n == 0 {
+        let tty = std::fs::File::open("/dev/tty").map_err(|_| {
+            anyhow::anyhow!(
+                "no confirmation on stdin and no terminal to ask on; \
+                pass --yes"
+            )
+        })?;
+        std::io::BufReader::new(tty)
+            .read_line(answer)
+            .context("failed to read confirmation")?;
+    }
+    Ok(())
+}
+
 fn confirm_entry_update(
     entry_name: &str,
     changes: &[(&'static str, String, String)],
@@ -8771,9 +8791,7 @@ fn confirm_entry_update(
     eprint!("Apply? [y/N] ");
     let _ = std::io::stderr().flush();
     let mut answer = String::new();
-    std::io::stdin()
-        .read_line(&mut answer)
-        .context("failed to read confirmation")?;
+    read_set_confirmation(&mut answer)?;
     if matches!(answer.trim(), "y" | "Y") {
         Ok(true)
     } else {

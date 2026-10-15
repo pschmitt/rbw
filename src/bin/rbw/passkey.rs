@@ -895,7 +895,7 @@ mod assertion_tests {
             serde_json::from_slice(&client).unwrap();
         assert_eq!(parsed["type"], "webauthn.get");
         assert_eq!(parsed["challenge"], "Y2hhbGxlbmdl");
-        let mut signed = auth.clone();
+        let mut signed = auth;
         signed.extend_from_slice(&sha2::Sha256::digest(&client));
         let sig = p256::ecdsa::Signature::from_der(&sig).unwrap();
         key.verifying_key().verify(&signed, &sig).unwrap();

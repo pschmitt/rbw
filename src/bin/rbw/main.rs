@@ -1472,11 +1472,13 @@ enum Opt {
         totp_env: Option<String>,
         #[arg(
             long,
-            value_name = "NAME=VALUE",
+            value_name = "NAME[=VALUE]",
             number_of_values = 1,
             help = "Set custom field NAME (replacing the first field of \
                 that name, keeping its type; otherwise adding a new hidden \
-                field). Can be repeated"
+                field). Without =VALUE the value is read from stdin (a \
+                single trailing newline is stripped), e.g. `--field NAME \
+                ENTRY <<< value`. Can be repeated"
         )]
         field: Vec<String>,
         #[arg(
@@ -3049,14 +3051,47 @@ fn split_field_arg<'a>(
 
 // Resolves `rbw set --field/--field-file/--field-env` into (name, value)
 // pairs, in that order. Setting the same field twice is rejected rather
-// than silently letting the last one win.
+// than silently letting the last one win. A bare `--field NAME` reads its
+// value from stdin, so at most one may be given, and not together with
+// another stdin consumer (`stdin_taken`, i.e. `--password-stdin`).
 fn read_field_sources(
     inline: &[String],
     files: &[String],
     envs: &[String],
+    stdin_taken: bool,
 ) -> anyhow::Result<Vec<(String, String)>> {
     let mut fields: Vec<(String, String)> = Vec::new();
+    let from_stdin: Vec<&String> =
+        inline.iter().filter(|arg| !arg.contains('=')).collect();
+    if from_stdin.len() > 1 {
+        return Err(anyhow::anyhow!(
+            "only one --field NAME may read its value from stdin"
+        ));
+    }
+    if !from_stdin.is_empty() && stdin_taken {
+        return Err(anyhow::anyhow!(
+            "--field NAME (value from stdin) can't be combined with \
+            --password-stdin"
+        ));
+    }
     for arg in inline {
+        if !arg.contains('=') {
+            if arg.is_empty() {
+                return Err(anyhow::anyhow!("--field expects NAME[=VALUE]"));
+            }
+            if std::io::stdin().is_terminal() {
+                return Err(anyhow::anyhow!(
+                    "--field {arg} without =VALUE reads the value from \
+                    stdin, but stdin is a terminal"
+                ));
+            }
+            let raw = std::io::read_to_string(std::io::stdin())
+                .with_context(|| {
+                    format!("failed to read field '{arg}' from stdin")
+                })?;
+            fields.push((arg.clone(), strip_one_newline(&raw).to_string()));
+            continue;
+        }
         let (name, value) = split_field_arg("--field", arg)?;
         fields.push((name.to_string(), value.to_string()));
     }
@@ -3812,7 +3847,12 @@ fn main() {
                 totp_file.as_deref(),
                 totp_env.as_deref(),
             )?;
-            let fields = read_field_sources(&field, &field_file, &field_env)?;
+            let fields = read_field_sources(
+                &field,
+                &field_file,
+                &field_env,
+                password_stdin,
+            )?;
             commands::set(
                 find_args.needles,
                 find_args.user.as_deref(),
@@ -4978,6 +5018,7 @@ mod test {
             &["a=b=c".to_string()],
             &[format!("f={}", dir.join("missing").display())],
             &[],
+            false,
         );
         assert!(fields.is_err());
         std::fs::write(&file, "from-file\n").unwrap();
@@ -4985,6 +5026,7 @@ mod test {
             &["a=b=c".to_string()],
             &[format!("f={}", file.display())],
             &[],
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -4994,14 +5036,25 @@ mod test {
                 ("f".to_string(), "from-file".to_string()),
             ]
         );
+        // A bare NAME reads stdin; these are rejected before touching it.
+        assert!(read_field_sources(
+            &["a".to_string(), "b".to_string()],
+            &[],
+            &[],
+            false
+        )
+        .is_err());
         assert!(
-            read_field_sources(&["noequals".to_string()], &[], &[]).is_err()
+            read_field_sources(&["a".to_string()], &[], &[], true).is_err()
         );
-        assert!(read_field_sources(&["=v".to_string()], &[], &[]).is_err());
+        assert!(
+            read_field_sources(&["=v".to_string()], &[], &[], false).is_err()
+        );
         assert!(read_field_sources(
             &["a=1".to_string(), "a=2".to_string()],
             &[],
-            &[]
+            &[],
+            false
         )
         .is_err());
 
