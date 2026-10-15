@@ -4,6 +4,11 @@
 
 ### Added
 
+* `rbw edit --field FIELD ENTRY` edits one field (name, username, password,
+  notes, totp, uris one per line, or a custom field, created as hidden when
+  missing): the value is read from piped stdin, e.g. `rbw edit --field
+  token ENTRY <<< value`, or from `$EDITOR` prefilled with the current value,
+  then saved through the same path as `rbw set`. Ported from doy/rbw#367.
 * `rbw passkey assert --origin ORIGIN --challenge CHALLENGE [--rp-id RP]
   [--allow ID]... [ENTRY]` signs one WebAuthn assertion (ES256) and prints it
   as JSON for a caller that answers the page's `navigator.credentials.get()`
@@ -17,6 +22,12 @@
 * `rbw passkey inject --rp-id RP` without an entry name picks the one live
   login holding a passkey for that relying party (only entries carrying
   passkeys are decrypted). Several matches are an error that asks for a name.
+
+### Fixed
+
+* The agent seeds its fallback pinentry environment from its own process, so
+  an ssh-agent unlock that arrives before any rbw command no longer runs
+  pinentry without DISPLAY/WAYLAND_DISPLAY/TERM. Ported from doy/rbw#388.
 
 ## [2.20.0] - 2026-10-13
 

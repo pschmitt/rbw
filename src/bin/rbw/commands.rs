@@ -6039,6 +6039,202 @@ pub fn edit(
     )
 }
 
+// What `rbw edit --field NAME` writes to, resolved against the entry.
+enum EditFieldTarget {
+    Name,
+    Notes,
+    Username,
+    Password,
+    Totp,
+    Uris,
+    Custom(String),
+}
+
+impl EditFieldTarget {
+    fn resolve(
+        decrypted: &DecryptedCipher,
+        field: &str,
+    ) -> anyhow::Result<Self> {
+        // Built-in fields win, as in `rbw get --field`.
+        let is_login = matches!(decrypted.data, DecryptedData::Login { .. });
+        let builtin = field.parse::<Field>().ok();
+        match builtin {
+            Some(Field::Name) => return Ok(Self::Name),
+            Some(Field::Notes) => return Ok(Self::Notes),
+            Some(Field::Username) if is_login => return Ok(Self::Username),
+            Some(Field::Password) if is_login => return Ok(Self::Password),
+            Some(Field::Totp) if is_login => return Ok(Self::Totp),
+            Some(Field::Uris) if is_login => return Ok(Self::Uris),
+            _ => {}
+        }
+        // Then an existing custom field, matched exactly, then ignoring
+        // case (keeping its stored spelling, since `set` matches custom
+        // field names exactly).
+        let names =
+            || decrypted.fields.iter().filter_map(|f| f.name.as_deref());
+        if let Some(name) = names()
+            .find(|n| *n == field)
+            .or_else(|| names().find(|n| n.eq_ignore_ascii_case(field)))
+        {
+            return Ok(Self::Custom(name.to_string()));
+        }
+        if builtin.is_some() {
+            return Err(anyhow::anyhow!(
+                "field '{field}' can't be edited with --field on this \
+                entry; use `rbw edit --yaml`"
+            ));
+        }
+        Ok(Self::Custom(field.to_string()))
+    }
+
+    fn current(&self, decrypted: &DecryptedCipher) -> String {
+        let login = |f: fn(&DecryptedData) -> Option<String>| {
+            f(&decrypted.data).unwrap_or_default()
+        };
+        match self {
+            Self::Name => decrypted.name.clone(),
+            Self::Notes => decrypted.notes.clone().unwrap_or_default(),
+            Self::Username => login(|d| match d {
+                DecryptedData::Login { username, .. } => username.clone(),
+                _ => None,
+            }),
+            Self::Password => login(|d| match d {
+                DecryptedData::Login { password, .. } => password.clone(),
+                _ => None,
+            }),
+            Self::Totp => login(|d| match d {
+                DecryptedData::Login { totp, .. } => totp.clone(),
+                _ => None,
+            }),
+            Self::Uris => login(|d| match d {
+                DecryptedData::Login { uris, .. } => uris.as_ref().map(|u| {
+                    u.iter()
+                        .map(|u| u.uri.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }),
+                _ => None,
+            }),
+            Self::Custom(name) => decrypted
+                .fields
+                .iter()
+                .find(|f| f.name.as_deref() == Some(name.as_str()))
+                .and_then(|f| f.value.clone())
+                .unwrap_or_default(),
+        }
+    }
+}
+
+// `rbw edit --field NAME`: reads one field's new value (piped stdin, or
+// `$EDITOR` prefilled with the current value) and hands it to `rbw set`, so
+// keyed entries, password history and revision checks behave exactly as
+// they do there.
+#[allow(clippy::too_many_arguments)]
+pub fn edit_field(
+    needles: Vec<Needle>,
+    username: Option<&str>,
+    folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+    field: &str,
+) -> anyhow::Result<()> {
+    unlock(None, None)?;
+    crate::actions::sync()?;
+
+    let db = load_db()?;
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc = format!(
+        "{}{}",
+        username.map_or_else(String::new, |s| format!("{s}@")),
+        needle_str
+    );
+    let (_, decrypted) = find_entry(
+        &db,
+        needles.clone(),
+        username,
+        folder,
+        collection,
+        org,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+
+    let target = EditFieldTarget::resolve(&decrypted, field)?;
+    let current = target.current(&decrypted);
+    let contents = rbw::edit::edit(&current, "", "")?;
+    // Editors and `<<<` both append a final newline the value never had.
+    let value = contents
+        .strip_suffix('\n')
+        .map_or(contents.as_str(), |v| v.strip_suffix('\r').unwrap_or(v));
+    if value == current {
+        eprintln!("{}", paint_no_changes());
+        return Ok(());
+    }
+
+    let mut new_name = None;
+    let mut new_notes = None;
+    let mut new_username = None;
+    let mut new_password = None;
+    let mut new_totp = None;
+    let mut new_uris = Vec::new();
+    let mut new_fields = Vec::new();
+    match &target {
+        EditFieldTarget::Notes => new_notes = Some(value),
+        EditFieldTarget::Custom(name) => {
+            new_fields.push((name.clone(), value.to_string()));
+        }
+        _ if value.trim().is_empty() => {
+            return Err(anyhow::anyhow!(
+                "refusing to set an empty {field}; use `rbw edit --yaml` \
+                to clear it"
+            ))
+        }
+        EditFieldTarget::Name => new_name = Some(value),
+        EditFieldTarget::Username => new_username = Some(value),
+        EditFieldTarget::Password => new_password = Some(value),
+        EditFieldTarget::Totp => new_totp = Some(value),
+        EditFieldTarget::Uris => {
+            new_uris = value
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+    }
+
+    set(
+        needles,
+        username,
+        folder,
+        collection,
+        org,
+        ignore_case,
+        new_name,
+        new_username,
+        new_password,
+        new_notes,
+        &new_uris,
+        new_totp,
+        &new_fields,
+        false,
+        &[],
+        None,
+        false,
+        true,
+        force_exact,
+        None,
+        None,
+    )
+}
+
 // `edit --from-file`'s counterpart to `edit_structured`: same
 // `decrypted_to_editable` → `$EDITOR` → reparse flow (including no-op
 // detection on an untouched buffer and password-history tracking), but
@@ -22694,6 +22890,107 @@ mod test {
             },
         )
     }
+    mod edit_field_tests {
+        use super::*;
+
+        fn cipher(
+            data: DecryptedData,
+            fields: &[(&str, &str)],
+        ) -> DecryptedCipher {
+            DecryptedCipher {
+                id: "id".to_string(),
+                folder: None,
+                name: "entry".to_string(),
+                data,
+                fields: fields
+                    .iter()
+                    .map(|(n, v)| DecryptedField {
+                        name: Some((*n).to_string()),
+                        value: Some((*v).to_string()),
+                        ty: Some(rbw::api::FieldType::Text),
+                    })
+                    .collect(),
+                notes: Some("some notes".to_string()),
+                history: vec![],
+                attachments: vec![],
+                attachment_metadata: AttachmentMetadata::new("id", 0),
+                archived: false,
+                deleted: false,
+                revision_date: None,
+                account: None,
+            }
+        }
+
+        fn login() -> DecryptedData {
+            DecryptedData::Login {
+                username: Some("alice".to_string()),
+                password: Some("hunter2".to_string()),
+                totp: None,
+                uris: Some(vec![
+                    DecryptedUri {
+                        uri: "https://a.example".to_string(),
+                        match_type: None,
+                    },
+                    DecryptedUri {
+                        uri: "https://b.example".to_string(),
+                        match_type: None,
+                    },
+                ]),
+                fido2_credentials: vec![],
+            }
+        }
+
+        fn current(c: &DecryptedCipher, field: &str) -> String {
+            EditFieldTarget::resolve(c, field).unwrap().current(c)
+        }
+
+        #[test]
+        fn builtin_fields() {
+            let c = cipher(login(), &[]);
+            assert_eq!(current(&c, "username"), "alice");
+            assert_eq!(current(&c, "user"), "alice");
+            assert_eq!(current(&c, "Password"), "hunter2");
+            assert_eq!(current(&c, "notes"), "some notes");
+            assert_eq!(current(&c, "name"), "entry");
+            assert_eq!(current(&c, "totp"), "");
+            assert_eq!(
+                current(&c, "uris"),
+                "https://a.example\nhttps://b.example"
+            );
+        }
+
+        #[test]
+        fn custom_fields() {
+            let c = cipher(login(), &[("API Key", "k1"), ("password", "f")]);
+            // Built-in fields shadow a custom field of the same name.
+            assert_eq!(current(&c, "password"), "hunter2");
+            // Case-insensitive match keeps the stored spelling.
+            assert!(matches!(
+                EditFieldTarget::resolve(&c, "api key").unwrap(),
+                EditFieldTarget::Custom(n) if n == "API Key"
+            ));
+            assert_eq!(current(&c, "api key"), "k1");
+            // Unknown names become a new custom field.
+            assert!(matches!(
+                EditFieldTarget::resolve(&c, "new").unwrap(),
+                EditFieldTarget::Custom(n) if n == "new"
+            ));
+            assert_eq!(current(&c, "new"), "");
+        }
+
+        #[test]
+        fn rejects_unsupported_builtin_fields() {
+            let c = cipher(login(), &[]);
+            assert!(EditFieldTarget::resolve(&c, "cvv").is_err());
+            let note = cipher(DecryptedData::SecureNote, &[]);
+            assert!(EditFieldTarget::resolve(&note, "password").is_err());
+            let note =
+                cipher(DecryptedData::SecureNote, &[("password", "x")]);
+            assert_eq!(current(&note, "password"), "x");
+            assert_eq!(current(&note, "notes"), "some notes");
+        }
+    }
+
     mod inject_tests {
         use super::*;
 

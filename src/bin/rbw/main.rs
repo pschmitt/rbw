@@ -1336,6 +1336,18 @@ enum Opt {
         #[arg(long, help = "Edit as JSON (structured mode)")]
         json: bool,
         #[arg(
+            short,
+            long,
+            value_name = "FIELD",
+            conflicts_with_all = ["yaml", "json", "from_file"],
+            help = "Edit a single field (name, username, password, notes, \
+                totp, uris, or a custom field name) instead of password + \
+                notes. The new value is read from stdin when it is not a \
+                terminal, else from $EDITOR prefilled with the current \
+                value. A missing custom field is created as hidden."
+        )]
+        field: Option<String>,
+        #[arg(
             long,
             value_name = "FILE",
             help = "Edit an entry directly in a `rbw export` file instead \
@@ -3712,8 +3724,23 @@ fn main() {
         }
         Opt::Edit {
             find_args,
+            field: Some(field),
+            ..
+        } => commands::edit_field(
+            find_args.needles,
+            find_args.user.as_deref(),
+            find_args.folder.as_deref(),
+            find_args.collection.as_deref(),
+            find_args.org.as_deref(),
+            find_args.ignorecase,
+            find_args.exact,
+            &field,
+        ),
+        Opt::Edit {
+            find_args,
             json,
             yaml,
+            field: None,
             from_file,
             from_file_passphrase,
         } => commands::edit(
