@@ -40,7 +40,9 @@ async fn tokio_main(
             sync_timeout,
             sync_timeout_duration,
             notifications_handler,
-            last_environment: rbw::protocol::Environment::default(),
+            last_environment: rbw::protocol::Environment::from_process(
+                std::env::var_os("RBW_TTY"),
+            ),
             #[cfg(feature = "clipboard")]
             clipboard: arboard::Clipboard::new()
                 .inspect_err(|e| {

@@ -153,6 +153,20 @@ pub struct Environment {
 }
 
 impl Environment {
+    // Captures the allowlisted variables from this process's own
+    // environment. The agent uses this to seed `last_environment` so that
+    // requests arriving before any rbw client has connected (e.g. an ssh
+    // agent request right after the agent was started) still give pinentry
+    // a usable DISPLAY/WAYLAND_DISPLAY/TERM instead of an empty environment.
+    pub fn from_process(tty: Option<std::ffi::OsString>) -> Self {
+        let env_vars = std::env::vars_os()
+            .filter(|(var_name, _)| {
+                (*ENVIRONMENT_VARIABLES_OS).contains(var_name)
+            })
+            .collect();
+        Self::new(tty, env_vars)
+    }
+
     pub fn new(
         tty: Option<std::ffi::OsString>,
         env_vars: Vec<(std::ffi::OsString, std::ffi::OsString)>,
