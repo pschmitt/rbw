@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.20.1] - 2026-10-15
+
 ### Added
 
 * `rbw edit --field FIELD ENTRY` edits one field (name, username, password,
