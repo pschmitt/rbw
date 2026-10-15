@@ -28,8 +28,17 @@
   login holding a passkey for that relying party (only entries carrying
   passkeys are decrypted). Several matches are an error that asks for a name.
 
+### Changed
+
+* `rbw passkey inject`, `assert` and `counter --set` sync the vault again
+  after writing the counter, check that the server holds at least the written
+  value, and remind you to sync other Bitwarden clients before using the
+  passkey there (a client on an older counter is rejected as a clone).
+* Dependency updates: tokio 1.53.3, zip 9.0.3, arboard 3.7.0.
+
 ### Fixed
 
+* rustls 0.23.46 (RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348).
 * `rbw set` asks for confirmation on the terminal when stdin already carried
   the value (`--password-stdin`, `--field NAME`) instead of reading EOF as
   "no" and aborting; without a terminal it fails asking for `--yes`.
