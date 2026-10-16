@@ -115,6 +115,7 @@ jobs:
           mkdir "$pkg"
           cp "$bin" \
             "target/${{ matrix.target }}/release/rbw-agent" \
+            "target/${{ matrix.target }}/release/rbw-browser" \
             LICENSE README.md "$pkg/"
           if [[ "${{ matrix.target }}" == "aarch64-linux-android" ]]
           then
@@ -141,6 +142,7 @@ jobs:
           "$tar_bin" -tzf "$pkg.tar.gz" > "$pkg.contents"
           grep -Fqx "$pkg/rbw" "$pkg.contents"
           grep -Fqx "$pkg/rbw-agent" "$pkg.contents"
+          grep -Fqx "$pkg/rbw-browser" "$pkg.contents"
       - uses: actions/upload-artifact@v7
         with:
           name: tarball-${{ matrix.target }}

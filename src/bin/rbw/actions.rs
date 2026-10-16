@@ -358,7 +358,7 @@ pub fn clipboard_store(text: &str) -> anyhow::Result<()> {
     }
 }
 
-fn system_clipboard_store(text: &str) -> anyhow::Result<()> {
+pub fn system_clipboard_store(text: &str) -> anyhow::Result<()> {
     simple_action(rbw::protocol::Action::ClipboardStore {
         text: text.to_string(),
     })

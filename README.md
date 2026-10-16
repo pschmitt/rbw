@@ -848,3 +848,8 @@ keeps the entered plaintext in its profile's data directory under
 `unsaved-edits` and reports the path. The directory has mode 0700 and files
 have mode 0600. Delete the recovery file after recovering the edit. Piped input
 is never saved as a recovery file, and confirmed writes do not leave one.
+
+## Browser extension
+
+A Firefox and Chromium development preview shares the CLI’s rbw-agent.
+See [browser/README.md](browser/README.md) for features, setup, and current limits.

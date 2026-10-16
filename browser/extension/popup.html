@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>rbw</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+<header><strong>rbw</strong><span id="state">Connecting…</span></header>
+<label>Account <select id="account"><option value="">Primary account</option></select></label>
+<nav><button id="unlock">Unlock</button><button id="lock">Lock</button><button id="sync">Sync</button></nav>
+<p id="message" role="status" aria-live="polite"></p>
+<section id="vault" hidden>
+<label class="search">Search vault <input id="query" type="search" autocomplete="off" placeholder="Name or username"></label>
+<label><input id="site" type="checkbox" checked> Matching this site</label>
+<div id="items"></div>
+<p class="hint">Up to 200 logins. Protected items and archived items are omitted. Fill supports the main page only.</p>
+</section>
+<details><summary>Password generator</summary>
+<label><input id="passphrase" type="checkbox"> Passphrase</label>
+<label>Characters / words <input id="length" type="number" min="1" max="128" placeholder="Configured default"></label>
+<button id="generate">Generate</button>
+<input id="generated" readonly aria-label="Generated password" autocomplete="off">
+<p class="hint">Select the generated value to copy it.</p>
+</details>
+<script src="popup.js"></script>
+</body></html>

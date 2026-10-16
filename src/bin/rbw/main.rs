@@ -12,6 +12,7 @@ use clap::{CommandFactory as _, FromArgMatches as _};
 
 mod actions;
 mod audit;
+mod browser;
 mod commands;
 mod export_info;
 mod import_bitwarden;
@@ -315,6 +316,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
             "agent",
             "stop-agent",
             "completions",
+            "native-messaging",
         ],
     ),
 ];
@@ -431,6 +433,8 @@ fn parse_cli() -> Cli {
 
 #[derive(Debug, clap::Subcommand)]
 enum Opt {
+    #[command(about = "Native messaging bridge for browser extensions")]
+    NativeMessaging,
     #[command(about = "Get or set configuration options")]
     Config {
         #[command(subcommand)]
@@ -2075,6 +2079,7 @@ enum Passkey {
 impl Opt {
     fn subcommand_name(&self) -> String {
         match self {
+            Self::NativeMessaging => "native-messaging".to_string(),
             Self::Config { config } => {
                 format!("config {}", config.subcommand_name())
             }
@@ -3196,6 +3201,7 @@ fn main() {
 
     let subcommand_name = opt.subcommand_name();
     let res = match opt {
+        Opt::NativeMessaging => browser::run(),
         Opt::Config { config } => match config {
             Config::Show { json } => commands::config_show(json),
             Config::Get { key } => commands::config_get(&key),

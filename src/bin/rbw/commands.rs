@@ -2516,7 +2516,7 @@ pub struct EditableCustomField {
     pub ty: Option<String>,
 }
 
-fn matches_url(
+pub fn matches_url(
     url: &str,
     match_type: Option<rbw::api::UriMatchType>,
     given_url: &url::Url,

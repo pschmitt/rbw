@@ -25,6 +25,7 @@ jobs:
           path: |
             target/debug/rbw
             target/debug/rbw-agent
+            target/debug/rbw-browser
           if-no-files-found: error
   build-musl:
     runs-on: ubuntu-latest

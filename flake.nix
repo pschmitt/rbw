@@ -30,8 +30,6 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-        in
-        let
           rbw = pkgs.rustPlatform.buildRustPackage {
             pname = "rbw";
             inherit (cargoToml.package) version;
@@ -141,6 +139,7 @@
           # strips store paths and installs the files under the Termux prefix.
           default = rbw;
         }
+        // (import ./nix/browser.nix { inherit pkgs rbw; })
         // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           rbw-termux = rbwTermux;
         }

@@ -3,3 +3,6 @@
 /target-ra
 /result
 .claude/
+
+# Browser development packages
+/browser/dist/
