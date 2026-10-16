@@ -299,6 +299,34 @@ let
         `accounts` ordering caveat above) when unset.
       '';
 
+      browser.clients = mkOption {
+        type = types.attrsOf (
+          types.submodule {
+            options = {
+              browser = mkOption {
+                type = types.enum [
+                  "firefox"
+                  "chromium"
+                ];
+                description = "Native messaging identity format.";
+              };
+              extensions = mkOption {
+                type = types.listOf types.str;
+                default = [ ];
+                description = "Allowed extension IDs for this browser.";
+              };
+              executableRoots = mkOption {
+                type = types.listOf types.str;
+                default = [ ];
+                description = "Absolute executable paths or package directories allowed to launch the native bridge (Linux).";
+              };
+            };
+          }
+        );
+        default = { };
+        description = "Explicit native messaging allowlist. Empty denies all browser access; changes apply to every request.";
+      };
+
       # ---- grouped global preferences ---------------------------------
       agent = mkOption {
         type = types.submodule {

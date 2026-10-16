@@ -460,3 +460,22 @@ pub fn get_environment() -> rbw::protocol::Environment {
 
     rbw::protocol::Environment::from_process(tty)
 }
+
+pub fn crypt_bytes(data: Vec<u8>, decrypt: bool) -> anyhow::Result<Vec<u8>> {
+    let mut sock = connect()?;
+    sock.send(&rbw::protocol::Request::with_account(
+        get_environment(),
+        current_account(),
+        rbw::protocol::Action::CryptBytes { data, decrypt },
+    ))?;
+    match sock.recv()? {
+        rbw::protocol::Response::Bytes { data } => Ok(data),
+        _ => anyhow::bail!("binary encryption operation failed"),
+    }
+}
+
+pub fn verify_master_password(password: &str) -> anyhow::Result<()> {
+    simple_action(rbw::protocol::Action::VerifyMasterPassword {
+        password: password.to_owned(),
+    })
+}

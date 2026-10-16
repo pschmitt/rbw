@@ -48,7 +48,7 @@ impl Sock {
             .await
             .context("failed to read message from socket")?;
         Ok(serde_json::from_str(&line)
-            .map_err(|e| format!("failed to parse message '{line}': {e}")))
+            .map_err(|_| "failed to parse agent request".to_owned()))
     }
 }
 

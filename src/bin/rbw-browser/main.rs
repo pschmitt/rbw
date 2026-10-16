@@ -5,7 +5,11 @@ fn main() {
     let result = std::env::current_exe().map(|path| {
         let mut command =
             std::process::Command::new(path.with_file_name("rbw"));
-        command.arg("native-messaging").env_remove("RUST_LOG");
+        command
+            .arg("native-messaging")
+            .arg("--")
+            .args(std::env::args_os().skip(1))
+            .env_remove("RUST_LOG");
         if std::env::var_os("RBW_AGENT").is_none() {
             command.env("RBW_AGENT", path.with_file_name("rbw-agent"));
         }

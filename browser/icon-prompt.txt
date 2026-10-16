@@ -1,0 +1,4 @@
+Generated with the built-in image_gen tool.
+
+Prompt:
+Use case: logo-brand. Asset type: rbw password-manager browser extension toolbar icon, square, must read clearly down to 16 pixels. Create one clean original emblem combining a bold Bitwarden-like security shield silhouette in vivid blue with a Rust-inspired orange cogwheel / gear surrounding a small dark keyhole inside the shield. Flat vector-like graphic, strong simple geometry, thick shapes, restrained palette blue #67adff and rust orange #dd7845 with dark navy #10182b. Centered composition occupies 85 percent of canvas. Genuine transparent background outside the emblem. No letters, no text, no watermark, no mockup, no drop shadow, no tiny details. It should feel like a coherent vault-and-Rust software icon.

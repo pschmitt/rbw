@@ -1,12 +1,31 @@
-/* The background is the only extension context allowed to reach the host. */
+/* Native operations are only exposed to our own UI, never directly to pages. */
+if (typeof importScripts === "function") importScripts("fill.js");
 const api = globalThis.browser || chrome;
 let serial = 0;
 let queue = Promise.resolve();
-
+const pending = new Map();
+const offers = new Map();
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, theme: "dark", account: "" };
+async function settings() { return { ...defaults, ...(await api.storage.local.get("preferences")).preferences }; }
+let nativePort;
+const nativeRequests = new Map();
 function native(request) {
-  return api.runtime.sendNativeMessage("org.rbw.browser", { ...request, id: ++serial }).then(response => {
-    if (response.error) throw new Error(response.error);
-    return response.result;
+  if (!nativePort) {
+    nativePort = api.runtime.connectNative("org.rbw.browser");
+    nativePort.onMessage.addListener(response => {
+      const entry = nativeRequests.get(response.id); if (!entry) return;
+      nativeRequests.delete(response.id);
+      if (response.error) entry.reject(new Error(response.error)); else entry.resolve(response.result);
+    });
+    nativePort.onDisconnect.addListener(() => {
+      nativePort = null;
+      for (const entry of nativeRequests.values()) entry.reject(new Error("rbw native connection closed. Retry the operation."));
+      nativeRequests.clear();
+    });
+  }
+  return new Promise((resolve, reject) => {
+    const id = ++serial; nativeRequests.set(id, { resolve, reject });
+    try { nativePort.postMessage({ ...request, id }); } catch (error) { nativeRequests.delete(id); reject(error); }
   });
 }
 
@@ -15,63 +34,214 @@ async function activeTab() {
   if (!tab?.url || !/^https?:\/\//.test(tab.url)) throw new Error("Open an HTTP or HTTPS page first.");
   return tab;
 }
-
+function badge() {
+  api.action.setBadgeBackgroundColor({ color: "#64abff" });
+  api.action.setBadgeText({ text: pending.size + offers.size ? String(pending.size + offers.size) : "" });
+}
+function finish(id, response) {
+  const operation = pending.get(id);
+  if (!operation) return;
+  clearTimeout(operation.timer); pending.delete(id); badge(); operation.respond(response);
+  if (operation.windowId) api.windows.remove(operation.windowId).catch(() => {});
+}
+async function checkDocument(operation) {
+  const tab = await api.tabs.get(operation.tabId);
+  if (tab.url !== operation.topUrl) throw new Error("The requesting page changed.");
+  const frame = await api.webNavigation.getFrame({ tabId: operation.tabId, frameId: operation.frameId });
+  if (!frame || frame.url !== operation.url || (operation.documentId && frame.documentId && frame.documentId !== operation.documentId)) throw new Error("The requesting document changed.");
+  // Document identity is checked by the content script as well; navigation events
+  // cancel the pending request even when the replacement has the same URL.
+  return tab;
+}
+async function pageMessage(message, sender, respond) {
+  if (sender.id !== api.runtime.id || !sender.tab || !sender.url) return respond({ error: "Invalid sender." });
+  const url = new URL(sender.url);
+  if (!sender.tab.url || new URL(sender.tab.url).origin !== url.origin) return respond({ fallback: true });
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && url.hostname === "localhost")) return respond({ fallback: true });
+  if (message.action === "passkey_cancel") {
+    for (const [id, p] of pending) if (p.tabId === sender.tab.id && p.pageRequest === message.request) finish(id, { error: "Cancelled." });
+    return respond({ result: true });
+  }
+  const prefs = await settings();
+  if (message.action === "passkey_available") return respond({ result: prefs.passkeys });
+  if (message.action === "autofill_load") {
+    if (!prefs.autoFill || sender.frameId !== 0 || !sender.tab.active) return respond({ result: false });
+    const results = await native({ action: "search", account: prefs.account || null, query: "", url: sender.url, site_only: true, kind: "login" });
+    if (results.items.length !== 1 || results.items[0].protected) return respond({ result: false });
+    return respond({ result: await fill({ item: results.items[0].id }, prefs.account || null) });
+  }
+  if (message.action === "inline_choices") {
+    if (!prefs.inlineSuggestions) return respond({ result: [] });
+    try {
+      const result = await native({ action: "search", account: prefs.account || null, query: "", url: sender.url, site_only: true, kind: "login" });
+      return respond({ result: result.items.slice(0, 5).map(v => ({ id: v.id, name: v.name, username: v.username })) });
+    } catch (_) { return respond({ result: [] }); }
+  }
+  if (message.action === "inline_fill") {
+    const tab = await activeTab();
+    if (tab.id !== sender.tab.id || new URL(tab.url).origin !== url.origin) return respond({ error: "Page changed." });
+    return respond({ result: await fill({ item: message.item }, prefs.account || null) });
+  }
+  if (message.action === "save_offer") {
+    if (!prefs.savePrompts || typeof message.username !== "string" || typeof message.password !== "string" || message.password.length > 4096 || message.username.length > 1024) return respond({ result: false });
+    const tabId = sender.tab.id;
+    const previous = offers.get(tabId); if (previous) clearTimeout(previous.timer);
+    offers.set(tabId, { origin: url.origin, url: sender.url, username: message.username, password: message.password, timer: setTimeout(() => { offers.delete(tabId); badge(); }, 120000) });
+    badge(); return respond({ result: true });
+  }
+  if (!prefs.passkeys) return respond({ fallback: true });
+  if (!["get", "create"].includes(message.method) || typeof message.request !== "string" || JSON.stringify(message.options || {}).length > 65536) return respond({ error: "Invalid passkey request." });
+  if ([...pending.values()].some(p => p.tabId === sender.tab.id) || pending.size >= 8) return respond({ error: "Another request is already pending." });
+  const id = crypto.randomUUID();
+  const operation = { id, method: message.method, origin: url.origin, options: structuredClone(message.options), tabId: sender.tab.id, frameId: sender.frameId, documentId: sender.documentId, topUrl: sender.tab.url, url: sender.url, pageRequest: message.request, respond, timer: setTimeout(() => finish(id, { error: "Passkey request expired." }), 120000) };
+  pending.set(id, operation); badge();
+  if (!message.conditional) {
+    try {
+      const window = await api.windows.create({ url: api.runtime.getURL(`popup.html?request=${id}`), type: "popup", width: 430, height: 640 });
+      if (pending.has(id)) operation.windowId = window.id;
+    } catch (_) { finish(id, { fallback: true }); }
+  }
+}
+async function fill(message, account) {
+  const tab = await activeTab();
+  let credential;
+  if (message.type && message.type !== "login") {
+    const detail = await native({ action: "detail", account, item: message.item });
+    credential = { ...detail.cipher.data, custom: detail.cipher.fields };
+    if (!["card", "identity"].includes(credential.type)) throw new Error("This item cannot fill a form.");
+  } else {
+    credential = { type: "login", ...await native({ action: "credential", account, item: message.item, url: tab.url }) };
+  }
+  const current = await activeTab();
+  if (current.id !== tab.id || current.url !== tab.url) throw new Error("Page changed. Choose Fill again.");
+  const frames = await api.webNavigation.getAllFrames({ tabId: tab.id });
+  let count = 0;
+  for (const frame of frames.filter(f => { try { return new URL(f.url).origin === new URL(tab.url).origin; } catch (_) { return false; } })) {
+    try {
+      const results = await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [frame.frameId] }, func: fillPage, args: [frame.url, credential] });
+      count += results[0]?.result || 0;
+    } catch (error) { if (frame.frameId === 0 && frames.length === 1) throw error; }
+  }
+  if (!count) throw new Error("No supported fields found on this page.");
+  return count;
+}
 async function handle(message) {
   const account = message.account || null;
   switch (message.action) {
-    case "status": case "unlock": case "lock": case "sync":
+    case "unlock": return native({ action: "unlock", account, password: typeof message.password === "string" ? message.password : null });
+    case "status": case "sync": case "audit":
       return native({ action: message.action, account });
-    case "search": {
-      let tab;
-      try { tab = await activeTab(); } catch (_) { /* Vault search works on internal pages. */ }
-      return native({ action: "search", account, query: String(message.query || ""), url: tab?.url || null, site_only: !!message.siteOnly });
+    case "lock":
+      for (const id of [...pending.keys()]) finish(id, { error: "Vault locked." });
+      for (const offer of offers.values()) clearTimeout(offer.timer); offers.clear(); badge();
+      return native({ action: "lock", account });
+    case "export": return native({ action: "export", account, format: message.format, password: message.password || null, attachments: !!message.attachments });
+    case "import": return native({ action: "import", account, token: message.token, password: message.password || null, overwrite: !!message.overwrite });
+    case "agent_settings": return native({ action: "agent_settings", account });
+    case "preferences": return settings();
+    case "set_preferences": {
+      const old = await settings();
+      const next = { ...old, ...Object.fromEntries(Object.entries(message.preferences || {}).filter(([k, v]) => (k in defaults) && typeof v === typeof defaults[k])) };
+      await api.storage.local.set({ preferences: next }); return next;
     }
-    case "copy":
-      return native({ action: "copy", account, item: message.item, field: message.field });
-    case "generate":
-      return native({ action: "generate", account, length: message.length || null, passphrase: !!message.passphrase });
-    case "fill": {
-      const tab = await activeTab();
-      const credential = await native({ action: "credential", account, item: message.item, url: tab.url });
-      // Navigation or tab selection may have changed while pinentry was open.
-      const current = await activeTab();
-      if (current.id !== tab.id || current.url !== tab.url) throw new Error("Page changed. Choose Fill again.");
-      const results = await api.scripting.executeScript({
-        target: { tabId: tab.id, frameIds: [0] },
-        func: (expectedUrl, username, password) => {
-          if (location.href !== expectedUrl) throw new Error("Page changed.");
-          const visible = el => !el.disabled && !el.readOnly && el.getClientRects().length > 0;
-          const passwords = [...document.querySelectorAll('input[type="password"]')].filter(visible);
-          // Multiple password fields can indicate signup or password changes.
-          if (passwords.length !== 1) throw new Error("Choose a login form with exactly one password field.");
-          const passwordInput = passwords[0];
-          const scope = passwordInput.form || document;
-          const users = [...scope.querySelectorAll('input[autocomplete="username"],input[type="email"],input[type="text"],input:not([type])')].filter(visible);
-          const user = users.find(el => el.autocomplete === "username") || users.find(el => el.type === "email") || users.at(-1);
-          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-          for (const [el, value] of [[user, username], [passwordInput, password]]) {
-            if (!el || value == null) continue;
-            setter.call(el, value);
-            el.dispatchEvent(new Event("input", { bubbles: true }));
-            el.dispatchEvent(new Event("change", { bubbles: true }));
-          }
-          passwordInput.focus();
-          return true;
-        },
-        args: [tab.url, credential.username, credential.password],
-      });
-      if (!results[0]?.result) throw new Error("Could not fill this page.");
-      return true;
+    case "search": {
+      let tab; try { tab = await activeTab(); } catch (_) { /* Search also works on internal pages. */ }
+      return native({ action: "search", account, query: String(message.query || ""), url: tab?.url || null, site_only: !!message.siteOnly, kind: message.kind || null, folder: message.folder || null, collection: message.collection || null, view: message.view || null });
+    }
+    case "folders": return native({ action: "folders", account, method: message.method, id: message.id || null, name: message.name || null });
+    case "set_collections": return native({ action: "set_collections", account, item: message.item, collections: message.collections });
+    case "send": return native({ action: "send", account, method: message.method, data: message.data || {} });
+    case "copy_text": return native({ action: "copy_text", account, text: message.text });
+    case "attachment_download": return native({ action: "attachment_download", account, item: message.item, attachment: message.attachment });
+    case "attachment_delete": return native({ action: "attachment_delete", account, item: message.item, attachment: message.attachment });
+    case "upload_begin": return native({ action: "upload_begin", account, item: message.item, name: message.name, size: message.size });
+    case "upload_chunk": return native({ action: "upload_chunk", account, token: message.token, offset: message.offset, data: message.data });
+    case "upload_finish": return native({ action: "upload_finish", account, token: message.token });
+    case "upload_cancel": return native({ action: "upload_cancel", account, token: message.token });
+    case "detail": return native({ action: "detail", account, item: message.item });
+    case "save": return native({ action: "save", account, item: message.item || null, revision: message.revision || null, cipher: message.cipher });
+    case "mutate": return native({ action: "mutate", account, item: message.item, mutation: message.mutation });
+    case "copy": return native({ action: "copy", account, item: message.item, field: message.field });
+    case "generate": return native({ action: "generate", account, length: message.length || null, passphrase: !!message.passphrase, mode: message.mode || null });
+    case "fill": return fill(message, account);
+    case "pending": return [...pending.values()].map(p => ({ id: p.id, method: p.method, origin: p.origin, user: p.options.user?.name, rp: p.options.rp?.id || p.options.rpId || new URL(p.origin).hostname, verification: (p.method === "create" ? p.options.authenticatorSelection?.userVerification : p.options.userVerification) || "preferred" }));
+    case "passkey_choices": {
+      const p = pending.get(message.request); if (!p) throw new Error("This request has expired.");
+      await checkDocument(p);
+      if (p.method === "get") return native({ action: "passkey_candidates", account, origin: p.origin, options: p.options });
+      return native({ action: "search", account, query: "", url: p.url, site_only: true, kind: "login" });
+    }
+    case "passkey_approve": {
+      const p = pending.get(message.request); if (!p) throw new Error("This request has expired.");
+      await checkDocument(p);
+      const result = await native({ action: p.method === "get" ? "passkey_get" : "passkey_create", account, item: message.item || null, password: typeof message.password === "string" ? message.password : null, origin: p.origin, options: p.options });
+      await checkDocument(p);
+      if (!pending.has(p.id)) throw new Error("The request was cancelled.");
+      finish(p.id, { result }); return true;
+    }
+    case "passkey_decline": finish(message.request, message.fallback ? { fallback: true } : { error: "Passkey request cancelled." }); return true;
+    case "save_offers": return [...offers.entries()].map(([tabId, offer]) => ({ tabId, origin: offer.origin, username: offer.username }));
+    case "save_offer_apply": {
+      const offer = offers.get(message.tabId); if (!offer) throw new Error("Save suggestion expired.");
+      if (message.item) {
+        const detail = await native({ action: "detail", account, item: message.item });
+        // Recheck the originating site with the same native matcher used for fill.
+        await native({ action: "credential", account, item: message.item, url: offer.url });
+        detail.cipher.data.password = offer.password;
+        if (offer.username) detail.cipher.data.username = offer.username;
+        await native({ action: "save", account, item: message.item, revision: detail.revision, cipher: detail.cipher });
+      } else {
+        await native({ action: "save", account, item: null, revision: null, cipher: { name: new URL(offer.origin).hostname, data: { type: "login", username: offer.username, password: offer.password, uris: [{ uri: offer.origin }] }, fields: [] } });
+      }
+      clearTimeout(offer.timer); offers.delete(message.tabId); badge(); return true;
+    }
+    case "save_offer_dismiss": {
+      const offer = offers.get(message.tabId); if (offer) clearTimeout(offer.timer);
+      offers.delete(message.tabId); badge(); return true;
     }
     default: throw new Error("Unknown action.");
   }
 }
-
 api.runtime.onMessage.addListener((message, sender, respond) => {
-  // Content scripts and other extension pages have no access to this API.
-  if (sender.id !== api.runtime.id || sender.tab || sender.url !== api.runtime.getURL("popup.html")) return false;
-  const operation = queue.then(() => handle(message));
-  queue = operation.catch(() => {});
-  operation.then(result => respond({ result }), error => respond({ error: error.message || "Operation failed." }));
-  return true;
+  const page = sender.url?.split(/[?#]/)[0];
+  const trustedUI = sender.id === api.runtime.id && [api.runtime.getURL("popup.html"), api.runtime.getURL("options.html")].includes(page);
+  // Options and pop-out pages may themselves live in a tab. Authenticate the
+  // exact extension document before handling the narrower content-script API.
+  if (trustedUI) {
+    const operation = queue.then(() => handle(message)); queue = operation.catch(() => {});
+    operation.then(result => respond({ result }), error => respond({ error: error.message || "Operation failed." })); return true;
+  }
+  if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "inline_choices", "inline_fill", "autofill_load"].includes(message?.action)) return false;
+  pageMessage(message, sender, respond).catch(() => respond({ error: "Request failed." })); return true;
+});
+
+api.tabs.onRemoved.addListener(tabId => {
+  for (const [id, p] of pending) if (p.tabId === tabId) finish(id, { error: "Page closed." });
+  const offer = offers.get(tabId); if (offer) { clearTimeout(offer.timer); offers.delete(tabId); badge(); }
+});
+api.tabs.onUpdated.addListener((tabId, change) => {
+  if (!change.url && change.status !== "loading") return;
+  for (const [id, p] of pending) if (p.tabId === tabId) finish(id, { error: "Page navigated." });
+});
+api.windows.onRemoved.addListener(windowId => {
+  for (const [id, p] of pending) if (p.windowId === windowId) finish(id, { fallback: true });
+});
+api.runtime.onInstalled.addListener(() => {
+  api.contextMenus.removeAll().then(() => api.contextMenus.create({ id: "rbw-open", title: "Fill with rbw…", contexts: ["editable"] }));
+});
+api.contextMenus.onClicked.addListener(() => api.action.openPopup().catch(() => api.windows.create({ url: api.runtime.getURL("popup.html"), type: "popup", width: 430, height: 640 })));
+api.commands.onCommand.addListener(async command => {
+  if (command === "open-vault") return api.action.openPopup();
+  if (command === "fill-login") {
+    try {
+      const prefs = await settings(); const tab = await activeTab();
+      const result = await native({ action: "search", account: prefs.account || null, query: "", url: tab.url, site_only: true, kind: "login" });
+      if (result.items.length === 1) await fill({ item: result.items[0].id }, prefs.account || null);
+      else await api.action.openPopup();
+    } catch (_) { api.action.openPopup().catch(() => {}); }
+  }
+});
+
+api.webNavigation.onCommitted.addListener(details => {
+  for (const [id, p] of pending) if (p.tabId === details.tabId && p.frameId === details.frameId) finish(id, { error: "Document navigated." });
 });

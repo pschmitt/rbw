@@ -487,9 +487,34 @@ pub struct Account {
     pub exclude_from: Vec<ExcludeContext>,
 }
 
+/// Native messaging is disabled until a browser and extension are enrolled.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrowserConfig {
+    #[serde(default)]
+    pub clients: std::collections::BTreeMap<String, BrowserClient>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrowserClient {
+    pub browser: BrowserKind,
+    pub extensions: Vec<String>,
+    pub executable_roots: Vec<std::path::PathBuf>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum BrowserKind {
+    Firefox,
+    Chromium,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
+    #[serde(default)]
+    pub browser: BrowserConfig,
     // ---- legacy single-account fields --------------------------------------
     // Deserialization-only fields for an older single-account shape. New
     // configs always write `accounts` instead.

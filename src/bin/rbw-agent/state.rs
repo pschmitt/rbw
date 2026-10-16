@@ -187,9 +187,17 @@ impl State {
             }
 
             match &entry.data {
-                rbw::db::EntryData::Login { password, totp, .. } => {
+                rbw::db::EntryData::Login {
+                    password,
+                    totp,
+                    fido2_credentials,
+                    ..
+                } => {
                     insert(password.as_deref());
                     insert(totp.as_deref());
+                    for credential in fido2_credentials {
+                        insert(credential.key_value.as_deref());
+                    }
                 }
                 rbw::db::EntryData::Card { number, code, .. } => {
                     insert(number.as_deref());
@@ -209,6 +217,10 @@ impl State {
                 }
             }
 
+            insert(entry.notes.as_deref());
+            for history in &entry.history {
+                insert(Some(&history.password));
+            }
             for field in &entry.fields {
                 if field.ty == Some(rbw::api::FieldType::Hidden) {
                     insert(field.value.as_deref());

@@ -24,6 +24,19 @@
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+      # Signing or changing a browser package must not rebuild the shared agent.
+      rbwSource = nixpkgs.lib.fileset.toSource {
+        root = ./.;
+        fileset = nixpkgs.lib.fileset.unions [
+          ./Cargo.toml
+          ./Cargo.lock
+          ./src
+          ./bin
+          ./LICENSE
+          ./README.md
+          ./CHANGELOG.md
+        ];
+      };
     in
     {
       packages = forAllSystems (
@@ -34,7 +47,7 @@
             pname = "rbw";
             inherit (cargoToml.package) version;
 
-            src = self;
+            src = rbwSource;
             cargoLock.lockFile = ./Cargo.lock;
 
             # WebAuthn/FIDO2 2FA login; links libudev on Linux.
@@ -71,7 +84,7 @@
                 pname = "rbw";
                 inherit (cargoToml.package) version;
 
-                src = self;
+                src = rbwSource;
                 cargoLock.lockFile = ./Cargo.lock;
                 cargoBuildFlags = [ "--no-default-features" ];
                 RUSTFLAGS = nixpkgs.lib.concatStringsSep " " [

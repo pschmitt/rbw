@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Added
+
+* Browser preview 0.2.3: passkey registration/authentication, in-popup master
+  password entry, Bitwarden-inspired vault layout and a generated shield/gear
+  icon, full item editing, inline suggestions, save/update offers, cards and
+  identities, generator modes, attachments, Sends, local vault reports,
+  import/export, folder/collection management and a dedicated options page.
+* Native messaging allowlist (`browser.clients`), denying browser access until
+  both the browser executable and extension ID are explicitly enrolled.
+* Firefox sidebar and Chromium side panel, context menu and keyboard commands.
+* Agent operations for explicit master password verification and wrapping short
+  binary key material; the browser never receives account or passkey keys.
+
+### Fixed
+
+* Master password reprompt now also protects passkey keys, notes and password
+  history. Malformed agent requests are no longer echoed into logs.
+* Browser item edits preserve existing passkeys and require the viewed revision.
+* Browser passkey assertions preserve synced zero counters and only claim user
+  verification after checking the master password. Existing CLI counter policy
+  remains unchanged.
+
 ## [2.20.1] - 2026-10-15
 
 ### Added
@@ -1048,7 +1070,7 @@ local vault with the necessary new data.*
   immediately drop the decrypted keys before they can be used for decryption,
   even within a single run of the `rbw` client.
 
-## [0.2.2] - 2020-05-17
+## [0.2.3] - 2020-05-17
 
 ### Fixed
 

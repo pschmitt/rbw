@@ -411,6 +411,30 @@ async fn dispatch(
             .await?;
             true
         }
+        rbw::protocol::Action::VerifyMasterPassword { password } => {
+            let password = zeroize::Zeroizing::new(password);
+            anyhow::ensure!(password.len() <= 4096, "password too long");
+            let mut bytes = rbw::locked::Vec::new();
+            bytes.extend(password.as_bytes().iter().copied());
+            crate::actions::verify_master_password(
+                sock,
+                &rbw::locked::Password::new(bytes),
+                account,
+            )
+            .await?;
+            true
+        }
+        rbw::protocol::Action::CryptBytes { data, decrypt } => {
+            crate::actions::crypt_bytes(
+                sock,
+                state.clone(),
+                &data,
+                decrypt,
+                account,
+            )
+            .await?;
+            true
+        }
         rbw::protocol::Action::ClipboardStore { text } => {
             crate::actions::clipboard_store(sock, state.clone(), &text)
                 .await?;

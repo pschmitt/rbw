@@ -1946,3 +1946,51 @@ pub async fn find_ssh_private_key(
 
     Err(anyhow::anyhow!("No matching private key found"))
 }
+
+// Wrap/unwrap short binary key material without releasing the account key.
+pub async fn crypt_bytes(
+    sock: &mut crate::sock::Sock,
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    data: &[u8],
+    decrypt: bool,
+    account: &rbw::config::Account,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(data.len() <= 4096, "binary key material too large");
+    let state = state.lock().await;
+    let keys = state.key(&account.name, None).context("vault locked")?;
+    let data = if decrypt {
+        rbw::cipherstring::CipherString::new(std::str::from_utf8(data)?)?
+            .decrypt_symmetric(keys, None)?
+    } else {
+        rbw::cipherstring::CipherString::encrypt_symmetric(keys, data)?
+            .to_string()
+            .into_bytes()
+    };
+    sock.send(&rbw::protocol::Response::Bytes { data }).await?;
+    Ok(())
+}
+
+pub async fn verify_master_password(
+    sock: &mut crate::sock::Sock,
+    password: &rbw::locked::Password,
+    account: &rbw::config::Account,
+) -> anyhow::Result<()> {
+    let db = load_db(account).await?;
+    rbw::actions::unlock(
+        &account_email(account)?,
+        password,
+        db.kdf.context("missing KDF")?,
+        db.iterations.context("missing KDF iterations")?,
+        db.memory,
+        db.parallelism,
+        db.protected_key
+            .as_deref()
+            .context("missing protected key")?,
+        db.protected_private_key
+            .as_deref()
+            .context("missing protected private key")?,
+        &db.protected_org_keys,
+    )?;
+    respond_ack(sock).await?;
+    Ok(())
+}

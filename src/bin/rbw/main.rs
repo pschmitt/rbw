@@ -434,7 +434,10 @@ fn parse_cli() -> Cli {
 #[derive(Debug, clap::Subcommand)]
 enum Opt {
     #[command(about = "Native messaging bridge for browser extensions")]
-    NativeMessaging,
+    NativeMessaging {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        arguments: Vec<std::ffi::OsString>,
+    },
     #[command(about = "Get or set configuration options")]
     Config {
         #[command(subcommand)]
@@ -2079,7 +2082,7 @@ enum Passkey {
 impl Opt {
     fn subcommand_name(&self) -> String {
         match self {
-            Self::NativeMessaging => "native-messaging".to_string(),
+            Self::NativeMessaging { .. } => "native-messaging".to_string(),
             Self::Config { config } => {
                 format!("config {}", config.subcommand_name())
             }
@@ -3201,7 +3204,7 @@ fn main() {
 
     let subcommand_name = opt.subcommand_name();
     let res = match opt {
-        Opt::NativeMessaging => browser::run(),
+        Opt::NativeMessaging { arguments } => browser::run(&arguments),
         Opt::Config { config } => match config {
             Config::Show { json } => commands::config_show(json),
             Config::Get { key } => commands::config_get(&key),

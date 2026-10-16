@@ -1126,3 +1126,17 @@ async fn api_client_async(
     );
     Ok((client, account))
 }
+
+pub fn send_request(
+    access_token: &str,
+    refresh_token: &str,
+    method: &str,
+    path: &str,
+    body: Option<&serde_json::Value>,
+    file: Option<(&[u8], &str)>,
+) -> Result<(Option<RefreshedTokens>, serde_json::Value)> {
+    with_exchange_refresh_token(access_token, refresh_token, |token| {
+        let (client, _) = api_client()?;
+        client.send_request(token, method, path, body, file)
+    })
+}

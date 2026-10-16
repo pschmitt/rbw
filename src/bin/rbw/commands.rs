@@ -2669,6 +2669,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "passwordGen.nonconfusables",
     "passwordGen.diceware",
     "clipboard",
+    "browser.clients",
 ];
 
 pub fn config_show(json: bool) -> anyhow::Result<()> {
@@ -2698,6 +2699,9 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
         "notificationsUrl" => resolve(primary.notifications_url)?,
         "clientCertPath" => {
             primary.client_cert_path.map(|p| p.display().to_string())
+        }
+        "browser.clients" => {
+            Some(serde_json::to_string(&config.browser.clients)?)
         }
         "primaryAccount" => config.primary_account,
         "agent.lockTimeout" => Some(config.agent.lock_timeout.to_string()),
@@ -2780,6 +2784,9 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
     let mut config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());
     match key {
+        "browser.clients" => {
+            config.browser.clients = serde_json::from_str(value)?;
+        }
         "email" => {
             config.primary_mut().email = Some(value.to_string().into());
         }
@@ -2892,6 +2899,7 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
     let mut config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());
     match key {
+        "browser.clients" => config.browser.clients.clear(),
         "email" => config.primary_mut().email = None,
         "ssoId" => config.primary_mut().sso_id = None,
         "baseUrl" => config.primary_mut().base_url = None,

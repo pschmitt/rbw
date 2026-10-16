@@ -292,6 +292,13 @@ pub enum Action {
         entry_key: Option<String>,
         org_id: Option<String>,
     },
+    VerifyMasterPassword {
+        password: String,
+    },
+    CryptBytes {
+        data: Vec<u8>,
+        decrypt: bool,
+    },
     ClipboardStore {
         text: String,
     },
@@ -302,6 +309,9 @@ pub enum Action {
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(tag = "type")]
 pub enum Response {
+    Bytes {
+        data: Vec<u8>,
+    },
     Ack,
     Progress {
         message: String,

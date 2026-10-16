@@ -3774,6 +3774,76 @@ impl Client {
         }
     }
 
+    // Send requests use the same configured endpoint, client identity and headers.
+    pub fn send_request(
+        &self,
+        access_token: &str,
+        method: &str,
+        path: &str,
+        body: Option<&serde_json::Value>,
+        file: Option<(&[u8], &str)>,
+    ) -> Result<serde_json::Value> {
+        let mut builder = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .redirect(reqwest::redirect::Policy::none());
+        if let Some(path) = &self.client_cert_path {
+            let pem = std::fs::read(path).map_err(|source| {
+                Error::LoadClientCert {
+                    source,
+                    file: path.clone(),
+                }
+            })?;
+            builder =
+                builder.identity(reqwest::Identity::from_pem(&pem).map_err(
+                    |source| Error::CreateReqwestClient { source },
+                )?);
+        }
+        let client = builder
+            .build()
+            .map_err(|source| Error::CreateReqwestClient { source })?;
+        let mut request = client
+            .request(
+                reqwest::Method::from_bytes(method.as_bytes())
+                    .expect("static HTTP method"),
+                self.api_url(path),
+            )
+            .bearer_auth(access_token)
+            .header("Bitwarden-Client-Name", BITWARDEN_CLIENT)
+            .header("Bitwarden-Client-Version", BITWARDEN_CLIENT_VERSION)
+            .header("Device-Type", DEVICE_TYPE.to_string());
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        if let Some((bytes, name)) = file {
+            request = request.multipart(
+                reqwest::blocking::multipart::Form::new().part(
+                    "data",
+                    reqwest::blocking::multipart::Part::bytes(bytes.to_vec())
+                        .file_name(name.to_owned()),
+                ),
+            );
+        }
+        let response =
+            request.send().map_err(|source| Error::Reqwest { source })?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(Error::RequestUnauthorized);
+        }
+        if !response.status().is_success() {
+            return Err(Error::RequestFailed {
+                status: response.status().as_u16(),
+            });
+        }
+        let bytes = response
+            .bytes()
+            .map_err(|source| Error::Reqwest { source })?;
+        if bytes.is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        // Existing API response parsing reports paths, never the response body.
+        serde_json::from_slice(&bytes)
+            .map_err(|_| Error::RequestFailed { status: 502 })
+    }
+
     fn api_url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
     }

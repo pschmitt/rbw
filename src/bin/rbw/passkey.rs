@@ -23,6 +23,13 @@ struct Selected {
 
 fn select(args: &FindArgs, rp_id: Option<&str>) -> anyhow::Result<Selected> {
     actions::sync()?;
+    select_cached(args, rp_id)
+}
+
+fn select_cached(
+    args: &FindArgs,
+    rp_id: Option<&str>,
+) -> anyhow::Result<Selected> {
     let db = commands::load_db()?;
     let (entry, decrypted) = if args.needles.is_empty() {
         let rp = rp_id.context("name an entry or give --rp-id")?;
@@ -296,7 +303,7 @@ fn normalize_base64(value: &str) -> anyhow::Result<String> {
 
 fn credential_id(value: &str) -> anyhow::Result<String> {
     uuid::Uuid::parse_str(value).map_or_else(
-        |_| normalize_base64(value),
+        |_| normalize_base64(value.strip_prefix("b64.").unwrap_or(value)),
         |id| Ok(rbw::base64::encode(id.as_bytes())),
     )
 }
@@ -461,6 +468,19 @@ fn sign_assertion(
     challenge: &str,
     counter: u32,
 ) -> anyhow::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    sign_assertion_with_verification(
+        key, rp, origin, challenge, counter, true,
+    )
+}
+
+fn sign_assertion_with_verification(
+    key: &p256::ecdsa::SigningKey,
+    rp: &str,
+    origin: &str,
+    challenge: &str,
+    counter: u32,
+    verified: bool,
+) -> anyhow::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     use p256::ecdsa::signature::Signer as _;
     use sha2::Digest as _;
     let client_data = serde_json::to_vec(&json!({
@@ -471,7 +491,7 @@ fn sign_assertion(
     }))?;
     // Flags: user present, user verified, backup eligible, backed up (synced).
     let mut auth_data = sha2::Sha256::digest(rp.as_bytes()).to_vec();
-    auth_data.push(0x01 | 0x04 | 0x08 | 0x10);
+    auth_data.push(0x01 | 0x08 | 0x10 | if verified { 0x04 } else { 0 });
     auth_data.extend_from_slice(&counter.to_be_bytes());
     let mut signed = auth_data.clone();
     signed.extend_from_slice(&sha2::Sha256::digest(&client_data));
@@ -496,6 +516,39 @@ pub fn assert(
     challenge: &str,
     allow: &[String],
 ) -> anyhow::Result<()> {
+    let assertion =
+        assertion_value(args, rp_id, origin, challenge, allow, true, false)?;
+    println!("{assertion}");
+    Ok(())
+}
+
+pub fn browser_assert(
+    args: &FindArgs,
+    rp_id: Option<&str>,
+    origin: &str,
+    challenge: &str,
+    allow: &[String],
+    verified: bool,
+) -> anyhow::Result<Value> {
+    let mut result = assertion_value(
+        args, rp_id, origin, challenge, allow, verified, true,
+    )?;
+    if let Some(object) = result.as_object_mut() {
+        object.remove("counter");
+    }
+    result["clientExtensionResults"] = json!({});
+    Ok(result)
+}
+
+fn assertion_value(
+    args: &FindArgs,
+    rp_id: Option<&str>,
+    origin: &str,
+    challenge: &str,
+    allow: &[String],
+    verified: bool,
+    preserve_zero: bool,
+) -> anyhow::Result<Value> {
     use base64::Engine as _;
     use p256::pkcs8::DecodePrivateKey as _;
     let b64url = base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -507,7 +560,11 @@ pub fn assert(
     log::set_max_level(log::LevelFilter::Off);
     commands::unlocked().context("the vault is locked")?;
     rbw::dirs::make_all()?;
-    let selected = select(args, rp_id)?;
+    let selected = if preserve_zero {
+        select_cached(args, rp_id)?
+    } else {
+        select(args, rp_id)?
+    };
     let lock_path = rbw::dirs::pid_file()
         .with_file_name(format!("passkey-{}.lock", selected.entry.id));
     let lock = std::fs::OpenOptions::new()
@@ -520,7 +577,11 @@ pub fn assert(
     lock.try_lock().map_err(|_| {
         anyhow::anyhow!("another passkey injection is active for this item")
     })?;
-    let selected = select(args, rp_id)?;
+    let selected = if preserve_zero {
+        select_cached(args, rp_id)?
+    } else {
+        select(args, rp_id)?
+    };
     let c = &selected.credential;
     anyhow::ensure!(
         c.key_type.as_deref() == Some("public-key")
@@ -550,32 +611,38 @@ pub fn assert(
     .map_err(|_| anyhow::anyhow!("unreadable passkey key"))?;
 
     let previous = stored_counter(c)?;
-    let reserved = next_counter(previous)?;
-    advance(&selected, reserved)?;
-    warn_counter_enabled(previous, reserved);
-    confirm_synced(args, rp_id, &selected, reserved)?;
-
-    let (client_data, auth_data, signature) =
-        sign_assertion(&key, rp, &origin, challenge, reserved)?;
+    let reserved = if preserve_zero && previous == 0 {
+        0
+    } else {
+        next_counter(previous)?
+    };
+    if reserved > previous {
+        advance(&selected, reserved)?;
+        warn_counter_enabled(previous, reserved);
+        confirm_synced(args, rp_id, &selected, reserved)?;
+    }
+    let (client_data, auth_data, signature) = if verified {
+        sign_assertion(&key, rp, &origin, challenge, reserved)?
+    } else {
+        sign_assertion_with_verification(
+            &key, rp, &origin, challenge, reserved, false,
+        )?
+    };
     let user_handle = c.user_handle.as_deref().map(std_b64).transpose()?;
 
-    println!(
-        "{}",
-        json!({
-            "id": b64url.encode(&raw_id),
-            "rawId": b64url.encode(&raw_id),
-            "type": "public-key",
-            "authenticatorAttachment": "platform",
-            "response": {
-                "clientDataJSON": b64url.encode(&client_data),
-                "authenticatorData": b64url.encode(&auth_data),
-                "signature": b64url.encode(&signature),
-                "userHandle": user_handle.map(|u| b64url.encode(u)),
-            },
-            "counter": reserved,
-        })
-    );
-    Ok(())
+    Ok(json!({
+        "id": b64url.encode(&raw_id),
+        "rawId": b64url.encode(&raw_id),
+        "type": "public-key",
+        "authenticatorAttachment": "platform",
+        "response": {
+            "clientDataJSON": b64url.encode(&client_data),
+            "authenticatorData": b64url.encode(&auth_data),
+            "signature": b64url.encode(&signature),
+            "userHandle": user_handle.map(|u| b64url.encode(u)),
+        },
+        "counter": reserved,
+    }))
 }
 
 pub fn inject(
