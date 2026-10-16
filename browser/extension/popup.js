@@ -1,3 +1,4 @@
+if (new URLSearchParams(location.search).get("surface") === "window") document.documentElement.dataset.surface = "window";
 const api = globalThis.browser || chrome;
 const $ = id => document.getElementById(id);
 const labels = { login: "Login", card: "Card", identity: "Identity", secure_note: "Secure note", ssh_key: "SSH key" };
@@ -17,8 +18,18 @@ async function request(action, values = {}) {
   if (!response) throw new Error("Extension background unavailable.");
   return response.result;
 }
-function message(text) { $("message").textContent = text; }
-async function attempt(fn) { try { await fn(); } catch (error) { message(error.message); } }
+function message(text, error = false) {
+  $("message").textContent = text;
+  $("message").classList.toggle("is-error", error);
+  $("message").setAttribute("role", error ? "alert" : "status");
+}
+async function attempt(fn) { try { await fn(); } catch (error) {
+  if (error.message.startsWith("Browser access denied.")) {
+    unlocked = false; clearVault(); show("locked");
+    $("unlock-panel").hidden = true; $("locked").hidden = true;
+  }
+  message(error.message, true);
+} }
 function element(tag, text, cls) { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; }
 function button(label, action, cls) { const el = element("button", label, cls); el.type = "button"; el.onclick = () => attempt(async () => { el.disabled = true; try { await action(); } finally { el.disabled = false; } }); return el; }
 function pretty(value) { return value.replaceAll("_", " ").replace(/^./, c => c.toUpperCase()); }
@@ -234,7 +245,7 @@ for (const mutation of ["favorite", "archive", "delete"]) $(mutation).onclick = 
   if (mutation === "delete" && !confirm("Move this item to trash? You can restore it from the Trash view.")) return;
   await request("mutate", { item: currentItem, mutation }); await refresh();
 });
-$("popout").onclick = () => api.windows.create({ url: api.runtime.getURL("popup.html"), type: "popup", width: 430, height: 680 });
+$("popout").onclick = () => api.windows.create({ url: api.runtime.getURL("popup.html?surface=window"), type: "popup", width: 460, height: 680 });
 for (const el of document.querySelectorAll("footer button")) el.onclick = () => attempt(async () => {
   const page = el.dataset.page;
   if (page === "vault") await refresh(); else if (page === "send") await loadSends(); else show(page);

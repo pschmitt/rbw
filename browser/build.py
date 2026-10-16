@@ -17,7 +17,7 @@ for target in ("firefox", "chromium"):
     manifest = {
         "manifest_version": 3,
         "name": "rbw",
-        "version": "0.2.3",
+        "version": "0.2.5",
         "description": "Use your existing rbw-agent vault in the browser.",
         "permissions": ["nativeMessaging", "activeTab", "scripting", "storage", "contextMenus", "webNavigation"],
         "host_permissions": ["https://*/*", "http://*/*"],
@@ -36,7 +36,7 @@ for target in ("firefox", "chromium"):
     }
     if target == "firefox":
         manifest["background"] = {"scripts": ["fill.js", "background.js"]}
-        manifest["sidebar_action"] = {"default_panel": "popup.html", "default_title": "rbw", "default_icon": "icons/rbw-32.png"}
+        manifest["sidebar_action"] = {"default_panel": "popup.html?surface=window", "default_title": "rbw", "default_icon": "icons/rbw-32.png"}
         manifest["browser_specific_settings"] = {"gecko": {
             "id": "rbw-browser@pschmitt.dev",
             "strict_min_version": "142.0",
@@ -45,7 +45,7 @@ for target in ("firefox", "chromium"):
     else:
         manifest["background"] = {"service_worker": "background.js"}
         manifest["permissions"].append("sidePanel")
-        manifest["side_panel"] = {"default_path": "popup.html"}
+        manifest["side_panel"] = {"default_path": "popup.html?surface=window"}
         metadata = ROOT / "packages" / "metadata.json"
         if metadata.exists():
             manifest["key"] = json.loads(metadata.read_text())["chromiumKey"]

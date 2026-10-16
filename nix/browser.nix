@@ -1,7 +1,7 @@
 # Browser packages share the same rbw derivation as the CLI and agent.
 { pkgs, rbw }:
 let
-  version = "0.2.3";
+  version = "0.2.5";
   metadata = builtins.fromJSON (builtins.readFile ../browser/packages/metadata.json);
   firefoxId = "rbw-browser@pschmitt.dev";
   firefoxAppId = "{ec8030f7-c20a-464f-9b0e-13a3a9e97384}";

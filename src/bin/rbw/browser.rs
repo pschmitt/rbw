@@ -1,5 +1,5 @@
 //! Narrow browser API. Never serialize vault entries or protocol requests here.
-use std::io::{Read as _, Write as _};
+use std::io::Read as _;
 
 use anyhow::{ensure, Context as _};
 use serde_json::{json, Value};
@@ -197,10 +197,42 @@ fn authorize(_arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
     anyhow::bail!("Native messaging browser allowlist requires Linux")
 }
 
+fn write_response(
+    output: &mut impl std::io::Write,
+    response: &Value,
+) -> anyhow::Result<()> {
+    let encoded = serde_json::to_vec(response)?;
+    ensure!(encoded.len() <= MAX_MESSAGE, "native response too large");
+    output.write_all(&u32::try_from(encoded.len())?.to_ne_bytes())?;
+    output.write_all(&encoded)?;
+    output.flush()?;
+    Ok(())
+}
+
+fn authorize_or_report(
+    arguments: &[std::ffi::OsString],
+    output: &mut impl std::io::Write,
+) -> anyhow::Result<()> {
+    if authorize(arguments).is_err() {
+        // A fixed protocol error lets the UI distinguish policy denial from
+        // a missing/crashed host without disclosing caller or config details.
+        write_response(
+            output,
+            &json!({
+                "id": null,
+                "code": "browser_not_authorized",
+                "error": "Browser access denied. This browser or extension is not authorized by rbw. Add it to browser.clients in your rbw configuration, then restart the browser."
+            }),
+        )?;
+        anyhow::bail!("Native messaging browser authorization denied");
+    }
+    Ok(())
+}
+
 pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
-    authorize(arguments)?;
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
+    authorize_or_report(arguments, &mut output)?;
     let mut attachments = attachments::Transfers::default();
     loop {
         let mut header = [0; 4];
@@ -216,7 +248,7 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
         );
         let mut bytes = zeroize::Zeroizing::new(vec![0; length]);
         input.read_exact(&mut bytes)?;
-        authorize(arguments)?;
+        authorize_or_report(arguments, &mut output)?;
         let parsed = serde_json::from_slice::<Request>(&bytes);
         let response = match parsed {
             Ok(request) => {
@@ -231,11 +263,7 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
             }
             Err(_) => json!({"id": null, "error": "Invalid browser request"}),
         };
-        let encoded = serde_json::to_vec(&response)?;
-        ensure!(encoded.len() <= MAX_MESSAGE, "native response too large");
-        output.write_all(&u32::try_from(encoded.len())?.to_ne_bytes())?;
-        output.write_all(&encoded)?;
-        output.flush()?;
+        write_response(&mut output, &response)?;
     }
 }
 

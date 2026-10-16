@@ -5,7 +5,7 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.3
+## Features in 0.2.5
 
 - A dark vault layout with search, type/folder/collection filters, favorites,
   archive and trash views; light and system themes are also available.
@@ -136,7 +136,7 @@ Manager). Each named rule requires `browser` (`firefox` or `chromium`),
 or immutable browser package directories). For example:
 
 ```json
-{"browser":{"clients":{"firefox":{"browser":"firefox","extensions":["rbw-browser@pschmitt.dev"],"executableRoots":["/nix/store/your-firefox-unwrapped-package"]}}}}
+{"browser":{"clients":{"firefox":{"browser":"firefox","extensions":["rbw-browser@pschmitt.dev"],"executableRoots":["/nix/store/your-firefox-package"]}}}}
 ```
 
 On Linux the bridge checks the immediate parent's executable through `/proc`
@@ -147,3 +147,8 @@ and other platforms fail closed. The extension cannot enroll itself. Host
 manifests also restrict extension identities. This protects native messaging
 entry points; it does not sandbox other programs running as your Unix user,
 which can invoke the regular rbw CLI.
+
+On NixOS, enroll Home Manager’s `config.programs.firefox.finalPackage`
+and the system `pkgs.firefox` package: native messaging creates another wrapper,
+and its running executable belongs to that final output. The unwrapped package
+alone does not cover these executables.

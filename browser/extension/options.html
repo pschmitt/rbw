@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>rbw · Settings</title><link rel="stylesheet" href="popup.css"><link rel="stylesheet" href="options.css"></head><body>
-<header><img src="icons/rbw-64.png" width="42" height="42" alt="rbw"><h1>rbw settings</h1><span class="hint">0.2.3</span></header>
+<header><img src="icons/rbw-64.png" width="42" height="42" alt="rbw"><h1>rbw settings</h1><span class="hint">0.2.5</span></header>
 <main><p id="message" role="status" aria-live="polite"></p>
 <section><h2>Vault connection</h2><p>rbw uses the same agent, accounts and lock state as the command line.</p><dl><dt>Native connection</dt><dd id="connection">Checking…</dd><dt>Vault state</dt><dd id="lock-state">Checking…</dd></dl><label>Default account<select id="account"><option value="">Primary account</option></select></label><button id="sync">Sync vault</button><button id="lock">Lock vault</button><p class="hint">Create accounts, configure your server, unlock policy and clipboard timeout using <code>rbw config</code> and <code>rbw account</code>.</p></section>
 <section><h2>Passkeys</h2><label><input id="passkeys" type="checkbox"> Offer rbw when sites request a passkey</label><p class="hint">Each operation asks for approval in an extension window. Private keys remain in rbw. Select “Use another authenticator” to use a security key or the browser’s built-in provider. Refresh existing site tabs after changing this setting.</p></section>

@@ -13,13 +13,18 @@ function native(request) {
   if (!nativePort) {
     nativePort = api.runtime.connectNative("org.rbw.browser");
     nativePort.onMessage.addListener(response => {
+      if (response.code === "browser_not_authorized") {
+        for (const entry of nativeRequests.values()) entry.reject(new Error(response.error));
+        nativeRequests.clear();
+        return;
+      }
       const entry = nativeRequests.get(response.id); if (!entry) return;
       nativeRequests.delete(response.id);
       if (response.error) entry.reject(new Error(response.error)); else entry.resolve(response.result);
     });
     nativePort.onDisconnect.addListener(() => {
       nativePort = null;
-      for (const entry of nativeRequests.values()) entry.reject(new Error("rbw native connection closed. Retry the operation."));
+      for (const entry of nativeRequests.values()) entry.reject(new Error("Cannot connect to rbw. Check the native host installation and browser.clients allowlist, then retry."));
       nativeRequests.clear();
     });
   }
@@ -97,7 +102,7 @@ async function pageMessage(message, sender, respond) {
   pending.set(id, operation); badge();
   if (!message.conditional) {
     try {
-      const window = await api.windows.create({ url: api.runtime.getURL(`popup.html?request=${id}`), type: "popup", width: 430, height: 640 });
+      const window = await api.windows.create({ url: api.runtime.getURL(`popup.html?surface=window&request=${id}`), type: "popup", width: 430, height: 640 });
       if (pending.has(id)) operation.windowId = window.id;
     } catch (_) { finish(id, { fallback: true }); }
   }
@@ -229,7 +234,7 @@ api.windows.onRemoved.addListener(windowId => {
 api.runtime.onInstalled.addListener(() => {
   api.contextMenus.removeAll().then(() => api.contextMenus.create({ id: "rbw-open", title: "Fill with rbw…", contexts: ["editable"] }));
 });
-api.contextMenus.onClicked.addListener(() => api.action.openPopup().catch(() => api.windows.create({ url: api.runtime.getURL("popup.html"), type: "popup", width: 430, height: 640 })));
+api.contextMenus.onClicked.addListener(() => api.action.openPopup().catch(() => api.windows.create({ url: api.runtime.getURL("popup.html?surface=window"), type: "popup", width: 460, height: 680 })));
 api.commands.onCommand.addListener(async command => {
   if (command === "open-vault") return api.action.openPopup();
   if (command === "fill-login") {

@@ -5,7 +5,7 @@ async function request(action, values = {}) {
   if (!response || response.error) throw new Error(response?.error || "Background unavailable.");
   return response.result;
 }
-async function attempt(fn) { try { await fn(); } catch (error) { $("message").textContent = error.message; } }
+async function attempt(fn) { $("message").classList.remove("is-error"); $("message").setAttribute("role", "status"); try { await fn(); } catch (error) { $("message").textContent = error.message; $("message").classList.add("is-error"); $("message").setAttribute("role", "alert"); } }
 function theme(value) { document.documentElement.dataset.theme = value === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : value; }
 async function status() {
   const state = await request("status"); $("connection").textContent = "Connected to rbw native messaging"; $("lock-state").textContent = state.unlocked ? "Unlocked" : "Locked";
