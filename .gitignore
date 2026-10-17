@@ -7,3 +7,6 @@
 # Browser development packages
 /browser/dist/
 /dist/
+
+# Python packaging helpers
+__pycache__/
