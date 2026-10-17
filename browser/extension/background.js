@@ -7,7 +7,7 @@ const pending = new Map();
 const offers = new Map();
 const fillCycles = new Map();
 const popupNotices = new Map();
-const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, theme: "dark", account: "" };
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false };
 async function settings() { return { ...defaults, ...(await api.storage.local.get("preferences")).preferences }; }
 let nativePort;
 const nativeRequests = new Map();

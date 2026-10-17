@@ -5,10 +5,12 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.7
+## Features in 0.2.8
 
 - A dark vault layout with search, type/folder/collection filters, favorites,
   archive and trash views; light and system themes are also available.
+  Generator, Send and Health tabs are configurable in the popup and add-on
+  settings. Send and Health are hidden by default.
 - Multiple configured accounts; unlock directly with a password in the popup,
   or use the configured rbw credential source / pinentry; shared lock and sync.
 - Login, card, identity, secure note and SSH key browsing, details, creation,

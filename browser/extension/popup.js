@@ -45,6 +45,17 @@ function show(page) {
   $("add").hidden = !["vault", "send"].includes(page) || !unlocked;
   document.querySelectorAll("footer button").forEach(el => el.classList.toggle("selected", el.dataset.page === page));
 }
+function applyTabs() {
+  const visibility = { generator: preference.showGenerator !== false, send: preference.showSend === true, health: preference.showHealth === true };
+  for (const el of document.querySelectorAll("footer button")) el.hidden = visibility[el.dataset.page] === false;
+  for (const [page, visible] of Object.entries(visibility)) $("setting-" + page).checked = visible;
+  if (visibility[currentPage === "send-editor" ? "send" : currentPage] === false) show(unlocked ? "vault" : "locked");
+}
+api.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.preferences) return;
+  preference = { ...preference, ...changes.preferences.newValue };
+  applyTheme(preference.theme); applyTabs();
+});
 function clearVault() {
   ++epoch; currentItem = null; currentDetail = null;
   for (const id of ["items", "suggestions", "detail-content", "edit-fields", "custom-fields", "audit-results", "approval-items", "send-items"]) $(id).replaceChildren();
@@ -283,8 +294,8 @@ $("open-sidebar").onclick = () => attempt(async () => {
 });
 $("open-options").onclick = () => api.runtime.openOptionsPage();
 function applyTheme(theme) { document.documentElement.dataset.theme = theme === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme; }
-for (const id of ["setting-passkeys", "setting-save", "theme"]) $(id).onchange = () => attempt(async () => {
-  preference = await request("set_preferences", { preferences: { passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value } }); applyTheme(preference.theme);
+for (const id of ["setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health"]) $(id).onchange = () => attempt(async () => {
+  preference = await request("set_preferences", { preferences: { passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked } }); applyTheme(preference.theme); applyTabs();
 });
 setInterval(() => attempt(async () => {
   if (!approvalId) {
@@ -296,7 +307,7 @@ setInterval(() => attempt(async () => {
   if (unlocked && !status.unlocked) { unlocked = false; clearVault(); show("locked"); message("Vault locked by rbw-agent."); }
 }), 3000);
 attempt(async () => {
-  preference = await request("preferences"); applyTheme(preference.theme);
+  preference = await request("preferences"); applyTheme(preference.theme); applyTabs();
   $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme;
   if (!approvalId) approvalId = await activeApproval();
   // Populate the account selector before applying a remembered selection.

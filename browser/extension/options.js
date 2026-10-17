@@ -12,8 +12,8 @@ async function status() {
   const state = await request("status"); $("connection").textContent = "Connected to rbw native messaging"; $("lock-state").textContent = state.unlocked ? "Unlocked" : "Locked";
   return state;
 }
-for (const id of ["account", "passkeys", "inline", "autofill", "save-prompts", "theme"]) $(id).onchange = () => attempt(async () => {
-  const preferences = { account: $("account").value, passkeys: $("passkeys").checked, savePrompts: $("save-prompts").checked, inlineSuggestions: $("inline").checked, autoFill: $("autofill").checked, theme: $("theme").value };
+for (const id of ["account", "passkeys", "inline", "autofill", "save-prompts", "theme", "show-generator", "show-send", "show-health"]) $(id).onchange = () => attempt(async () => {
+  const preferences = { account: $("account").value, passkeys: $("passkeys").checked, savePrompts: $("save-prompts").checked, inlineSuggestions: $("inline").checked, autoFill: $("autofill").checked, theme: $("theme").value, showGenerator: $("show-generator").checked, showSend: $("show-send").checked, showHealth: $("show-health").checked };
   await request("set_preferences", { preferences }); theme(preferences.theme); $("message").textContent = "Settings saved."; await status();
   const policy = await request("agent_settings");
   $("agent-policy").textContent = `Automatic lock: ${policy.lockTimeout} seconds. Sync: every ${policy.syncInterval} seconds. Clipboard: ${policy.clipboard}. Generator default length: ${policy.passwordGen.length || 20}.`;
@@ -22,6 +22,7 @@ for (const action of ["sync", "lock"]) $(action).onclick = () => attempt(async (
 $("shortcuts").onclick = () => { const firefox = !!globalThis.browser; api.tabs.create({ url: firefox ? "about:addons" : "chrome://extensions/shortcuts" }).catch(() => { $("message").textContent = "Open your browser’s extension manager to change shortcuts."; }); };
 attempt(async () => {
   const prefs = await request("preferences"); theme(prefs.theme);
+  $("show-generator").checked = prefs.showGenerator; $("show-send").checked = prefs.showSend; $("show-health").checked = prefs.showHealth;
   const state = await status(); $("account").replaceChildren(new Option("Primary account", ""), ...state.accounts.map(a => new Option(a, a))); $("account").value = prefs.account;
   $("autofill").checked = prefs.autoFill; $("inline").checked = prefs.inlineSuggestions; $("passkeys").checked = prefs.passkeys; $("save-prompts").checked = prefs.savePrompts; $("theme").value = prefs.theme; await status();
   const policy = await request("agent_settings");
