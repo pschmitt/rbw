@@ -1,5 +1,45 @@
 /* Local SVG icons: no font dependencies or remote assets. */
 function icon(name) {
+  if (name === 'mastercard') {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('class', 'svg-icon brand-icon');
+    const r = document.createElementNS(svg.namespaceURI, 'rect');
+    r.setAttribute('x', '2'); r.setAttribute('y', '4'); r.setAttribute('width', '20'); r.setAttribute('height', '16'); r.setAttribute('rx', '3'); r.setAttribute('fill', '#252525');
+    const c1 = document.createElementNS(svg.namespaceURI, 'circle');
+    c1.setAttribute('cx', '9.5'); c1.setAttribute('cy', '12'); c1.setAttribute('r', '4.2'); c1.setAttribute('fill', '#eb001b');
+    const c2 = document.createElementNS(svg.namespaceURI, 'circle');
+    c2.setAttribute('cx', '14.5'); c2.setAttribute('cy', '12'); c2.setAttribute('r', '4.2'); c2.setAttribute('fill', '#f79e1b');
+    const p = document.createElementNS(svg.namespaceURI, 'path');
+    p.setAttribute('d', 'M12 8.9a4.2 4.2 0 0 0 0 6.2 4.2 4.2 0 0 0 0-6.2z'); p.setAttribute('fill', '#ff5f00');
+    svg.append(r, c1, c2, p);
+    return svg;
+  }
+  if (name === 'visa') {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('class', 'svg-icon brand-icon');
+    const r = document.createElementNS(svg.namespaceURI, 'rect');
+    r.setAttribute('x', '2'); r.setAttribute('y', '4'); r.setAttribute('width', '20'); r.setAttribute('height', '16'); r.setAttribute('rx', '3'); r.setAttribute('fill', '#1434cb');
+    const t = document.createElementNS(svg.namespaceURI, 'text');
+    t.setAttribute('x', '12'); t.setAttribute('y', '15'); t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('font-family', 'system-ui,-apple-system,sans-serif'); t.setAttribute('font-weight', '900');
+    t.setAttribute('font-style', 'italic'); t.setAttribute('font-size', '7.5'); t.setAttribute('fill', '#ffffff');
+    t.setAttribute('letter-spacing', '0.5'); t.textContent = 'VISA';
+    svg.append(r, t);
+    return svg;
+  }
+  if (name === 'amex') {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('class', 'svg-icon brand-icon');
+    const r = document.createElementNS(svg.namespaceURI, 'rect');
+    r.setAttribute('x', '2'); r.setAttribute('y', '4'); r.setAttribute('width', '20'); r.setAttribute('height', '16'); r.setAttribute('rx', '3'); r.setAttribute('fill', '#006fcf');
+    const t = document.createElementNS(svg.namespaceURI, 'text');
+    t.setAttribute('x', '12'); t.setAttribute('y', '14.5'); t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('font-family', 'system-ui,-apple-system,sans-serif'); t.setAttribute('font-weight', '900');
+    t.setAttribute('font-size', '5.5'); t.setAttribute('fill', '#ffffff');
+    t.setAttribute('letter-spacing', '0.3'); t.textContent = 'AMEX';
+    svg.append(r, t);
+    return svg;
+  }
   const paths = {
     vault: ['rect:3,3,18,18,2', 'circle:12,12,5', 'M12 7v3m5 2h-3m-2 5v-3m-5-2h3'],
     key: ['circle:8,15,5', 'm11.5 11.5 8-8L22 6l-2 2-2-2-2 2 2 2-3 3'],
@@ -18,13 +58,19 @@ function icon(name) {
     trash: ['M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7'],
     copy: ['rect:8,8,13,13,2', 'M16 8V3H3v13h5'],
     fill: ['M4 4v8h15m-5-5 5 5-5 5'],
-    more: ['circle:12,5,1', 'circle:12,12,1', 'circle:12,19,1'],
+    more: ['circle:12,5,1.5', 'circle:12,12,1.5', 'circle:12,19,1.5'],
     search: ['circle:10.5,10.5,7.5', 'm16 16 5 5'],
     filters: ['M4 3v5m0 4v9M12 3v9m0 4v5M20 3v2m0 4v12M1 8h6m2 8h6m2-11h6'],
     plus: ['M12 5v14M5 12h14'],
     popout: ['M14 3h7v7m0-7L10 14M10 3H3v18h18v-7'],
     folder: ['M3 5h6l2 3h10v12H3Z'],
     collections: ['m12 3 10 5-10 5L2 8Zm-10 9 10 5 10-5M2 16l10 5 10-5'],
+    eye: ['M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z', 'circle:12,12,3'],
+    'eye-off': ['M9.88 9.88a3 3 0 1 0 4.24 4.24', 'M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68', 'M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61', 'M2 2l20 20'],
+    close: ['M18 6 6 18', 'm6 6 12 12'],
+    check: ['m5 12 5 5L20 7'],
+    download: ['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'm7 10 5 5 5-5', 'M12 15V3'],
+    refresh: ['M20 7v5h-5M4 17v-5h5', 'M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6'],
   };
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   for (const [key, value] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false', class: 'svg-icon' })) svg.setAttribute(key, value);

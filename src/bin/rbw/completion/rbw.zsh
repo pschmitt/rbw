@@ -1,6 +1,15 @@
 _rbw_wrapper() {
   local -a opts
-  local cur prev folder attachment res name user start mode
+  local cur prev folder attachment res name user start mode acct send_subcmd
+
+  for (( i=2; i <= ${#words}; i++ )); do
+    case "${(Q)words[i-1]}" in
+      -a|--account) acct="${(Q)words[i]}" ;;
+    esac
+    case "${(Q)words[i]}" in
+      --account=*) acct="${(Q)words[i]#--account=}" ;;
+    esac
+  done
 
   # --collection/--org take a collection/org name, regardless of which
   # subcommand they're used on -- checked unconditionally, ahead of the
@@ -26,7 +35,7 @@ _rbw_wrapper() {
 
     case "$prev" in
       --from|--to)
-        res=$(rbw account list 2>/dev/null | cut -f1 | sed 's/ \*$//')
+        res=$(rbw account list 2>/dev/null | cut -f1 | sed 's/\*$//')
         opts=("${(@f)${res}}")
         compadd -- "${opts[@]}"
         return 0
@@ -56,19 +65,45 @@ _rbw_wrapper() {
   fi
 
   case "$prev" in
+    -a|--account)
+      res=$(rbw account list 2>/dev/null | cut -f1 | sed 's/\*$//')
+      opts=("${(@f)${res}}")
+      compadd -- "${opts[@]}"
+      return 0
+      ;;
+    -o|--output)
+      opts=(name json yaml)
+      compadd -- "${opts[@]}"
+      return 0
+      ;;
+    --name|-t|--text|-n|--notes|-p|--password|-d|--days|--deletion-date|--expire-in|--expiration-date|-m|--max-access-count)
+      _rbw
+      return
+      ;;
     --collection)
-      res=$(rbw collection list --output name 2>/dev/null)
+      res=$(rbw ${acct:+--account=$acct} collection list --output name 2>/dev/null)
       opts=("${(@f)${res}}")
       compadd -- "${opts[@]}"
       return 0
       ;;
     --org)
-      res=$(rbw org list --output name 2>/dev/null)
+      res=$(rbw ${acct:+--account=$acct} org list --output name 2>/dev/null)
       opts=("${(@f)${res}}")
       compadd -- "${opts[@]}"
       return 0
       ;;
   esac
+
+  if [[ "$cur" == "--account="* ]]; then
+    res=$(rbw account list 2>/dev/null | cut -f1 | sed 's/\*$//')
+    opts=("${(@f)${res}}")
+    compadd -P '--account=' -- "${opts[@]}"
+    return 0
+  elif [[ "$cur" == "--output="* ]]; then
+    opts=(name json yaml)
+    compadd -P '--output=' -- "${opts[@]}"
+    return 0
+  fi
 
   if [[ "${(Q)words[2]}" == "get" ]]; then
     start=3
@@ -79,12 +114,42 @@ _rbw_wrapper() {
     mode=attachment
   fi
 
+  if [[ -z "$mode" ]]; then
+    for (( i=2; i < CURRENT; i++ )); do
+      if [[ "${(Q)words[i]}" == "send" ]]; then
+        for (( j=i+1; j < CURRENT; j++ )); do
+          case "${(Q)words[j]}" in
+            -a|--account)
+              (( j++ ))
+              ;;
+            --account=*)
+              ;;
+            -*)
+              ;;
+            view|get|show|edit|update|remove|rm|delete|link|url)
+              start=$((j + 1))
+              mode=send
+              send_subcmd="${(Q)words[j]}"
+              break 2
+              ;;
+            *)
+              break
+              ;;
+          esac
+        done
+      fi
+    done
+  fi
+
   if [[ -n "$mode" ]] && [[ $CURRENT -ge $start ]]; then
     for (( i=start; i < CURRENT; i++ )); do
       cur="${(Q)words[i]}"
 
       case "$cur" in
         --folder|--attachment|-f|--field)
+          (( i++ ))
+          ;;
+        --name|-t|--text|-n|--notes|-p|--password|-d|--days|--deletion-date|--expire-in|--expiration-date|-m|--max-access-count|-o|--output)
           (( i++ ))
           ;;
         -*)
@@ -133,19 +198,21 @@ _rbw_wrapper() {
         # rbw get ... $cur
         if [[ "$mode" == attachment ]]; then
           res=$(
-            rbw list --fields name,folder --with-attachments 2>/dev/null \
+            rbw ${acct:+--account=$acct} list --fields name,folder --with-attachments 2>/dev/null \
               | awk -F'\t' -v folder="$folder" '$1 && (!folder || $2 == folder) {print $1}' 2>/dev/null
           )
+        elif [[ "$mode" == send ]]; then
+          res=$(rbw ${acct:+--account=$acct} send list --output name 2>/dev/null)
         else
           res=$(
-            rbw list --fields name,folder 2>/dev/null \
+            rbw ${acct:+--account=$acct} list --fields name,folder 2>/dev/null \
               | awk -F'\t' -v folder="$folder" '$1 && (!folder || $2 == folder) {print $1}' 2>/dev/null
           )
         fi
       elif [[ "$mode" == get ]] && [ -z "$user" ]; then
         # rbw get ... name $cur
         res=$(
-          rbw list --fields name,folder,user 2>/dev/null \
+          rbw ${acct:+--account=$acct} list --fields name,folder,user 2>/dev/null \
             | awk -F'\t' -v name="$name" -v folder="$folder" '$1 == name && (!folder || $2 == folder) {print $3}' 2>/dev/null
         )
       fi
@@ -170,11 +237,26 @@ _rbw_wrapper() {
             ;;
         esac
         res=$'--user\n--collection\n--org\n-i\n--ignorecase\n-e\n--exact\n'"$res"
+      elif [[ "$mode" == send ]]; then
+        case "$send_subcmd" in
+          view|get|show)
+            res=$'-t\n--text\n-o\n--output\n-j\n--raw\n--json\n--yaml\n-a\n--account\n-h\n--help\n'"$res"
+            ;;
+          edit|update)
+            res=$'--name\n-t\n--text\n-n\n--notes\n-p\n--password\n--remove-password\n--hidden\n--visible\n--disable\n--enable\n--hide-email\n--show-email\n-d\n--days\n--deletion-date\n--expire-in\n--expiration-date\n--clear-expiration\n-m\n--max-access-count\n--clear-max-access\n-a\n--account\n-h\n--help\n'"$res"
+            ;;
+          remove|rm|delete)
+            res=$'-y\n--yes\n-a\n--account\n-h\n--help\n'"$res"
+            ;;
+          link|url)
+            res=$'-c\n--copy\n-a\n--account\n-h\n--help\n'"$res"
+            ;;
+        esac
       else
         res=$'-f\n--field\n--full\n--raw\n--clipboard\n--collection\n--org\n-i\n--ignorecase\n--all\n-h\n--help\n'"$res"
-      fi
-      if [ -z "$folder" ]; then
-        res=$'--folder\n'"$res"
+        if [ -z "$folder" ]; then
+          res=$'--folder\n'"$res"
+        fi
       fi
     fi
 

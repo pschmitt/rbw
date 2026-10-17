@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [2.21.1] - 2026-10-17
+
+### Fixed
+
+* Shell completions: add dynamic completions for `rbw send` (`remove`, `view`, `edit`, `link`, etc.) resolving Send names dynamically across zsh, bash, and fish.
+* Shell completions: complete configured accounts dynamically for `-a`/`--account` across zsh, bash, and fish.
+* Shell completions: complete output formats (`name`, `json`, `yaml`) for `-o`/`--output`.
+
 ## [2.21.0] - 2026-10-17
 
 ### Added

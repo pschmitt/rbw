@@ -7,6 +7,13 @@ for (const label of document.querySelectorAll("[data-extension-version]")) {
 }
 const labels = { login: "Login", card: "Card", identity: "Identity", secure_note: "Secure note", ssh_key: "SSH key" };
 const icons = { login: "key", card: "card", identity: "identity", secure_note: "note", ssh_key: "terminal" };
+function getCardBrandIcon(brand, name = "") {
+  const str = `${brand || ""} ${name || ""}`.toLowerCase();
+  if (str.includes("visa")) return "visa";
+  if (str.includes("master") || str.includes("mc")) return "mastercard";
+  if (str.includes("amex") || str.includes("american express")) return "amex";
+  return "card";
+}
 for (const el of document.querySelectorAll("[data-icon]")) el.replaceChildren(icon(el.dataset.icon));
 const schema = {
   login: ["username", "password", "totp"],
@@ -48,7 +55,6 @@ async function request(action, values = {}) {
 }
 function message(text, error = false) {
   clearTimeout(notificationTimer);
-  // Progress belongs to the header spinner; banners describe results and errors.
   if (!error && /^(Working|Unlocking|Waiting for rbw|Checking vault locally|Loading Sends|Uploading)/.test(text)) return;
   $("message-text").textContent = text;
   $("message").hidden = !text;
@@ -66,6 +72,9 @@ async function attempt(fn) { try { await fn(); } catch (error) {
 } }
 function element(tag, text, cls) { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; }
 function button(label, action, cls) { const el = element("button", label, cls); el.type = "button"; el.onclick = () => attempt(async () => { el.disabled = true; try { await action(); } finally { el.disabled = false; } }); return el; }
+function actionButton(label, name, action, cls) {
+  const el = button("", action, cls); el.append(icon(name)); if (label) el.append(element("span", label)); el.title = label; el.setAttribute("aria-label", label); return el;
+}
 function pretty(value) { return value.replaceAll("_", " ").replace(/^./, c => c.toUpperCase()); }
 function show(page) {
   remember();
@@ -75,6 +84,9 @@ function show(page) {
   for (const id of ["vault", "generator", "send", "send-editor", "health", "settings", "detail", "editor", "approval", "locked"]) $(id).hidden = id !== page;
   $("title").textContent = ({ vault: "Vault", generator: "Generator", health: "Vault health", settings: "Settings", send: "Send", "send-editor": "Edit Send", detail: "Item", editor: currentItem ? "Edit item" : "New item", approval: "Passkey", locked: "Vault" })[page];
   $("add").hidden = !["vault", "send"].includes(page) || !unlocked;
+  $("detail-header-actions").hidden = page !== "detail";
+  $("edit-header-actions").hidden = page !== "editor";
+  $("send-header-actions").hidden = page !== "send-editor";
   document.querySelectorAll("footer button").forEach(el => el.classList.toggle("selected", el.dataset.page === page));
   document.querySelector("main").scrollTop = 0;
   remember();
@@ -102,6 +114,16 @@ function selectOptions(id, values, label) {
   $(id).replaceChildren(new Option(label, ""), ...values.map(v => new Option(typeof v === "string" ? v : v.name, typeof v === "string" ? v : v.id)));
   $(id).value = selected;
 }
+function renderAccounts(accounts, primary, chosen) {
+  const select = $("account");
+  const active = chosen || preference.account || primary || (accounts[0] || "");
+  select.replaceChildren(...accounts.map(name => {
+    const isPrimary = name === primary;
+    return new Option(isPrimary ? `${name} *` : name, name);
+  }));
+  select.value = active;
+  preference.account = select.value;
+}
 async function activeApproval() {
   const [tab] = await api.tabs.query({ active: true, currentWindow: true });
   const requests = await request("pending");
@@ -117,7 +139,7 @@ async function refresh(knownStatus = null, skipList = false) {
   try {
   clearVault();
   const status = knownStatus || await request("status"); unlocked = status.unlocked;
-  selectOptions("account", status.accounts, "Primary account");
+  renderAccounts(status.accounts || [], status.primary, preference.account);
   $("state").textContent = unlocked ? "Unlocked · shared rbw-agent" : "Locked";
   $("unlock").disabled = unlocked; $("lock").disabled = !unlocked;
   if (approvalId) { await showApproval(approvalId); return; }
@@ -148,9 +170,6 @@ function renderSearch(result) {
   if (!result.items.length) $("items").append(element("p", "No items found.", "empty"));
   $("count").textContent = result.total > result.limit ? `${result.limit} of ${result.total} items. Narrow your search to see more.` : `${result.total} items`;
 }
-function actionButton(label, name, action, cls) {
-  const el = button("", action, cls); el.append(icon(name), element("span", label)); el.title = label; el.setAttribute("aria-label", label); return el;
-}
 const faviconObserver = new IntersectionObserver(entries => {
   for (const entry of entries) if (entry.isIntersecting) {
     faviconObserver.unobserve(entry.target);
@@ -164,14 +183,17 @@ const faviconObserver = new IntersectionObserver(entries => {
 }, { root: document.querySelector("main"), rootMargin: "80px" });
 function itemRow(item) {
   const row = element("article"); const image = element("span", null, "item-icon");
-  image.dataset.fallback = item.passkeys ? "key" : icons[item.type]; image.append(icon(image.dataset.fallback)); row.append(image);
+  const fallback = item.type === "card"
+    ? getCardBrandIcon(item.brand || item.username?.split(",")?.[0], item.name)
+    : (item.passkeys ? "key" : (icons[item.type] || "note"));
+  image.dataset.fallback = fallback; image.append(icon(fallback)); row.append(image);
   if (preference.favicons && item.iconOrigin) { image.dataset.origin = item.iconOrigin; faviconObserver.observe(image); }
   const main = button("", async () => { if (item.deleted) return; await openDetail(item.id); }, "item-main");
   const title = element("div", null, "item-title");
   if (item.favorite) { const star = icon("star"); star.classList.add("favorite-icon"); title.append(star); }
   title.append(element("strong", item.name)); main.append(title, element("small", item.username || labels[item.type])); row.append(main);
   const actions = element("div", null, "item-actions");
-  if (item.deleted) actions.append(button("Restore", async () => { await request("mutate", { item: item.id, mutation: "restore" }); await search(); }));
+  if (item.deleted) actions.append(actionButton("Restore", "archive", async () => { await request("mutate", { item: item.id, mutation: "restore" }); await search(); }));
   else {
     if (item.matched || ["card", "identity"].includes(item.type)) { const fill = actionButton("Fill", "fill", async () => { const n = await request("fill", { item: item.id, type: item.type }); message(`Filled ${n} fields. Submit the form when ready.`); }); fill.title = "Fill"; fill.setAttribute("aria-label", `Fill ${item.name}`); actions.append(fill); }
     const field = item.type === "login" ? "password" : item.type === "card" ? "number" : item.type === "identity" ? "email" : item.type === "ssh_key" ? "public_key" : "notes";
@@ -179,7 +201,13 @@ function itemRow(item) {
     const menu = element("details", null, "menu"); const summary = element("summary"); summary.append(icon("more")); summary.setAttribute("aria-label", `Actions for ${item.name}`); menu.append(summary);
     const entries = element("div");
     entries.append(actionButton("View item", "note", () => openDetail(item.id)), actionButton("Edit", "edit", async () => { await openDetail(item.id); editItem(); }));
-    if (item.type === "login") for (const [label, field] of [["Copy username", "username"], ["Copy password", "password"], ["Copy verification code", "totp"]]) entries.append(button(label, () => copyField(item.id, field)));
+    if (item.type === "login") {
+      entries.append(
+        actionButton("Copy username", "identity", () => copyField(item.id, "username")),
+        actionButton("Copy password", "key", () => copyField(item.id, "password")),
+        actionButton("Copy verification code", "generator", () => copyField(item.id, "totp"))
+      );
+    }
     entries.append(actionButton(item.favorite ? "Remove favorite" : "Favorite", "star", async () => { await request("mutate", { item: item.id, mutation: "favorite" }); await search(); }),
       actionButton(item.archived ? "Unarchive" : "Archive", "archive", async () => { await request("mutate", { item: item.id, mutation: "archive" }); await search(); }),
       actionButton("Move to trash", "trash", async () => { if (!confirm("Move this item to trash?")) return; await request("mutate", { item: item.id, mutation: "delete" }); await search(); }, "danger"));
@@ -187,13 +215,65 @@ function itemRow(item) {
   }
   row.append(actions); return row;
 }
-async function copyField(item, field) { await request("copy", { item, field }); message("Copied to clipboard."); }
-function detailField(label, value, item, field, hidden = false) {
+async function copyField(item, field) {
+  try {
+    await request("copy", { item, field });
+    message("Copied to clipboard.");
+  } catch (err) {
+    if (field === "notes") {
+      try {
+        await request("copy", { item, field: "custom/0" });
+        message("Copied to clipboard.");
+        return;
+      } catch (_) {}
+    } else if (field === "password") {
+      for (const alt of ["totp", "username", "custom/0"]) {
+        try {
+          await request("copy", { item, field: alt });
+          message(`Copied ${alt === "totp" ? "verification code" : alt === "username" ? "username" : "field"} to clipboard.`);
+          return;
+        } catch (_) {}
+      }
+    }
+    throw err;
+  }
+}
+function detailField(label, value, item, field, hidden = false, isUrl = false) {
   const section = element("div", null, "field"); section.append(element("span", label));
-  const row = element("div", null, "field-value"); const input = element("input"); input.readOnly = true; input.value = value; input.type = hidden ? "password" : "text"; input.setAttribute("aria-label", label); row.append(input);
-  if (hidden) row.append(button("Show", async () => { input.type = input.type === "password" ? "text" : "password"; }));
-  if (field) row.append(button("Copy", () => copyField(item, field)));
-  section.append(row); return section;
+  const row = element("div", null, "field-value");
+  let input, textDisplay;
+  if (hidden) {
+    input = element("input"); input.readOnly = true; input.value = value; input.type = "password"; input.setAttribute("aria-label", label); row.append(input);
+  } else {
+    textDisplay = element("div", value, "field-text-wrapped"); textDisplay.setAttribute("aria-label", label); textDisplay.tabIndex = 0; row.append(textDisplay);
+  }
+  const actions = element("div", null, "field-actions");
+  if (hidden) {
+    let revealed = false;
+    const showBtn = actionButton("Show", "eye", () => {
+      revealed = !revealed;
+      if (revealed) {
+        showBtn.replaceChildren(icon("eye-off")); showBtn.title = "Hide"; showBtn.setAttribute("aria-label", "Hide");
+        if (input) input.hidden = true;
+        if (!textDisplay) { textDisplay = element("div", value, "field-text-wrapped"); textDisplay.tabIndex = 0; row.prepend(textDisplay); }
+        else textDisplay.hidden = false;
+      } else {
+        showBtn.replaceChildren(icon("eye")); showBtn.title = "Show"; showBtn.setAttribute("aria-label", "Show");
+        if (textDisplay) textDisplay.hidden = true;
+        if (input) input.hidden = false;
+      }
+    }, "icon");
+    actions.append(showBtn);
+  }
+  if (isUrl && value && /^https?:\/\//i.test(value)) {
+    const visitBtn = actionButton("Visit website", "popout", () => { api.tabs.create({ url: value }); }, "icon");
+    actions.append(visitBtn);
+  }
+  if (field) {
+    const copyBtn = actionButton("Copy", "copy", () => copyField(item, field), "icon");
+    actions.append(copyBtn);
+  }
+  row.append(actions); section.append(row); return section;
 }
 function noteField(text, item) {
   const section = element("section", null, "field note-field"); const toolbar = element("div", null, "note-toolbar"); toolbar.append(element("strong", "Notes"));
@@ -223,8 +303,8 @@ async function openDetail(item) {
     if (["type", "uris", "fido2_credentials"].includes(field) || value == null || value === "") continue;
     content.append(detailField(field === "totp" ? "Authenticator key" : pretty(field), String(value), item, field, secret(field)));
   }
-  if (data.totp) content.append(button("Copy verification code", () => copyField(item, "totp")));
-  for (const uri of data.uris || []) content.append(detailField("Website", uri.uri, item));
+  if (data.totp) content.append(actionButton("Copy verification code", "generator", () => copyField(item, "totp")));
+  for (const uri of data.uris || []) content.append(detailField("Website", uri.uri, item, null, false, true));
   if (detail.cipher.notes) content.append(noteField(detail.cipher.notes, item));
   for (const [i, field] of (detail.cipher.fields || []).entries()) content.append(detailField(field.name || "Custom field", field.value || "", item, `custom/${i}`, field.type === "hidden"));
   for (const passkey of detail.passkeys) { content.append(element("h3", "Passkey"), element("p", `${passkey.rp} · ${passkey.user || ""}`), element("p", `Created ${passkey.created || "unknown"}`, "hint")); }
@@ -232,7 +312,8 @@ async function openDetail(item) {
   content.append(element("h3", "Attachments"));
   for (const attachment of detail.attachments) {
     const row = element("div", null, "field"); row.append(element("p", `${attachment.file_name || "Attachment"} · ${attachment.size_name || attachment.size || ""}`));
-    row.append(button("Download", async () => { const result = await request("attachment_download", { item, attachment: attachment.id }); message(`Saved to ${result.path}`); }), button("Delete", async () => { if (!confirm("Delete this attachment permanently?")) return; await request("attachment_delete", { item, attachment: attachment.id }); await openDetail(item); }, "danger")); content.append(row);
+    const actions = element("div", null, "actions");
+    actions.append(actionButton("Download", "download", async () => { const result = await request("attachment_download", { item, attachment: attachment.id }); message(`Saved to ${result.path}`); }), actionButton("Delete", "trash", async () => { if (!confirm("Delete this attachment permanently?")) return; await request("attachment_delete", { item, attachment: attachment.id }); await openDetail(item); }, "danger")); row.append(actions); content.append(row);
   }
   const upload = element("input"); upload.type = "file"; upload.setAttribute("aria-label", "Upload attachment");
   upload.onchange = () => attempt(async () => {
@@ -258,9 +339,9 @@ async function openDetail(item) {
     }
     updateSummary(); content.append(dropdown, actionButton("Save collections", "collections", async () => { await request("set_collections", { item, collections: Array.from(dropdown.querySelectorAll("input:checked"), input => input.value) }); message("Collections updated."); await openDetail(item); }));
   }
-  $("favorite").replaceChildren(icon("star"), document.createTextNode(detail.favorite ? " Unfavorite" : " Favorite"));
-  $("favorite").classList.toggle("is-favorite", detail.favorite);
-  $("archive").replaceChildren(icon("archive"), document.createTextNode(detail.archived ? " Unarchive" : " Archive"));
+  $("header-favorite-label").textContent = detail.favorite ? "Unfavorite" : "Favorite";
+  $("header-favorite").classList.toggle("is-favorite", detail.favorite);
+  $("header-archive-label").textContent = detail.archived ? "Unarchive" : "Archive";
 }
 function renderEditFields(data = {}) {
   const type = $("edit-type").value; $("edit-fields").replaceChildren();
@@ -269,18 +350,48 @@ function renderEditFields(data = {}) {
     input.id = `field-${name}`; input.value = data[name] || ""; input.autocomplete = "off"; input.spellcheck = false;
     if (input.tagName === "INPUT") input.type = secret(name) ? "password" : "text";
     label.append(input);
-    if (name === "password") label.append(button("Generate password", async () => { input.value = await request("generate"); message("Generated password added to this form. Save to keep it."); }));
+    if (name === "password") label.append(actionButton("Generate password", "generator", async () => { input.value = await request("generate"); message("Generated password added to this form. Save to keep it."); }));
     $("edit-fields").append(label);
   }
   $("uri-label").hidden = type !== "login";
 }
 function addCustom(field = {}) {
-  const row = element("div", null, "custom-row");
-  const name = element("input"); name.placeholder = "Name / HTML id"; name.value = field.name || ""; name.setAttribute("aria-label", "Custom field name");
-  const value = element("input"); value.placeholder = "Value"; value.value = field.value || ""; value.type = field.type === "hidden" ? "password" : "text"; value.setAttribute("aria-label", "Custom field value");
-  const type = element("select"); for (const kind of ["text", "hidden", "boolean", "linked"]) type.append(new Option(kind, kind)); type.value = field.type || "text"; type.setAttribute("aria-label", "Custom field type");
+  const card = element("div", null, "custom-card");
+  const header = element("div", null, "custom-card-header");
+  const nameLabel = element("label", null, "custom-name-label");
+  nameLabel.append(element("span", "Field name / key", "custom-mini-label"));
+  const name = element("input", null, "custom-name-input");
+  name.placeholder = "e.g. PIN, ID Number, Secret";
+  name.value = field.name || "";
+  name.setAttribute("aria-label", "Custom field name");
+  nameLabel.append(name);
+  const removeBtn = actionButton("Remove field", "trash", () => card.remove(), "icon danger remove-custom-btn");
+  header.append(nameLabel, removeBtn);
+
+  const body = element("div", null, "custom-card-body");
+  const valueLabel = element("label", null, "custom-value-label");
+  valueLabel.append(element("span", "Value", "custom-mini-label"));
+  const value = element("input", null, "custom-value-input");
+  value.placeholder = "Value";
+  value.value = field.value || "";
+  value.type = field.type === "hidden" ? "password" : "text";
+  value.setAttribute("aria-label", "Custom field value");
+  valueLabel.append(value);
+
+  const typeLabel = element("label", null, "custom-type-label");
+  typeLabel.append(element("span", "Type", "custom-mini-label"));
+  const type = element("select", null, "custom-type-select");
+  for (const kind of ["text", "hidden", "boolean", "linked"]) {
+    type.append(new Option(kind.charAt(0).toUpperCase() + kind.slice(1), kind));
+  }
+  type.value = field.type || "text";
+  type.setAttribute("aria-label", "Custom field type");
   type.onchange = () => { value.type = type.value === "hidden" ? "password" : "text"; };
-  row.append(name, value, type, button("×", async () => row.remove())); $("custom-fields").append(row);
+  typeLabel.append(type);
+
+  body.append(valueLabel, typeLabel);
+  card.append(header, body);
+  $("custom-fields").append(card);
 }
 function editItem(fresh = false) {
   if (fresh) { currentItem = null; currentDetail = null; }
@@ -296,7 +407,11 @@ $("edit-form").onsubmit = event => { event.preventDefault(); attempt(async () =>
   const type = $("edit-type").value; const data = { type };
   for (const name of schema[type]) data[name] = $(`field-${name}`).value || null;
   if (type === "login") data.uris = $("edit-uris").value.split("\n").map(uri => uri.trim()).filter(Boolean).map(uri => currentDetail?.cipher.data.uris?.find(old => old.uri === uri) || { uri });
-  const fields = [...$("custom-fields").children].map(row => ({ name: row.children[0].value, value: row.children[1].value, type: row.children[2].value }));
+  const fields = [...$("custom-fields").children].map(card => ({
+    name: card.querySelector(".custom-name-input")?.value || "",
+    value: card.querySelector(".custom-value-input")?.value || "",
+    type: card.querySelector(".custom-type-select")?.value || "text"
+  }));
   await request("save", { item: currentItem, revision: currentDetail?.revision, cipher: { name: $("edit-name").value, folder: $("edit-folder").value || null, notes: $("edit-notes").value || null, data, fields } });
   message("Saved and synchronized."); await refresh();
 }); };
@@ -305,11 +420,11 @@ async function suggestions() {
   for (const pending of await request("pending")) area.append(button(`⚿ ${pending.method === "create" ? "Save passkey" : "Sign in"} · ${pending.origin}`, () => showApproval(pending.id)));
   for (const offer of await request("save_offers")) {
     const card = element("div", null, "field"); card.append(element("strong", `Save login for ${offer.origin}?`), element("p", offer.username || "No username"));
-    card.append(button("Save new", async () => { await request("save_offer_apply", { tabId: offer.tabId }); await refresh(); }));
+    card.append(actionButton("Save new", "plus", async () => { await request("save_offer_apply", { tabId: offer.tabId }); await refresh(); }));
     const select = element("select"); select.append(new Option("Update an existing login…", ""));
     const logins = await request("search", { query: offer.username, kind: "login" });
     for (const item of logins.items) select.append(new Option(item.name, item.id));
-    card.append(select, button("Update", async () => { if (!select.value) throw new Error("Choose an existing login."); await request("save_offer_apply", { tabId: offer.tabId, item: select.value }); await refresh(); }), button("Dismiss", async () => { await request("save_offer_dismiss", { tabId: offer.tabId }); await suggestions(); })); area.append(card);
+    card.append(select, actionButton("Update", "check", async () => { if (!select.value) throw new Error("Choose an existing login."); await request("save_offer_apply", { tabId: offer.tabId, item: select.value }); await refresh(); }), actionButton("Dismiss", "close", async () => { await request("save_offer_dismiss", { tabId: offer.tabId }); await suggestions(); })); area.append(card);
   }
 }
 async function showApproval(id) {
@@ -347,7 +462,7 @@ let accountMenuTimer;
 $("account-toggle").onclick = event => {
   clearTimeout(accountMenuTimer);
   const toggle = () => { $("account-menu").hidden = !$("account-menu").hidden; };
-  if (event.detail === 0) toggle(); // Keyboard activation does not wait for a second click.
+  if (event.detail === 0) toggle();
   else if (event.detail === 1) accountMenuTimer = setTimeout(toggle, 250);
 };
 $("account-toggle").ondblclick = () => {
@@ -361,13 +476,35 @@ $("account").onchange = () => attempt(async () => { await request("set_preferenc
 $("filter-toggle").onclick = () => { $("filters").hidden = !$("filters").hidden; $("filter-toggle").setAttribute("aria-expanded", String(!$("filters").hidden)); remember(); };
 $("query").oninput = () => { remember(); clearTimeout(timer); ++epoch; timer = setTimeout(() => attempt(search), 180); };
 for (const id of ["kind", "view", "folder", "collection"]) $(id).onchange = () => { remember(); attempt(search); };
-$("add").onclick = () => { if (currentPage === "send") editSend(); else editItem(true); }; $("edit").onclick = () => editItem(); $("edit-type").onchange = () => renderEditFields(); $("add-custom").onclick = () => addCustom();
-$("cancel-edit").onclick = () => attempt(async () => { if (currentItem) await openDetail(currentItem); else await refresh(); });
-$("back").onclick = () => attempt(async () => { if (currentPage === "editor" && currentItem) await openDetail(currentItem); else if (currentPage === "send-editor") await loadSends(); else await refresh(); });
-for (const mutation of ["favorite", "archive", "delete"]) $(mutation).onclick = () => attempt(async () => {
-  if (mutation === "delete" && !confirm("Move this item to trash? You can restore it from the Trash view.")) return;
-  await request("mutate", { item: currentItem, mutation }); await refresh();
+$("add").onclick = () => { if (currentPage === "send") editSend(); else editItem(true); };
+$("header-edit").onclick = () => editItem();
+$("header-favorite").onclick = () => attempt(async () => {
+  $("detail-menu").removeAttribute("open");
+  await request("mutate", { item: currentItem, mutation: "favorite" });
+  await openDetail(currentItem);
 });
+$("header-archive").onclick = () => attempt(async () => {
+  $("detail-menu").removeAttribute("open");
+  await request("mutate", { item: currentItem, mutation: "archive" });
+  await openDetail(currentItem);
+});
+$("header-delete").onclick = () => attempt(async () => {
+  $("detail-menu").removeAttribute("open");
+  if (!confirm("Move this item to trash? You can restore it from the Trash view.")) return;
+  await request("mutate", { item: currentItem, mutation: "delete" });
+  await refresh();
+});
+$("header-cancel-edit").onclick = () => attempt(async () => {
+  if (currentItem) await openDetail(currentItem);
+  else await refresh();
+});
+$("header-save-edit").onclick = () => $("edit-form").requestSubmit();
+$("header-cancel-send").onclick = () => attempt(loadSends);
+$("header-save-send").onclick = () => $("send-form").requestSubmit();
+
+$("edit-type").onchange = () => renderEditFields();
+$("add-custom").onclick = () => addCustom();
+$("back").onclick = () => attempt(async () => { if (currentPage === "editor" && currentItem) await openDetail(currentItem); else if (currentPage === "send-editor") await loadSends(); else await refresh(); });
 for (const el of document.querySelectorAll("footer button")) el.onclick = () => attempt(async () => {
   const page = el.dataset.page;
   if (page === "vault") await refresh(); else if (page === "send") await loadSends(); else show(page);
@@ -391,8 +528,8 @@ $("open-sidebar").onclick = () => attempt(async () => {
 });
 $("open-options").onclick = () => api.runtime.openOptionsPage();
 function applyTheme(theme) { document.documentElement.dataset.theme = theme === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme; }
-for (const id of ["setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
-  preference = await request("set_preferences", { preferences: { passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
+for (const id of ["setting-autofill", "setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
+  preference = await request("set_preferences", { preferences: { autoFill: $("setting-autofill").checked, passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
 });
 setInterval(() => attempt(async () => {
   if (!approvalId) {
@@ -407,10 +544,11 @@ attempt(async () => {
   loading(true);
   try {
     preference = await request("preferences"); applyTheme(preference.theme); applyTabs();
+    $("setting-autofill").checked = preference.autoFill !== false;
     $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
-    $("account").append(new Option(preference.account || "Primary account", preference.account)); $("account").value = preference.account;
     if (!approvalId) approvalId = await activeApproval();
     const status = await request("status");
+    renderAccounts(status.accounts || [], status.primary, preference.account);
     const saved = status.unlocked && !approvalId ? await request("popup_state") : null;
     if (saved) {
       for (const id of filterIds) {
@@ -443,9 +581,9 @@ async function loadSends() {
     const row = element("article"); row.append(element("span", item.type === 1 ? "▤" : "➤", "item-icon"));
     const main = button("", async () => editSend(await send("detail", { id: item.id })), "item-main");
     main.append(element("strong", item.name), element("small", `${item.disabled ? "Disabled · " : ""}${item.accessCount || 0} accesses · ${item.deletionDate?.slice(0, 10) || ""}`)); row.append(main);
-    row.append(button("Copy link", async () => { await send("copy", { id: item.id }); message("Send link copied using rbw clipboard settings."); }));
-    row.append(button("×", async () => { if (!confirm("Permanently delete this Send?")) return; await send("delete", { id: item.id }); await loadSends(); }, "danger"));
-    if (item.hasPassword) row.append(button("Remove password", async () => { if (!confirm("Remove this Send’s access password?")) return; await send("remove_password", { id: item.id }); await loadSends(); }));
+    row.append(actionButton("Copy link", "copy", async () => { await send("copy", { id: item.id }); message("Send link copied using rbw clipboard settings."); }));
+    row.append(actionButton("Delete", "trash", async () => { if (!confirm("Permanently delete this Send?")) return; await send("delete", { id: item.id }); await loadSends(); }, "danger"));
+    if (item.hasPassword) row.append(actionButton("Remove password", "key", async () => { if (!confirm("Remove this Send’s access password?")) return; await send("remove_password", { id: item.id }); await loadSends(); }));
     $("send-items").append(row);
   }
   if (!items.length) $("send-items").append(element("p", "No Sends yet. Choose Add to share encrypted text or a file.", "empty")); message("");
@@ -458,7 +596,7 @@ function editSend(item = null) {
   $("send-hidden").checked = !!item?.hidden; $("send-hide-email").checked = item?.hideEmail !== false; $("send-disabled").checked = !!item?.disabled;
   show("send-editor");
 }
-$("refresh-sends").onclick = () => attempt(loadSends); $("cancel-send").onclick = () => attempt(loadSends);
+$("refresh-sends").onclick = () => attempt(loadSends);
 $("send-form").onsubmit = event => { event.preventDefault(); attempt(async () => {
   let token;
   try {

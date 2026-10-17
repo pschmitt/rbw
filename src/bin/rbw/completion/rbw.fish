@@ -201,3 +201,77 @@ complete -f -c rbw -n '__fish_seen_subcommand_from mirror' -l to -r -d 'Account 
 complete -f -c rbw -n '__fish_seen_subcommand_from mirror' -l collection -r -d 'Only copy entries in this collection' -a '(__fish_rbw_mirror_completion_collection)'
 complete -f -c rbw -n '__fish_seen_subcommand_from mirror' -l dest-collection -r -d 'Destination collection' -a '(__fish_rbw_mirror_completion_dest_collection)'
 complete -f -c rbw -n '__fish_seen_subcommand_from mirror' -l dest-org -r -d 'Destination organization' -a '(__fish_rbw_mirror_completion_dest_org)'
+
+function __fish_rbw_send_using_subcommand
+    __fish_seen_subcommand_from send
+    and __fish_seen_subcommand_from $argv
+end
+
+function __fish_rbw_send_completion_name
+    set -l cmd (commandline -xpc)
+    set -e cmd[1] # rbw
+
+    argparse -i a/account= y/yes c/copy t/text o/output= j/raw json yaml name= n/notes= p/password= remove-password hidden visible disable enable hide-email show-email d/days= deletion-date= expire-in= expiration-date= clear-expiration m/max-access-count= clear-max-access h/help -- $cmd 2>/dev/null
+
+    set -l positional
+    for arg in $argv
+        if test "$arg" != "send" -a "$arg" != "view" -a "$arg" != "get" -a "$arg" != "show" -a "$arg" != "edit" -a "$arg" != "update" -a "$arg" != "remove" -a "$arg" != "rm" -a "$arg" != "delete" -a "$arg" != "link" -a "$arg" != "url"
+            set -a positional $arg
+        end
+    end
+
+    if test (count $positional) -gt 0
+        return
+    end
+
+    set -l list_args send list --output name
+    if set -q _flag_account
+        command rbw --account "$_flag_account" $list_args 2>/dev/null
+    else
+        command rbw $list_args 2>/dev/null
+    end
+end
+
+complete -f -c rbw -s a -l account -r -d 'Account to operate on' -a '(__fish_rbw_account_names)'
+
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand view get show edit update remove rm delete link url' -a '(__fish_rbw_send_completion_name)'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand remove rm delete' -s y -l yes -d 'Skip confirmation prompt'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand link url' -s c -l copy -d 'Copy link to clipboard'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand view get show' -s t -l text -d 'Print decrypted text directly'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand view get show' -s o -l output -r -d 'Output mode' -a 'name json yaml'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand view get show' -s j -l raw -l json -d 'Display output as JSON'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand view get show' -l yaml -d 'Display output as YAML'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand list ls' -s o -l output -r -d 'Output mode' -a 'name json yaml'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand list ls' -s j -l raw -l json -d 'Display output as JSON'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand list ls' -l yaml -d 'Display output as YAML'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand create new add' -s t -l text -r -d 'Text content to send'
+complete -c rbw -n '__fish_rbw_send_using_subcommand create new add' -s f -l file -r -F -d 'File to send'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand create new add' -l stdin -d 'Read text content from standard input'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand create new add' -s n -l notes -r -d 'Optional notes'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand create new add' -s p -l password -r -d 'Optional password'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand create new add' -s d -l days -r -d 'Days until deletion'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand create new add' -l expire-in -r -d 'Days until expiration'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand create new add' -l deletion-date -r -d 'Explicit deletion timestamp'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand create new add' -l expiration-date -r -d 'Explicit expiration timestamp'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand create new add' -s m -l max-access-count -r -d 'Max access count'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand create new add' -l hidden -d 'Hide text by default'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand create new add' -l show-email -d 'Do not hide sender email'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand create new add' -s c -l copy -d 'Copy link to clipboard'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -l name -r -d 'Update name'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -s t -l text -r -d 'Update text'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -s n -l notes -r -d 'Update notes'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -s p -l password -r -d 'Set or update password'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -l remove-password -d 'Remove password'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -l hidden -d 'Hide text by default'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -l visible -d 'Show text by default'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -l disable -d 'Disable access'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -l enable -d 'Enable access'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -l hide-email -d 'Hide sender email'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -l show-email -d 'Show sender email'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -s d -l days -r -d 'Reset deletion days'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -l deletion-date -r -d 'Set deletion timestamp'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -l expire-in -r -d 'Set expiration days'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -l expiration-date -r -d 'Set expiration timestamp'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -l clear-expiration -d 'Clear expiration date'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -s m -l max-access-count -r -d 'Max access count'
+complete -f -c rbw -n '__fish_rbw_send_using_subcommand edit update' -l clear-max-access -d 'Clear max access limitation'

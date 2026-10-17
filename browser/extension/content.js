@@ -49,15 +49,39 @@
     if (current !== generation || !result?.result?.length || focused !== input) return;
     host = document.createElement("div");
     const shadow = host.attachShadow({ mode: "closed" });
-    const style = document.createElement("style"); style.textContent = ":host{all:initial}div{font:13px system-ui;color:#f1f4fc;background:#1b263d;border:1px solid #a7bfea;border-radius:8px;box-shadow:0 4px 15px #0005;overflow:hidden;max-width:360px}p{margin:0;padding:7px 10px;color:#a0b4d6;font-size:11px}button{display:block;width:100%;text-align:left;border:0;border-top:1px solid #384d70;padding:9px 12px;background:#1b263d;color:#f1f4fc;font:13px system-ui;cursor:pointer}button:hover,button:focus{background:#253653}small{display:block;color:#a0b4d6}"; shadow.append(style);
-    const box = document.createElement("div"); const title = document.createElement("p"); title.textContent = "rbw · Fill a login"; box.append(title);
+    const style = document.createElement("style");
+    style.textContent = ":host{all:initial}.box{box-sizing:border-box;font:13px/1.4 system-ui,sans-serif;color:#f1f4fc;background:#1b263d;border:1px solid #a7bfea;border-radius:10px;box-shadow:0 6px 20px #0006;overflow:hidden;max-width:380px}.header{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:#151b2d;border-bottom:1px solid #384d70}.title{color:#a0b4d6;font-size:11px;font-weight:600;letter-spacing:0.3px;text-transform:uppercase}.dismiss-btn{display:flex;align-items:center;justify-content:center;border:0;background:transparent;color:#a0b4d6;padding:2px 4px;border-radius:4px;cursor:pointer;line-height:1}.dismiss-btn:hover,.dismiss-btn:focus-visible{color:#f1f4fc;background:#253653}.dismiss-btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}.item-btn{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;border-top:1px solid #253653;padding:8px 12px;background:#1b263d;color:#f1f4fc;font:13px system-ui,sans-serif;cursor:pointer}.item-btn:first-of-type{border-top:0}.item-btn:hover,.item-btn:focus-visible{background:#253653;outline:none}.icon-col{width:20px;height:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:3px}.icon-col img{width:18px;height:18px;border-radius:3px;object-fit:contain}.icon-col svg{width:18px;height:18px;stroke:#a7bfea;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.text-col{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}strong{font-weight:500;font-size:13px}small{color:#a0b4d6;font-size:11px;margin-top:1px}";
+    shadow.append(style);
+    const box = document.createElement("div"); box.className = "box";
+    const header = document.createElement("div"); header.className = "header";
+    const title = document.createElement("span"); title.className = "title"; title.textContent = "rbw · Fill a login";
+    const dismiss = document.createElement("button"); dismiss.className = "dismiss-btn"; dismiss.type = "button"; dismiss.title = "Dismiss"; dismiss.setAttribute("aria-label", "Dismiss");
+    dismiss.innerHTML = '<svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+    dismiss.addEventListener("click", event => { if (event.isTrusted) close(); });
+    header.append(title, dismiss); box.append(header);
+
     for (const item of result.result) {
-      const button = document.createElement("button"); button.type = "button"; button.textContent = item.name;
-      const subtitle = document.createElement("small"); subtitle.textContent = item.username || ""; button.append(subtitle);
+      const button = document.createElement("button"); button.type = "button"; button.className = "item-btn";
+      const iconCol = document.createElement("span"); iconCol.className = "icon-col";
+      if (item.favicon) {
+        const img = document.createElement("img"); img.src = item.favicon; img.alt = "";
+        iconCol.append(img);
+      } else {
+        iconCol.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="5"></circle><path d="m11.5 11.5 8-8L22 6l-2 2-2-2-2 2 2 2-3 3"></path></svg>';
+      }
+      const textCol = document.createElement("div"); textCol.className = "text-col";
+      const name = document.createElement("strong"); name.textContent = item.name;
+      textCol.append(name);
+      if (item.username) {
+        const subtitle = document.createElement("small"); subtitle.textContent = item.username;
+        textCol.append(subtitle);
+      }
+      button.append(iconCol, textCol);
       button.addEventListener("pointerdown", event => { if (event.isTrusted) event.preventDefault(); });
-      button.addEventListener("click", async event => { if (!event.isTrusted) return; close(); await api.runtime.sendMessage({ action: "inline_fill", item: item.id }).catch(() => {}); }); box.append(button);
+      button.addEventListener("click", async event => { if (!event.isTrusted) return; close(); await api.runtime.sendMessage({ action: "inline_fill", item: item.id }).catch(() => {}); });
+      box.append(button);
     }
-    const dismiss = document.createElement("button"); dismiss.textContent = "Dismiss"; dismiss.addEventListener("click", event => { if (event.isTrusted) close(); }); box.append(dismiss); shadow.append(box);
+    shadow.append(box);
     const rect = input.getBoundingClientRect(); host.style.cssText = `position:fixed!important;z-index:2147483647!important;top:${Math.min(rect.bottom + 4, innerHeight - 230)}px!important;left:${Math.max(0, Math.min(rect.left, innerWidth - 300))}px!important;width:${Math.max(rect.width, 240)}px!important`;
     document.documentElement.append(host);
   });

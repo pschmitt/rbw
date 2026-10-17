@@ -55,7 +55,7 @@ async function fetchFavicon(origin) {
   } catch (_) { /* Missing icons retain the local item-type icon. */ }
   if (generation === metadataEpoch) cacheFor(faviconCache, origin, value, 5 * 60 * 1000, 128); return value;
 }
-const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, favicons: true };
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: true, theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, favicons: true };
 async function settings() { return { ...defaults, ...(await api.storage.local.get("preferences")).preferences }; }
 let nativePort;
 const nativeRequests = new Map();

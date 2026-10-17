@@ -1,6 +1,15 @@
 _rbw_wrapper() {
-  local cur prev folder attachment opts res name user start mode
+  local cur prev folder attachment opts res name user start mode acct send_subcmd
   COMPREPLY=()
+
+  for (( i=1; i < ${#COMP_WORDS[@]}; i++ )); do
+    case "${COMP_WORDS[i-1]}" in
+      -a|--account) acct="${COMP_WORDS[i]}" ;;
+    esac
+    case "${COMP_WORDS[i]}" in
+      --account=*) acct="${COMP_WORDS[i]#--account=}" ;;
+    esac
+  done
 
   # --collection/--org take a collection/org name, regardless of which
   # subcommand they're used on (get/show/code/edit/set/rm/archive/
@@ -27,7 +36,7 @@ _rbw_wrapper() {
 
     case "$prev" in
       --from|--to)
-        res=$(rbw account list 2>/dev/null | cut -f1 | sed 's/ \*$//')
+        res=$(rbw account list 2>/dev/null | cut -f1 | sed 's/\*$//')
         mapfile -t opts <<< "$res"
         COMPREPLY=( $(compgen -W "${opts[*]}" -- "$cur") )
         return 0
@@ -56,15 +65,34 @@ _rbw_wrapper() {
     return
   fi
 
-  case "$prev" in
+  local prev_flag="$prev"
+  if [[ "$prev" == "=" && $COMP_CWORD -ge 2 ]]; then
+    prev_flag="${COMP_WORDS[COMP_CWORD-2]}"
+  fi
+
+  case "$prev_flag" in
+    -a|--account)
+      res=$(rbw account list 2>/dev/null | cut -f1 | sed 's/\*$//')
+      mapfile -t opts <<< "$res"
+      COMPREPLY=( $(compgen -W "${opts[*]}" -- "$cur") )
+      return 0
+      ;;
+    -o|--output)
+      opts=(name json yaml)
+      COMPREPLY=( $(compgen -W "${opts[*]}" -- "$cur") )
+      return 0
+      ;;
+    --name|-t|--text|-n|--notes|-p|--password|-d|--days|--deletion-date|--expire-in|--expiration-date|-m|--max-access-count)
+      return 0
+      ;;
     --collection)
-      res=$(rbw collection list --output name 2>/dev/null)
+      res=$(rbw ${acct:+--account=$acct} collection list --output name 2>/dev/null)
       mapfile -t opts <<< "$res"
       COMPREPLY=( $(compgen -W "${opts[*]}" -- "$cur") )
       return 0
       ;;
     --org)
-      res=$(rbw org list --output name 2>/dev/null)
+      res=$(rbw ${acct:+--account=$acct} org list --output name 2>/dev/null)
       mapfile -t opts <<< "$res"
       COMPREPLY=( $(compgen -W "${opts[*]}" -- "$cur") )
       return 0
@@ -80,10 +108,44 @@ _rbw_wrapper() {
     mode=attachment
   fi
 
+  if [[ -z "$mode" ]]; then
+    for (( i=1; i < COMP_CWORD; i++ )); do
+      if [[ "${COMP_WORDS[i]}" == "send" ]]; then
+        for (( j=i+1; j < COMP_CWORD; j++ )); do
+          case "${COMP_WORDS[j]}" in
+            -a|--account)
+              (( j++ ))
+              if [ "${COMP_WORDS[j]}" == "=" ]; then (( j++ )); fi
+              ;;
+            --account=*)
+              ;;
+            -*)
+              ;;
+            view|get|show|edit|update|remove|rm|delete|link|url)
+              start=$((j + 1))
+              mode=send
+              send_subcmd="${COMP_WORDS[j]}"
+              break 2
+              ;;
+            *)
+              break
+              ;;
+          esac
+        done
+      fi
+    done
+  fi
+
   if [[ -n "$mode" ]] && [[ $COMP_CWORD -ge $start ]]; then
     for (( i=start; i < COMP_CWORD; i++ )); do
       case "${COMP_WORDS[i]}" in
         --folder|--attachment|-f|--field)
+          (( i++ ))
+          if [ "${COMP_WORDS[i]}" == "=" ]; then
+            (( i++ ))
+          fi
+          ;;
+        --name|-t|--text|-n|--notes|-p|--password|-d|--days|--deletion-date|--expire-in|--expiration-date|-m|--max-access-count|-o|--output)
           (( i++ ))
           if [ "${COMP_WORDS[i]}" == "=" ]; then
             (( i++ ))
@@ -153,19 +215,21 @@ _rbw_wrapper() {
         # rbw get ... $cur
         if [[ "$mode" == attachment ]]; then
           res=$(
-            rbw list --fields name,folder --with-attachments 2>/dev/null \
+            rbw ${acct:+--account=$acct} list --fields name,folder --with-attachments 2>/dev/null \
               | awk -F'\t' -v folder="$folder" '$1 && (!folder || $2 == folder) {print $1}' 2>/dev/null
           )
+        elif [[ "$mode" == send ]]; then
+          res=$(rbw ${acct:+--account=$acct} send list --output name 2>/dev/null)
         else
           res=$(
-            rbw list --fields name,folder 2>/dev/null \
+            rbw ${acct:+--account=$acct} list --fields name,folder 2>/dev/null \
               | awk -F'\t' -v folder="$folder" '$1 && (!folder || $2 == folder) {print $1}' 2>/dev/null
           )
         fi
       elif [[ "$mode" == get ]] && [ -z "$user" ]; then
         # rbw get ... name $cur
         res=$(
-          rbw list --fields name,folder,user 2>/dev/null \
+          rbw ${acct:+--account=$acct} list --fields name,folder,user 2>/dev/null \
             | awk -F'\t' -v name="$name" -v folder="$folder" '$1 == name && (!folder || $2 == folder) {print $3}' 2>/dev/null
         )
       fi
@@ -190,11 +254,26 @@ _rbw_wrapper() {
             ;;
         esac
         res="--user --collection --org -i --ignorecase -e --exact $res"
+      elif [[ "$mode" == send ]]; then
+        case "$send_subcmd" in
+          view|get|show)
+            res="-t --text -o --output -j --raw --json --yaml -a --account -h --help $res"
+            ;;
+          edit|update)
+            res="--name -t --text -n --notes -p --password --remove-password --hidden --visible --disable --enable --hide-email --show-email -d --days --deletion-date --expire-in --expiration-date --clear-expiration -m --max-access-count --clear-max-access -a --account -h --help $res"
+            ;;
+          remove|rm|delete)
+            res="-y --yes -a --account -h --help $res"
+            ;;
+          link|url)
+            res="-c --copy -a --account -h --help $res"
+            ;;
+        esac
       else
         res="-f --field --full --raw --clipboard --collection --org -i --ignorecase --all -h --help $res"
-      fi
-      if [ -z "$folder" ]; then
-        res="--folder $res"
+        if [ -z "$folder" ]; then
+          res="--folder $res"
+        fi
       fi
     fi
 
