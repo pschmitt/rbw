@@ -17,7 +17,14 @@ function fillPage(expectedUrl, data, fillToken) {
     el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true }));
   };
   let count = 0;
-  const put = (el, value) => { if (el && value != null) { setter(el, value); count++; } };
+  const filledElements = [];
+  const put = (el, value) => {
+    if (el && value != null) {
+      setter(el, value);
+      if (!filledElements.includes(el)) filledElements.push(el);
+      count++;
+    }
+  };
   if (data.type === "login") {
     const passwords = fields.filter(el => el.type === "password" && el.autocomplete !== "new-password");
     if (passwords.length > 1) throw new Error("Several password fields found. Select a login form.");
@@ -49,6 +56,35 @@ function fillPage(expectedUrl, data, fillToken) {
     }
   }
   if (count) {
+    if (!window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      filledElements.forEach((el, index) => {
+        if (typeof el.animate !== "function") return;
+        try {
+          el.animate([
+            {
+              boxShadow: "0 0 0 3px rgba(96, 165, 250, 0.75), 0 0 14px rgba(96, 165, 250, 0.35)",
+              backgroundColor: "rgba(96, 165, 250, 0.12)",
+              transform: "scale(1.012)"
+            },
+            {
+              boxShadow: "0 0 0 1px rgba(96, 165, 250, 0.35), 0 0 6px rgba(96, 165, 250, 0.15)",
+              backgroundColor: "rgba(96, 165, 250, 0.05)",
+              transform: "scale(1.004)",
+              offset: 0.55
+            },
+            {
+              boxShadow: "0 0 0 0 rgba(96, 165, 250, 0)",
+              backgroundColor: "transparent",
+              transform: "scale(1)"
+            }
+          ], {
+            duration: 600,
+            delay: index * 75,
+            easing: "cubic-bezier(0.16, 1, 0.3, 1)"
+          });
+        } catch (_) {}
+      });
+    }
     const token = fillToken || crypto.randomUUID();
     for (const [el, state] of previous) state.filled = read(el);
     const undo = { token, restore: () => {
@@ -60,6 +96,14 @@ function fillPage(expectedUrl, data, fillToken) {
         if (el.type === "checkbox") Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked").set.call(el, state.before.checked);
         else Object.getOwnPropertyDescriptor(proto, "value").set.call(el, state.before.value);
         el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); restored++;
+        if (typeof el.animate === "function" && (!window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches)) {
+          try {
+            el.animate([
+              { boxShadow: "0 0 0 2px rgba(239, 169, 185, 0.7)", backgroundColor: "rgba(239, 169, 185, 0.12)" },
+              { boxShadow: "0 0 0 0 rgba(239, 169, 185, 0)", backgroundColor: "transparent" }
+            ], { duration: 400, easing: "ease-out" });
+          } catch (_) {}
+        }
       }
       previous.clear(); return restored;
     }, clear: () => previous.clear() };

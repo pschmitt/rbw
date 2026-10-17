@@ -37,10 +37,7 @@ function remember() {
 }
 function loading(active) {
   loadingRequests = Math.max(0, loadingRequests + (active ? 1 : -1));
-  clearTimeout(loadingTimer);
-  if (!loadingRequests) $("loading").hidden = true;
-  else loadingTimer = setTimeout(() => { $("loading").hidden = false; }, 150);
-  document.querySelector("main").setAttribute("aria-busy", String(!!loadingRequests));
+  document.querySelector("main")?.setAttribute("aria-busy", String(!!loadingRequests));
 }
 function updateFab() {
   const scrolled = document.querySelector("main").scrollTop > 15;

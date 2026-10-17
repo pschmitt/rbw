@@ -143,7 +143,6 @@ button:has(>.svg-icon), button:has(>[data-icon]) { display:inline-flex; align-it
 details.menu button .svg-icon { width:16px; height:16px; }
 .is-favorite { color:var(--accent); }
 .is-favorite .svg-icon { fill:currentColor; }
-#loading { display:inline-flex; vertical-align:middle; margin-left:7px; padding:0; background:transparent; color:var(--accent); }
 .spinner { width:13px; height:13px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { .spinner { animation:none; } }
