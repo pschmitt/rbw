@@ -1,5 +1,6 @@
 const api = globalThis.browser || chrome;
 const $ = id => document.getElementById(id);
+for (const el of document.querySelectorAll("[data-icon]")) el.replaceChildren(icon(el.dataset.icon));
 document.querySelector("[data-extension-version]").textContent = `v${api.runtime.getManifest().version}`;
 async function request(action, values = {}) {
   const response = await api.runtime.sendMessage({ action, account: $("account").value, ...values });
@@ -36,8 +37,8 @@ async function folders() {
   for (const folder of list) {
     const row = document.createElement("div"); row.className = "actions";
     const input = document.createElement("input"); input.value = folder.name; input.setAttribute("aria-label", "Folder name");
-    const rename = document.createElement("button"); rename.textContent = "Rename"; rename.onclick = () => attempt(async () => { await request("folders", { method: "rename", id: folder.id, name: input.value }); await folders(); });
-    const remove = document.createElement("button"); remove.textContent = "Delete"; remove.className = "danger"; remove.onclick = () => attempt(async () => { if (!confirm("Delete this folder? Its items will remain in your vault.")) return; await request("folders", { method: "delete", id: folder.id }); await folders(); });
+    const rename = document.createElement("button"); rename.append(icon("edit"), document.createTextNode("Rename")); rename.onclick = () => attempt(async () => { await request("folders", { method: "rename", id: folder.id, name: input.value }); await folders(); });
+    const remove = document.createElement("button"); remove.append(icon("trash"), document.createTextNode("Delete")); remove.className = "danger"; remove.onclick = () => attempt(async () => { if (!confirm("Delete this folder? Its items will remain in your vault.")) return; await request("folders", { method: "delete", id: folder.id }); await folders(); });
     row.append(input, rename, remove); $("folders").append(row);
   }
 }

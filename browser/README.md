@@ -5,14 +5,16 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.14
+## Features in 0.2.15
 
 - A dark vault layout with search, type/folder/collection filters, favorites,
   archive and trash views; light and system themes are also available.
   Home starts with favorites plus all matching autofill suggestions; typing
   searches the whole vault. The last view resumes on reopening.
   The compact header uses the crab/shield icon at the far left. Click it for
-  the account menu; double-click to open the vault in a separate window.
+  the account menu; on subpages an attached chevron turns it into Back.
+  Double-click to open the vault in a separate window.
+  Attachment uploads and management appear only in the editor.
   Bundled SVG icons and optional direct-site favicons avoid font glyphs and
   third-party favicon services. Generator, Send and Health tabs are configurable in the popup and add-on
   settings. Send and Health are hidden by default.
@@ -36,8 +38,8 @@ is no browser vault cache, HTTP listener or separate browser agent.
   repeated within 30 seconds; opening the vault has a separate shortcut. A brief
   page notification identifies the filled login and username, without passwords.
   Login/custom-field filling rechecks the URI in rbw and the current document.
-  Forms are never submitted automatically. Optional on-load filling is off by
-  default and only fills a single matching, unprotected login.
+  Forms are never submitted automatically. On-load filling is enabled by
+  default and fills the first matching login unless it requires reprompt.
 - Inline matching-login suggestions in login fields. Submitted credentials can
   be saved or used to update an existing matching login after approval in the
   popup. The badge indicates pending suggestions, which expire in two minutes.

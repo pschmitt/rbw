@@ -161,3 +161,8 @@ footer button:has(>[data-icon]) { display:flex; flex-direction:column; gap:0; }
 #message-text { flex:1; overflow-wrap:anywhere; }
 #dismiss-message { border:0; padding:0 3px; background:transparent; font-size:20px; line-height:1; }
 #account-toggle:hover, #account-toggle:focus-visible { background:var(--raised); }
+
+/* On subpages the same brand button becomes Back, with an attached chevron. */
+button.avatar.is-subpage { width:45px; border-radius:8px; }
+#back .svg-icon { width:13px; height:20px; color:var(--accent); }
+#dismiss-message .svg-icon { width:16px; height:16px; }

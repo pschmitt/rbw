@@ -17,7 +17,7 @@ for target in ("firefox", "chromium"):
     manifest = {
         "manifest_version": 3,
         "name": "rbw",
-        "version": "0.2.14",
+        "version": "0.2.15",
         "description": "Use your existing rbw-agent vault in the browser.",
         "permissions": ["nativeMessaging", "activeTab", "scripting", "storage", "contextMenus", "webNavigation"],
         "host_permissions": ["https://*/*", "http://*/*"],
@@ -31,7 +31,7 @@ for target in ("firefox", "chromium"):
             "fill-login": {"suggested_key": {"default": "Ctrl+Shift+L"}, "description": "Fill matching login"},
         },
         "icons": {str(size): f"icons/rbw-{size}.png" for size in [16, 32, 48, 96, 128]},
-        "action": {"default_popup": "popup.html", "default_title": "rbw", "default_icon": {str(size): f"icons/rbw-{size}.png" for size in [16, 19, 32, 38]}},
+        "action": {"default_popup": "popup.html", "default_title": "rbw", "default_icon": {str(size): f"icons/rbw-{size}.png" for size in [16, 19, 24, 32, 38, 48, 64]}},
         "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'"},
     }
     if target == "firefox":

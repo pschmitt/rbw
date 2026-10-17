@@ -27,7 +27,7 @@ let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail =
 let loadingRequests = 0, loadingTimer, notificationTimer, stateTimer, ready = false;
 const filterIds = ["query", "kind", "folder", "collection", "view"];
 function remember() {
-  if (!ready || !unlocked || approvalId) return;
+  if (!ready || !unlocked || approvalId || ["approval", "locked"].includes(currentPage)) return;
   const page = currentPage === "editor" ? (currentItem ? "detail" : "vault") : currentPage === "send-editor" ? "send" : currentPage;
   const state = { page, item: currentItem, expanded: !$("filters").hidden, scroll: document.querySelector("main").scrollTop,
     filters: Object.fromEntries(filterIds.map(id => [id, $(id).value])) };
@@ -73,13 +73,17 @@ async function attempt(fn) { try { await fn(); } catch (error) {
 function element(tag, text, cls) { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; }
 function button(label, action, cls) { const el = element("button", label, cls); el.type = "button"; el.onclick = () => attempt(async () => { el.disabled = true; try { await action(); } finally { el.disabled = false; } }); return el; }
 function actionButton(label, name, action, cls) {
-  const el = button("", action, cls); el.append(icon(name)); if (label) el.append(element("span", label)); el.title = label; el.setAttribute("aria-label", label); return el;
+  const el = button("", action, cls); el.append(icon(name)); if (label && !cls?.split(" ").includes("icon")) el.append(element("span", label)); el.title = label; el.setAttribute("aria-label", label); return el;
 }
 function pretty(value) { return value.replaceAll("_", " ").replace(/^./, c => c.toUpperCase()); }
 function show(page) {
   remember();
   currentPage = page;
-  $("back").hidden = !["detail", "editor", "send-editor"].includes(page);
+  const subpage = ["detail", "editor", "send-editor"].includes(page);
+  $("back").hidden = !subpage;
+  $("account-toggle").classList.toggle("is-subpage", subpage);
+  $("account-toggle").setAttribute("aria-label", subpage ? "Back" : "Account menu");
+  $("account-toggle").title = `${subpage ? "Back" : "Account menu"} · Double-click to open in a window`;
   $("unlock-panel").hidden = unlocked || !["locked", "approval"].includes(page);
   for (const id of ["vault", "generator", "send", "send-editor", "health", "settings", "detail", "editor", "approval", "locked"]) $(id).hidden = id !== page;
   $("title").textContent = ({ vault: "Vault", generator: "Generator", health: "Vault health", settings: "Settings", send: "Send", "send-editor": "Edit Send", detail: "Item", editor: currentItem ? "Edit item" : "New item", approval: "Passkey", locked: "Vault" })[page];
@@ -105,7 +109,7 @@ api.storage.onChanged.addListener((changes, area) => {
 function clearVault() {
   faviconObserver.disconnect();
   ++epoch; currentItem = null; currentDetail = null;
-  for (const id of ["items", "suggestions", "detail-content", "edit-fields", "custom-fields", "audit-results", "approval-items", "send-items"]) $(id).replaceChildren();
+  for (const id of ["items", "suggestions", "detail-content", "edit-fields", "custom-fields", "edit-attachments", "audit-results", "approval-items", "send-items"]) $(id).replaceChildren();
   $("send-file").value = "";
   for (const id of ["unlock-password", "approval-password", "generated", "edit-name", "edit-folder", "edit-uris", "edit-notes", "send-name", "send-text", "send-notes", "send-password"]) $(id).value = "";
 }
@@ -197,7 +201,7 @@ function itemRow(item) {
   else {
     if (item.matched || ["card", "identity"].includes(item.type)) { const fill = actionButton("Fill", "fill", async () => { const n = await request("fill", { item: item.id, type: item.type }); message(`Filled ${n} fields. Submit the form when ready.`); }); fill.title = "Fill"; fill.setAttribute("aria-label", `Fill ${item.name}`); actions.append(fill); }
     const field = item.type === "login" ? "password" : item.type === "card" ? "number" : item.type === "identity" ? "email" : item.type === "ssh_key" ? "public_key" : "notes";
-    const copy = actionButton("Copy", "copy", () => copyField(item.id, field)); copy.title = "Copy"; copy.setAttribute("aria-label", `Copy ${field}`); actions.append(copy);
+    const copy = actionButton("Copy", "copy", () => copyField(item.id, field, true)); copy.title = "Copy"; copy.setAttribute("aria-label", `Copy ${field}`); actions.append(copy);
     const menu = element("details", null, "menu"); const summary = element("summary"); summary.append(icon("more")); summary.setAttribute("aria-label", `Actions for ${item.name}`); menu.append(summary);
     const entries = element("div");
     entries.append(actionButton("View item", "note", () => openDetail(item.id)), actionButton("Edit", "edit", async () => { await openDetail(item.id); editItem(); }));
@@ -215,11 +219,12 @@ function itemRow(item) {
   }
   row.append(actions); return row;
 }
-async function copyField(item, field) {
+async function copyField(item, field, allowFallback = false) {
   try {
     await request("copy", { item, field });
     message("Copied to clipboard.");
   } catch (err) {
+    if (!allowFallback) throw err;
     if (field === "notes") {
       try {
         await request("copy", { item, field: "custom/0" });
@@ -290,7 +295,7 @@ function noteField(text, item) {
     }
     content.replaceChildren(fragment);
   };
-  const toggle = button("Plain text", async () => { raw = !raw; toggle.textContent = raw ? "Markdown" : "Plain text"; render(); });
+  const toggle = actionButton("Plain text", "note", async () => { raw = !raw; toggle.replaceChildren(icon("note"), element("span", raw ? "Markdown" : "Plain text")); render(); });
   toolbar.append(toggle, actionButton("Copy", "copy", () => copyField(item, "notes"))); section.append(toolbar, content); render(); return section;
 }
 async function openDetail(item) {
@@ -309,26 +314,6 @@ async function openDetail(item) {
   for (const [i, field] of (detail.cipher.fields || []).entries()) content.append(detailField(field.name || "Custom field", field.value || "", item, `custom/${i}`, field.type === "hidden"));
   for (const passkey of detail.passkeys) { content.append(element("h3", "Passkey"), element("p", `${passkey.rp} · ${passkey.user || ""}`), element("p", `Created ${passkey.created || "unknown"}`, "hint")); }
   if (detail.history.length) { const history = element("details"); history.append(element("summary", `Password history · ${detail.history.length}`)); for (const entry of detail.history) history.append(detailField(entry.last_used_date, entry.password, item, null, true)); content.append(history); }
-  content.append(element("h3", "Attachments"));
-  for (const attachment of detail.attachments) {
-    const row = element("div", null, "field"); row.append(element("p", `${attachment.file_name || "Attachment"} · ${attachment.size_name || attachment.size || ""}`));
-    const actions = element("div", null, "actions");
-    actions.append(actionButton("Download", "download", async () => { const result = await request("attachment_download", { item, attachment: attachment.id }); message(`Saved to ${result.path}`); }), actionButton("Delete", "trash", async () => { if (!confirm("Delete this attachment permanently?")) return; await request("attachment_delete", { item, attachment: attachment.id }); await openDetail(item); }, "danger")); row.append(actions); content.append(row);
-  }
-  const upload = element("input"); upload.type = "file"; upload.setAttribute("aria-label", "Upload attachment");
-  upload.onchange = () => attempt(async () => {
-    const file = upload.files[0]; if (!file) return;
-    const token = await request("upload_begin", { item, name: file.name, size: file.size });
-    try {
-      for (let offset = 0; offset < file.size; offset += 192 * 1024) {
-        const bytes = new Uint8Array(await file.slice(offset, offset + 192 * 1024).arrayBuffer());
-        let text = ""; for (const byte of bytes) text += String.fromCharCode(byte);
-        await request("upload_chunk", { token, offset, data: btoa(text) });
-        message(`Uploading ${Math.round(Math.min(offset + bytes.length, file.size) / file.size * 100)}%…`);
-      }
-      await request("upload_finish", { token }); message("Attachment uploaded."); await openDetail(item);
-    } finally { await request("upload_cancel", { token }).catch(() => {}); }
-  }); content.append(upload);
   if (detail.collection_options?.length) {
     content.append(element("h3", "Collections"));
     const dropdown = element("details", null, "collection-picker"); const summary = element("summary");
@@ -342,6 +327,50 @@ async function openDetail(item) {
   $("header-favorite-label").textContent = detail.favorite ? "Unfavorite" : "Favorite";
   $("header-favorite").classList.toggle("is-favorite", detail.favorite);
   $("header-archive-label").textContent = detail.archived ? "Unarchive" : "Archive";
+}
+let attachmentBusy = false;
+async function attachmentOperation(item, operation) {
+  if (attachmentBusy) throw new Error("Wait for the current attachment operation to finish.");
+  attachmentBusy = true; $("header-save-edit").disabled = true;
+  try {
+    await operation();
+    const fresh = await request("detail", { item });
+    if (currentPage !== "editor" || currentItem !== item) return;
+    // Accept our attachment-only revision change, but preserve the guard if
+    // another client also changed the editable fields while the editor was open.
+    if (JSON.stringify(fresh.cipher) === JSON.stringify(currentDetail.cipher)) currentDetail = fresh;
+    else message("This item changed elsewhere. Reload it before saving your edits.", true);
+    renderAttachments(fresh, item);
+  } finally { attachmentBusy = false; $("header-save-edit").disabled = false; }
+}
+function renderAttachments(detail, item) {
+  const content = $("edit-attachments"); content.replaceChildren(element("h3", "Attachments"));
+  if (!item) { content.append(element("p", "Save this item before adding attachments.", "hint")); return; }
+  content.append(element("p", "Attachment changes are saved immediately.", "hint"));
+  for (const attachment of detail.attachments || []) {
+    const row = element("div", null, "field"); row.append(element("p", `${attachment.file_name || "Attachment"} · ${attachment.size_name || attachment.size || ""}`));
+    const actions = element("div", null, "actions");
+    actions.append(actionButton("Download", "download", async () => { const result = await request("attachment_download", { item, attachment: attachment.id }); message(`Saved to ${result.path}`); }), actionButton("Delete", "trash", async () => {
+      if (!confirm("Delete this attachment permanently?")) return;
+      await attachmentOperation(item, () => request("attachment_delete", { item, attachment: attachment.id }));
+    }, "danger")); row.append(actions); content.append(row);
+  }
+  const upload = element("input"); upload.type = "file"; upload.hidden = true; upload.setAttribute("aria-label", "Upload attachment");
+  upload.onchange = () => attempt(async () => {
+    const file = upload.files[0]; if (!file) return;
+    await attachmentOperation(item, async () => {
+      const token = await request("upload_begin", { item, name: file.name, size: file.size });
+      try {
+        for (let offset = 0; offset < file.size; offset += 192 * 1024) {
+          const bytes = new Uint8Array(await file.slice(offset, offset + 192 * 1024).arrayBuffer());
+          let text = ""; for (const byte of bytes) text += String.fromCharCode(byte);
+          await request("upload_chunk", { token, offset, data: btoa(text) });
+        }
+        await request("upload_finish", { token }); message("Attachment uploaded.");
+      } finally { await request("upload_cancel", { token }).catch(() => {}); }
+    });
+  });
+  content.append(upload, actionButton("Add attachment", "upload", () => upload.click()));
 }
 function renderEditFields(data = {}) {
   const type = $("edit-type").value; $("edit-fields").replaceChildren();
@@ -401,9 +430,11 @@ function editItem(fresh = false) {
   $("edit-uris").value = (cipher.data.uris || []).map(uri => uri.uri).join("\n");
   $("custom-fields").replaceChildren(); for (const field of cipher.fields || []) addCustom(field);
   $("edit-passkeys").textContent = currentDetail?.passkeys.length ? "Existing passkeys are preserved by rbw. Their private keys never enter this editor." : "";
+  renderAttachments(currentDetail, currentItem);
   renderEditFields(cipher.data); show("editor"); $("edit-name").focus();
 }
 $("edit-form").onsubmit = event => { event.preventDefault(); attempt(async () => {
+  if (attachmentBusy) throw new Error("Wait for the attachment operation to finish before saving.");
   const type = $("edit-type").value; const data = { type };
   for (const name of schema[type]) data[name] = $(`field-${name}`).value || null;
   if (type === "login") data.uris = $("edit-uris").value.split("\n").map(uri => uri.trim()).filter(Boolean).map(uri => currentDetail?.cipher.data.uris?.find(old => old.uri === uri) || { uri });
@@ -417,7 +448,7 @@ $("edit-form").onsubmit = event => { event.preventDefault(); attempt(async () =>
 }); };
 async function suggestions() {
   const area = $("suggestions"); area.replaceChildren();
-  for (const pending of await request("pending")) area.append(button(`⚿ ${pending.method === "create" ? "Save passkey" : "Sign in"} · ${pending.origin}`, () => showApproval(pending.id)));
+  for (const pending of await request("pending")) area.append(actionButton(`${pending.method === "create" ? "Save passkey" : "Sign in"} · ${pending.origin}`, "key", () => showApproval(pending.id)));
   for (const offer of await request("save_offers")) {
     const card = element("div", null, "field"); card.append(element("strong", `Save login for ${offer.origin}?`), element("p", offer.username || "No username"));
     card.append(actionButton("Save new", "plus", async () => { await request("save_offer_apply", { tabId: offer.tabId }); await refresh(); }));
@@ -443,8 +474,8 @@ async function showApproval(id) {
     const password = $("approval-password").value; $("approval-password").value = "";
     if (pending.verification === "required" && !password) { $("approval-password").focus(); throw new Error("Enter your master password to verify this passkey operation."); }
     message("Waiting for rbw…"); await request("passkey_approve", { request: id, item, password: password || null }); await finishApproval("Passkey request completed."); };
-  if (pending.method === "create") $("approval-items").append(button("Create in a new login", () => approve(null), "primary"));
-  for (const item of result.items) $("approval-items").append(button(`${pending.method === "create" ? "Add to" : "Use"} ${item.name} · ${item.username || ""}`, () => approve(item.id)));
+  if (pending.method === "create") $("approval-items").append(actionButton("Create in a new login", "plus", () => approve(null), "primary"));
+  for (const item of result.items) $("approval-items").append(actionButton(`${pending.method === "create" ? "Add to" : "Use"} ${item.name} · ${item.username || ""}`, "key", () => approve(item.id)));
   if (pending.method === "get" && !result.items.length) $("approval-items").append(element("p", "No matching passkeys in this account. Try another account or authenticator.", "hint"));
 }
 $("use-device").onclick = () => attempt(async () => { await request("passkey_decline", { request: approvalId, fallback: true }); await finishApproval("Passkey request declined."); });
@@ -461,7 +492,7 @@ $("settings-sync").onclick = $("sync").onclick; $("settings-lock").onclick = $("
 let accountMenuTimer;
 $("account-toggle").onclick = event => {
   clearTimeout(accountMenuTimer);
-  const toggle = () => { $("account-menu").hidden = !$("account-menu").hidden; };
+  const toggle = () => { if (!$("back").hidden) attempt(navigateBack); else $("account-menu").hidden = !$("account-menu").hidden; };
   if (event.detail === 0) toggle();
   else if (event.detail === 1) accountMenuTimer = setTimeout(toggle, 250);
 };
@@ -504,7 +535,7 @@ $("header-save-send").onclick = () => $("send-form").requestSubmit();
 
 $("edit-type").onchange = () => renderEditFields();
 $("add-custom").onclick = () => addCustom();
-$("back").onclick = () => attempt(async () => { if (currentPage === "editor" && currentItem) await openDetail(currentItem); else if (currentPage === "send-editor") await loadSends(); else await refresh(); });
+async function navigateBack() { if (currentPage === "editor" && currentItem) await openDetail(currentItem); else if (currentPage === "send-editor") await loadSends(); else await refresh(); }
 for (const el of document.querySelectorAll("footer button")) el.onclick = () => attempt(async () => {
   const page = el.dataset.page;
   if (page === "vault") await refresh(); else if (page === "send") await loadSends(); else show(page);
@@ -578,7 +609,7 @@ async function loadSends() {
   show("send"); message("Loading Sends…");
   const items = await send("list"); $("send-items").replaceChildren();
   for (const item of items) {
-    const row = element("article"); row.append(element("span", item.type === 1 ? "▤" : "➤", "item-icon"));
+    const row = element("article"); const image = element("span", null, "item-icon"); image.append(icon(item.type === 1 ? "note" : "send")); row.append(image);
     const main = button("", async () => editSend(await send("detail", { id: item.id })), "item-main");
     main.append(element("strong", item.name), element("small", `${item.disabled ? "Disabled · " : ""}${item.accessCount || 0} accesses · ${item.deletionDate?.slice(0, 10) || ""}`)); row.append(main);
     row.append(actionButton("Copy link", "copy", async () => { await send("copy", { id: item.id }); message("Send link copied using rbw clipboard settings."); }));

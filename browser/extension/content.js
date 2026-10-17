@@ -56,7 +56,8 @@
     const header = document.createElement("div"); header.className = "header";
     const title = document.createElement("span"); title.className = "title"; title.textContent = "rbw · Fill a login";
     const dismiss = document.createElement("button"); dismiss.className = "dismiss-btn"; dismiss.type = "button"; dismiss.title = "Dismiss"; dismiss.setAttribute("aria-label", "Dismiss");
-    dismiss.innerHTML = '<svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+    const closeIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg"); closeIcon.setAttribute("viewBox", "0 0 24 24"); closeIcon.setAttribute("aria-hidden", "true");
+    const closePath = document.createElementNS(closeIcon.namespaceURI, "path"); closePath.setAttribute("d", "M18 6 6 18M6 6l12 12"); closeIcon.append(closePath); dismiss.append(closeIcon);
     dismiss.addEventListener("click", event => { if (event.isTrusted) close(); });
     header.append(title, dismiss); box.append(header);
 
@@ -67,7 +68,8 @@
         const img = document.createElement("img"); img.src = item.favicon; img.alt = "";
         iconCol.append(img);
       } else {
-        iconCol.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="5"></circle><path d="m11.5 11.5 8-8L22 6l-2 2-2-2-2 2 2 2-3 3"></path></svg>';
+        const keyIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg"); keyIcon.setAttribute("viewBox", "0 0 24 24"); keyIcon.setAttribute("aria-hidden", "true");
+        const keyPath = document.createElementNS(keyIcon.namespaceURI, "path"); keyPath.setAttribute("d", "M13 15a5 5 0 1 1-1.5-3.5l8-8L22 6l-2 2-2-2-2 2 2 2-3 3"); keyIcon.append(keyPath); iconCol.append(keyIcon);
       }
       const textCol = document.createElement("div"); textCol.className = "text-col";
       const name = document.createElement("strong"); name.textContent = item.name;

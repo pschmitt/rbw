@@ -73,7 +73,8 @@ function showFillNotice(expectedUrl, notice) {
   }
   account.title = account.textContent;
   text.append(title, account);
-  const close = document.createElement("button"); close.type = "button"; close.textContent = "×"; close.setAttribute("aria-label", "Dismiss autofill notification");
+  const close = document.createElement("button"); close.type = "button"; const closeIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg"); closeIcon.setAttribute("viewBox", "0 0 24 24"); closeIcon.setAttribute("width", "16"); closeIcon.setAttribute("height", "16"); closeIcon.setAttribute("aria-hidden", "true");
+  const closePath = document.createElementNS(closeIcon.namespaceURI, "path"); closePath.setAttribute("d", "M18 6 6 18M6 6l12 12"); closePath.setAttribute("stroke", "currentColor"); closePath.setAttribute("stroke-width", "2"); closeIcon.append(closePath); close.append(closeIcon); close.setAttribute("aria-label", "Dismiss autofill notification");
   let timer;
   const dismiss = () => { clearTimeout(timer); host.remove(); document.removeEventListener("keydown", onKey); };
   const onKey = event => { if (event.key === "Escape") dismiss(); };
