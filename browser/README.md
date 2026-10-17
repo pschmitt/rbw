@@ -5,18 +5,24 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.21
+## Features in 0.2.23
 
+- Polished popup layout: increased popup height, improved spacing between adjacent
+  action buttons, and moved the sidebar and add-on settings shortcuts directly into
+  the header as compact icon actions.
+- Configurable footer tabs: the Settings tab can now be hidden via preferences,
+  and the footer is hidden entirely when only one tab is active.
 - Neutral charcoal surfaces throughout the popup, sidebar, settings, inline
   suggestions and notifications. Active navigation has a clear filled state,
   including the parent tab while viewing an item or editor.
 - The toolbar badge shows the current page's matching-login count, reusing
   cached searches; passkey/save approvals use a distinct attention badge.
-- Autofill notifications show the rbw icon and aligned Undo/Close icon buttons,
-  with brief entry/dismissal animations that respect reduced motion.
+- Autofill notifications show the rbw icon and aligned Undo/Close icon buttons
+  with an updated return-loop Undo icon and brief animations that respect reduced motion.
 - Drag inline suggestions by their header (or use arrow keys on the move
-  handle). Position lasts only for the current document and resets on refresh;
-  Home restores the default position immediately.
+  handle). The header displays the branded rbw app icon alongside "RBW · AUTOFILL".
+  Position lasts only for the current document and resets on refresh; Home restores
+  the default position immediately.
 
 - Passkey account cards replace the old button list. Optional master-password
   entry is removed from the chooser; required WebAuthn identity verification

@@ -577,11 +577,14 @@ fn assertion_value(
     lock.try_lock().map_err(|_| {
         anyhow::anyhow!("another passkey injection is active for this item")
     })?;
-    let selected = if preserve_zero {
+    let mut selected = if preserve_zero {
         select_cached(args, rp_id)?
     } else {
         select(args, rp_id)?
     };
+    if preserve_zero && stored_counter(&selected.credential)? > 0 {
+        selected = select(args, rp_id)?;
+    }
     let c = &selected.credential;
     anyhow::ensure!(
         c.key_type.as_deref() == Some("public-key")

@@ -127,7 +127,7 @@ function showFillNotice(expectedUrl, notice) {
   if (undo) {
     const undoButton = document.createElement("button"); undoButton.type = "button"; undoButton.setAttribute("aria-label", "Undo autofill"); undoButton.title = "Undo autofill";
     const undoIcon = document.createElementNS(closeIcon.namespaceURI, "svg"); undoIcon.setAttribute("viewBox", "0 0 24 24"); undoIcon.setAttribute("aria-hidden", "true");
-    const undoPath = document.createElementNS(closeIcon.namespaceURI, "path"); undoPath.setAttribute("d", "M9 14 4 9l5-5M4 9h9a7 7 0 0 1 7 7v4"); undoIcon.append(undoPath); undoButton.append(undoIcon);
+    const undoPath = document.createElementNS(closeIcon.namespaceURI, "path"); undoPath.setAttribute("d", "M9 14 4 9l5-5 M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"); undoIcon.append(undoPath); undoButton.append(undoIcon);
     undoButton.addEventListener("click", async () => {
       undoButton.disabled = true;
       try {

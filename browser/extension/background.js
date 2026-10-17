@@ -84,7 +84,7 @@ async function fetchFavicon(origin) {
   } catch (_) { /* Missing icons retain the local item-type icon. */ }
   if (generation === metadataEpoch) cacheFor(faviconCache, origin, value, 5 * 60 * 1000, 128); return value;
 }
-const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: true, theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, favicons: true };
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: true, theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true };
 async function settings() { return { ...defaults, ...(await api.storage.local.get("preferences")).preferences }; }
 let nativePort;
 const nativeRequests = new Map();
@@ -154,15 +154,18 @@ async function refreshActiveBadge() {
   if (tab?.id !== undefined) await updateSuggestionsBadge(tab.id, tab);
 }
 let notificationIcon;
-async function notifyFill(tab, notice) {
-  // Bundle the local brand image into the isolated notice; no public resources
-  // or website requests are needed for notification branding.
+async function getNotificationIcon() {
   notificationIcon ||= fetch(api.runtime.getURL("icons/rbw-32.png")).then(async response => {
     const bytes = new Uint8Array(await response.arrayBuffer()); let binary = "";
     for (const byte of bytes) binary += String.fromCharCode(byte);
     return "data:image/png;base64," + btoa(binary);
   }).catch(() => null);
-  return api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: showFillNotice, args: [tab.url, { ...notice, icon: await notificationIcon }] });
+  return notificationIcon;
+}
+async function notifyFill(tab, notice) {
+  // Bundle the local brand image into the isolated notice; no public resources
+  // or website requests are needed for notification branding.
+  return api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: showFillNotice, args: [tab.url, { ...notice, icon: await getNotificationIcon() }] });
 }
 
 function finish(id, response) {
@@ -215,7 +218,7 @@ async function pageMessage(message, sender, respond) {
       const result = await cachedSearch({ account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
       const items = result.items.slice(0, 5).map(v => ({ id: v.id, name: v.name, username: v.username,
         favicon: prefs.favicons ? faviconCache.get(v.iconOrigin)?.value || null : null }));
-      return respond({ result: items });
+      return respond({ result: items, appIcon: await getNotificationIcon() });
     } catch (_) { return respond({ result: [] }); }
   }
   if (message.action === "inline_icons") {

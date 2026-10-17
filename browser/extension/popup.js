@@ -91,6 +91,8 @@ function show(page) {
   for (const id of ["vault", "generator", "send", "send-editor", "health", "settings", "detail", "editor", "approval", "locked"]) $(id).hidden = id !== page;
   $("title").textContent = ({ vault: "Vault", generator: "Generator", health: "Vault health", settings: "Settings", send: "Send", "send-editor": "Edit Send", detail: "Item", editor: currentItem ? "Edit item" : "New item", approval: "Passkey", locked: "Vault" })[page];
   $("add").hidden = !["vault", "send"].includes(page) || !unlocked;
+  $("open-sidebar").hidden = subpage || document.documentElement.dataset.surface === "window";
+  $("open-options").hidden = subpage;
   $("detail-header-actions").hidden = page !== "detail";
   $("edit-header-actions").hidden = page !== "editor";
   $("send-header-actions").hidden = page !== "send-editor";
@@ -103,10 +105,19 @@ function show(page) {
   remember();
 }
 function applyTabs() {
-  const visibility = { generator: preference.showGenerator !== false, send: preference.showSend === true, health: preference.showHealth === true };
-  for (const el of document.querySelectorAll("footer button")) el.hidden = visibility[el.dataset.page] === false;
-  for (const [page, visible] of Object.entries(visibility)) $("setting-" + page).checked = visible;
-  if (visibility[currentPage === "send-editor" ? "send" : currentPage] === false) show(unlocked ? "vault" : "locked");
+  const visibility = { generator: preference.showGenerator !== false, send: preference.showSend === true, health: preference.showHealth === true, settings: preference.showSettings !== false };
+  let count = 0;
+  for (const el of document.querySelectorAll("footer button")) {
+    const isVisible = el.dataset.page === "vault" || visibility[el.dataset.page] !== false;
+    el.hidden = !isVisible;
+    if (isVisible) count++;
+  }
+  for (const [page, visible] of Object.entries(visibility)) {
+    const el = $("setting-" + page);
+    if (el) el.checked = visible;
+  }
+  document.querySelector("footer").hidden = count <= 1;
+  if (currentPage !== "vault" && visibility[currentPage === "send-editor" ? "send" : currentPage] === false) show(unlocked ? "vault" : "locked");
 }
 api.storage.onChanged.addListener((changes, area) => {
   if (area !== "local" || !changes.preferences) return;
@@ -639,8 +650,8 @@ $("open-sidebar").onclick = () => attempt(async () => {
 });
 $("open-options").onclick = () => api.runtime.openOptionsPage();
 function applyTheme(theme) { document.documentElement.dataset.theme = theme === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme; }
-for (const id of ["setting-autofill", "setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
-  preference = await request("set_preferences", { preferences: { autoFill: $("setting-autofill").checked, passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
+for (const id of ["setting-autofill", "setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-settings", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
+  preference = await request("set_preferences", { preferences: { autoFill: $("setting-autofill").checked, passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, showSettings: $("setting-settings").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
 });
 setInterval(() => attempt(async () => {
   if (!approvalId) {
@@ -657,7 +668,7 @@ attempt(async () => {
     const initial = await request("bootstrap");
     preference = initial.preferences; applyTheme(preference.theme); applyTabs();
     $("setting-autofill").checked = preference.autoFill !== false;
-    $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
+    $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons; $("setting-settings").checked = preference.showSettings !== false;
     if (!approvalId) approvalId = await activeApproval();
     const status = initial.status;
     renderAccounts(status.accounts || [], status.primary, preference.account);
