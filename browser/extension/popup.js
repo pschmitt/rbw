@@ -768,8 +768,8 @@ $("open-options").onclick = event => {
 };
 $("settings-open-options").onclick = () => api.runtime.openOptionsPage();
 function applyTheme(theme) { document.documentElement.dataset.theme = theme === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme; }
-for (const id of ["setting-autofill", "setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
-  preference = await request("set_preferences", { preferences: { autoFill: $("setting-autofill").checked, passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
+for (const id of ["setting-autofill", "setting-crabify", "setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
+  preference = await request("set_preferences", { preferences: { autoFill: $("setting-autofill").checked, crabify: $("setting-crabify").checked, passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
 });
 setInterval(() => attempt(async () => {
   if (!approvalId) {
@@ -786,6 +786,7 @@ attempt(async () => {
     const initial = await request("bootstrap");
     preference = initial.preferences; applyTheme(preference.theme); applyTabs();
     $("setting-autofill").checked = preference.autoFill !== false;
+    $("setting-crabify").checked = preference.crabify === true;
     $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
     if (!approvalId) approvalId = await activeApproval();
     const status = initial.status;

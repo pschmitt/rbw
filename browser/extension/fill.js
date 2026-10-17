@@ -1,5 +1,5 @@
 /* This function is serialized into an isolated world by scripting.executeScript. */
-function fillPage(expectedUrl, data, fillToken) {
+async function fillPage(expectedUrl, data, fillToken, options = {}) {
   if (location.href !== expectedUrl) throw new Error("Page changed. Choose Fill again.");
   const all = root => [...root.querySelectorAll("input,textarea,select"), ...[...root.querySelectorAll("*")].filter(el => el.shadowRoot).flatMap(el => all(el.shadowRoot))];
   const fields = all(document).filter(el => !el.disabled && !el.readOnly && el.getClientRects().length && getComputedStyle(el).visibility !== "hidden" && el.type !== "hidden");
@@ -17,11 +17,10 @@ function fillPage(expectedUrl, data, fillToken) {
     el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true }));
   };
   let count = 0;
-  const filledElements = [];
+  const assignments = [];
   const put = (el, value) => {
     if (el && value != null) {
-      setter(el, value);
-      if (!filledElements.includes(el)) filledElements.push(el);
+      assignments.push({ el, value });
       count++;
     }
   };
@@ -55,35 +54,96 @@ function fillPage(expectedUrl, data, fillToken) {
       put(el, value);
     }
   }
+
+  const runCrab = (el, finalVal, iconUrl) => new Promise(resolve => {
+    const rect = el.getBoundingClientRect();
+    if (!rect.width || !rect.height || typeof finalVal !== "string") {
+      setter(el, finalVal); resolve(); return;
+    }
+    const crab = document.createElement("div");
+    crab.setAttribute("aria-hidden", "true");
+    const crabSize = Math.max(18, Math.min(26, rect.height - 4));
+    const top = rect.top + (rect.height - crabSize) / 2;
+    const startX = rect.left + 4;
+    crab.style.cssText = `position:fixed!important;z-index:2147483647!important;pointer-events:none!important;width:${crabSize}px!important;height:${crabSize}px!important;left:${startX}px!important;top:${top}px!important;background:url('${iconUrl}') no-repeat center/contain!important;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.4))!important;transform-origin:center center!important;will-change:transform,opacity!important;`;
+    document.documentElement.appendChild(crab);
+
+    const travel = Math.max(28, Math.min(rect.width - crabSize - 8, Math.max(50, finalVal.length * 8)));
+    const duration = Math.min(260, Math.max(150, finalVal.length * 13));
+    const startTime = performance.now();
+
+    function frame(now) {
+      const elapsed = now - startTime;
+      const p = Math.min(1, elapsed / duration);
+      const curX = p * travel;
+      const angle = Math.sin(p * Math.PI * 10) * 16;
+      const bob = Math.abs(Math.sin(p * Math.PI * 10)) * -3;
+      crab.style.transform = `translate(${curX}px, ${bob}px) rotate(${angle}deg)`;
+
+      const curLen = Math.min(finalVal.length, Math.max(1, Math.floor(p * finalVal.length)));
+      setter(el, finalVal.slice(0, curLen));
+
+      if (p < 1) {
+        requestAnimationFrame(frame);
+      } else {
+        setter(el, finalVal);
+        crab.style.transition = "transform 0.12s ease-out, opacity 0.12s ease-out";
+        crab.style.transform = `translate(${travel}px, -10px) scale(1.25) rotate(0deg)`;
+        crab.style.opacity = "0";
+        if (typeof el.animate === "function") {
+          try {
+            el.animate([
+              { boxShadow: "0 0 0 3px rgba(96, 165, 250, 0.75), 0 0 12px rgba(96, 165, 250, 0.35)", backgroundColor: "rgba(96, 165, 250, 0.1)" },
+              { boxShadow: "0 0 0 0 rgba(96, 165, 250, 0)", backgroundColor: "transparent" }
+            ], { duration: 400, easing: "ease-out" });
+          } catch (_) {}
+        }
+        setTimeout(() => { crab.remove(); resolve(); }, 130);
+      }
+    }
+    requestAnimationFrame(frame);
+  });
+
   if (count) {
-    if (!window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      filledElements.forEach((el, index) => {
-        if (typeof el.animate !== "function") return;
-        try {
-          el.animate([
-            {
-              boxShadow: "0 0 0 3px rgba(96, 165, 250, 0.75), 0 0 14px rgba(96, 165, 250, 0.35)",
-              backgroundColor: "rgba(96, 165, 250, 0.12)",
-              transform: "scale(1.012)"
-            },
-            {
-              boxShadow: "0 0 0 1px rgba(96, 165, 250, 0.35), 0 0 6px rgba(96, 165, 250, 0.15)",
-              backgroundColor: "rgba(96, 165, 250, 0.05)",
-              transform: "scale(1.004)",
-              offset: 0.55
-            },
-            {
-              boxShadow: "0 0 0 0 rgba(96, 165, 250, 0)",
-              backgroundColor: "transparent",
-              transform: "scale(1)"
-            }
-          ], {
-            duration: 600,
-            delay: index * 75,
-            easing: "cubic-bezier(0.16, 1, 0.3, 1)"
-          });
-        } catch (_) {}
-      });
+    const reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (options.crabify && options.icon && !reducedMotion) {
+      for (const item of assignments) {
+        await runCrab(item.el, item.value, options.icon);
+      }
+    } else {
+      for (const item of assignments) {
+        setter(item.el, item.value);
+      }
+      if (!reducedMotion) {
+        assignments.forEach((item, index) => {
+          const el = item.el;
+          if (typeof el.animate !== "function") return;
+          try {
+            el.animate([
+              {
+                boxShadow: "0 0 0 3px rgba(96, 165, 250, 0.75), 0 0 14px rgba(96, 165, 250, 0.35)",
+                backgroundColor: "rgba(96, 165, 250, 0.12)",
+                transform: "scale(1.012)"
+              },
+              {
+                boxShadow: "0 0 0 1px rgba(96, 165, 250, 0.35), 0 0 6px rgba(96, 165, 250, 0.15)",
+                backgroundColor: "rgba(96, 165, 250, 0.05)",
+                transform: "scale(1.004)",
+                offset: 0.55
+              },
+              {
+                boxShadow: "0 0 0 0 rgba(96, 165, 250, 0)",
+                backgroundColor: "transparent",
+                transform: "scale(1)"
+              }
+            ], {
+              duration: 600,
+              delay: index * 75,
+              easing: "cubic-bezier(0.16, 1, 0.3, 1)"
+            });
+          } catch (_) {}
+        });
+      }
     }
     const token = fillToken || crypto.randomUUID();
     for (const [el, state] of previous) state.filled = read(el);

@@ -84,7 +84,7 @@ async function fetchFavicon(origin) {
   } catch (_) { /* Missing icons retain the local item-type icon. */ }
   if (generation === metadataEpoch) cacheFor(faviconCache, origin, value, 5 * 60 * 1000, 128); return value;
 }
-const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: true, theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true };
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: true, crabify: false, theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true };
 async function settings() { return { ...defaults, ...(await api.storage.local.get("preferences")).preferences }; }
 let nativePort;
 const nativeRequests = new Map();
@@ -278,9 +278,11 @@ async function fill(message, account) {
     if (current.id !== tab.id || current.url !== tab.url) throw new Error("Page changed. Choose Fill again.");
     const frames = await api.webNavigation.getAllFrames({ tabId: tab.id });
     const filledFrames = [];
+    const prefs = await settings();
+    const fillOptions = { crabify: prefs.crabify === true, icon: prefs.crabify ? await getNotificationIcon() : null };
     for (const frame of frames.filter(f => { try { return new URL(f.url).origin === new URL(tab.url).origin; } catch (_) { return false; } })) {
       try {
-        const results = await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [frame.frameId] }, func: fillPage, args: [frame.url, credential, token] });
+        const results = await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [frame.frameId] }, func: fillPage, args: [frame.url, credential, token, fillOptions] });
         const filled = results[0]?.result || 0;
         count += filled; if (filled) filledFrames.push({ frameId: frame.frameId, url: frame.url });
       } catch (error) { if (frame.frameId === 0 && frames.length === 1) throw error; }

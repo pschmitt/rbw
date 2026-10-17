@@ -13,8 +13,8 @@ async function status() {
   const state = await request("status"); $("connection").textContent = "Connected to rbw native messaging"; $("lock-state").textContent = state.unlocked ? "Unlocked" : "Locked";
   return state;
 }
-for (const id of ["account", "passkeys", "inline", "autofill", "save-prompts", "theme", "show-generator", "show-send", "show-health", "favicons"]) $(id).onchange = () => attempt(async () => {
-  const preferences = { account: $("account").value, passkeys: $("passkeys").checked, savePrompts: $("save-prompts").checked, inlineSuggestions: $("inline").checked, autoFill: $("autofill").checked, theme: $("theme").value, showGenerator: $("show-generator").checked, showSend: $("show-send").checked, showHealth: $("show-health").checked, favicons: $("favicons").checked };
+for (const id of ["account", "passkeys", "inline", "autofill", "crabify", "save-prompts", "theme", "show-generator", "show-send", "show-health", "favicons"]) $(id).onchange = () => attempt(async () => {
+  const preferences = { account: $("account").value, passkeys: $("passkeys").checked, savePrompts: $("save-prompts").checked, inlineSuggestions: $("inline").checked, autoFill: $("autofill").checked, crabify: $("crabify").checked, theme: $("theme").value, showGenerator: $("show-generator").checked, showSend: $("show-send").checked, showHealth: $("show-health").checked, favicons: $("favicons").checked };
   await request("set_preferences", { preferences }); theme(preferences.theme); $("message").textContent = "Settings saved."; await status();
   const policy = await request("agent_settings");
   $("agent-policy").textContent = `Automatic lock: ${policy.lockTimeout} seconds. Sync: every ${policy.syncInterval} seconds. Clipboard: ${policy.clipboard}. Generator default length: ${policy.passwordGen.length || 20}.`;
@@ -27,7 +27,7 @@ attempt(async () => {
   const state = await status();
   $("account").replaceChildren(...(state.accounts || []).map(a => new Option(a === state.primary ? `${a} *` : a, a)));
   $("account").value = prefs.account || state.primary || "";
-  $("autofill").checked = prefs.autoFill; $("inline").checked = prefs.inlineSuggestions; $("passkeys").checked = prefs.passkeys; $("save-prompts").checked = prefs.savePrompts; $("theme").value = prefs.theme; await status();
+  $("autofill").checked = prefs.autoFill; $("crabify").checked = prefs.crabify === true; $("inline").checked = prefs.inlineSuggestions; $("passkeys").checked = prefs.passkeys; $("save-prompts").checked = prefs.savePrompts; $("theme").value = prefs.theme; await status();
   const policy = await request("agent_settings");
   $("agent-policy").textContent = `Automatic lock: ${policy.lockTimeout} seconds. Sync: every ${policy.syncInterval} seconds. Clipboard: ${policy.clipboard}. Generator default length: ${policy.passwordGen.length || 20}.`;
 });
