@@ -5,8 +5,11 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.26
+## Features in 0.2.27
 
+- Fixed FAB button clipping: clamped popup height to 600px to respect Firefox's maximum extension popup ceiling and switched `#add.fab` to fixed positioning so the Add action is never cropped.
+- "Crabify" autofill animation: optional playful crab crawling across form fields during autofill, toggled via settings.
+- AMO compliance: eliminated unsafe `innerHTML` assignments in vendor dependencies for a clean automated AMO linter validation.
 - Animated form element autofill: inputs dynamically highlight with a staggered glowing pulse and subtle scale when autofilled, and smoothly pulse on Undo.
 - Cleaner popup header: removed redundant header loading spinner in favor of dedicated in-section progress feedback.
 - Passkey progress feedback: choosing an account immediately highlights the selected card, disables choices, and replaces the "Use another authenticator" / "Cancel" buttons with dedicated in-panel status text and a loading spinner for real-time progress.

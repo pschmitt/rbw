@@ -3,7 +3,7 @@
 * { box-sizing:border-box; }
 /* Firefox measures the body to size toolbar popups, not the root. */
 html { overflow:hidden; background:var(--bg); }
-body { width:420px; height:650px; margin:0; display:flex; flex-direction:column; background:var(--bg); color:var(--text); position:relative; }
+body { width:420px; height:600px; margin:0; display:flex; flex-direction:column; background:var(--bg); color:var(--text); position:relative; }
 header { display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--panel); border-bottom:1px solid var(--line); min-height:48px; }
 h1 { font-size:18px; font-weight:600; margin:0; line-height:1.2; }
 .heading { flex:1; min-width:0; display:flex; flex-direction:column; justify-content:center; position:relative; }
@@ -227,7 +227,7 @@ details.menu button .svg-icon { width:16px; height:16px; }
 
 /* Extended Floating Action Button (FAB) */
 #add.fab {
-  position: absolute;
+  position: fixed;
   bottom: 20px;
   right: 20px;
   z-index: 25;
