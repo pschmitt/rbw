@@ -123,14 +123,19 @@ async function pageMessage(message, sender, respond) {
   if (message.action === "autofill_load") {
     if (!prefs.autoFill || sender.frameId !== 0 || !sender.tab.active) return respond({ result: false });
     const results = await native({ action: "search", account: prefs.account || null, query: "", url: sender.url, site_only: true, kind: "login" });
-    if (results.items.length !== 1 || results.items[0].protected) return respond({ result: false });
+    if (!results.items.length || results.items[0].protected) return respond({ result: false });
     return respond({ result: await fill({ item: results.items[0].id }, prefs.account || null) });
   }
   if (message.action === "inline_choices") {
     if (!prefs.inlineSuggestions) return respond({ result: [] });
     try {
       const result = await native({ action: "search", account: prefs.account || null, query: "", url: sender.url, site_only: true, kind: "login" });
-      return respond({ result: result.items.slice(0, 5).map(v => ({ id: v.id, name: v.name, username: v.username })) });
+      const items = await Promise.all(result.items.slice(0, 5).map(async v => {
+        let fav = null;
+        if (prefs.favicons && v.iconOrigin) fav = await favicon(v.iconOrigin);
+        return { id: v.id, name: v.name, username: v.username, favicon: fav };
+      }));
+      return respond({ result: items });
     } catch (_) { return respond({ result: [] }); }
   }
   if (message.action === "inline_fill") {
@@ -334,16 +339,22 @@ async function fillShortcut() {
     const prefs = await settings(); const account = prefs.account || null;
     const status = await native({ action: "status", account });
     if (!status.unlocked) {
-      popupNotices.set(tab.id, { url: tab.url, text: "Unlock rbw to autofill this page, then press the fill shortcut again.", error: false, expires: Date.now() + 60000 });
       fillCycles.delete(tab.id);
-      api.action.openPopup({ windowId: tab.windowId }).catch(() => {});
+      await api.scripting.executeScript({
+        target: { tabId: tab.id, frameIds: [0] },
+        func: showFillNotice,
+        args: [tab.url, { title: "rbw is locked", error: true, message: "Unlock your vault to autofill this page." }]
+      }).catch(() => {});
       return;
     }
     const result = await native({ action: "search", account, query: "", url: tab.url, site_only: true, kind: "login" });
     if (!result.items.length) {
-      popupNotices.set(tab.id, { url: tab.url, text: "No matching logins for this page. Choose a login or add one to your vault.", error: false, expires: Date.now() + 60000 });
       fillCycles.delete(tab.id);
-      api.action.openPopup({ windowId: tab.windowId }).catch(() => {});
+      await api.scripting.executeScript({
+        target: { tabId: tab.id, frameIds: [0] },
+        func: showFillNotice,
+        args: [tab.url, { title: "No matching logins", error: true, message: "No matching logins found for this page." }]
+      }).catch(() => {});
       return;
     }
     const signature = JSON.stringify([account, result.items.map(item => item.id)]);
@@ -352,12 +363,15 @@ async function fillShortcut() {
     await fill({ item: result.items[index].id, expectedTab: tab.id, expectedUrl: tab.url, cycleIndex: index + 1, cycleCount: result.items.length }, account);
     fillCycles.set(tab.id, { url: tab.url, signature, index, time: Date.now() });
     popupNotices.delete(tab.id);
-  } catch (_) {
+  } catch (err) {
     if (tab) {
       fillCycles.delete(tab.id);
-      popupNotices.set(tab.id, { url: tab.url, text: "Could not autofill this page. Unlock your vault if needed, check that it has a matching login and the page has login fields, then press the fill shortcut again.", error: true, expires: Date.now() + 60000 });
+      await api.scripting.executeScript({
+        target: { tabId: tab.id, frameIds: [0] },
+        func: showFillNotice,
+        args: [tab.url, { title: "Autofill failed", error: true, message: err?.message || "Could not autofill this page." }]
+      }).catch(() => {});
     }
-    api.action.openPopup().catch(() => {});
   }
 }
 api.commands.onCommand.addListener(command => {

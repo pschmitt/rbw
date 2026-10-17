@@ -23,7 +23,9 @@ $("shortcuts").onclick = () => { const firefox = !!globalThis.browser; api.tabs.
 attempt(async () => {
   const prefs = await request("preferences"); theme(prefs.theme);
   $("favicons").checked = prefs.favicons; $("show-generator").checked = prefs.showGenerator; $("show-send").checked = prefs.showSend; $("show-health").checked = prefs.showHealth;
-  const state = await status(); $("account").replaceChildren(new Option("Primary account", ""), ...state.accounts.map(a => new Option(a, a))); $("account").value = prefs.account;
+  const state = await status();
+  $("account").replaceChildren(...(state.accounts || []).map(a => new Option(a === state.primary ? `${a} *` : a, a)));
+  $("account").value = prefs.account || state.primary || "";
   $("autofill").checked = prefs.autoFill; $("inline").checked = prefs.inlineSuggestions; $("passkeys").checked = prefs.passkeys; $("save-prompts").checked = prefs.savePrompts; $("theme").value = prefs.theme; await status();
   const policy = await request("agent_settings");
   $("agent-policy").textContent = `Automatic lock: ${policy.lockTimeout} seconds. Sync: every ${policy.syncInterval} seconds. Clipboard: ${policy.clipboard}. Generator default length: ${policy.passwordGen.length || 20}.`;
