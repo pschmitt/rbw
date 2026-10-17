@@ -2,7 +2,7 @@ if (new URLSearchParams(location.search).get("surface") === "window") document.d
 const api = globalThis.browser || chrome;
 const $ = id => document.getElementById(id);
 for (const label of document.querySelectorAll("[data-extension-version]")) {
-  label.textContent = `v${api.runtime.getManifest().version}`;
+  label.textContent = `v${api?.runtime?.getManifest?.()?.version || "0.2.27"}`;
   label.title = "Loaded rbw extension version";
 }
 const labels = { login: "Login", card: "Card", identity: "Identity", secure_note: "Secure note", ssh_key: "SSH key" };
@@ -46,6 +46,7 @@ function updateFab() {
 window.addEventListener("pagehide", remember);
 document.addEventListener("visibilitychange", () => { if (document.hidden) remember(); });
 document.querySelector("main").addEventListener("scroll", () => {
+  for (const m of document.querySelectorAll("details.menu[open]")) m.open = false;
   updateFab();
   clearTimeout(stateTimer);
   stateTimer = setTimeout(remember, 80);
@@ -140,7 +141,7 @@ function applyTabs() {
   updateTitleMenuState();
   if (["generator", "send", "health"].includes(currentPage) && visibility[currentPage] === false) show(unlocked ? "vault" : "locked");
 }
-api.storage.onChanged.addListener((changes, area) => {
+api?.storage?.onChanged?.addListener((changes, area) => {
   if (area !== "local" || !changes.preferences) return;
   preference = { ...preference, ...changes.preferences.newValue };
   applyTheme(preference.theme); applyTabs();
@@ -252,6 +253,27 @@ function itemRow(item) {
     const copy = actionButton("Copy", "copy", () => copyField(item.id, field, true)); copy.title = "Copy"; copy.setAttribute("aria-label", `Copy ${field}`); actions.append(copy);
     const menu = element("details", null, "menu"); const summary = element("summary"); summary.append(icon("more")); summary.setAttribute("aria-label", `Actions for ${item.name}`); menu.append(summary);
     const entries = element("div");
+    menu.addEventListener("toggle", () => {
+      if (menu.open) {
+        for (const other of document.querySelectorAll("details.menu[open]")) {
+          if (other !== menu) other.open = false;
+        }
+        const rect = summary.getBoundingClientRect();
+        const menuHeight = entries.offsetHeight || 220;
+        const spaceBelow = window.innerHeight - rect.bottom;
+        const spaceAbove = rect.top;
+        if (spaceBelow < menuHeight + 10 && spaceAbove > spaceBelow) {
+          menu.classList.add("drop-up");
+        } else {
+          menu.classList.remove("drop-up");
+        }
+      } else {
+        menu.classList.remove("drop-up");
+      }
+    });
+    entries.addEventListener("click", event => {
+      if (event.target.closest("button")) menu.open = false;
+    });
     entries.append(actionButton("View item", "note", () => openDetail(item.id)), actionButton("Edit", "edit", async () => { await openDetail(item.id); editItem(); }));
     if (item.type === "login") {
       entries.append(
@@ -267,6 +289,7 @@ function itemRow(item) {
   }
   row.append(actions); return row;
 }
+if (typeof window !== "undefined") window.itemRow = itemRow;
 async function copyField(item, field, allowFallback = false) {
   try {
     await request("copy", { item, field });
@@ -740,9 +763,17 @@ $("title-summary").onclick = event => {
 };
 document.addEventListener("click", event => {
   if (!event.target.closest("#title-menu")) $("title-menu").open = false;
+  for (const m of document.querySelectorAll("details.menu[open]")) {
+    if (!m.contains(event.target)) m.open = false;
+  }
 });
 window.addEventListener("keydown", event => {
-  if (event.key === "Escape" && $("title-menu").open) $("title-menu").open = false;
+  if (event.key === "Escape") {
+    if ($("title-menu").open) $("title-menu").open = false;
+    for (const m of document.querySelectorAll("details.menu[open]")) {
+      m.open = false;
+    }
+  }
 });
 $("generate").onclick = () => attempt(async () => {
   const value = $("length").value;

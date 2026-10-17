@@ -1,10 +1,11 @@
 :root { color-scheme: dark; font: 14px/1.45 system-ui, sans-serif; --bg:#202020; --panel:#282828; --raised:#383838; --line:#494949; --text:#efefef; --muted:#adadad; --accent:#d0d0d0; --danger:#efa9b9; }
 :root[data-theme=light] { color-scheme:light; --bg:#f5f5f5; --panel:#fff; --raised:#e8e8e8; --line:#cacaca; --text:#202020; --muted:#626262; --accent:#454545; --danger:#b42238; }
 * { box-sizing:border-box; }
-/* Firefox measures the body to size toolbar popups, not the root. */
-html { overflow:hidden; background:var(--bg); }
-body { width:420px; height:600px; margin:0; display:flex; flex-direction:column; background:var(--bg); color:var(--text); position:relative; }
-header { display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--panel); border-bottom:1px solid var(--line); min-height:48px; }
+/* Firefox measures the body to size toolbar popups, not the root; Chromium sizes the popup to the document. */
+html, body { width:420px; height:600px; max-height:600px; margin:0; padding:0; overflow:hidden; }
+html { background:var(--bg); }
+body { display:flex; flex-direction:column; background:var(--bg); color:var(--text); position:relative; }
+header { flex-shrink:0; display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--panel); border-bottom:1px solid var(--line); min-height:48px; }
 h1 { font-size:18px; font-weight:600; margin:0; line-height:1.2; }
 .heading { flex:1; min-width:0; display:flex; flex-direction:column; justify-content:center; position:relative; }
 .title-menu { position:relative; display:inline-block; width:fit-content; }
@@ -76,7 +77,8 @@ details.menu { position:relative; }
 details.menu>summary { cursor:pointer; list-style:none; font-size:20px; padding:2px 6px; display:flex; align-items:center; border-radius:6px; }
 details.menu>summary:hover { background:var(--raised); }
 details.menu>summary::-webkit-details-marker { display:none; }
-details.menu>div:not(.menu-dropdown) { position:absolute; right:0; top:30px; width:180px; background:var(--raised); border:1px solid var(--line); border-radius:8px; padding:5px; z-index:25; box-shadow:0 6px 20px #0006; }
+details.menu>div:not(.menu-dropdown) { position:absolute; right:0; top:calc(100% + 4px); width:180px; max-height:260px; overflow-y:auto; background:var(--raised); border:1px solid var(--line); border-radius:8px; padding:5px; z-index:40; box-shadow:0 6px 20px #0006; }
+details.menu.drop-up>div:not(.menu-dropdown) { top:auto; bottom:calc(100% + 4px); }
 details.menu button { display:flex; align-items:center; justify-content:flex-start; gap:8px; width:100%; border:0; text-align:left; background:transparent; font-size:13px; padding:6px 8px; }
 details.menu button:hover { background:var(--panel); }
 
