@@ -5,12 +5,19 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.8
+## Features in 0.2.10
 
 - A dark vault layout with search, type/folder/collection filters, favorites,
   archive and trash views; light and system themes are also available.
-  Generator, Send and Health tabs are configurable in the popup and add-on
+  Bundled SVG icons and optional direct-site favicons avoid font glyphs and
+  third-party favicon services. Generator, Send and Health tabs are configurable in the popup and add-on
   settings. Send and Health are hidden by default.
+- Multiline notes render sanitized Markdown (headings, lists, tables, links
+  and code), with plain-text viewing/copying and a multiline editor.
+- Item-list metadata is cached only in background memory for 30 seconds, checked
+  against the agent lock state before reuse, and cleared on writes/lock/account
+  changes. Passwords, note contents and item details are never cached. A loading
+  indicator covers native requests; details are still fetched on demand.
 - Multiple configured accounts; unlock directly with a password in the popup,
   or use the configured rbw credential source / pinentry; shared lock and sync.
 - Login, card, identity, secure note and SSH key browsing, details, creation,
@@ -160,3 +167,16 @@ On NixOS, enroll Home Manager’s `config.programs.firefox.finalPackage`
 and the system `pkgs.firefox` package: native messaging creates another wrapper,
 and its running executable belongs to that final output. The unwrapped package
 alone does not cover these executables.
+
+## Release assets
+
+Tagged CLI releases include the checked-in Mozilla-signed Firefox XPI and signed
+Chromium CRX, named `rbw-browser-VERSION-firefox.xpi` and
+`rbw-browser-VERSION-chromium.crx`. They are included in `SHA256SUMS` and the
+release provenance attestation. The extension version is independent of the CLI
+version. Main-branch build artifacts also include both extension packages.
+
+`python3 browser/release.py --output dist` verifies that both packages match the
+shared extension source and generated manifests before preparing release assets.
+Signing stays outside CI; no extension signing credentials are needed by the
+release workflow.

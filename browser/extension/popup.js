@@ -6,7 +6,8 @@ for (const label of document.querySelectorAll("[data-extension-version]")) {
   label.title = "Loaded rbw extension version";
 }
 const labels = { login: "Login", card: "Card", identity: "Identity", secure_note: "Secure note", ssh_key: "SSH key" };
-const icons = { login: "▣", card: "▰", identity: "♙", secure_note: "▤", ssh_key: "⌘" };
+const icons = { login: "key", card: "card", identity: "identity", secure_note: "note", ssh_key: "terminal" };
+for (const el of document.querySelectorAll("[data-icon]")) el.replaceChildren(icon(el.dataset.icon));
 const schema = {
   login: ["username", "password", "totp"],
   card: ["cardholder_name", "number", "brand", "exp_month", "exp_year", "code"],
@@ -16,11 +17,17 @@ const schema = {
 const secret = name => ["password", "totp", "code", "number", "ssn", "license_number", "passport_number", "private_key"].includes(name);
 let sendId = null;
 let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
+let loadingRequests = 0;
+function loading(active) { loadingRequests = Math.max(0, loadingRequests + (active ? 1 : -1)); $("loading").hidden = !loadingRequests; document.querySelector("main").setAttribute("aria-busy", String(!!loadingRequests)); }
 async function request(action, values = {}) {
-  const response = await api.runtime.sendMessage({ action, account: $("account").value, ...values });
-  if (response?.error) throw new Error(response.error);
-  if (!response) throw new Error("Extension background unavailable.");
-  return response.result;
+  const busy = !["preferences", "pending", "save_offers", "popup_notice", "status", "favicon"].includes(action);
+  if (busy) loading(true);
+  try {
+    const response = await api.runtime.sendMessage({ action, account: $("account").value, ...values });
+    if (response?.error) throw new Error(response.error);
+    if (!response) throw new Error("Extension background unavailable.");
+    return response.result;
+  } finally { if (busy) loading(false); }
 }
 function message(text, error = false) {
   $("message").textContent = text;
@@ -39,6 +46,7 @@ function button(label, action, cls) { const el = element("button", label, cls); 
 function pretty(value) { return value.replaceAll("_", " ").replace(/^./, c => c.toUpperCase()); }
 function show(page) {
   currentPage = page;
+  $("back").hidden = !["detail", "editor", "send-editor"].includes(page);
   $("unlock-panel").hidden = unlocked || !["locked", "approval"].includes(page);
   for (const id of ["vault", "generator", "send", "send-editor", "health", "settings", "detail", "editor", "approval", "locked"]) $(id).hidden = id !== page;
   $("title").textContent = ({ vault: "Vault", generator: "Generator", health: "Vault health", settings: "Settings", send: "Send", "send-editor": "Edit Send", detail: "Item", editor: currentItem ? "Edit item" : "New item", approval: "Passkey", locked: "Vault" })[page];
@@ -57,6 +65,7 @@ api.storage.onChanged.addListener((changes, area) => {
   applyTheme(preference.theme); applyTabs();
 });
 function clearVault() {
+  faviconObserver.disconnect();
   ++epoch; currentItem = null; currentDetail = null;
   for (const id of ["items", "suggestions", "detail-content", "edit-fields", "custom-fields", "audit-results", "approval-items", "send-items"]) $(id).replaceChildren();
   $("send-file").value = "";
@@ -78,6 +87,8 @@ async function finishApproval(text) {
   else await refresh();
 }
 async function refresh() {
+  loading(true);
+  try {
   clearVault();
   const status = await request("status"); unlocked = status.unlocked;
   selectOptions("account", status.accounts, "Primary account");
@@ -86,19 +97,20 @@ async function refresh() {
   if (approvalId) { await showApproval(approvalId); return; }
   if (!unlocked) { show("locked"); return; }
   show("vault"); await search(); await suggestions();
+  } finally { loading(false); }
 }
 async function search() {
   const current = ++epoch;
   const result = await request("search", { query: $("query").value, kind: $("kind").value, folder: $("folder").value, collection: $("collection").value, view: $("view").value });
   if (current !== epoch) return;
-  selectOptions("folder", result.folders, "▱ Folder"); selectOptions("collection", result.collections, "▤ Collection");
+  selectOptions("folder", result.folders, "Folder"); selectOptions("collection", result.collections, "Collection");
   $("folder-list").replaceChildren(...result.folders.map(f => new Option(f)));
   const groups = new Map();
   for (const item of result.items) {
     const group = item.matched ? "Autofill suggestions" : item.type === "card" ? "Cards" : item.type === "identity" ? "Identities" : item.type === "secure_note" ? "Secure notes" : item.type === "ssh_key" ? "SSH keys" : "Logins";
     if (!groups.has(group)) groups.set(group, []); groups.get(group).push(item);
   }
-  $("items").replaceChildren();
+  faviconObserver.disconnect(); $("items").replaceChildren();
   for (const [title, items] of groups) {
     $("items").append(element("h3", `${title} · ${items.length}`));
     for (const item of items) $("items").append(itemRow(item));
@@ -106,21 +118,41 @@ async function search() {
   if (!result.items.length) $("items").append(element("p", "No items found.", "empty"));
   $("count").textContent = result.total > result.limit ? `${result.limit} of ${result.total} items. Narrow your search to see more.` : `${result.total} items`;
 }
+function actionButton(label, name, action, cls) {
+  const el = button("", action, cls); el.append(icon(name), element("span", label)); el.title = label; el.setAttribute("aria-label", label); return el;
+}
+const faviconObserver = new IntersectionObserver(entries => {
+  for (const entry of entries) if (entry.isIntersecting) {
+    faviconObserver.unobserve(entry.target);
+    const target = entry.target;
+    request("favicon", { origin: target.dataset.origin }).then(value => {
+      if (!value || !target.isConnected) return;
+      const image = element("img"); image.alt = ""; image.src = value; image.width = 24; image.height = 24;
+      image.onerror = () => target.replaceChildren(icon(target.dataset.fallback)); target.replaceChildren(image);
+    }).catch(() => {});
+  }
+}, { root: document.querySelector("main"), rootMargin: "80px" });
 function itemRow(item) {
-  const row = element("article"); row.append(element("span", item.passkeys ? "⚿" : icons[item.type], "item-icon"));
+  const row = element("article"); const image = element("span", null, "item-icon");
+  image.dataset.fallback = item.passkeys ? "key" : icons[item.type]; image.append(icon(image.dataset.fallback)); row.append(image);
+  if (preference.favicons && item.iconOrigin) { image.dataset.origin = item.iconOrigin; faviconObserver.observe(image); }
   const main = button("", async () => { if (item.deleted) return; await openDetail(item.id); }, "item-main");
-  main.append(element("strong", `${item.favorite ? "☆ " : ""}${item.name}`), element("small", item.username || labels[item.type])); row.append(main);
+  const title = element("div", null, "item-title");
+  if (item.favorite) { const star = icon("star"); star.classList.add("favorite-icon"); title.append(star); }
+  title.append(element("strong", item.name)); main.append(title, element("small", item.username || labels[item.type])); row.append(main);
   const actions = element("div", null, "item-actions");
   if (item.deleted) actions.append(button("Restore", async () => { await request("mutate", { item: item.id, mutation: "restore" }); await search(); }));
   else {
-    if (item.matched || ["card", "identity"].includes(item.type)) { const fill = button("↳", async () => { const n = await request("fill", { item: item.id, type: item.type }); message(`Filled ${n} fields. Submit the form when ready.`); }); fill.title = "Fill"; fill.setAttribute("aria-label", `Fill ${item.name}`); actions.append(fill); }
+    if (item.matched || ["card", "identity"].includes(item.type)) { const fill = actionButton("Fill", "fill", async () => { const n = await request("fill", { item: item.id, type: item.type }); message(`Filled ${n} fields. Submit the form when ready.`); }); fill.title = "Fill"; fill.setAttribute("aria-label", `Fill ${item.name}`); actions.append(fill); }
     const field = item.type === "login" ? "password" : item.type === "card" ? "number" : item.type === "identity" ? "email" : item.type === "ssh_key" ? "public_key" : "notes";
-    const copy = button("▢", () => copyField(item.id, field)); copy.title = "Copy"; copy.setAttribute("aria-label", `Copy ${field}`); actions.append(copy);
-    const menu = element("details", null, "menu"); const summary = element("summary", "⋮"); summary.setAttribute("aria-label", `Actions for ${item.name}`); menu.append(summary);
+    const copy = actionButton("Copy", "copy", () => copyField(item.id, field)); copy.title = "Copy"; copy.setAttribute("aria-label", `Copy ${field}`); actions.append(copy);
+    const menu = element("details", null, "menu"); const summary = element("summary"); summary.append(icon("more")); summary.setAttribute("aria-label", `Actions for ${item.name}`); menu.append(summary);
     const entries = element("div");
-    entries.append(button("View item", () => openDetail(item.id)), button("Edit", async () => { await openDetail(item.id); editItem(); }));
+    entries.append(actionButton("View item", "note", () => openDetail(item.id)), actionButton("Edit", "edit", async () => { await openDetail(item.id); editItem(); }));
     if (item.type === "login") for (const [label, field] of [["Copy username", "username"], ["Copy password", "password"], ["Copy verification code", "totp"]]) entries.append(button(label, () => copyField(item.id, field)));
-    entries.append(button(item.favorite ? "Remove favorite" : "Favorite", async () => { await request("mutate", { item: item.id, mutation: "favorite" }); await search(); }));
+    entries.append(actionButton(item.favorite ? "Remove favorite" : "Favorite", "star", async () => { await request("mutate", { item: item.id, mutation: "favorite" }); await search(); }),
+      actionButton(item.archived ? "Unarchive" : "Archive", "archive", async () => { await request("mutate", { item: item.id, mutation: "archive" }); await search(); }),
+      actionButton("Move to trash", "trash", async () => { if (!confirm("Move this item to trash?")) return; await request("mutate", { item: item.id, mutation: "delete" }); await search(); }, "danger"));
     menu.append(entries); actions.append(menu);
   }
   row.append(actions); return row;
@@ -132,6 +164,24 @@ function detailField(label, value, item, field, hidden = false) {
   if (hidden) row.append(button("Show", async () => { input.type = input.type === "password" ? "text" : "password"; }));
   if (field) row.append(button("Copy", () => copyField(item, field)));
   section.append(row); return section;
+}
+function noteField(text, item) {
+  const section = element("section", null, "field note-field"); const toolbar = element("div", null, "note-toolbar"); toolbar.append(element("strong", "Notes"));
+  const content = element("div", null, "markdown"); let raw = false;
+  const render = () => {
+    if (raw) { content.replaceChildren(element("pre", text)); return; }
+    const fragment = DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: true }), {
+      RETURN_DOM_FRAGMENT: true, USE_PROFILES: { html: true }, FORBID_TAGS: ["img", "style", "form", "input", "button", "textarea", "select", "video", "audio", "source"], FORBID_ATTR: ["style", "id", "name", "src", "srcset", "background", "poster", "ping"],
+    });
+    for (const link of fragment.querySelectorAll("a")) {
+      const href = link.getAttribute("href") || "";
+      if (!/^(https?:|mailto:)/i.test(href)) { link.replaceWith(...link.childNodes); continue; }
+      link.target = "_blank"; link.rel = "noopener noreferrer"; link.referrerPolicy = "no-referrer";
+    }
+    content.replaceChildren(fragment);
+  };
+  const toggle = button("Plain text", async () => { raw = !raw; toggle.textContent = raw ? "Markdown" : "Plain text"; render(); });
+  toolbar.append(toggle, actionButton("Copy", "copy", () => copyField(item, "notes"))); section.append(toolbar, content); render(); return section;
 }
 async function openDetail(item) {
   const current = ++epoch;
@@ -145,7 +195,7 @@ async function openDetail(item) {
   }
   if (data.totp) content.append(button("Copy verification code", () => copyField(item, "totp")));
   for (const uri of data.uris || []) content.append(detailField("Website", uri.uri, item));
-  if (detail.cipher.notes) content.append(detailField("Notes", detail.cipher.notes, item, "notes", true));
+  if (detail.cipher.notes) content.append(noteField(detail.cipher.notes, item));
   for (const [i, field] of (detail.cipher.fields || []).entries()) content.append(detailField(field.name || "Custom field", field.value || "", item, `custom/${i}`, field.type === "hidden"));
   for (const passkey of detail.passkeys) { content.append(element("h3", "Passkey"), element("p", `${passkey.rp} · ${passkey.user || ""}`), element("p", `Created ${passkey.created || "unknown"}`, "hint")); }
   if (detail.history.length) { const history = element("details"); history.append(element("summary", `Password history · ${detail.history.length}`)); for (const entry of detail.history) history.append(detailField(entry.last_used_date, entry.password, item, null, true)); content.append(history); }
@@ -170,12 +220,17 @@ async function openDetail(item) {
   }); content.append(upload);
   if (detail.collection_options?.length) {
     content.append(element("h3", "Collections"));
-    const select = element("select"); select.multiple = true; select.setAttribute("aria-label", "Item collections");
-    for (const collection of detail.collection_options) select.append(new Option(collection.name, collection.id, false, detail.collection_ids.includes(collection.id)));
-    content.append(select, button("Save collections", async () => { await request("set_collections", { item, collections: [...select.selectedOptions].map(o => o.value) }); message("Collections updated."); await openDetail(item); }));
+    const dropdown = element("details", null, "collection-picker"); const summary = element("summary");
+    const updateSummary = () => { const count = dropdown.querySelectorAll("input:checked").length; summary.textContent = count ? `${count} collection${count === 1 ? "" : "s"} selected` : "Choose collections"; };
+    dropdown.append(summary);
+    for (const collection of detail.collection_options) {
+      const label = element("label"); const input = element("input"); input.type = "checkbox"; input.value = collection.id; input.checked = detail.collection_ids.includes(collection.id); input.onchange = updateSummary; label.append(input, document.createTextNode(" " + collection.name)); dropdown.append(label);
+    }
+    updateSummary(); content.append(dropdown, actionButton("Save collections", "collections", async () => { await request("set_collections", { item, collections: Array.from(dropdown.querySelectorAll("input:checked"), input => input.value) }); message("Collections updated."); await openDetail(item); }));
   }
-  $("favorite").textContent = detail.favorite ? "Remove favorite" : "Favorite";
-  $("archive").textContent = detail.archived ? "Unarchive" : "Archive";
+  $("favorite").replaceChildren(icon("star"), document.createTextNode(detail.favorite ? " Unfavorite" : " Favorite"));
+  $("favorite").classList.toggle("is-favorite", detail.favorite);
+  $("archive").replaceChildren(icon("archive"), document.createTextNode(detail.archived ? " Unarchive" : " Archive"));
 }
 function renderEditFields(data = {}) {
   const type = $("edit-type").value; $("edit-fields").replaceChildren();
@@ -265,7 +320,7 @@ $("query").oninput = () => { clearTimeout(timer); ++epoch; timer = setTimeout(()
 for (const id of ["kind", "view", "folder", "collection"]) $(id).onchange = () => attempt(search);
 $("add").onclick = () => { if (currentPage === "send") editSend(); else editItem(true); }; $("edit").onclick = () => editItem(); $("edit-type").onchange = () => renderEditFields(); $("add-custom").onclick = () => addCustom();
 $("cancel-edit").onclick = () => attempt(async () => { if (currentItem) await openDetail(currentItem); else await refresh(); });
-$("back").onclick = () => attempt(refresh);
+$("back").onclick = () => attempt(async () => { if (currentPage === "editor" && currentItem) await openDetail(currentItem); else if (currentPage === "send-editor") await loadSends(); else await refresh(); });
 for (const mutation of ["favorite", "archive", "delete"]) $(mutation).onclick = () => attempt(async () => {
   if (mutation === "delete" && !confirm("Move this item to trash? You can restore it from the Trash view.")) return;
   await request("mutate", { item: currentItem, mutation }); await refresh();
@@ -294,8 +349,8 @@ $("open-sidebar").onclick = () => attempt(async () => {
 });
 $("open-options").onclick = () => api.runtime.openOptionsPage();
 function applyTheme(theme) { document.documentElement.dataset.theme = theme === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme; }
-for (const id of ["setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health"]) $(id).onchange = () => attempt(async () => {
-  preference = await request("set_preferences", { preferences: { passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked } }); applyTheme(preference.theme); applyTabs();
+for (const id of ["setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
+  preference = await request("set_preferences", { preferences: { passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
 });
 setInterval(() => attempt(async () => {
   if (!approvalId) {
@@ -308,7 +363,7 @@ setInterval(() => attempt(async () => {
 }), 3000);
 attempt(async () => {
   preference = await request("preferences"); applyTheme(preference.theme); applyTabs();
-  $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme;
+  $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
   if (!approvalId) approvalId = await activeApproval();
   // Populate the account selector before applying a remembered selection.
   const status = await request("status"); selectOptions("account", status.accounts, "Primary account"); $("account").value = preference.account;

@@ -148,8 +148,22 @@ jobs:
           name: tarball-${{ matrix.target }}
           path: rbw-*.tar.gz
           if-no-files-found: error
+  browser:
+    name: Signed browser packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify and prepare signed extension assets
+        run: python3 browser/release.py --output dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: browser-extensions
+          path: |
+            dist/*.xpi
+            dist/*.crx
+          if-no-files-found: error
   release:
-    needs: build
+    needs: [build, browser]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -163,13 +177,24 @@ jobs:
           pattern: tarball-*
           merge-multiple: true
           path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: browser-extensions
+          path: dist
       - name: Generate checksums
-        run: cd dist && sha256sum -- *.tar.gz > SHA256SUMS
+        run: |
+          cd dist
+          sha256sum -- *.tar.gz *.xpi *.crx > SHA256SUMS
       - name: Verify checksums
-        run: cd dist && sha256sum --check SHA256SUMS
+        run: |
+          cd dist
+          sha256sum --check SHA256SUMS
       - uses: actions/attest@v4
         with:
-          subject-path: '${{ github.workspace }}/dist/*.tar.gz'
+          subject-path: |
+            ${{ github.workspace }}/dist/*.tar.gz
+            ${{ github.workspace }}/dist/*.xpi
+            ${{ github.workspace }}/dist/*.crx
       - name: Prepare release notes
         run: |
           version="${GITHUB_REF_NAME#v}"

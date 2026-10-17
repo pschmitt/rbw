@@ -7,7 +7,53 @@ const pending = new Map();
 const offers = new Map();
 const fillCycles = new Map();
 const popupNotices = new Map();
-const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false };
+// Only list metadata lives here. No details, notes, passwords or persistent storage.
+const listCache = new Map();
+const faviconCache = new Map();
+const faviconPending = new Map();
+let metadataEpoch = 0;
+function clearMetadata() {
+  ++metadataEpoch;
+  for (const map of [listCache, faviconCache]) { for (const entry of map.values()) clearTimeout(entry.timer); map.clear(); }
+  faviconPending.clear();
+}
+function cacheFor(map, key, value, milliseconds, maximum) {
+  if (map.size >= maximum) { const first = map.keys().next().value; clearTimeout(map.get(first).timer); map.delete(first); }
+  clearTimeout(map.get(key)?.timer);
+  const entry = { value, expires: Date.now() + milliseconds }; map.set(key, entry);
+  entry.timer = setTimeout(() => { if (map.get(key) === entry) map.delete(key); }, milliseconds);
+}
+async function favicon(origin) {
+  if (faviconPending.has(origin)) return faviconPending.get(origin);
+  const operation = fetchFavicon(origin); faviconPending.set(origin, operation);
+  try { return await operation; } finally { if (faviconPending.get(origin) === operation) faviconPending.delete(origin); }
+}
+async function fetchFavicon(origin) {
+  const generation = metadataEpoch;
+  const url = new URL(origin);
+  if (url.origin !== origin || url.username || url.password || !(url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "localhost"))) return null;
+  const cached = faviconCache.get(origin); if (cached) return cached.value;
+  let value = null;
+  try {
+    const response = await fetch(origin + "/favicon.ico", { credentials: "omit", referrerPolicy: "no-referrer", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(3000) });
+    const type = response.headers.get("content-type")?.split(";")[0].trim();
+    if (!response.ok || !["image/png", "image/jpeg", "image/gif", "image/webp", "image/x-icon", "image/vnd.microsoft.icon", "image/avif"].includes(type)) throw new Error("No icon");
+    if (Number(response.headers.get("content-length")) > 128 * 1024) throw new Error("Icon too large");
+    const reader = response.body.getReader(); let length = 0; const chunks = [];
+    while (true) {
+      const { done, value: chunk } = await reader.read(); if (done) break;
+      length += chunk.length;
+      if (length > 128 * 1024) { await reader.cancel(); throw new Error("Icon too large"); }
+      chunks.push(chunk);
+    }
+    const bytes = new Uint8Array(length); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    let binary = ""; for (const byte of bytes) binary += String.fromCharCode(byte);
+    value = `data:${type};base64,${btoa(binary)}`;
+  } catch (_) { /* Missing icons retain the local item-type icon. */ }
+  if (generation === metadataEpoch) cacheFor(faviconCache, origin, value, 5 * 60 * 1000, 128); return value;
+}
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, favicons: true };
 async function settings() { return { ...defaults, ...(await api.storage.local.get("preferences")).preferences }; }
 let nativePort;
 const nativeRequests = new Map();
@@ -16,6 +62,7 @@ function native(request) {
     nativePort = api.runtime.connectNative("org.rbw.browser");
     nativePort.onMessage.addListener(response => {
       if (response.code === "browser_not_authorized") {
+        clearMetadata();
         for (const entry of nativeRequests.values()) entry.reject(new Error(response.error));
         nativeRequests.clear();
         return;
@@ -25,7 +72,7 @@ function native(request) {
       if (response.error) entry.reject(new Error(response.error)); else entry.resolve(response.result);
     });
     nativePort.onDisconnect.addListener(() => {
-      nativePort = null;
+      nativePort = null; clearMetadata();
       for (const entry of nativeRequests.values()) entry.reject(new Error("Cannot connect to rbw. Check the native host installation and browser.clients allowlist, then retry."));
       nativeRequests.clear();
     });
@@ -144,9 +191,14 @@ async function fill(message, account) {
 }
 async function handle(message) {
   const account = message.account || null;
+  if (["lock", "sync", "save", "mutate", "set_collections", "folders", "import", "save_offer_apply", "passkey_approve"].includes(message.action)) clearMetadata();
   switch (message.action) {
     case "unlock": return native({ action: "unlock", account, password: typeof message.password === "string" ? message.password : null });
-    case "status": case "sync": case "audit":
+    case "status": {
+      const state = await native({ action: "status", account });
+      if (!state.unlocked) clearMetadata(); return state;
+    }
+    case "sync": case "audit":
       return native({ action: message.action, account });
     case "lock":
       fillCycles.clear(); popupNotices.clear();
@@ -165,12 +217,21 @@ async function handle(message) {
     case "set_preferences": {
       const old = await settings();
       const next = { ...old, ...Object.fromEntries(Object.entries(message.preferences || {}).filter(([k, v]) => (k in defaults) && typeof v === typeof defaults[k])) };
+      if (next.account !== old.account || !next.favicons) clearMetadata();
       await api.storage.local.set({ preferences: next }); return next;
     }
     case "search": {
       let tab; try { tab = await activeTab(); } catch (_) { /* Search also works on internal pages. */ }
-      return native({ action: "search", account, query: String(message.query || ""), url: tab?.url || null, site_only: !!message.siteOnly, kind: message.kind || null, folder: message.folder || null, collection: message.collection || null, view: message.view || null });
+      const query = { action: "search", account, query: String(message.query || ""), url: tab?.url || null, site_only: !!message.siteOnly, kind: message.kind || null, folder: message.folder || null, collection: message.collection || null, view: message.view || null };
+      const key = JSON.stringify(query); const cached = listCache.get(key);
+      if (cached && cached.expires > Date.now()) {
+        const state = await native({ action: "status", account });
+        if (!state.unlocked) { clearMetadata(); throw new Error("Vault locked by rbw-agent."); }
+        return cached.value;
+      }
+      const result = await native(query); cacheFor(listCache, key, result, 30000, 8); return result;
     }
+    case "favicon": return (await settings()).favicons ? favicon(message.origin) : null;
     case "folders": return native({ action: "folders", account, method: message.method, id: message.id || null, name: message.name || null });
     case "set_collections": return native({ action: "set_collections", account, item: message.item, collections: message.collections });
     case "send": return native({ action: "send", account, method: message.method, data: message.data || {} });
@@ -231,7 +292,9 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
   // Options and pop-out pages may themselves live in a tab. Authenticate the
   // exact extension document before handling the narrower content-script API.
   if (trustedUI) {
-    const operation = queue.then(() => handle(message)); queue = operation.catch(() => {});
+    const independent = ["preferences", "pending", "save_offers", "popup_notice", "favicon"].includes(message.action);
+    const operation = independent ? handle(message) : queue.then(() => handle(message));
+    if (!independent) queue = operation.catch(() => {});
     operation.then(result => respond({ result }), error => respond({ error: error.message || "Operation failed." })); return true;
   }
   if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "inline_choices", "inline_fill", "autofill_load"].includes(message?.action)) return false;

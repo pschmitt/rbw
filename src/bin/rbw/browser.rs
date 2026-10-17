@@ -490,7 +490,27 @@ fn dispatch(
                         {
                             continue;
                         }
-                        items.push(json!({"id": entry.id, "name": name, "username": subtitle, "matched": matched, "type": ty, "passkeys": passkeys, "favorite": entry.favorite, "folder": folder_name, "archived": entry.archived, "deleted": entry.deleted, "protected": entry.master_password_reprompt()}));
+                        let icon_origin = if let rbw::db::EntryData::Login {
+                            uris,
+                            ..
+                        } = &entry.data
+                        {
+                            uris.iter()
+                                .filter_map(|uri| {
+                                    decrypt(entry, &uri.uri).ok()
+                                })
+                                .filter_map(|uri| url::Url::parse(&uri).ok())
+                                .find(|uri| {
+                                    uri.scheme() == "https"
+                                        || (uri.scheme() == "http"
+                                            && uri.host_str()
+                                                == Some("localhost"))
+                                })
+                                .map(|uri| uri.origin().ascii_serialization())
+                        } else {
+                            None
+                        };
+                        items.push(json!({"id": entry.id, "name": name, "iconOrigin": icon_origin, "username": subtitle, "matched": matched, "type": ty, "passkeys": passkeys, "favorite": entry.favorite, "folder": folder_name, "archived": entry.archived, "deleted": entry.deleted, "protected": entry.master_password_reprompt()}));
                     }
                     items.sort_by_key(|v| {
                         (

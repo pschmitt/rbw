@@ -11,6 +11,19 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify signed browser packages match their source
+        run: python3 browser/release.py --output dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: browser-extensions
+          path: |
+            dist/*.xpi
+            dist/*.crx
+          if-no-files-found: error
   build:
     runs-on: ubuntu-latest
     steps:
