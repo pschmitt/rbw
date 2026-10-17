@@ -1846,7 +1846,10 @@
 			if (!doc || !doc.documentElement) {
 				doc = implementation.createDocument(NAMESPACE, "template", null);
 				try {
-					doc.documentElement.innerHTML = IS_EMPTY_INPUT ? emptyHTML : dirtyPayload;
+					const parsed = new DOMParser().parseFromString(IS_EMPTY_INPUT ? emptyHTML : dirtyPayload, "text/html");
+					if (parsed && parsed.body) {
+						doc.documentElement.append(...parsed.body.childNodes);
+					}
 				} catch (_) {}
 			}
 			const body = doc.body || doc.documentElement;
