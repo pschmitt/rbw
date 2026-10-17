@@ -5,6 +5,9 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
+## Features in 0.2.30
+- Keep the app icon fixed when the back chevron appears in the popup header.
+
 ## Features in 0.2.29
 
 - Keep the app icon fixed while the back chevron appears, and move the Add button clear of the popup edge.
