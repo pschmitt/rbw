@@ -20582,6 +20582,26 @@ fn generate_totp_algorithm_type(
     }
 }
 
+/// Return a code and its validity window without exposing the authenticator key.
+pub fn generate_totp_with_expiry(
+    secret: &str,
+) -> anyhow::Result<(String, u64, u64)> {
+    let period = parse_totp_secret(secret)?.period;
+    anyhow::ensure!(period > 0, "TOTP period must be greater than zero");
+    loop {
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        let code = generate_totp(secret)?;
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        if before / period == after / period {
+            return Ok((code, period, (after / period + 1) * period));
+        }
+    }
+}
+
 pub fn generate_totp(secret: &str) -> anyhow::Result<String> {
     let totp_params = parse_totp_secret(secret)?;
     let alg = totp_params.algorithm.as_str();
@@ -20609,6 +20629,24 @@ pub fn generate_totp(secret: &str) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod test {
+    #[test]
+    fn browser_totp_codes_include_their_actual_validity_window() {
+        // Public RFC-style test material, never a real authenticator key.
+        for (secret, expected_period, digits) in [
+            ("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 30, 6),
+            ("otpauth://totp/demo?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&period=45&digits=8", 45, 8),
+            ("steam://GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 30, 5),
+        ] {
+            let (code, period, expires) = super::generate_totp_with_expiry(secret).unwrap();
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+            assert_eq!(code.len(), digits);
+            assert_eq!(period, expected_period);
+            assert_eq!(expires % period, 0);
+            assert!(expires >= now && expires <= now + period);
+        }
+        assert!(super::generate_totp_with_expiry("otpauth://totp/demo?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&period=0").is_err());
+    }
+
     #[test]
     fn write_outcomes_survive_context_and_do_not_stash_committed_edits() {
         let err = anyhow::anyhow!("sync failed")

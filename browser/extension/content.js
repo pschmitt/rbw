@@ -38,10 +38,21 @@
 (() => {
   try { if (window.top.location.origin !== location.origin) return; } catch (_) { return; }
   const api = globalThis.browser || chrome;
-  let host, generation = 0;
+  let host, generation = 0, filled = false;
+  const fills = new Set();
+  api.runtime.onMessage.addListener((message, sender) => {
+    if (sender.id !== api.runtime.id || message?.action !== "rbw_fill_state") return;
+    close();
+    if (message.active) fills.add(message.token);
+    else { fills.delete(message.token); filled ||= message.filled === true; }
+  });
+  // Only deliberate interaction re-enables suggestions after filling; focus() is trusted too.
+  document.addEventListener("pointerdown", event => { if (event.isTrusted && !fills.size) filled = false; }, true);
+  document.addEventListener("keydown", event => { if (event.isTrusted && !fills.size && event.key !== "Escape") filled = false; }, true);
   function close() { ++generation; host?.remove(); host = null; }
   document.addEventListener("focusin", async event => {
     const input = event.composedPath()[0];
+    if (filled || fills.size) { close(); return; }
     if (!(input instanceof HTMLInputElement) || !event.isTrusted || !isSecureContext || !["password", "email", "text"].includes(input.type) || (input.type === "text" && input.autocomplete !== "username")) { if (!host?.contains(input)) close(); return; }
     close(); const current = generation;
     const result = await api.runtime.sendMessage({ action: "inline_choices" }).catch(() => null);
@@ -61,6 +72,7 @@
     dismiss.addEventListener("click", event => { if (event.isTrusted) close(); });
     header.append(title, dismiss); box.append(header);
 
+    const iconTargets = new Map();
     for (const item of result.result) {
       const button = document.createElement("button"); button.type = "button"; button.className = "item-btn";
       const iconCol = document.createElement("span"); iconCol.className = "icon-col";
@@ -71,6 +83,7 @@
         const keyIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg"); keyIcon.setAttribute("viewBox", "0 0 24 24"); keyIcon.setAttribute("aria-hidden", "true");
         const keyPath = document.createElementNS(keyIcon.namespaceURI, "path"); keyPath.setAttribute("d", "M13 15a5 5 0 1 1-1.5-3.5l8-8L22 6l-2 2-2-2-2 2 2 2-3 3"); keyIcon.append(keyPath); iconCol.append(keyIcon);
       }
+      iconTargets.set(item.id, iconCol);
       const textCol = document.createElement("div"); textCol.className = "text-col";
       const name = document.createElement("strong"); name.textContent = item.name;
       textCol.append(name);
@@ -86,12 +99,36 @@
     shadow.append(box);
     const rect = input.getBoundingClientRect(); host.style.cssText = `position:fixed!important;z-index:2147483647!important;top:${Math.min(rect.bottom + 4, innerHeight - 230)}px!important;left:${Math.max(0, Math.min(rect.left, innerWidth - 300))}px!important;width:${Math.max(rect.width, 240)}px!important`;
     document.documentElement.append(host);
+    api.runtime.sendMessage({ action: "inline_icons" }).then(response => {
+      if (generation !== current || !host) return;
+      for (const item of response?.result || []) {
+        const target = iconTargets.get(item.id);
+        if (!target || !item.favicon) continue;
+        const image = document.createElement("img"); image.alt = ""; image.src = item.favicon;
+        image.onload = () => { if (generation === current && host) target.replaceChildren(image); };
+      }
+    }).catch(() => {});
   });
   document.addEventListener("keydown", event => { if (event.key === "Escape") close(); });
   window.addEventListener("scroll", close, true); window.addEventListener("resize", close);
 })();
 
 if (window === window.top) {
-  const loaded = () => (globalThis.browser || chrome).runtime.sendMessage({ action: "autofill_load" }).catch(() => {});
+  const loaded = () => {
+    let observer, timer, expiry;
+    const eligible = () => document.querySelector('input[type="password"]:not([autocomplete="new-password"]),input[autocomplete="username"]');
+    const check = () => {
+      if (!eligible()) return false;
+      observer?.disconnect(); clearTimeout(timer); clearTimeout(expiry);
+      (globalThis.browser || chrome).runtime.sendMessage({ action: "autofill_load" }).catch(() => {});
+      return true;
+    };
+    if (check()) return;
+    // Briefly cover asynchronously rendered sign-in forms without keeping a
+    // permanent observer or querying the vault on ordinary content/search pages.
+    observer = new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(check, 250); });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    expiry = setTimeout(() => { observer.disconnect(); clearTimeout(timer); }, 10000);
+  };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", loaded, { once: true }); else loaded();
 }

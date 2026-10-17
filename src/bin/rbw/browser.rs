@@ -48,6 +48,9 @@ enum Operation {
         item: String,
         url: String,
     },
+    Totp {
+        item: String,
+    },
     Copy {
         item: String,
         field: String,
@@ -363,6 +366,44 @@ fn dispatch(
                     let query = query.to_lowercase();
                     let mut items = Vec::new();
                     let mut folders = std::collections::BTreeSet::new();
+                    // A search used to open an agent socket for every field (and
+                    // decrypt URIs twice). Batch only list metadata, keeping the
+                    // plaintext local to this request, never in a browser cache
+                    // alongside passwords, notes, TOTP seeds or custom fields.
+                    let metadata = search_metadata(
+                        &db.entries,
+                        view.as_deref(),
+                        kind.as_deref(),
+                    )?;
+                    let decrypt = |entry: &rbw::db::Entry, value: &str| {
+                        metadata.get(
+                            value,
+                            entry.key.as_deref(),
+                            entry.org_id.as_deref(),
+                        )
+                    };
+                    let matches =
+                        |entry: &rbw::db::Entry,
+                         uris: &[rbw::db::Uri],
+                         url: &url::Url|
+                         -> anyhow::Result<bool> {
+                            for uri in uris {
+                                let value = decrypt(entry, &uri.uri)?;
+                                if url.scheme() == "http"
+                                    && value.starts_with("https:")
+                                {
+                                    continue;
+                                }
+                                if commands::matches_url(
+                                    &value,
+                                    uri.match_type,
+                                    url,
+                                ) {
+                                    return Ok(true);
+                                }
+                            }
+                            Ok(false)
+                        };
                     for entry in &db.entries {
                         let in_view = match view.as_deref().unwrap_or("vault")
                         {
@@ -381,7 +422,7 @@ fn dispatch(
                         let folder_name = entry
                             .folder
                             .as_deref()
-                            .map(|f| actions::decrypt(f, None, None))
+                            .map(|f| metadata.get(f, None, None))
                             .transpose()?;
                         if let Some(f) = &folder_name {
                             folders.insert(f.clone());
@@ -553,6 +594,21 @@ fn dispatch(
                         "password": password.as_deref().map(|s| decrypt(entry, s)).transpose()?}),
                     )
                 }
+                Operation::Totp { item } => {
+                    let entry = entry(&db, &item)?;
+                    let rbw::db::EntryData::Login {
+                        totp: Some(secret), ..
+                    } = &entry.data
+                    else {
+                        anyhow::bail!("authenticator key unavailable");
+                    };
+                    let secret = decrypt(entry, secret)?;
+                    let (code, period, expires_at) =
+                        commands::generate_totp_with_expiry(&secret)?;
+                    Ok(
+                        json!({"code": code, "period": period, "expiresAt": expires_at}),
+                    )
+                }
                 Operation::Copy { item, field } => {
                     let entry = entry(&db, &item)?;
                     let value = if field == "notes" {
@@ -563,6 +619,13 @@ fn dispatch(
                                 .as_deref()
                                 .context("notes unavailable")?,
                         )?
+                    } else if let Some(index) = field.strip_prefix("history/")
+                    {
+                        let history = entry
+                            .history
+                            .get(index.parse::<usize>()?)
+                            .context("password history entry unavailable")?;
+                        decrypt(entry, &history.password)?
                     } else if let Some(index) = field.strip_prefix("custom/")
                     {
                         let custom = entry
@@ -977,6 +1040,133 @@ fn entry<'a>(
         .find(|e| e.id == id && !e.deleted)
         .context("item unavailable")?;
     Ok(entry)
+}
+
+// Per-search metadata batch; all values are dropped before the next request.
+struct SearchMetadata {
+    indices: std::collections::HashMap<
+        (String, Option<String>, Option<String>),
+        usize,
+    >,
+    results: Vec<rbw::protocol::DecryptResult>,
+}
+impl SearchMetadata {
+    fn get(
+        &self,
+        value: &str,
+        key: Option<&str>,
+        org: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let index = self
+            .indices
+            .get(&(
+                value.to_owned(),
+                key.map(str::to_owned),
+                org.map(str::to_owned),
+            ))
+            .context("missing search metadata")?;
+        match &self.results[*index] {
+            rbw::protocol::DecryptResult::Success { plaintext } => {
+                Ok(plaintext.clone())
+            }
+            rbw::protocol::DecryptResult::Failure { .. } => {
+                anyhow::bail!("failed to decrypt search metadata")
+            }
+        }
+    }
+}
+fn search_metadata(
+    entries: &[rbw::db::Entry],
+    view: Option<&str>,
+    kind: Option<&str>,
+) -> anyhow::Result<SearchMetadata> {
+    let mut indices = std::collections::HashMap::new();
+    let mut requests = Vec::new();
+    let mut push = |value: &str, key: Option<&str>, org: Option<&str>| {
+        let tuple = (
+            value.to_owned(),
+            key.map(str::to_owned),
+            org.map(str::to_owned),
+        );
+        if let std::collections::hash_map::Entry::Vacant(slot) =
+            indices.entry(tuple)
+        {
+            slot.insert(requests.len());
+            requests.push(rbw::protocol::DecryptRequest {
+                cipherstring: value.to_owned(),
+                entry_key: key.map(str::to_owned),
+                org_id: org.map(str::to_owned),
+            });
+        }
+    };
+    for entry in entries {
+        let in_view = match view.unwrap_or("vault") {
+            "trash" => entry.deleted,
+            "archive" => entry.archived && !entry.deleted,
+            "favorites" => {
+                entry.favorite && !entry.deleted && !entry.archived
+            }
+            _ => !entry.deleted && !entry.archived,
+        };
+        if !in_view {
+            continue;
+        }
+        if let Some(folder) = &entry.folder {
+            push(folder, None, None);
+        }
+        let ty = match &entry.data {
+            rbw::db::EntryData::Login { .. } => "login",
+            rbw::db::EntryData::Card { .. } => "card",
+            rbw::db::EntryData::Identity { .. } => "identity",
+            rbw::db::EntryData::SecureNote => "secure_note",
+            rbw::db::EntryData::SshKey { .. } => "ssh_key",
+        };
+        if kind.is_some_and(|k| k != ty && !(k == "passkey" && matches!(&entry.data, rbw::db::EntryData::Login { fido2_credentials, .. } if !fido2_credentials.is_empty()))) { continue; }
+        let key = entry.key.as_deref();
+        let org = entry.org_id.as_deref();
+        push(&entry.name, key, org);
+        if let Some(folder) = &entry.folder {
+            push(folder, None, None);
+        }
+        match &entry.data {
+            rbw::db::EntryData::Login { username, uris, .. } => {
+                if let Some(value) = username {
+                    push(value, key, org);
+                }
+                for uri in uris {
+                    push(&uri.uri, key, org);
+                }
+            }
+            rbw::db::EntryData::Card { brand, number, .. } => {
+                if let Some(value) = brand {
+                    push(value, key, org);
+                }
+                if !entry.master_password_reprompt() {
+                    if let Some(value) = number {
+                        push(value, key, org);
+                    }
+                }
+            }
+            rbw::db::EntryData::Identity {
+                first_name,
+                last_name,
+                ..
+            } => {
+                for value in [first_name, last_name].into_iter().flatten() {
+                    push(value, key, org);
+                }
+            }
+            _ => {}
+        }
+    }
+    let count = requests.len();
+    let results = if requests.is_empty() {
+        Vec::new()
+    } else {
+        actions::decrypt_batch(requests)?
+    };
+    ensure!(results.len() == count, "incomplete search metadata batch");
+    Ok(SearchMetadata { indices, results })
 }
 
 fn decrypt(entry: &rbw::db::Entry, value: &str) -> anyhow::Result<String> {

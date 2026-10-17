@@ -1,10 +1,13 @@
 /* This function is serialized into an isolated world by scripting.executeScript. */
-function fillPage(expectedUrl, data) {
+function fillPage(expectedUrl, data, fillToken) {
   if (location.href !== expectedUrl) throw new Error("Page changed. Choose Fill again.");
   const all = root => [...root.querySelectorAll("input,textarea,select"), ...[...root.querySelectorAll("*")].filter(el => el.shadowRoot).flatMap(el => all(el.shadowRoot))];
   const fields = all(document).filter(el => !el.disabled && !el.readOnly && el.getClientRects().length && getComputedStyle(el).visibility !== "hidden" && el.type !== "hidden");
+  const previous = new Map();
+  const read = el => ({ value: el.value, checked: el.checked });
   const setter = (el, value) => {
     if (value == null || !el) return;
+    if (!previous.has(el)) previous.set(el, { before: read(el) });
     const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     if (el instanceof HTMLInputElement && el.type === "checkbox") Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked").set.call(el, value === true || value === "true");
     else if (el instanceof HTMLSelectElement) {
@@ -19,8 +22,13 @@ function fillPage(expectedUrl, data) {
     const passwords = fields.filter(el => el.type === "password" && el.autocomplete !== "new-password");
     if (passwords.length > 1) throw new Error("Several password fields found. Select a login form.");
     const password = passwords[0];
-    const users = fields.filter(el => (!password?.form || el.form === password.form) && ["text", "email", "tel"].includes(el.type));
-    const user = users.find(el => el.autocomplete === "username") || users.find(el => el.type === "email") || users.at(-1);
+    const isSearch = el => el.type === "search" || el.closest('[role="search"],form[action*="search"]') || /search|(^|[\s_-])q($|[\s_-])/i.test([el.id, el.name, el.autocomplete, el.getAttribute("aria-label"), el.placeholder].filter(Boolean).join(" "));
+    const users = fields.filter(el => (!password?.form || el.form === password.form) && ["text", "email", "tel"].includes(el.type) && !isSearch(el));
+    const recognizable = el => el.autocomplete?.split(/\s+/).includes("username") || el.type === "email" || /(^|[\s_-])(user(name)?|email|login|identifier|account)([\s_-]|$)/i.test([el.id, el.name, el.getAttribute("aria-label")].filter(Boolean).join(" "));
+    // Generic text fields are only eligible inside the same real login form.
+    // Username-only flows require explicit login semantics; never guess a search box.
+    const usernameOnly = el => el.autocomplete?.split(/\s+/).includes("username") || /username|identifier|login/i.test([el.id, el.name].join(" ")) || (recognizable(el) && /login|sign.?in|auth/i.test([el.form?.id, el.form?.name, el.form?.getAttribute("action"), el.form?.getAttribute("aria-label")].filter(Boolean).join(" ")));
+    const user = password ? users.find(recognizable) || (password.form ? users.filter(el => el.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING).at(-1) : null) : users.find(usernameOnly);
     put(user, data.username); put(password, data.password);
     if (password) password.focus(); else user?.focus();
   } else {
@@ -40,9 +48,35 @@ function fillPage(expectedUrl, data) {
       put(el, value);
     }
   }
+  if (count) {
+    const token = fillToken || crypto.randomUUID();
+    for (const [el, state] of previous) state.filled = read(el);
+    const undo = { token, restore: () => {
+      let restored = 0;
+      for (const [el, state] of previous) {
+        const current = read(el);
+        if (!el.isConnected || current.value !== state.filled.value || current.checked !== state.filled.checked) continue;
+        const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        if (el.type === "checkbox") Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked").set.call(el, state.before.checked);
+        else Object.getOwnPropertyDescriptor(proto, "value").set.call(el, state.before.value);
+        el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); restored++;
+      }
+      previous.clear(); return restored;
+    }, clear: () => previous.clear() };
+    globalThis.__rbwUndoFill?.clear(); globalThis.__rbwUndoFill = undo;
+    setTimeout(() => { undo.clear(); if (globalThis.__rbwUndoFill === undo) delete globalThis.__rbwUndoFill; }, 10000);
+  }
   return count;
 }
 
+
+/* Same isolated world as fillPage; no form values cross the messaging boundary. */
+function undoPageFill(expectedUrl, token, restore) {
+  if (location.href !== expectedUrl || globalThis.__rbwUndoFill?.token !== token) return 0;
+  const undo = globalThis.__rbwUndoFill; delete globalThis.__rbwUndoFill;
+  if (restore) return undo.restore();
+  undo.clear(); return 0;
+}
 
 /* Render a transient notice without publishing vault metadata in the page DOM. */
 function showFillNotice(expectedUrl, notice) {
@@ -76,9 +110,26 @@ function showFillNotice(expectedUrl, notice) {
   const close = document.createElement("button"); close.type = "button"; const closeIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg"); closeIcon.setAttribute("viewBox", "0 0 24 24"); closeIcon.setAttribute("width", "16"); closeIcon.setAttribute("height", "16"); closeIcon.setAttribute("aria-hidden", "true");
   const closePath = document.createElementNS(closeIcon.namespaceURI, "path"); closePath.setAttribute("d", "M18 6 6 18M6 6l12 12"); closePath.setAttribute("stroke", "currentColor"); closePath.setAttribute("stroke-width", "2"); closeIcon.append(closePath); close.append(closeIcon); close.setAttribute("aria-label", "Dismiss autofill notification");
   let timer;
-  const dismiss = () => { clearTimeout(timer); host.remove(); document.removeEventListener("keydown", onKey); };
+  const undo = !notice.error && !notice.title ? notice.undoToken : null;
+  const api = globalThis.browser || chrome;
+  const clearUndo = () => { if (undo) api.runtime.sendMessage({ action: "dismiss_fill", token: undo }).catch(() => {}); };
+  const dismiss = () => { clearTimeout(timer); clearUndo(); host.remove(); document.removeEventListener("keydown", onKey); };
   const onKey = event => { if (event.key === "Escape") dismiss(); };
   close.addEventListener("click", dismiss); document.addEventListener("keydown", onKey);
-  box.append(text, close); shadow.append(box); document.documentElement.append(host);
-  timer = setTimeout(dismiss, 4500);
+  box.append(text);
+  if (undo) {
+    const undoButton = document.createElement("button"); undoButton.type = "button"; undoButton.textContent = "Undo"; undoButton.setAttribute("aria-label", "Undo autofill"); undoButton.style.cssText = "font:600 13px system-ui;align-self:center;padding:6px";
+    undoButton.addEventListener("click", async () => {
+      undoButton.disabled = true;
+      try {
+        const response = await api.runtime.sendMessage({ action: "undo_fill", token: undo });
+        const restored = response?.result || 0; undoButton.remove();
+        title.textContent = restored ? "Autofill undone" : "Fields kept";
+        account.textContent = restored ? "Previous field values restored. Later edits were preserved." : "The fields changed or undo expired; your edits were preserved.";
+      } catch (_) { title.textContent = "Undo unavailable"; undoButton.remove(); }
+      clearTimeout(timer); timer = setTimeout(dismiss, 3000);
+    }); box.append(undoButton);
+  }
+  box.append(close); shadow.append(box); document.documentElement.append(host);
+  timer = setTimeout(dismiss, undo ? 8000 : 4500);
 }

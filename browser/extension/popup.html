@@ -32,11 +32,22 @@
 <div id="message" class="popup-notification" role="status" aria-live="polite" hidden><span id="message-text"></span><button id="dismiss-message" aria-label="Dismiss notification" title="Dismiss"><span data-icon="close"></span></button></div>
 <main>
 <section id="unlock-panel" hidden><form id="unlock-form"><label>Master password<input id="unlock-password" maxlength="4096" type="password" autocomplete="off" spellcheck="false" required autofocus></label><button type="submit" class="primary"><span data-icon="unlock"></span>Unlock</button><button type="button" id="unlock-configured"><span data-icon="settings"></span>Use configured unlock method</button></form><p class="hint">Sent directly to your shared rbw-agent. Never saved by the extension.</p></section>
-<section id="approval" hidden><h2 id="approval-title"></h2><p class="origin" id="approval-origin"></p><p id="approval-description"></p><label id="approval-verify-label" hidden>Master password for site verification<input id="approval-password" type="password" autocomplete="off" maxlength="4096"><small id="approval-verify-hint"></small></label><div id="approval-items"></div><div class="actions"><button id="use-device"><span data-icon="key"></span>Use another authenticator</button><button id="cancel-passkey"><span data-icon="close"></span>Cancel</button></div></section>
+<section id="approval" hidden>
+<div class="passkey-intro"><span class="passkey-emblem" data-icon="key"></span><div><h2 id="approval-title"></h2><p id="approval-origin"></p></div></div>
+<p id="approval-description" class="hint"></p>
+<div id="approval-items" class="passkey-choices"></div>
+<form id="approval-verification" class="field" hidden>
+<h3>Verify your identity</h3><p class="hint">This site requires identity verification before using this passkey.</p>
+<label>Master password<div class="editor-secret"><input id="approval-password" type="password" autocomplete="off" maxlength="4096" spellcheck="false" required><button type="button" id="approval-reveal" class="icon" aria-label="Show" title="Show"><span data-icon="eye"></span></button></div></label>
+<div class="actions"><button type="submit" class="primary"><span data-icon="check"></span>Verify and continue</button><button type="button" id="approval-verify-back"><span data-icon="back"></span>Back</button></div>
+</form>
+<div class="passkey-alternatives"><button id="use-device"><span data-icon="key"></span>Use another authenticator</button><button id="cancel-passkey"><span data-icon="close"></span>Cancel</button></div>
+</section>
 <section id="locked" hidden><div class="lock-art" data-icon="vault"></div><h2>Your vault is locked</h2><p>Unlock your shared rbw-agent to access your vault.</p></section>
 <section id="vault" hidden>
-<div class="search-row"><div class="search"><span data-icon="search"></span><input id="query" type="search" autocomplete="off" placeholder="Search vault" aria-label="Search vault"><button id="filter-toggle" class="icon filter-toggle-btn" aria-label="Toggle filters" aria-expanded="false" aria-controls="filters" title="Filters"><span data-icon="filters"></span></button></div></div>
+<div class="search-row"><div class="search"><span data-icon="search"></span><input id="query" type="search" autocomplete="off" placeholder="Search vault" aria-label="Search vault"><button id="filter-toggle" class="icon filter-toggle-btn" aria-label="Toggle filters" aria-expanded="false" aria-controls="filters" title="Filters"><span data-icon="filters"></span></button></div>
 <div id="filters" class="filters" hidden><select id="view" aria-label="Vault view"><option value="home">Favorites + suggestions</option><option value="vault">All items</option><option value="favorites">☆ Favorites</option><option value="archive">Archive</option><option value="trash">Trash</option></select><select id="collection" aria-label="Collection"><option value="">Collection</option></select><select id="folder" aria-label="Folder"><option value="">Folder</option></select><select id="kind" aria-label="Type"><option value="">Type</option><option value="login">Login</option><option value="passkey">Passkey</option><option value="card">Card</option><option value="identity">Identity</option><option value="secure_note">Secure note</option><option value="ssh_key">SSH key</option></select></div>
+</div>
 <div id="suggestions"></div><div id="items"></div><p id="count" class="hint"></p>
 </section>
 <section id="detail" hidden><div id="detail-content"></div></section>

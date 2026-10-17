@@ -5,7 +5,31 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.15
+## Features in 0.2.19
+
+- Passkey account cards replace the old button list. Optional master-password
+  entry is removed from the chooser; required WebAuthn identity verification
+  appears only as a separate step after selecting a passkey.
+
+- Autofill excludes search controls and requires explicit sign-in semantics for
+  username-only forms. Ordinary pages do not trigger automatic vault searches.
+  The page banner has Undo, including same-origin frames; previous values stay
+  briefly in the isolated page context and later user edits are preserved.
+
+- Live verification codes with a validity countdown and Copy control; secret
+  fields in the editor have Show/Hide controls. Password history has Copy icons
+  using the agent clipboard policy.
+
+- Favorites render from a shared metadata-only cache across tabs, while site
+  suggestions refresh independently. Concurrent searches share one request;
+  native search batches metadata decryption through rbw-agent. Passwords and
+  item details are always fetched afresh and never stored in the list cache.
+- Autofill dismisses inline suggestions and suppresses programmatic-focus
+  reopening. Favicon downloads happen after suggestions render.
+- Sticky expanded filters, whole-card hover, and home ordering: suggestions,
+  favorite cards, favorite logins, favorite secure notes.
+- A dedicated, simpler toolbar icon with content-addressed filenames avoids
+  stale browser icon resources while preserving the richer icon inside the UI.
 
 - A dark vault layout with search, type/folder/collection filters, favorites,
   archive and trash views; light and system themes are also available.

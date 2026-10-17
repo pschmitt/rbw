@@ -6,16 +6,18 @@ let queue = Promise.resolve();
 const pending = new Map();
 const offers = new Map();
 const fillCycles = new Map();
+const fillUndos = new Map();
 const popupNotices = new Map();
 // Only list metadata lives here. No details, notes, passwords or persistent storage.
 const listCache = new Map();
+const searchPending = new Map();
 // Navigation only; never save forms or item details. Cleared when the vault locks.
 const popupStates = new Map();
 const faviconCache = new Map();
 const faviconPending = new Map();
 let metadataEpoch = 0;
 function clearMetadata() {
-  ++metadataEpoch;
+  ++metadataEpoch; searchPending.clear();
   for (const map of [listCache, faviconCache]) { for (const entry of map.values()) clearTimeout(entry.timer); map.clear(); }
   faviconPending.clear();
 }
@@ -24,6 +26,28 @@ function cacheFor(map, key, value, milliseconds, maximum) {
   clearTimeout(map.get(key)?.timer);
   const entry = { value, expires: Date.now() + milliseconds }; map.set(key, entry);
   entry.timer = setTimeout(() => { if (map.get(key) === entry) map.delete(key); }, milliseconds);
+}
+// Coalesce focus, on-load, shortcut and popup lookups. Credentials never enter this cache.
+async function cachedSearch(values) {
+  const query = { action: "search", account: values.account || null, query: values.query || "", url: values.url || null, site_only: !!values.site_only, kind: values.kind || null, folder: values.folder || null, collection: values.collection || null, view: values.view || null };
+  const key = JSON.stringify(query);
+  if (searchPending.has(key)) return searchPending.get(key);
+  const generation = metadataEpoch;
+  const operation = (async () => {
+    const cached = listCache.get(key);
+    if (cached && cached.expires > Date.now()) {
+      const state = await native({ action: "status", account: query.account });
+      if (!state.unlocked) { clearMetadata(); popupStates.clear(); throw new Error("Vault locked by rbw-agent."); }
+      if (generation !== metadataEpoch) throw new Error("Vault changed. Retry the operation.");
+      return cached.value;
+    }
+    const result = await native(query);
+    if (generation !== metadataEpoch) throw new Error("Vault changed. Retry the operation.");
+    cacheFor(listCache, key, result, 300000, 32);
+    return result;
+  })();
+  searchPending.set(key, operation);
+  try { return await operation; } finally { if (searchPending.get(key) === operation) searchPending.delete(key); }
 }
 async function favicon(origin) {
   if (faviconPending.has(origin)) return faviconPending.get(origin);
@@ -118,25 +142,42 @@ async function pageMessage(message, sender, respond) {
     for (const [id, p] of pending) if (p.tabId === sender.tab.id && p.pageRequest === message.request) finish(id, { error: "Cancelled." });
     return respond({ result: true });
   }
+  if (["undo_fill", "dismiss_fill"].includes(message.action)) {
+    const undo = fillUndos.get(sender.tab.id);
+    if (!undo || undo.token !== message.token || undo.url !== sender.tab.url || sender.url !== undo.url) return respond({ result: 0 });
+    fillUndos.delete(sender.tab.id); clearTimeout(undo.timer);
+    let restored = 0;
+    for (const frame of undo.frames) {
+      try {
+        const results = await api.scripting.executeScript({ target: { tabId: sender.tab.id, frameIds: [frame.frameId] }, func: undoPageFill, args: [frame.url, undo.token, message.action === "undo_fill"] });
+        restored += results[0]?.result || 0;
+      } catch (_) { /* A navigated or removed frame has no surviving undo state. */ }
+    }
+    return respond({ result: restored });
+  }
   const prefs = await settings();
   if (message.action === "passkey_available") return respond({ result: prefs.passkeys });
   if (message.action === "autofill_load") {
     if (!prefs.autoFill || sender.frameId !== 0 || !sender.tab.active) return respond({ result: false });
-    const results = await native({ action: "search", account: prefs.account || null, query: "", url: sender.url, site_only: true, kind: "login" });
+    const results = await cachedSearch({ account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
     if (!results.items.length || results.items[0].protected) return respond({ result: false });
-    return respond({ result: await fill({ item: results.items[0].id }, prefs.account || null) });
+    return respond({ result: await fill({ item: results.items[0].id, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, prefs.account || null) });
   }
   if (message.action === "inline_choices") {
     if (!prefs.inlineSuggestions) return respond({ result: [] });
     try {
-      const result = await native({ action: "search", account: prefs.account || null, query: "", url: sender.url, site_only: true, kind: "login" });
-      const items = await Promise.all(result.items.slice(0, 5).map(async v => {
-        let fav = null;
-        if (prefs.favicons && v.iconOrigin) fav = await favicon(v.iconOrigin);
-        return { id: v.id, name: v.name, username: v.username, favicon: fav };
-      }));
+      const result = await cachedSearch({ account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
+      const items = result.items.slice(0, 5).map(v => ({ id: v.id, name: v.name, username: v.username,
+        favicon: prefs.favicons ? faviconCache.get(v.iconOrigin)?.value || null : null }));
       return respond({ result: items });
     } catch (_) { return respond({ result: [] }); }
+  }
+  if (message.action === "inline_icons") {
+    if (!prefs.inlineSuggestions || !prefs.favicons) return respond({ result: [] });
+    // Resolve icons only for this page's matching items, never arbitrary page-supplied URLs.
+    const result = await cachedSearch({ account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
+    const items = await Promise.all(result.items.slice(0, 5).map(async item => ({ id: item.id, favicon: item.iconOrigin ? await favicon(item.iconOrigin) : null })));
+    return respond({ result: items });
   }
   if (message.action === "inline_fill") {
     const tab = await activeTab();
@@ -171,35 +212,53 @@ async function pageMessage(message, sender, respond) {
 async function fill(message, account) {
   const tab = await activeTab();
   if (message.expectedTab !== undefined && (tab.id !== message.expectedTab || tab.url !== message.expectedUrl)) throw new Error("The active page changed.");
-  let credential, label;
-  if (message.type && message.type !== "login") {
-    const detail = await native({ action: "detail", account, item: message.item });
-    credential = { ...detail.cipher.data, custom: detail.cipher.fields };
-    label = detail.cipher.name;
-    if (!["card", "identity"].includes(credential.type)) throw new Error("This item cannot fill a form.");
-  } else {
-    credential = { type: "login", ...await native({ action: "credential", account, item: message.item, url: tab.url }) };
-  }
-  const current = await activeTab();
-  if (current.id !== tab.id || current.url !== tab.url) throw new Error("Page changed. Choose Fill again.");
-  const frames = await api.webNavigation.getAllFrames({ tabId: tab.id });
+  const token = crypto.randomUUID();
+  await api.tabs.sendMessage(tab.id, { action: "rbw_fill_state", token, active: true }).catch(() => {});
   let count = 0;
-  for (const frame of frames.filter(f => { try { return new URL(f.url).origin === new URL(tab.url).origin; } catch (_) { return false; } })) {
-    try {
-      const results = await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [frame.frameId] }, func: fillPage, args: [frame.url, credential] });
-      count += results[0]?.result || 0;
-    } catch (error) { if (frame.frameId === 0 && frames.length === 1) throw error; }
+  try {
+    let credential, label;
+    if (message.type && message.type !== "login") {
+      const detail = await native({ action: "detail", account, item: message.item });
+      credential = { ...detail.cipher.data, custom: detail.cipher.fields };
+      label = detail.cipher.name;
+      if (!["card", "identity"].includes(credential.type)) throw new Error("This item cannot fill a form.");
+    } else {
+      credential = { type: "login", ...await native({ action: "credential", account, item: message.item, url: tab.url }) };
+    }
+    const current = await activeTab();
+    if (current.id !== tab.id || current.url !== tab.url) throw new Error("Page changed. Choose Fill again.");
+    const frames = await api.webNavigation.getAllFrames({ tabId: tab.id });
+    const filledFrames = [];
+    for (const frame of frames.filter(f => { try { return new URL(f.url).origin === new URL(tab.url).origin; } catch (_) { return false; } })) {
+      try {
+        const results = await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [frame.frameId] }, func: fillPage, args: [frame.url, credential, token] });
+        const filled = results[0]?.result || 0;
+        count += filled; if (filled) filledFrames.push({ frameId: frame.frameId, url: frame.url });
+      } catch (error) { if (frame.frameId === 0 && frames.length === 1) throw error; }
+    }
+    if (!count) throw new Error("No supported fields found on this page.");
+    clearTimeout(fillUndos.get(tab.id)?.timer);
+    fillUndos.set(tab.id, { token, url: tab.url, frames: filledFrames, timer: setTimeout(() => { if (fillUndos.get(tab.id)?.token === token) fillUndos.delete(tab.id); }, 10000) });
+    // Only public display metadata goes to the notice, never the credential.
+    const notice = { undoToken: token, name: label || credential.name || "Item", username: credential.type === "login" ? credential.username : null, position: message.cycleIndex, total: message.cycleCount };
+    await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: showFillNotice, args: [tab.url, notice] }).catch(() => {});
+    return count;
+  } finally {
+    await api.tabs.sendMessage(tab.id, { action: "rbw_fill_state", token, active: false, filled: count > 0 }).catch(() => {});
   }
-  if (!count) throw new Error("No supported fields found on this page.");
-  // Only public display metadata goes to the notice, never the credential.
-  const notice = { name: label || credential.name || "Item", username: credential.type === "login" ? credential.username : null, position: message.cycleIndex, total: message.cycleCount };
-  await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: showFillNotice, args: [tab.url, notice] }).catch(() => {});
-  return count;
 }
 async function handle(message) {
   const account = message.account || null;
   if (["lock", "sync", "save", "mutate", "set_collections", "folders", "import", "save_offer_apply", "passkey_approve"].includes(message.action)) clearMetadata();
   switch (message.action) {
+    case "bootstrap": {
+      const preferences = await settings();
+      const account = preferences.account || null;
+      const status = await native({ action: "status", account });
+      if (!status.unlocked) { clearMetadata(); popupStates.clear(); }
+      const selected = preferences.account || status.primary || status.accounts?.[0] || null;
+      return { preferences, status, saved: status.unlocked ? popupStates.get(selected) || popupStates.get(account) || null : null };
+    }
     case "unlock": return native({ action: "unlock", account, password: typeof message.password === "string" ? message.password : null });
     case "status": {
       const state = await native({ action: "status", account });
@@ -240,13 +299,32 @@ async function handle(message) {
     case "search": {
       let tab; try { tab = await activeTab(); } catch (_) { /* Search also works on internal pages. */ }
       const query = { action: "search", account, query: String(message.query || ""), url: tab?.url || null, site_only: !!message.siteOnly, kind: message.kind || null, folder: message.folder || null, collection: message.collection || null, view: message.view || null };
-      const key = JSON.stringify(query); const cached = listCache.get(key);
-      if (cached && cached.expires > Date.now()) {
-        const state = await native({ action: "status", account });
-        if (!state.unlocked) { clearMetadata(); popupStates.clear(); throw new Error("Vault locked by rbw-agent."); }
-        return cached.value;
+      if (query.view === "home" && !query.query && !query.site_only) {
+        // Favorites are independent of the active tab; only suggestions need site matching.
+        const favoritesQuery = { ...query, url: null, view: "favorites" };
+        const snapshotKey = JSON.stringify({ action: "search", account, query: "", url: null, site_only: false, kind: query.kind, folder: query.folder, collection: query.collection, view: "favorites" });
+        if (message.snapshot) {
+          const entry = listCache.get(snapshotKey);
+          const favorites = entry?.expires > Date.now() ? entry.value : null;
+          if (!favorites) return null;
+          const matchingKey = JSON.stringify({ ...query, site_only: true, kind: query.kind || "login", view: null });
+          const site = listCache.get(matchingKey);
+          const matching = site?.expires > Date.now() ? site.value : null;
+          if (!matching) return favorites;
+          const ids = new Set(matching.items.map(item => item.id));
+          const items = [...matching.items, ...favorites.items.filter(item => !ids.has(item.id))];
+          return { ...favorites, items, total: items.length };
+        }
+        const [favorites, matching] = await Promise.all([
+          cachedSearch(favoritesQuery),
+          query.url ? cachedSearch({ ...query, site_only: true, kind: query.kind || "login", view: null }) : Promise.resolve({ items: [] }),
+        ]);
+        const ids = new Set(matching.items.map(item => item.id));
+        const items = [...matching.items, ...favorites.items.filter(item => !ids.has(item.id))];
+        return { ...favorites, items, total: items.length };
       }
-      const result = await native(query); cacheFor(listCache, key, result, 300000, 8); return result;
+      if (message.snapshot) return null;
+      return cachedSearch(query);
     }
     case "favicon": return (await settings()).favicons ? favicon(message.origin) : null;
     case "folders": return native({ action: "folders", account, method: message.method, id: message.id || null, name: message.name || null });
@@ -259,6 +337,7 @@ async function handle(message) {
     case "upload_chunk": return native({ action: "upload_chunk", account, token: message.token, offset: message.offset, data: message.data });
     case "upload_finish": return native({ action: "upload_finish", account, token: message.token });
     case "upload_cancel": return native({ action: "upload_cancel", account, token: message.token });
+    case "totp": return native({ action: "totp", account, item: message.item });
     case "detail": return native({ action: "detail", account, item: message.item });
     case "save": return native({ action: "save", account, item: message.item || null, revision: message.revision || null, cipher: message.cipher });
     case "mutate": return native({ action: "mutate", account, item: message.item, mutation: message.mutation });
@@ -314,7 +393,7 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
     if (!independent) queue = operation.catch(() => {});
     operation.then(result => respond({ result }), error => respond({ error: error.message || "Operation failed." })); return true;
   }
-  if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "inline_choices", "inline_fill", "autofill_load"].includes(message?.action)) return false;
+  if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "inline_choices", "inline_icons", "inline_fill", "autofill_load", "undo_fill", "dismiss_fill"].includes(message?.action)) return false;
   pageMessage(message, sender, respond).catch(() => respond({ error: "Request failed." })); return true;
 });
 
@@ -347,7 +426,7 @@ async function fillShortcut() {
       }).catch(() => {});
       return;
     }
-    const result = await native({ action: "search", account, query: "", url: tab.url, site_only: true, kind: "login" });
+    const result = await cachedSearch({ account, url: tab.url, site_only: true, kind: "login" });
     if (!result.items.length) {
       fillCycles.delete(tab.id);
       await api.scripting.executeScript({

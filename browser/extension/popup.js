@@ -23,6 +23,8 @@ const schema = {
 };
 const secret = name => ["password", "totp", "code", "number", "ssn", "license_number", "passport_number", "private_key"].includes(name);
 let sendId = null;
+let totpTimer;
+function stopTotp() { clearTimeout(totpTimer); }
 let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
 let loadingRequests = 0, loadingTimer, notificationTimer, stateTimer, ready = false;
 const filterIds = ["query", "kind", "folder", "collection", "view"];
@@ -44,7 +46,7 @@ window.addEventListener("pagehide", remember);
 document.addEventListener("visibilitychange", () => { if (document.hidden) remember(); });
 document.querySelector("main").addEventListener("scroll", () => { clearTimeout(stateTimer); stateTimer = setTimeout(remember, 80); }, { passive: true });
 async function request(action, values = {}) {
-  const busy = !["preferences", "pending", "save_offers", "popup_notice", "status", "favicon", "popup_state", "save_popup_state"].includes(action);
+  const busy = !["preferences", "pending", "save_offers", "popup_notice", "status", "favicon", "popup_state", "save_popup_state", "totp"].includes(action);
   if (busy) loading(true);
   try {
     const response = await api.runtime.sendMessage({ action, account: $("account").value, ...values });
@@ -77,6 +79,7 @@ function actionButton(label, name, action, cls) {
 }
 function pretty(value) { return value.replaceAll("_", " ").replace(/^./, c => c.toUpperCase()); }
 function show(page) {
+  stopTotp();
   remember();
   currentPage = page;
   const subpage = ["detail", "editor", "send-editor"].includes(page);
@@ -107,6 +110,7 @@ api.storage.onChanged.addListener((changes, area) => {
   applyTheme(preference.theme); applyTabs();
 });
 function clearVault() {
+  stopTotp();
   faviconObserver.disconnect();
   ++epoch; currentItem = null; currentDetail = null;
   for (const id of ["items", "suggestions", "detail-content", "edit-fields", "custom-fields", "edit-attachments", "audit-results", "approval-items", "send-items"]) $(id).replaceChildren();
@@ -154,21 +158,29 @@ async function refresh(knownStatus = null, skipList = false) {
 }
 async function search() {
   const current = ++epoch;
-  const result = await request("search", { query: $("query").value, kind: $("kind").value, folder: $("folder").value, collection: $("collection").value, view: $("view").value });
+  const filters = { query: $("query").value, kind: $("kind").value, folder: $("folder").value, collection: $("collection").value, view: $("view").value };
+  const snapshot = await request("search", { ...filters, snapshot: true });
+  if (current !== epoch) return;
+  if (snapshot) renderSearch(snapshot);
+  const result = await request("search", filters);
   if (current !== epoch) return;
   renderSearch(result); remember();
 }
 function renderSearch(result) {
   selectOptions("folder", result.folders, "Folder"); selectOptions("collection", result.collections, "Collection");
   $("folder-list").replaceChildren(...result.folders.map(f => new Option(f)));
-  const groups = new Map();
-  for (const item of result.items) {
-    const group = item.matched ? "Autofill suggestions" : item.type === "card" ? "Cards" : item.type === "identity" ? "Identities" : item.type === "secure_note" ? "Secure notes" : item.type === "ssh_key" ? "SSH keys" : "Logins";
-    if (!groups.has(group)) groups.set(group, []); groups.get(group).push(item);
-  }
+  const favorites = $("view").value === "favorites" || ($("view").value === "home" && !$("query").value);
+  const sections = [
+    ["suggestions", "Autofill suggestions"], ["card", "Cards"], ["login", "Logins"],
+    ["secure_note", "Secure notes"], ["identity", "Identities"], ["ssh_key", "SSH keys"],
+  ];
+  const groups = new Map(sections.map(([key]) => [key, []]));
+  for (const item of result.items) (groups.get(item.matched ? "suggestions" : item.type) || groups.get("login")).push(item);
   faviconObserver.disconnect(); $("items").replaceChildren();
-  for (const [title, items] of groups) {
-    $("items").append(element("h3", `${title} · ${items.length}`));
+  for (const [key, title] of sections) {
+    const items = groups.get(key); if (!items.length) continue;
+    const heading = favorites && key !== "suggestions" ? `Favorite ${key === "ssh_key" ? "SSH keys" : title.toLowerCase()}` : title;
+    $("items").append(element("h3", `${heading} · ${items.length}`));
     for (const item of items) $("items").append(itemRow(item));
   }
   if (!result.items.length) $("items").append(element("p", "No items found.", "empty"));
@@ -298,6 +310,46 @@ function noteField(text, item) {
   const toggle = actionButton("Plain text", "note", async () => { raw = !raw; toggle.replaceChildren(icon("note"), element("span", raw ? "Markdown" : "Plain text")); render(); });
   toolbar.append(toggle, actionButton("Copy", "copy", () => copyField(item, "notes"))); section.append(toolbar, content); render(); return section;
 }
+function totpField(item) {
+  const section = element("div", null, "field totp-field"); section.append(element("span", "Verification code"));
+  const row = element("div", null, "field-value"); const code = element("div", "••• •••", "totp-code");
+  const actions = element("div", null, "field-actions");
+  const copy = actionButton("Copy verification code", "copy", () => copyField(item, "totp"), "icon"); copy.disabled = true;
+  actions.append(copy); row.append(code, actions);
+  const countdown = element("small", "Generating code…", "hint"); const progress = element("progress"); progress.setAttribute("aria-label", "Verification code validity");
+  section.append(row, countdown, progress);
+  let state;
+  const current = () => section.isConnected && currentPage === "detail" && currentItem === item && unlocked;
+  const tick = async () => {
+    if (!current()) return;
+    if (document.hidden) { totpTimer = setTimeout(tick, 1000); return; }
+    try {
+      if (!state || state.expiresAt * 1000 <= Date.now()) {
+        copy.disabled = true; code.textContent = "••• •••";
+        state = await request("totp", { item });
+        if (!current()) return;
+        code.textContent = /^\d{6}$/.test(state.code) ? `${state.code.slice(0, 3)} ${state.code.slice(3)}` : state.code;
+        copy.disabled = false;
+      }
+      const remaining = Math.max(0, Math.ceil(state.expiresAt - Date.now() / 1000));
+      countdown.textContent = `${remaining}s remaining`; progress.max = state.period; progress.value = remaining;
+    } catch (_) {
+      if (!current()) return;
+      state = null; code.textContent = "Unavailable"; copy.disabled = true; countdown.textContent = "Could not generate verification code.";
+    }
+    if (current()) totpTimer = setTimeout(tick, state ? 500 : 3000);
+  };
+  // The detail DOM is attached by the caller in the current task.
+  totpTimer = setTimeout(tick, 0); return section;
+}
+function revealButton(input) {
+  const toggle = actionButton("Show", "eye", () => {
+    const reveal = input.type === "password";
+    input.type = reveal ? "text" : "password";
+    toggle.replaceChildren(icon(reveal ? "eye-off" : "eye"));
+    toggle.title = reveal ? "Hide" : "Show"; toggle.setAttribute("aria-label", toggle.title); toggle.setAttribute("aria-pressed", String(reveal));
+  }, "icon reveal-secret"); toggle.setAttribute("aria-controls", input.id); toggle.setAttribute("aria-pressed", "false"); return toggle;
+}
 async function openDetail(item) {
   const current = ++epoch;
   const detail = await request("detail", { item }); if (current !== epoch) return;
@@ -305,15 +357,15 @@ async function openDetail(item) {
   const content = $("detail-content"); content.replaceChildren(element("h2", detail.cipher.name));
   const data = detail.cipher.data;
   for (const [field, value] of Object.entries(data)) {
-    if (["type", "uris", "fido2_credentials"].includes(field) || value == null || value === "") continue;
+    if (["type", "uris", "fido2_credentials", "totp"].includes(field) || value == null || value === "") continue;
     content.append(detailField(field === "totp" ? "Authenticator key" : pretty(field), String(value), item, field, secret(field)));
   }
-  if (data.totp) content.append(actionButton("Copy verification code", "generator", () => copyField(item, "totp")));
+  if (data.totp) content.append(totpField(item));
   for (const uri of data.uris || []) content.append(detailField("Website", uri.uri, item, null, false, true));
   if (detail.cipher.notes) content.append(noteField(detail.cipher.notes, item));
   for (const [i, field] of (detail.cipher.fields || []).entries()) content.append(detailField(field.name || "Custom field", field.value || "", item, `custom/${i}`, field.type === "hidden"));
   for (const passkey of detail.passkeys) { content.append(element("h3", "Passkey"), element("p", `${passkey.rp} · ${passkey.user || ""}`), element("p", `Created ${passkey.created || "unknown"}`, "hint")); }
-  if (detail.history.length) { const history = element("details"); history.append(element("summary", `Password history · ${detail.history.length}`)); for (const entry of detail.history) history.append(detailField(entry.last_used_date, entry.password, item, null, true)); content.append(history); }
+  if (detail.history.length) { const history = element("details"); history.append(element("summary", `Password history · ${detail.history.length}`)); for (const [index, entry] of detail.history.entries()) history.append(detailField(entry.last_used_date, entry.password, item, `history/${index}`, true)); content.append(history); }
   if (detail.collection_options?.length) {
     content.append(element("h3", "Collections"));
     const dropdown = element("details", null, "collection-picker"); const summary = element("summary");
@@ -375,10 +427,12 @@ function renderAttachments(detail, item) {
 function renderEditFields(data = {}) {
   const type = $("edit-type").value; $("edit-fields").replaceChildren();
   for (const name of schema[type]) {
-    const label = element("label", pretty(name)); const input = element(name === "private_key" || name === "public_key" ? "textarea" : "input");
+    const label = element("label", name === "totp" ? "Authenticator key" : pretty(name)); const input = element(name === "private_key" || name === "public_key" ? "textarea" : "input");
     input.id = `field-${name}`; input.value = data[name] || ""; input.autocomplete = "off"; input.spellcheck = false;
     if (input.tagName === "INPUT") input.type = secret(name) ? "password" : "text";
-    label.append(input);
+    if (input.type === "password") {
+      const row = element("div", null, "editor-secret"); row.append(input, revealButton(input)); label.append(row);
+    } else label.append(input);
     if (name === "password") label.append(actionButton("Generate password", "generator", async () => { input.value = await request("generate"); message("Generated password added to this form. Save to keep it."); }));
     $("edit-fields").append(label);
   }
@@ -405,7 +459,9 @@ function addCustom(field = {}) {
   value.value = field.value || "";
   value.type = field.type === "hidden" ? "password" : "text";
   value.setAttribute("aria-label", "Custom field value");
-  valueLabel.append(value);
+  value.id = `custom-secret-${crypto.randomUUID()}`;
+  const valueRow = element("div", null, "editor-secret"); const reveal = revealButton(value); reveal.hidden = field.type !== "hidden";
+  valueRow.append(value, reveal); valueLabel.append(valueRow);
 
   const typeLabel = element("label", null, "custom-type-label");
   typeLabel.append(element("span", "Type", "custom-mini-label"));
@@ -415,7 +471,7 @@ function addCustom(field = {}) {
   }
   type.value = field.type || "text";
   type.setAttribute("aria-label", "Custom field type");
-  type.onchange = () => { value.type = type.value === "hidden" ? "password" : "text"; };
+  type.onchange = () => { value.type = type.value === "hidden" ? "password" : "text"; reveal.hidden = type.value !== "hidden"; reveal.replaceChildren(icon("eye")); reveal.title = "Show"; reveal.setAttribute("aria-label", "Show"); reveal.setAttribute("aria-pressed", "false"); };
   typeLabel.append(type);
 
   body.append(valueLabel, typeLabel);
@@ -462,21 +518,41 @@ async function showApproval(id) {
   approvalId = id; show("approval"); $("approval-items").replaceChildren();
   const pending = (await request("pending")).find(p => p.id === id);
   if (!pending) { approvalId = null; message("Passkey request expired or completed."); show(unlocked ? "vault" : "locked"); return; }
-  $("approval-title").textContent = pending.method === "create" ? "Save a passkey" : "Sign in with a passkey";
+  const title = pending.method === "create" ? "Save a passkey" : "Sign in with a passkey";
+  $("approval-title").textContent = title;
   $("approval-origin").textContent = pending.origin;
-  $("approval-description").textContent = pending.method === "create" ? `Create a passkey for ${pending.user || "this account"}. Relying party: ${pending.rp}.` : `Choose a passkey for ${pending.rp}.`;
-  $("approval-verify-label").hidden = !unlocked || pending.verification === "discouraged";
-  $("approval-password").value = "";
-  $("approval-verify-hint").textContent = pending.verification === "required" ? "This site requires master password verification before using the passkey." : "Optional. Leave blank for presence-only authentication, or verify with your master password.";
+  $("approval-description").textContent = pending.method === "create" ? `Save a passkey for ${pending.user || "this account"} in your vault.` : "Choose an account to continue.";
+  $("approval-verification").hidden = true; $("approval-items").hidden = false; $("approval-password").value = ""; $("approval-password").type = "password";
+  $("approval-reveal").replaceChildren(icon("eye")); $("approval-reveal").title = "Show"; $("approval-reveal").setAttribute("aria-label", "Show");
   if (!unlocked) { $("unlock-password").focus(); return; }
   const result = await request("passkey_choices", { request: id });
+  const complete = async (item, password = null) => {
+    await request("passkey_approve", { request: id, item, password }); await finishApproval("Passkey request completed.");
+  };
   const approve = async item => {
-    const password = $("approval-password").value; $("approval-password").value = "";
-    if (pending.verification === "required" && !password) { $("approval-password").focus(); throw new Error("Enter your master password to verify this passkey operation."); }
-    message("Waiting for rbw…"); await request("passkey_approve", { request: id, item, password: password || null }); await finishApproval("Passkey request completed."); };
-  if (pending.method === "create") $("approval-items").append(actionButton("Create in a new login", "plus", () => approve(null), "primary"));
-  for (const item of result.items) $("approval-items").append(actionButton(`${pending.method === "create" ? "Add to" : "Use"} ${item.name} · ${item.username || ""}`, "key", () => approve(item.id)));
-  if (pending.method === "get" && !result.items.length) $("approval-items").append(element("p", "No matching passkeys in this account. Try another account or authenticator.", "hint"));
+    if (pending.verification !== "required") { await complete(item); return; }
+    // Required WebAuthn verification is a separate step after account selection.
+    // An unlocked agent alone must never be reported as user verification.
+    $("approval-items").hidden = true; $("approval-verification").hidden = false;
+    $("approval-password").focus();
+    $("approval-verification").onsubmit = event => {
+      event.preventDefault(); const password = $("approval-password").value; $("approval-password").value = "";
+      attempt(async () => { await complete(item, password); });
+    };
+  };
+  $("approval-verify-back").onclick = () => { $("approval-password").value = ""; $("approval-verification").hidden = true; $("approval-items").hidden = false; };
+  $("approval-reveal").onclick = () => { const input = $("approval-password"); const reveal = input.type === "password"; input.type = reveal ? "text" : "password"; $("approval-reveal").replaceChildren(icon(reveal ? "eye-off" : "eye")); $("approval-reveal").title = reveal ? "Hide" : "Show"; $("approval-reveal").setAttribute("aria-label", $("approval-reveal").title); };
+  const choice = (name, username, item, create = false) => {
+    const row = button("", () => approve(item), "passkey-choice");
+    const emblem = element("span", null, "passkey-choice-icon"); emblem.append(icon(create ? "plus" : "key"));
+    const text = element("span", null, "passkey-choice-text"); text.append(element("strong", name)); if (username) text.append(element("small", username));
+    row.append(emblem, text, icon("fill")); return row;
+  };
+  if (pending.method === "create") $("approval-items").append(choice("Create a new login", pending.user || "Save in your vault", null, true));
+  for (const item of result.items) $("approval-items").append(choice(item.name, item.username || (pending.method === "create" ? "Add to this login" : "Saved passkey"), item.id));
+  if (pending.method === "get" && !result.items.length) {
+    const empty = element("div", null, "passkey-empty"); empty.append(icon("key"), element("strong", "No saved passkey"), element("p", "Try another vault account or use a different authenticator.", "hint")); $("approval-items").append(empty);
+  }
 }
 $("use-device").onclick = () => attempt(async () => { await request("passkey_decline", { request: approvalId, fallback: true }); await finishApproval("Passkey request declined."); });
 $("cancel-passkey").onclick = () => attempt(async () => { await request("passkey_decline", { request: approvalId }); await finishApproval("Passkey request declined."); });
@@ -574,13 +650,14 @@ setInterval(() => attempt(async () => {
 attempt(async () => {
   loading(true);
   try {
-    preference = await request("preferences"); applyTheme(preference.theme); applyTabs();
+    const initial = await request("bootstrap");
+    preference = initial.preferences; applyTheme(preference.theme); applyTabs();
     $("setting-autofill").checked = preference.autoFill !== false;
     $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
     if (!approvalId) approvalId = await activeApproval();
-    const status = await request("status");
+    const status = initial.status;
     renderAccounts(status.accounts || [], status.primary, preference.account);
-    const saved = status.unlocked && !approvalId ? await request("popup_state") : null;
+    const saved = status.unlocked && !approvalId ? initial.saved : null;
     if (saved) {
       for (const id of filterIds) {
         const value = saved.filters[id];

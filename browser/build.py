@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Package the shared extension without a JS toolchain or dependencies."""
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -8,16 +9,25 @@ import zipfile
 ROOT = Path(__file__).resolve().parent
 for target in ("firefox", "chromium"):
     dest = ROOT / "dist" / target
-    dest.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
     for source in (ROOT / "extension").iterdir():
         if source.is_dir():
             shutil.copytree(source, dest / source.name, dirs_exist_ok=True)
         else:
             shutil.copy2(source, dest / source.name)
+    toolbar_icons = {}
+    for size in [16, 19, 24, 32, 38, 48, 64]:
+        source = ROOT / "extension" / "icons" / f"toolbar-{size}.png"
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()[:12]
+        name = f"icons/toolbar-{size}-{digest}.png"
+        shutil.copy2(source, dest / name)
+        toolbar_icons[str(size)] = name
     manifest = {
         "manifest_version": 3,
         "name": "rbw",
-        "version": "0.2.15",
+        "version": "0.2.19",
         "description": "Use your existing rbw-agent vault in the browser.",
         "permissions": ["nativeMessaging", "activeTab", "scripting", "storage", "contextMenus", "webNavigation"],
         "host_permissions": ["https://*/*", "http://*/*"],
@@ -31,7 +41,7 @@ for target in ("firefox", "chromium"):
             "fill-login": {"suggested_key": {"default": "Ctrl+Shift+L"}, "description": "Fill matching login"},
         },
         "icons": {str(size): f"icons/rbw-{size}.png" for size in [16, 32, 48, 96, 128]},
-        "action": {"default_popup": "popup.html", "default_title": "rbw", "default_icon": {str(size): f"icons/rbw-{size}.png" for size in [16, 19, 24, 32, 38, 48, 64]}},
+        "action": {"default_popup": "popup.html", "default_title": "rbw", "default_icon": toolbar_icons},
         "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'"},
     }
     if target == "firefox":
