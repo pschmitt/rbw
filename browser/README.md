@@ -5,19 +5,26 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.10
+## Features in 0.2.13
 
 - A dark vault layout with search, type/folder/collection filters, favorites,
   archive and trash views; light and system themes are also available.
+  Home starts with favorites plus all matching autofill suggestions; typing
+  searches the whole vault. The last view resumes on reopening.
+  The compact header uses the crab/shield icon at the far left. Click it for
+  the account menu; double-click to open the vault in a separate window.
   Bundled SVG icons and optional direct-site favicons avoid font glyphs and
   third-party favicon services. Generator, Send and Health tabs are configurable in the popup and add-on
   settings. Send and Health are hidden by default.
 - Multiline notes render sanitized Markdown (headings, lists, tables, links
   and code), with plain-text viewing/copying and a multiline editor.
-- Item-list metadata is cached only in background memory for 30 seconds, checked
+- Item-list metadata is cached only in background memory for five minutes, checked
   against the agent lock state before reuse, and cleared on writes/lock/account
-  changes. Passwords, note contents and item details are never cached. A loading
-  indicator covers native requests; details are still fetched on demand.
+  changes. Passwords, note contents and item details are never cached. A delayed
+  header spinner covers native requests; details are still fetched on demand.
+  Popup navigation, search, filters and scroll position resume when reopened.
+  Forms and generated passwords are never remembered. Filters start collapsed;
+  action feedback appears in dismissible banners. Sync refreshes cached names.
 - Multiple configured accounts; unlock directly with a password in the popup,
   or use the configured rbw credential source / pinentry; shared lock and sync.
 - Login, card, identity, secure note and SSH key browsing, details, creation,

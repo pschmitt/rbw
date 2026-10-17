@@ -17,10 +17,27 @@ const schema = {
 const secret = name => ["password", "totp", "code", "number", "ssn", "license_number", "passport_number", "private_key"].includes(name);
 let sendId = null;
 let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
-let loadingRequests = 0;
-function loading(active) { loadingRequests = Math.max(0, loadingRequests + (active ? 1 : -1)); $("loading").hidden = !loadingRequests; document.querySelector("main").setAttribute("aria-busy", String(!!loadingRequests)); }
+let loadingRequests = 0, loadingTimer, notificationTimer, stateTimer, ready = false;
+const filterIds = ["query", "kind", "folder", "collection", "view"];
+function remember() {
+  if (!ready || !unlocked || approvalId) return;
+  const page = currentPage === "editor" ? (currentItem ? "detail" : "vault") : currentPage === "send-editor" ? "send" : currentPage;
+  const state = { page, item: currentItem, expanded: !$("filters").hidden, scroll: document.querySelector("main").scrollTop,
+    filters: Object.fromEntries(filterIds.map(id => [id, $(id).value])) };
+  request("save_popup_state", { state }).catch(() => {});
+}
+function loading(active) {
+  loadingRequests = Math.max(0, loadingRequests + (active ? 1 : -1));
+  clearTimeout(loadingTimer);
+  if (!loadingRequests) $("loading").hidden = true;
+  else loadingTimer = setTimeout(() => { $("loading").hidden = false; }, 150);
+  document.querySelector("main").setAttribute("aria-busy", String(!!loadingRequests));
+}
+window.addEventListener("pagehide", remember);
+document.addEventListener("visibilitychange", () => { if (document.hidden) remember(); });
+document.querySelector("main").addEventListener("scroll", () => { clearTimeout(stateTimer); stateTimer = setTimeout(remember, 80); }, { passive: true });
 async function request(action, values = {}) {
-  const busy = !["preferences", "pending", "save_offers", "popup_notice", "status", "favicon"].includes(action);
+  const busy = !["preferences", "pending", "save_offers", "popup_notice", "status", "favicon", "popup_state", "save_popup_state"].includes(action);
   if (busy) loading(true);
   try {
     const response = await api.runtime.sendMessage({ action, account: $("account").value, ...values });
@@ -30,10 +47,16 @@ async function request(action, values = {}) {
   } finally { if (busy) loading(false); }
 }
 function message(text, error = false) {
-  $("message").textContent = text;
+  clearTimeout(notificationTimer);
+  // Progress belongs to the header spinner; banners describe results and errors.
+  if (!error && /^(Working|Unlocking|Waiting for rbw|Checking vault locally|Loading Sends|Uploading)/.test(text)) return;
+  $("message-text").textContent = text;
+  $("message").hidden = !text;
   $("message").classList.toggle("is-error", error);
   $("message").setAttribute("role", error ? "alert" : "status");
+  if (text && !error) notificationTimer = setTimeout(() => { $("message").hidden = true; }, 4500);
 }
+$("dismiss-message").onclick = () => message("");
 async function attempt(fn) { try { await fn(); } catch (error) {
   if (error.message.startsWith("Browser access denied.")) {
     unlocked = false; clearVault(); show("locked");
@@ -45,6 +68,7 @@ function element(tag, text, cls) { const el = document.createElement(tag); if (t
 function button(label, action, cls) { const el = element("button", label, cls); el.type = "button"; el.onclick = () => attempt(async () => { el.disabled = true; try { await action(); } finally { el.disabled = false; } }); return el; }
 function pretty(value) { return value.replaceAll("_", " ").replace(/^./, c => c.toUpperCase()); }
 function show(page) {
+  remember();
   currentPage = page;
   $("back").hidden = !["detail", "editor", "send-editor"].includes(page);
   $("unlock-panel").hidden = unlocked || !["locked", "approval"].includes(page);
@@ -52,6 +76,8 @@ function show(page) {
   $("title").textContent = ({ vault: "Vault", generator: "Generator", health: "Vault health", settings: "Settings", send: "Send", "send-editor": "Edit Send", detail: "Item", editor: currentItem ? "Edit item" : "New item", approval: "Passkey", locked: "Vault" })[page];
   $("add").hidden = !["vault", "send"].includes(page) || !unlocked;
   document.querySelectorAll("footer button").forEach(el => el.classList.toggle("selected", el.dataset.page === page));
+  document.querySelector("main").scrollTop = 0;
+  remember();
 }
 function applyTabs() {
   const visibility = { generator: preference.showGenerator !== false, send: preference.showSend === true, health: preference.showHealth === true };
@@ -86,23 +112,27 @@ async function finishApproval(text) {
   if (document.documentElement.dataset.surface !== "window") window.close();
   else await refresh();
 }
-async function refresh() {
+async function refresh(knownStatus = null, skipList = false) {
   loading(true);
   try {
   clearVault();
-  const status = await request("status"); unlocked = status.unlocked;
+  const status = knownStatus || await request("status"); unlocked = status.unlocked;
   selectOptions("account", status.accounts, "Primary account");
   $("state").textContent = unlocked ? "Unlocked · shared rbw-agent" : "Locked";
   $("unlock").disabled = unlocked; $("lock").disabled = !unlocked;
   if (approvalId) { await showApproval(approvalId); return; }
   if (!unlocked) { show("locked"); return; }
-  show("vault"); await search(); await suggestions();
+  show("vault"); if (!skipList) { await search(); await suggestions(); }
+  remember();
   } finally { loading(false); }
 }
 async function search() {
   const current = ++epoch;
   const result = await request("search", { query: $("query").value, kind: $("kind").value, folder: $("folder").value, collection: $("collection").value, view: $("view").value });
   if (current !== epoch) return;
+  renderSearch(result); remember();
+}
+function renderSearch(result) {
   selectOptions("folder", result.folders, "Folder"); selectOptions("collection", result.collections, "Collection");
   $("folder-list").replaceChildren(...result.folders.map(f => new Option(f)));
   const groups = new Map();
@@ -157,7 +187,7 @@ function itemRow(item) {
   }
   row.append(actions); return row;
 }
-async function copyField(item, field) { await request("copy", { item, field }); message("Copied. rbw clipboard clearing policy applies."); }
+async function copyField(item, field) { await request("copy", { item, field }); message("Copied to clipboard."); }
 function detailField(label, value, item, field, hidden = false) {
   const section = element("div", null, "field"); section.append(element("span", label));
   const row = element("div", null, "field-value"); const input = element("input"); input.readOnly = true; input.value = value; input.type = hidden ? "password" : "text"; input.setAttribute("aria-label", label); row.append(input);
@@ -313,11 +343,24 @@ $("unlock-form").onsubmit = event => {
 $("unlock-configured").onclick = $("unlock").onclick;
 $("unlock").onclick = () => { show(approvalId ? "approval" : "locked"); $("account-menu").hidden = true; $("unlock-password").focus(); };
 $("settings-sync").onclick = $("sync").onclick; $("settings-lock").onclick = $("lock").onclick;
-$("account-toggle").onclick = () => { $("account-menu").hidden = !$("account-menu").hidden; };
+let accountMenuTimer;
+$("account-toggle").onclick = event => {
+  clearTimeout(accountMenuTimer);
+  const toggle = () => { $("account-menu").hidden = !$("account-menu").hidden; };
+  if (event.detail === 0) toggle(); // Keyboard activation does not wait for a second click.
+  else if (event.detail === 1) accountMenuTimer = setTimeout(toggle, 250);
+};
+$("account-toggle").ondblclick = () => {
+  clearTimeout(accountMenuTimer); $("account-menu").hidden = true; remember();
+  attempt(async () => {
+    await api.windows.create({ url: api.runtime.getURL("popup.html?surface=window"), type: "popup", width: 460, height: 680 });
+    if (document.documentElement.dataset.surface !== "window") window.close();
+  });
+};
 $("account").onchange = () => attempt(async () => { await request("set_preferences", { preferences: { account: $("account").value } }); await refresh(); });
-$("filter-toggle").onclick = () => { $("filters").hidden = !$("filters").hidden; };
-$("query").oninput = () => { clearTimeout(timer); ++epoch; timer = setTimeout(() => attempt(search), 180); };
-for (const id of ["kind", "view", "folder", "collection"]) $(id).onchange = () => attempt(search);
+$("filter-toggle").onclick = () => { $("filters").hidden = !$("filters").hidden; $("filter-toggle").setAttribute("aria-expanded", String(!$("filters").hidden)); remember(); };
+$("query").oninput = () => { remember(); clearTimeout(timer); ++epoch; timer = setTimeout(() => attempt(search), 180); };
+for (const id of ["kind", "view", "folder", "collection"]) $(id).onchange = () => { remember(); attempt(search); };
 $("add").onclick = () => { if (currentPage === "send") editSend(); else editItem(true); }; $("edit").onclick = () => editItem(); $("edit-type").onchange = () => renderEditFields(); $("add-custom").onclick = () => addCustom();
 $("cancel-edit").onclick = () => attempt(async () => { if (currentItem) await openDetail(currentItem); else await refresh(); });
 $("back").onclick = () => attempt(async () => { if (currentPage === "editor" && currentItem) await openDetail(currentItem); else if (currentPage === "send-editor") await loadSends(); else await refresh(); });
@@ -325,7 +368,6 @@ for (const mutation of ["favorite", "archive", "delete"]) $(mutation).onclick = 
   if (mutation === "delete" && !confirm("Move this item to trash? You can restore it from the Trash view.")) return;
   await request("mutate", { item: currentItem, mutation }); await refresh();
 });
-$("popout").onclick = () => api.windows.create({ url: api.runtime.getURL("popup.html?surface=window"), type: "popup", width: 460, height: 680 });
 for (const el of document.querySelectorAll("footer button")) el.onclick = () => attempt(async () => {
   const page = el.dataset.page;
   if (page === "vault") await refresh(); else if (page === "send") await loadSends(); else show(page);
@@ -362,14 +404,35 @@ setInterval(() => attempt(async () => {
   if (unlocked && !status.unlocked) { unlocked = false; clearVault(); show("locked"); message("Vault locked by rbw-agent."); }
 }), 3000);
 attempt(async () => {
-  preference = await request("preferences"); applyTheme(preference.theme); applyTabs();
-  $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
-  if (!approvalId) approvalId = await activeApproval();
-  // Populate the account selector before applying a remembered selection.
-  const status = await request("status"); selectOptions("account", status.accounts, "Primary account"); $("account").value = preference.account;
-  await refresh();
-  const notice = await request("popup_notice");
-  if (notice && !approvalId) message(notice.text, notice.error);
+  loading(true);
+  try {
+    preference = await request("preferences"); applyTheme(preference.theme); applyTabs();
+    $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
+    $("account").append(new Option(preference.account || "Primary account", preference.account)); $("account").value = preference.account;
+    if (!approvalId) approvalId = await activeApproval();
+    const status = await request("status");
+    const saved = status.unlocked && !approvalId ? await request("popup_state") : null;
+    if (saved) {
+      for (const id of filterIds) {
+        const value = saved.filters[id];
+        if (value && ["folder", "collection"].includes(id)) $(id).append(new Option(value, value));
+        $(id).value = value || (id === "view" ? "home" : "");
+      }
+      $("filters").hidden = !saved.expanded; $("filter-toggle").setAttribute("aria-expanded", String(saved.expanded));
+    }
+    await refresh(status, !!saved && saved.page !== "vault");
+    if (saved && unlocked && !approvalId) {
+      if (saved.page === "detail" && saved.item) await openDetail(saved.item);
+      else if (saved.page === "send" && preference.showSend) await loadSends();
+      else if (["settings", "generator", "health"].includes(saved.page)) {
+        show(saved.page); applyTabs();
+      }
+      document.querySelector("main").scrollTop = saved.scroll;
+    }
+    ready = true; remember();
+    const notice = await request("popup_notice");
+    if (notice && !approvalId) message(notice.text, notice.error);
+  } finally { loading(false); }
 });
 
 async function send(method, data = {}) { return request("send", { method, data }); }

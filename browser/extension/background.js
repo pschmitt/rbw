@@ -9,6 +9,8 @@ const fillCycles = new Map();
 const popupNotices = new Map();
 // Only list metadata lives here. No details, notes, passwords or persistent storage.
 const listCache = new Map();
+// Navigation only; never save forms or item details. Cleared when the vault locks.
+const popupStates = new Map();
 const faviconCache = new Map();
 const faviconPending = new Map();
 let metadataEpoch = 0;
@@ -62,7 +64,7 @@ function native(request) {
     nativePort = api.runtime.connectNative("org.rbw.browser");
     nativePort.onMessage.addListener(response => {
       if (response.code === "browser_not_authorized") {
-        clearMetadata();
+        clearMetadata(); popupStates.clear();
         for (const entry of nativeRequests.values()) entry.reject(new Error(response.error));
         nativeRequests.clear();
         return;
@@ -72,7 +74,7 @@ function native(request) {
       if (response.error) entry.reject(new Error(response.error)); else entry.resolve(response.result);
     });
     nativePort.onDisconnect.addListener(() => {
-      nativePort = null; clearMetadata();
+      nativePort = null; clearMetadata(); popupStates.clear();
       for (const entry of nativeRequests.values()) entry.reject(new Error("Cannot connect to rbw. Check the native host installation and browser.clients allowlist, then retry."));
       nativeRequests.clear();
     });
@@ -196,12 +198,12 @@ async function handle(message) {
     case "unlock": return native({ action: "unlock", account, password: typeof message.password === "string" ? message.password : null });
     case "status": {
       const state = await native({ action: "status", account });
-      if (!state.unlocked) clearMetadata(); return state;
+      if (!state.unlocked) { clearMetadata(); popupStates.clear(); } return state;
     }
     case "sync": case "audit":
       return native({ action: message.action, account });
     case "lock":
-      fillCycles.clear(); popupNotices.clear();
+      fillCycles.clear(); popupNotices.clear(); popupStates.clear();
       for (const id of [...pending.keys()]) finish(id, { error: "Vault locked." });
       for (const offer of offers.values()) clearTimeout(offer.timer); offers.clear(); badge();
       return native({ action: "lock", account });
@@ -212,6 +214,16 @@ async function handle(message) {
       const [tab] = await api.tabs.query({ active: true, currentWindow: true });
       const notice = popupNotices.get(tab?.id); popupNotices.delete(tab?.id);
       return notice && notice.url === tab.url && notice.expires > Date.now() ? notice : null;
+    }
+    case "popup_state": return popupStates.get(account) || null;
+    case "save_popup_state": {
+      const value = message.state || {};
+      const page = ["vault", "detail", "generator", "settings", "send", "health"].includes(value.page) ? value.page : "vault";
+      const state = { page, item: typeof value.item === "string" ? value.item.slice(0, 128) : null, expanded: value.expanded === true,
+        scroll: Math.max(0, Math.min(Number(value.scroll) || 0, 1000000)), filters: {} };
+      for (const key of ["query", "kind", "folder", "collection", "view"]) state.filters[key] = typeof value.filters?.[key] === "string" ? value.filters[key].slice(0, 1024) : "";
+      if (popupStates.size >= 8 && !popupStates.has(account)) popupStates.delete(popupStates.keys().next().value);
+      popupStates.set(account, state); return true;
     }
     case "preferences": return settings();
     case "set_preferences": {
@@ -226,10 +238,10 @@ async function handle(message) {
       const key = JSON.stringify(query); const cached = listCache.get(key);
       if (cached && cached.expires > Date.now()) {
         const state = await native({ action: "status", account });
-        if (!state.unlocked) { clearMetadata(); throw new Error("Vault locked by rbw-agent."); }
+        if (!state.unlocked) { clearMetadata(); popupStates.clear(); throw new Error("Vault locked by rbw-agent."); }
         return cached.value;
       }
-      const result = await native(query); cacheFor(listCache, key, result, 30000, 8); return result;
+      const result = await native(query); cacheFor(listCache, key, result, 300000, 8); return result;
     }
     case "favicon": return (await settings()).favicons ? favicon(message.origin) : null;
     case "folders": return native({ action: "folders", account, method: message.method, id: message.id || null, name: message.name || null });
@@ -292,7 +304,7 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
   // Options and pop-out pages may themselves live in a tab. Authenticate the
   // exact extension document before handling the narrower content-script API.
   if (trustedUI) {
-    const independent = ["preferences", "pending", "save_offers", "popup_notice", "favicon"].includes(message.action);
+    const independent = ["preferences", "pending", "save_offers", "popup_notice", "favicon", "popup_state", "save_popup_state"].includes(message.action);
     const operation = independent ? handle(message) : queue.then(() => handle(message));
     if (!independent) queue = operation.catch(() => {});
     operation.then(result => respond({ result }), error => respond({ error: error.message || "Operation failed." })); return true;

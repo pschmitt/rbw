@@ -49,7 +49,7 @@
     if (current !== generation || !result?.result?.length || focused !== input) return;
     host = document.createElement("div");
     const shadow = host.attachShadow({ mode: "closed" });
-    const style = document.createElement("style"); style.textContent = ":host{all:initial}div{font:13px system-ui;color:#e6e9f1;background:#10182b;border:1px solid #67adff;border-radius:8px;box-shadow:0 4px 15px #0005;overflow:hidden;max-width:360px}p{margin:0;padding:7px 10px;color:#91a4c3;font-size:11px}button{display:block;width:100%;text-align:left;border:0;border-top:1px solid #2b3c55;padding:9px 12px;background:#10182b;color:#e6e9f1;font:13px system-ui;cursor:pointer}button:hover,button:focus{background:#1e293e}small{display:block;color:#91a4c3}"; shadow.append(style);
+    const style = document.createElement("style"); style.textContent = ":host{all:initial}div{font:13px system-ui;color:#f1f4fc;background:#1b263d;border:1px solid #a7bfea;border-radius:8px;box-shadow:0 4px 15px #0005;overflow:hidden;max-width:360px}p{margin:0;padding:7px 10px;color:#a0b4d6;font-size:11px}button{display:block;width:100%;text-align:left;border:0;border-top:1px solid #384d70;padding:9px 12px;background:#1b263d;color:#f1f4fc;font:13px system-ui;cursor:pointer}button:hover,button:focus{background:#253653}small{display:block;color:#a0b4d6}"; shadow.append(style);
     const box = document.createElement("div"); const title = document.createElement("p"); title.textContent = "rbw · Fill a login"; box.append(title);
     for (const item of result.result) {
       const button = document.createElement("button"); button.type = "button"; button.textContent = item.name;

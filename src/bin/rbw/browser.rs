@@ -478,7 +478,12 @@ fn dispatch(
                             ),
                             _ => (folder_name.clone(), false, 0),
                         };
-                        if site_only && !matched {
+                        if (site_only && !matched)
+                            || (view.as_deref() == Some("home")
+                                && query.is_empty()
+                                && !entry.favorite
+                                && !matched)
+                        {
                             continue;
                         }
                         if !format!(

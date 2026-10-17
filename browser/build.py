@@ -17,7 +17,7 @@ for target in ("firefox", "chromium"):
     manifest = {
         "manifest_version": 3,
         "name": "rbw",
-        "version": "0.2.10",
+        "version": "0.2.13",
         "description": "Use your existing rbw-agent vault in the browser.",
         "permissions": ["nativeMessaging", "activeTab", "scripting", "storage", "contextMenus", "webNavigation"],
         "host_permissions": ["https://*/*", "http://*/*"],

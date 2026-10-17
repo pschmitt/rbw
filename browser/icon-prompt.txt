@@ -1,4 +1,6 @@
-Generated with the built-in image_gen tool.
+Generated with the built-in image_gen tool from the user-supplied crab/shield reference.
 
 Prompt:
-Use case: logo-brand. Asset type: rbw password-manager browser extension toolbar icon, square, must read clearly down to 16 pixels. Create one clean original emblem combining a bold Bitwarden-like security shield silhouette in vivid blue with a Rust-inspired orange cogwheel / gear surrounding a small dark keyhole inside the shield. Flat vector-like graphic, strong simple geometry, thick shapes, restrained palette blue #67adff and rust orange #dd7845 with dark navy #10182b. Centered composition occupies 85 percent of canvas. Genuine transparent background outside the emblem. No letters, no text, no watermark, no mockup, no drop shadow, no tiny details. It should feel like a coherent vault-and-Rust software icon.
+Preserve the supplied symmetric crab, shield and white terminal >_ design. Remove the rectangular background to transparency. Center the silhouette on a square canvas with even padding. Pale periwinkle crab #a7bfea, navy #151b2d and #1e2d49 outline, muted steel-blue shield #3f6094, white eyes and terminal. Crisp flat fills and smooth edges; no new elements or extra text.
+
+Toolbar sizes exported from icon-source.png using ImageMagick resize, preserving alpha.

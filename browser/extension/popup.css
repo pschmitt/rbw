@@ -1,11 +1,11 @@
-:root { color-scheme: dark; font: 14px/1.45 system-ui, sans-serif; --bg:#050919; --panel:#10182b; --raised:#1e293e; --line:#2b3c55; --text:#e6e9f1; --muted:#91a4c3; --accent:#67adff; --danger:#ff9caa; }
-:root[data-theme=light] { color-scheme:light; --bg:#f5f7fc; --panel:#fff; --raised:#edf2fb; --line:#c5cedb; --text:#192237; --muted:#5a6d89; --accent:#165dc0; --danger:#b42238; }
+:root { color-scheme: dark; font: 14px/1.45 system-ui, sans-serif; --bg:#151b2d; --panel:#1b263d; --raised:#253653; --line:#384d70; --text:#f1f4fc; --muted:#a0b4d6; --accent:#a7bfea; --danger:#efa9b9; }
+:root[data-theme=light] { color-scheme:light; --bg:#f3f6fc; --panel:#fff; --raised:#e6edf9; --line:#bdcce4; --text:#151b2d; --muted:#526c92; --accent:#3f6094; --danger:#b42238; }
 * { box-sizing:border-box; }
 /* Firefox measures the body to size toolbar popups, not the root. */
 html { overflow:hidden; background:var(--bg); }
 body { width:420px; height:600px; margin:0; display:flex; flex-direction:column; background:var(--bg); color:var(--text); }
-header { display:flex; align-items:center; gap:8px; padding:12px; background:var(--panel); border-bottom:1px solid var(--line); }
-h1 { font-size:23px; font-weight:600; margin:0; }
+header { display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--panel); border-bottom:1px solid var(--line); }
+h1 { font-size:21px; font-weight:600; margin:0; }
 .heading { flex:1; min-width:0; }
 .version { display:block; color:var(--muted); font-size:10px; line-height:1.2; font-weight:400; } h2 { font-size:18px; margin:16px 0 8px; } h3 { font-size:14px; margin:18px 0 8px; color:var(--muted); font-weight:500; }
 button,input,select,textarea { font:inherit; color:inherit; }
@@ -13,7 +13,7 @@ button { border:1px solid var(--line); border-radius:8px; padding:7px 10px; back
 button:hover { background:var(--raised); } button:disabled { opacity:.45; cursor:default; }
 button.primary { background:var(--accent); color:var(--bg); border-color:var(--accent); font-weight:600; }
 button.danger { color:var(--danger); } button.icon { border:0; font-size:23px; padding:4px 8px; }
-button.avatar { background:#393647; border:0; border-radius:50%; width:36px; height:36px; padding:0; font-size:11px; }
+button.avatar { flex-shrink:0; background:transparent; border:0; border-radius:50%; width:34px; height:34px; padding:0; font-size:11px; }
 button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
 input:not([type=checkbox]),select,textarea { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px; width:100%; }
 textarea { resize:vertical; } label { display:block; margin:10px 0; } label>input:not([type=checkbox]),label>select,label>textarea { display:block; margin-top:5px; } input[type=checkbox] { accent-color:var(--accent); }
@@ -88,3 +88,18 @@ details.menu button .svg-icon { width:16px; height:16px; }
 
 footer button:has(>[data-icon]) { display:flex; flex-direction:column; gap:0; }
 .lock-art .svg-icon { width:55px; height:55px; }
+
+/* Keep progress in the header and feedback over the content, without resizing it. */
+body { position:relative; }
+.heading { position:relative; }
+.heading h1 { display:inline; }
+#loading { display:inline-flex; vertical-align:middle; margin-left:7px; padding:0; background:transparent; color:var(--accent); }
+#message.popup-notification, #message.popup-notification.is-error { position:absolute; top:62px; left:10px; right:10px; z-index:20; display:flex; align-items:flex-start; gap:8px; margin:0; padding:10px 12px; border:1px solid var(--accent); border-radius:8px; background:var(--raised); color:var(--text); font-size:13px; box-shadow:0 5px 18px #0005; }
+#message.popup-notification.is-error { border-color:var(--danger); }
+#message-text { flex:1; overflow-wrap:anywhere; }
+#dismiss-message { border:0; padding:0 3px; background:transparent; font-size:20px; line-height:1; }
+.search { padding:2px 8px; border-radius:9px; }
+.search input { padding:6px 4px; font-size:14px; }
+.search-row > button { padding:4px 8px; }
+
+#account-toggle:hover, #account-toggle:focus-visible { background:var(--raised); }
