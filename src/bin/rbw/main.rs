@@ -18,6 +18,7 @@ mod export_info;
 mod import_bitwarden;
 mod osc52;
 mod passkey;
+mod sends;
 mod sock;
 mod tui;
 
@@ -297,6 +298,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
             "restore",
             "attachment",
             "passkey",
+            "send",
         ],
     ),
     (
@@ -1173,6 +1175,17 @@ enum Opt {
     Attachment {
         #[command(subcommand)]
         attachment: Attachment,
+    },
+
+    #[command(
+        about = "Manage Bitwarden Sends",
+        long_about = "Manage Bitwarden Sends\n\n\
+            Create, view, edit, list, and delete end-to-end encrypted Bitwarden \
+            Sends (text and files)."
+    )]
+    Send {
+        #[command(subcommand)]
+        send: SendCmd,
     },
 
     #[command(
@@ -2108,6 +2121,9 @@ impl Opt {
             Self::Attachment { attachment } => {
                 format!("attachment {}", attachment.subcommand_name())
             }
+            Self::Send { send } => {
+                format!("send {}", send.subcommand_name())
+            }
             Self::Code { .. } => "code".to_string(),
             Self::Inject { .. } => "inject".to_string(),
             Self::Run { .. } => "run".to_string(),
@@ -2515,6 +2531,256 @@ impl Attachment {
             Self::Get { .. } => "get",
             Self::Create { .. } => "create",
             Self::Rm { .. } => "rm",
+        }
+        .to_string()
+    }
+}
+
+#[derive(Debug, clap::Parser)]
+enum SendCmd {
+    #[command(
+        about = "List existing Sends",
+        visible_aliases = ["ls"]
+    )]
+    List {
+        #[arg(
+            short,
+            long,
+            value_enum,
+            help = "Output mode: name, json, yaml"
+        )]
+        output: Option<OutputArg>,
+        #[arg(
+            short = 'j',
+            long,
+            visible_alias = "json",
+            help = "Display output as JSON"
+        )]
+        raw: bool,
+        #[arg(long, help = "Display output as YAML")]
+        yaml: bool,
+    },
+
+    #[command(
+        about = "View a Send's details or content",
+        visible_aliases = ["get", "show"]
+    )]
+    View {
+        #[arg(help = "Send ID or name")]
+        send: String,
+        #[arg(
+            short = 't',
+            long,
+            help = "Print decrypted text content directly"
+        )]
+        text: bool,
+        #[arg(
+            short,
+            long,
+            value_enum,
+            help = "Output mode: name, json, yaml"
+        )]
+        output: Option<OutputArg>,
+        #[arg(
+            short = 'j',
+            long,
+            visible_alias = "json",
+            help = "Display output as JSON"
+        )]
+        raw: bool,
+        #[arg(long, help = "Display output as YAML")]
+        yaml: bool,
+    },
+
+    #[command(
+        about = "Create a new Send",
+        visible_aliases = ["new", "add"]
+    )]
+    Create {
+        #[arg(
+            help = "Name of the Send (required for text; defaults to filename for files)"
+        )]
+        name: Option<String>,
+        #[arg(
+            short = 't',
+            long,
+            help = "Text content to send (or '-' to read from stdin)"
+        )]
+        text: Option<String>,
+        #[arg(short = 'f', long, value_name = "FILE", help = "File to send")]
+        file: Option<std::path::PathBuf>,
+        #[arg(long, help = "Read text content from standard input")]
+        stdin: bool,
+        #[arg(short = 'n', long, help = "Optional notes (encrypted)")]
+        notes: Option<String>,
+        #[arg(
+            short = 'p',
+            long,
+            help = "Optional password required to access the Send"
+        )]
+        password: Option<String>,
+        #[arg(long, help = "Hide text content by default on the web page")]
+        hidden: bool,
+        #[arg(
+            short = 'd',
+            long,
+            default_value = "7",
+            help = "Number of days until the Send is permanently deleted (1-30)"
+        )]
+        days: u64,
+        #[arg(
+            long,
+            value_name = "DAYS",
+            help = "Number of days until access to the Send expires"
+        )]
+        expire_in: Option<u64>,
+        #[arg(
+            long,
+            value_name = "RFC3339",
+            help = "Explicit deletion timestamp (RFC 3339 format)"
+        )]
+        deletion_date: Option<String>,
+        #[arg(
+            long,
+            value_name = "RFC3339",
+            help = "Explicit expiration timestamp (RFC 3339 format)"
+        )]
+        expiration_date: Option<String>,
+        #[arg(
+            short = 'm',
+            long,
+            value_name = "COUNT",
+            help = "Maximum number of times this Send can be accessed"
+        )]
+        max_access_count: Option<u64>,
+        #[arg(
+            long,
+            help = "Do not hide sender email address from recipients"
+        )]
+        show_email: bool,
+        #[arg(
+            short = 'c',
+            long,
+            help = "Copy the generated Send URL to the system clipboard"
+        )]
+        copy: bool,
+    },
+
+    #[command(
+        about = "Edit an existing Send",
+        visible_aliases = ["update"]
+    )]
+    Edit {
+        #[arg(help = "Send ID or name")]
+        send: String,
+        #[arg(long, help = "Update the Send's name")]
+        name: Option<String>,
+        #[arg(short = 't', long, help = "Update the Send's text content")]
+        text: Option<String>,
+        #[arg(short = 'n', long, help = "Update the Send's notes")]
+        notes: Option<String>,
+        #[arg(short = 'p', long, help = "Set or update access password")]
+        password: Option<String>,
+        #[arg(long, help = "Remove password requirement from the Send")]
+        remove_password: bool,
+        #[arg(long, help = "Hide text content by default")]
+        hidden: bool,
+        #[arg(
+            long,
+            conflicts_with = "hidden",
+            help = "Show text content by default"
+        )]
+        visible: bool,
+        #[arg(long, help = "Disable access to the Send")]
+        disable: bool,
+        #[arg(
+            long,
+            conflicts_with = "disable",
+            help = "Re-enable access to the Send"
+        )]
+        enable: bool,
+        #[arg(long, help = "Hide email address from recipients")]
+        hide_email: bool,
+        #[arg(
+            long,
+            conflicts_with = "hide_email",
+            help = "Show email address to recipients"
+        )]
+        show_email: bool,
+        #[arg(
+            short = 'd',
+            long,
+            value_name = "DAYS",
+            help = "Reset deletion date to N days from now (1-30)"
+        )]
+        days: Option<u64>,
+        #[arg(
+            long,
+            value_name = "RFC3339",
+            help = "Explicit deletion timestamp (RFC 3339 format)"
+        )]
+        deletion_date: Option<String>,
+        #[arg(
+            long,
+            value_name = "DAYS",
+            help = "Set expiration to N days from now"
+        )]
+        expire_in: Option<u64>,
+        #[arg(
+            long,
+            value_name = "RFC3339",
+            help = "Set explicit expiration timestamp (RFC 3339 format)"
+        )]
+        expiration_date: Option<String>,
+        #[arg(long, help = "Clear expiration date")]
+        clear_expiration: bool,
+        #[arg(
+            short = 'm',
+            long,
+            value_name = "COUNT",
+            help = "Set maximum access count"
+        )]
+        max_access_count: Option<u64>,
+        #[arg(long, help = "Clear maximum access count limitation")]
+        clear_max_access: bool,
+    },
+
+    #[command(
+        about = "Delete a Send",
+        visible_aliases = ["rm", "delete"]
+    )]
+    Remove {
+        #[arg(help = "Send ID or name")]
+        send: String,
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
+    },
+
+    #[command(
+        about = "Print or copy the shareable link for a Send",
+        visible_aliases = ["url"]
+    )]
+    Link {
+        #[arg(help = "Send ID or name")]
+        send: String,
+        #[arg(
+            short = 'c',
+            long,
+            help = "Copy the link to the system clipboard"
+        )]
+        copy: bool,
+    },
+}
+
+impl SendCmd {
+    fn subcommand_name(&self) -> String {
+        match self {
+            Self::List { .. } => "list",
+            Self::View { .. } => "view",
+            Self::Create { .. } => "create",
+            Self::Edit { .. } => "edit",
+            Self::Remove { .. } => "remove",
+            Self::Link { .. } => "link",
         }
         .to_string()
     }
@@ -3552,6 +3818,115 @@ fn main() {
                 from_file.as_deref(),
                 from_file_passphrase.as_deref(),
             ),
+        },
+        Opt::Send { send } => match send {
+            SendCmd::List { output, raw, yaml } => {
+                (|| -> anyhow::Result<()> {
+                    let output = resolve_output_mode(output, raw, yaml)?;
+                    commands::send_list(output)
+                })()
+            }
+            SendCmd::View {
+                send,
+                text,
+                output,
+                raw,
+                yaml,
+            } => (|| -> anyhow::Result<()> {
+                let output = resolve_output_mode(output, raw, yaml)?;
+                commands::send_view(&send, text, output)
+            })(),
+            SendCmd::Create {
+                name,
+                text,
+                file,
+                stdin,
+                notes,
+                password,
+                hidden,
+                days,
+                expire_in,
+                deletion_date,
+                expiration_date,
+                max_access_count,
+                show_email,
+                copy,
+            } => commands::send_create(
+                name.as_deref(),
+                text.as_deref(),
+                file.as_deref(),
+                stdin,
+                notes.as_deref(),
+                password.as_deref(),
+                hidden,
+                days,
+                expire_in,
+                deletion_date.as_deref(),
+                expiration_date.as_deref(),
+                max_access_count,
+                !show_email,
+                copy,
+            ),
+            SendCmd::Edit {
+                send,
+                name,
+                text,
+                notes,
+                password,
+                remove_password,
+                hidden,
+                visible,
+                disable,
+                enable,
+                hide_email,
+                show_email,
+                days,
+                deletion_date,
+                expire_in,
+                expiration_date,
+                clear_expiration,
+                max_access_count,
+                clear_max_access,
+            } => commands::send_edit(
+                &send,
+                name.as_deref(),
+                text.as_deref(),
+                notes.as_deref(),
+                password.as_deref(),
+                remove_password,
+                if hidden {
+                    Some(true)
+                } else if visible {
+                    Some(false)
+                } else {
+                    None
+                },
+                if disable {
+                    Some(true)
+                } else if enable {
+                    Some(false)
+                } else {
+                    None
+                },
+                if hide_email {
+                    Some(true)
+                } else if show_email {
+                    Some(false)
+                } else {
+                    None
+                },
+                days,
+                deletion_date.as_deref(),
+                expire_in,
+                expiration_date.as_deref(),
+                clear_expiration,
+                max_access_count,
+                clear_max_access,
+            ),
+            SendCmd::Remove { send, yes } => {
+                commands::send_remove(&send, yes)
+            }
+            SendCmd::Link { send, copy } => commands::send_link(&send, copy),
         },
         Opt::Get {
             find_args,
@@ -5079,5 +5454,161 @@ mod test {
             );
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_send_subcommands_parse() {
+        let Opt::Send {
+            send: SendCmd::List { raw, .. },
+        } = parse(&["rbw", "send", "list", "--json"]).command
+        else {
+            panic!("expected SendCmd::List");
+        };
+        assert!(raw);
+
+        let Opt::Send {
+            send: SendCmd::List { .. },
+        } = parse(&["rbw", "send", "ls"]).command
+        else {
+            panic!("expected SendCmd::List via alias");
+        };
+
+        let Opt::Send {
+            send: SendCmd::View { send, text, .. },
+        } = parse(&["rbw", "send", "view", "my-send", "--text"]).command
+        else {
+            panic!("expected SendCmd::View");
+        };
+        assert_eq!(send, "my-send");
+        assert!(text);
+
+        let Opt::Send {
+            send: SendCmd::View { send, .. },
+        } = parse(&["rbw", "send", "get", "my-send"]).command
+        else {
+            panic!("expected SendCmd::View via get");
+        };
+        assert_eq!(send, "my-send");
+
+        let Opt::Send {
+            send: SendCmd::View { send, .. },
+        } = parse(&["rbw", "send", "show", "my-send"]).command
+        else {
+            panic!("expected SendCmd::View via show");
+        };
+        assert_eq!(send, "my-send");
+
+        let Opt::Send {
+            send:
+                SendCmd::Create {
+                    name,
+                    text,
+                    file,
+                    password,
+                    hidden,
+                    days,
+                    copy,
+                    ..
+                },
+        } = parse(&[
+            "rbw",
+            "send",
+            "create",
+            "foo",
+            "-t",
+            "secret text",
+            "-p",
+            "mypass",
+            "--hidden",
+            "--days",
+            "5",
+            "--copy",
+        ])
+        .command
+        else {
+            panic!("expected SendCmd::Create");
+        };
+        assert_eq!(name.as_deref(), Some("foo"));
+        assert_eq!(text.as_deref(), Some("secret text"));
+        assert!(file.is_none());
+        assert_eq!(password.as_deref(), Some("mypass"));
+        assert!(hidden);
+        assert_eq!(days, 5);
+        assert!(copy);
+
+        let Opt::Send {
+            send:
+                SendCmd::Edit {
+                    send,
+                    name,
+                    clear_expiration,
+                    clear_max_access,
+                    remove_password,
+                    ..
+                },
+        } = parse(&[
+            "rbw",
+            "send",
+            "edit",
+            "my-send",
+            "--name",
+            "new-name",
+            "--clear-expiration",
+            "--clear-max-access",
+            "--remove-password",
+        ])
+        .command
+        else {
+            panic!("expected SendCmd::Edit");
+        };
+        assert_eq!(send, "my-send");
+        assert_eq!(name.as_deref(), Some("new-name"));
+        assert!(clear_expiration);
+        assert!(clear_max_access);
+        assert!(remove_password);
+
+        let Opt::Send {
+            send: SendCmd::Remove { send, yes },
+        } = parse(&["rbw", "send", "remove", "my-send", "-y"]).command
+        else {
+            panic!("expected SendCmd::Remove");
+        };
+        assert_eq!(send, "my-send");
+        assert!(yes);
+
+        let Opt::Send {
+            send: SendCmd::Remove { send, yes },
+        } = parse(&["rbw", "send", "rm", "my-send"]).command
+        else {
+            panic!("expected SendCmd::Remove via rm");
+        };
+        assert_eq!(send, "my-send");
+        assert!(!yes);
+
+        let Opt::Send {
+            send: SendCmd::Remove { send, .. },
+        } = parse(&["rbw", "send", "delete", "my-send"]).command
+        else {
+            panic!("expected SendCmd::Remove via delete");
+        };
+        assert_eq!(send, "my-send");
+
+        let Opt::Send {
+            send: SendCmd::Link { send, copy },
+        } = parse(&["rbw", "send", "link", "my-send", "--copy"]).command
+        else {
+            panic!("expected SendCmd::Link");
+        };
+        assert_eq!(send, "my-send");
+        assert!(copy);
+
+        let Opt::Send {
+            send: SendCmd::Link { send, copy },
+        } = parse(&["rbw", "send", "url", "my-send"]).command
+        else {
+            panic!("expected SendCmd::Link via url");
+        };
+        assert_eq!(send, "my-send");
+        assert!(!copy);
     }
 }

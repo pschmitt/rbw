@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [2.21.0] - 2026-10-17
+
+### Added
+
+* `rbw send`: Full Bitwarden Send management from the command line:
+  * `rbw send list` (alias `ls`): List active and expired Sends with status, type, access count, and expiration date. Supports `--json` and `--yaml`.
+  * `rbw send view` (aliases `get`, `show`): View detailed metadata and decrypted content for a Send, or print decrypted text directly with `-t`/`--text`.
+  * `rbw send create` (aliases `new`, `add`): Create text or file Sends with optional password protection, expiration timestamps, access count limits, and clipboard link copying (`-c`/`--copy`).
+  * `rbw send edit` (alias `update`): Update Send metadata, notes, text, access password, expiration date, max access limit, disabled state, and email visibility.
+  * `rbw send remove` (aliases `rm`, `delete`): Delete a Send by name or ID with confirmation prompt (`-y`/`--yes` to skip).
+  * `rbw send link` (alias `url`): Print or copy (`-c`/`--copy`) the direct shareable web access URL for a Send.
+* Browser extension 0.2.14 with updated crab-and-shield icon and transparent toolbar icons for Firefox and Chromium.
+
 ### Added
 
 * Browser preview 0.2.3: passkey registration/authentication, in-popup master

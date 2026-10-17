@@ -6,9 +6,9 @@ use serde_json::{json, Value};
 
 use crate::{actions, commands};
 
-mod attachments;
+pub mod attachments;
 mod passkeys;
-mod sends;
+use crate::sends;
 mod transfer;
 
 const MAX_MESSAGE: usize = 512 * 1024;
