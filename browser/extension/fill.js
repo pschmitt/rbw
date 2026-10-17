@@ -86,9 +86,9 @@ function showFillNotice(expectedUrl, notice) {
   host.style.cssText = "all:initial!important;position:fixed!important;inset:16px 16px auto auto!important;z-index:2147483647!important;pointer-events:none!important;max-width:calc(100vw - 32px)!important;";
   const shadow = host.attachShadow({ mode: "closed" });
   const sheet = new CSSStyleSheet();
-  const border = notice.error ? "#efa9b9" : "#a7bfea";
-  const bg = notice.error ? "#251821" : "#1b263d";
-  sheet.replaceSync(`:host{all:initial}.notice{box-sizing:border-box;display:flex;align-items:start;gap:12px;width:340px;max-width:calc(100vw - 32px);padding:12px 14px;border:1px solid ${border};border-radius:12px;background:${bg};color:#f1f4fc;box-shadow:0 6px 24px #0006;font:14px/1.4 system-ui,sans-serif;pointer-events:none}.text{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}small{color:#a0b4d6;font-size:12px;margin-top:2px}button{flex-shrink:0;pointer-events:auto;cursor:pointer;border:0;border-radius:6px;background:transparent;color:#a0b4d6;font:20px/1 system-ui;padding:4px}button:hover,button:focus-visible{background:#253653;color:#f1f4fc;outline:1px solid #a7bfea}`);
+  const border = notice.error ? "#efa9b9" : "#555555";
+  const bg = notice.error ? "#302528" : "#282828";
+  sheet.replaceSync(`:host{all:initial}.notice{box-sizing:border-box;display:flex;align-items:center;gap:10px;width:360px;max-width:calc(100vw - 32px);padding:10px 12px;border:1px solid ${border};border-radius:12px;background:${bg};color:#efefef;box-shadow:0 6px 24px #0006;font:14px/1.4 system-ui,sans-serif;pointer-events:none}.brand{width:30px;height:30px;object-fit:contain;flex-shrink:0}.text{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}small{color:#adadad;font-size:12px;margin-top:2px}button{flex-shrink:0;pointer-events:auto;cursor:pointer;border:0;border-radius:6px;background:transparent;color:#adadad;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}button svg{width:18px;height:18px;display:block;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}button:hover,button:focus-visible{background:#383838;color:#efefef;outline:1px solid #d0d0d0}.notice{animation:rbw-in 160ms ease-out both}.notice.closing{animation:rbw-out 120ms ease-in both}@keyframes rbw-in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}@keyframes rbw-out{to{opacity:0;transform:translateY(-4px)}}@media(prefers-reduced-motion:reduce){.notice,.notice.closing{animation:none}}`);
   shadow.adoptedStyleSheets = [sheet];
   const box = document.createElement("div"); box.className = "notice"; box.setAttribute("role", "status"); box.setAttribute("aria-live", "polite");
   const text = document.createElement("div"); text.className = "text";
@@ -108,17 +108,26 @@ function showFillNotice(expectedUrl, notice) {
   account.title = account.textContent;
   text.append(title, account);
   const close = document.createElement("button"); close.type = "button"; const closeIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg"); closeIcon.setAttribute("viewBox", "0 0 24 24"); closeIcon.setAttribute("width", "16"); closeIcon.setAttribute("height", "16"); closeIcon.setAttribute("aria-hidden", "true");
-  const closePath = document.createElementNS(closeIcon.namespaceURI, "path"); closePath.setAttribute("d", "M18 6 6 18M6 6l12 12"); closePath.setAttribute("stroke", "currentColor"); closePath.setAttribute("stroke-width", "2"); closeIcon.append(closePath); close.append(closeIcon); close.setAttribute("aria-label", "Dismiss autofill notification");
+  const closePath = document.createElementNS(closeIcon.namespaceURI, "path"); closePath.setAttribute("d", "M18 6 6 18M6 6l12 12"); closePath.setAttribute("stroke", "currentColor"); closePath.setAttribute("stroke-width", "1.8"); closeIcon.append(closePath); close.append(closeIcon); close.setAttribute("aria-label", "Dismiss autofill notification");
   let timer;
   const undo = !notice.error && !notice.title ? notice.undoToken : null;
   const api = globalThis.browser || chrome;
   const clearUndo = () => { if (undo) api.runtime.sendMessage({ action: "dismiss_fill", token: undo }).catch(() => {}); };
-  const dismiss = () => { clearTimeout(timer); clearUndo(); host.remove(); document.removeEventListener("keydown", onKey); };
+  let closing = false;
+  const dismiss = () => {
+    if (closing) return; closing = true;
+    clearTimeout(timer); clearUndo(); document.removeEventListener("keydown", onKey);
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) host.remove();
+    else { box.classList.add("closing"); setTimeout(() => host.remove(), 140); }
+  };
   const onKey = event => { if (event.key === "Escape") dismiss(); };
   close.addEventListener("click", dismiss); document.addEventListener("keydown", onKey);
+  if (notice.icon) { const image = document.createElement("img"); image.className = "brand"; image.alt = "rbw"; image.src = notice.icon; box.append(image); }
   box.append(text);
   if (undo) {
-    const undoButton = document.createElement("button"); undoButton.type = "button"; undoButton.textContent = "Undo"; undoButton.setAttribute("aria-label", "Undo autofill"); undoButton.style.cssText = "font:600 13px system-ui;align-self:center;padding:6px";
+    const undoButton = document.createElement("button"); undoButton.type = "button"; undoButton.setAttribute("aria-label", "Undo autofill"); undoButton.title = "Undo autofill";
+    const undoIcon = document.createElementNS(closeIcon.namespaceURI, "svg"); undoIcon.setAttribute("viewBox", "0 0 24 24"); undoIcon.setAttribute("aria-hidden", "true");
+    const undoPath = document.createElementNS(closeIcon.namespaceURI, "path"); undoPath.setAttribute("d", "M9 14 4 9l5-5M4 9h9a7 7 0 0 1 7 7v4"); undoIcon.append(undoPath); undoButton.append(undoIcon);
     undoButton.addEventListener("click", async () => {
       undoButton.disabled = true;
       try {

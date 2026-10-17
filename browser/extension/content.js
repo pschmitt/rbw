@@ -38,7 +38,7 @@
 (() => {
   try { if (window.top.location.origin !== location.origin) return; } catch (_) { return; }
   const api = globalThis.browser || chrome;
-  let host, generation = 0, filled = false;
+  let host, generation = 0, filled = false, movedPosition = null;
   const fills = new Set();
   api.runtime.onMessage.addListener((message, sender) => {
     if (sender.id !== api.runtime.id || message?.action !== "rbw_fill_state") return;
@@ -61,7 +61,7 @@
     host = document.createElement("div");
     const shadow = host.attachShadow({ mode: "closed" });
     const style = document.createElement("style");
-    style.textContent = ":host{all:initial}.box{box-sizing:border-box;font:13px/1.4 system-ui,sans-serif;color:#f1f4fc;background:#1b263d;border:1px solid #a7bfea;border-radius:10px;box-shadow:0 6px 20px #0006;overflow:hidden;max-width:380px}.header{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:#151b2d;border-bottom:1px solid #384d70}.title{color:#a0b4d6;font-size:11px;font-weight:600;letter-spacing:0.3px;text-transform:uppercase}.dismiss-btn{display:flex;align-items:center;justify-content:center;border:0;background:transparent;color:#a0b4d6;padding:2px 4px;border-radius:4px;cursor:pointer;line-height:1}.dismiss-btn:hover,.dismiss-btn:focus-visible{color:#f1f4fc;background:#253653}.dismiss-btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}.item-btn{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;border-top:1px solid #253653;padding:8px 12px;background:#1b263d;color:#f1f4fc;font:13px system-ui,sans-serif;cursor:pointer}.item-btn:first-of-type{border-top:0}.item-btn:hover,.item-btn:focus-visible{background:#253653;outline:none}.icon-col{width:20px;height:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:3px}.icon-col img{width:18px;height:18px;border-radius:3px;object-fit:contain}.icon-col svg{width:18px;height:18px;stroke:#a7bfea;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.text-col{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}strong{font-weight:500;font-size:13px}small{color:#a0b4d6;font-size:11px;margin-top:1px}";
+    style.textContent = ":host{all:initial}.box{box-sizing:border-box;font:13px/1.4 system-ui,sans-serif;color:#efefef;background:#282828;border:1px solid #555555;border-radius:10px;box-shadow:0 6px 20px #0006;overflow:hidden;max-width:380px}.header{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:#202020;border-bottom:1px solid #494949}.drag-handle{display:flex;align-items:center;gap:7px;flex:1;min-width:0;border:0;padding:0;background:transparent;text-align:left;cursor:grab;touch-action:none;user-select:none}.drag-handle:active{cursor:grabbing}.drag-handle:focus-visible{outline:1px solid #d0d0d0;outline-offset:3px;border-radius:3px}.grip{width:12px;height:16px;fill:#adadad;flex-shrink:0}.title{color:#adadad;font-size:11px;font-weight:600;letter-spacing:0.3px;text-transform:uppercase}.dismiss-btn{display:flex;align-items:center;justify-content:center;border:0;background:transparent;color:#adadad;padding:2px 4px;border-radius:4px;cursor:pointer;line-height:1}.dismiss-btn:hover,.dismiss-btn:focus-visible{color:#efefef;background:#383838}.dismiss-btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}.item-btn{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;border-top:1px solid #383838;padding:8px 12px;background:#282828;color:#efefef;font:13px system-ui,sans-serif;cursor:pointer}.item-btn:first-of-type{border-top:0}.item-btn:hover,.item-btn:focus-visible{background:#383838;outline:none}.icon-col{width:20px;height:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:3px}.icon-col img{width:18px;height:18px;border-radius:3px;object-fit:contain}.icon-col svg{width:18px;height:18px;stroke:#d0d0d0;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.text-col{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}strong{font-weight:500;font-size:13px}small{color:#adadad;font-size:11px;margin-top:1px}";
     shadow.append(style);
     const box = document.createElement("div"); box.className = "box";
     const header = document.createElement("div"); header.className = "header";
@@ -70,7 +70,11 @@
     const closeIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg"); closeIcon.setAttribute("viewBox", "0 0 24 24"); closeIcon.setAttribute("aria-hidden", "true");
     const closePath = document.createElementNS(closeIcon.namespaceURI, "path"); closePath.setAttribute("d", "M18 6 6 18M6 6l12 12"); closeIcon.append(closePath); dismiss.append(closeIcon);
     dismiss.addEventListener("click", event => { if (event.isTrusted) close(); });
-    header.append(title, dismiss); box.append(header);
+    const handle = document.createElement("button"); handle.type = "button"; handle.className = "drag-handle";
+    handle.setAttribute("aria-label", "Move autofill suggestions"); handle.title = "Drag to move · Arrow keys to adjust · Home to reset";
+    const grip = document.createElementNS(closeIcon.namespaceURI, "svg"); grip.setAttribute("viewBox", "0 0 12 16"); grip.setAttribute("class", "grip"); grip.setAttribute("aria-hidden", "true");
+    for (const x of [3, 9]) for (const y of [3, 8, 13]) { const dot = document.createElementNS(closeIcon.namespaceURI, "circle"); dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("r", "1"); grip.append(dot); }
+    handle.append(grip, title); header.append(handle, dismiss); box.append(header);
 
     const iconTargets = new Map();
     for (const item of result.result) {
@@ -97,8 +101,37 @@
       box.append(button);
     }
     shadow.append(box);
-    const rect = input.getBoundingClientRect(); host.style.cssText = `position:fixed!important;z-index:2147483647!important;top:${Math.min(rect.bottom + 4, innerHeight - 230)}px!important;left:${Math.max(0, Math.min(rect.left, innerWidth - 300))}px!important;width:${Math.max(rect.width, 240)}px!important`;
+    const rect = input.getBoundingClientRect();
+    host.style.cssText = `position:fixed!important;z-index:2147483647!important;top:0!important;left:0!important;width:${Math.max(0, Math.min(380, Math.max(rect.width, 240), innerWidth - 16))}px!important;visibility:hidden!important`;
     document.documentElement.append(host);
+    const position = (x, y) => {
+      const size = box.getBoundingClientRect();
+      const point = { x: Math.max(8, Math.min(x, innerWidth - size.width - 8)), y: Math.max(8, Math.min(y, innerHeight - size.height - 8)) };
+      host.style.setProperty("left", `${point.x}px`, "important"); host.style.setProperty("top", `${point.y}px`, "important");
+      return point;
+    };
+    position(movedPosition?.x ?? rect.left, movedPosition?.y ?? rect.bottom + 4); host.style.setProperty("visibility", "visible", "important");
+    let drag;
+    handle.addEventListener("pointerdown", event => {
+      if (!event.isTrusted || event.button !== 0) return;
+      event.preventDefault(); const bounds = box.getBoundingClientRect();
+      drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: bounds.left, top: bounds.top };
+      handle.setPointerCapture(event.pointerId);
+    });
+    handle.addEventListener("pointermove", event => {
+      if (!event.isTrusted || !drag || drag.id !== event.pointerId || !host) return;
+      movedPosition = position(drag.left + event.clientX - drag.x, drag.top + event.clientY - drag.y);
+    });
+    const endDrag = () => { drag = null; };
+    handle.addEventListener("pointerup", endDrag); handle.addEventListener("pointercancel", endDrag); handle.addEventListener("lostpointercapture", endDrag);
+    handle.addEventListener("keydown", event => {
+      if (!event.isTrusted || !host) return;
+      if (event.key === "Home") { event.preventDefault(); movedPosition = null; const anchor = input.getBoundingClientRect(); position(anchor.left, anchor.bottom + 4); return; }
+      const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+      if (!delta) return;
+      event.preventDefault(); const bounds = box.getBoundingClientRect(); const step = event.shiftKey ? 40 : 10;
+      movedPosition = position(bounds.left + delta[0] * step, bounds.top + delta[1] * step);
+    });
     api.runtime.sendMessage({ action: "inline_icons" }).then(response => {
       if (generation !== current || !host) return;
       for (const item of response?.result || []) {

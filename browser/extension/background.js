@@ -7,6 +7,9 @@ const pending = new Map();
 const offers = new Map();
 const fillCycles = new Map();
 const fillUndos = new Map();
+const suggestionCounts = new Map();
+const badgeRequests = new Map();
+const badgeTabs = new Set();
 const popupNotices = new Map();
 // Only list metadata lives here. No details, notes, passwords or persistent storage.
 const listCache = new Map();
@@ -18,6 +21,8 @@ const faviconPending = new Map();
 let metadataEpoch = 0;
 function clearMetadata() {
   ++metadataEpoch; searchPending.clear();
+  const tabs = [...new Set([...suggestionCounts.keys(), ...badgeRequests.keys()])]; suggestionCounts.clear(); badgeRequests.clear();
+  for (const tabId of tabs) badge(tabId);
   for (const map of [listCache, faviconCache]) { for (const entry of map.values()) clearTimeout(entry.timer); map.clear(); }
   faviconPending.clear();
 }
@@ -114,11 +119,52 @@ async function activeTab() {
   if (!tab?.url || !/^https?:\/\//.test(tab.url)) throw new Error("Open an HTTP or HTTPS page first.");
   return tab;
 }
-function badge() {
-  api.action.setBadgeBackgroundColor({ color: "#64abff" });
-  api.action.setBadgeText({ text: pending.size + offers.size ? String(pending.size + offers.size) : "" });
-  api.action.setTitle({ title: pending.size ? "rbw — Passkey approval waiting. Click to continue." : "rbw" });
+function badge(tabId) {
+  if (tabId === undefined) {
+    Promise.resolve(api.action.setBadgeText({ text: "" })).catch(() => {});
+    Promise.resolve(api.action.setTitle({ title: "rbw" })).catch(() => {});
+    for (const id of new Set([...badgeTabs, ...suggestionCounts.keys(), ...[...pending.values()].map(p => p.tabId), ...offers.keys()])) badge(id);
+    return;
+  }
+  badgeTabs.add(tabId);
+  const approval = [...pending.values()].some(p => p.tabId === tabId);
+  const offer = offers.has(tabId);
+  const count = suggestionCounts.get(tabId)?.count || 0;
+  Promise.resolve(api.action.setBadgeBackgroundColor({ tabId, color: approval || offer ? "#87642a" : "#555555" })).catch(() => {});
+  Promise.resolve(api.action.setBadgeText({ tabId, text: approval || offer ? "!" : count ? (count > 99 ? "99+" : String(count)) : "" })).catch(() => {});
+  Promise.resolve(api.action.setTitle({ tabId, title: approval ? "rbw — Passkey approval waiting. Click to continue." : offer ? "rbw — Login ready to save." : count ? `rbw — ${count} matching login${count === 1 ? "" : "s"}` : "rbw" })).catch(() => {});
 }
+async function updateSuggestionsBadge(tabId, knownTab) {
+  const token = {}; badgeRequests.set(tabId, token);
+  try {
+    const tab = knownTab || await api.tabs.get(tabId);
+    const url = new URL(tab.url);
+    if (!["https:", "http:"].includes(url.protocol)) throw new Error("No login matching on internal pages.");
+    const prefs = await settings();
+    const result = await cachedSearch({ account: prefs.account || null, url: tab.url, site_only: true, kind: "login" });
+    if (badgeRequests.get(tabId) !== token) return;
+    suggestionCounts.set(tabId, { url: tab.url, count: result.total ?? result.items.length }); badge(tabId);
+  } catch (_) {
+    if (badgeRequests.get(tabId) !== token) return;
+    suggestionCounts.delete(tabId); badge(tabId);
+  } finally { if (badgeRequests.get(tabId) === token) badgeRequests.delete(tabId); }
+}
+async function refreshActiveBadge() {
+  const [tab] = await api.tabs.query({ active: true, currentWindow: true });
+  if (tab?.id !== undefined) await updateSuggestionsBadge(tab.id, tab);
+}
+let notificationIcon;
+async function notifyFill(tab, notice) {
+  // Bundle the local brand image into the isolated notice; no public resources
+  // or website requests are needed for notification branding.
+  notificationIcon ||= fetch(api.runtime.getURL("icons/rbw-32.png")).then(async response => {
+    const bytes = new Uint8Array(await response.arrayBuffer()); let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return "data:image/png;base64," + btoa(binary);
+  }).catch(() => null);
+  return api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: showFillNotice, args: [tab.url, { ...notice, icon: await notificationIcon }] });
+}
+
 function finish(id, response) {
   const operation = pending.get(id);
   if (!operation) return;
@@ -241,7 +287,7 @@ async function fill(message, account) {
     fillUndos.set(tab.id, { token, url: tab.url, frames: filledFrames, timer: setTimeout(() => { if (fillUndos.get(tab.id)?.token === token) fillUndos.delete(tab.id); }, 10000) });
     // Only public display metadata goes to the notice, never the credential.
     const notice = { undoToken: token, name: label || credential.name || "Item", username: credential.type === "login" ? credential.username : null, position: message.cycleIndex, total: message.cycleCount };
-    await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: showFillNotice, args: [tab.url, notice] }).catch(() => {});
+    await notifyFill(tab, notice).catch(() => {});
     return count;
   } finally {
     await api.tabs.sendMessage(tab.id, { action: "rbw_fill_state", token, active: false, filled: count > 0 }).catch(() => {});
@@ -391,22 +437,32 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
     const independent = ["preferences", "pending", "save_offers", "popup_notice", "favicon", "popup_state", "save_popup_state"].includes(message.action);
     const operation = independent ? handle(message) : queue.then(() => handle(message));
     if (!independent) queue = operation.catch(() => {});
-    operation.then(result => respond({ result }), error => respond({ error: error.message || "Operation failed." })); return true;
+    operation.then(result => {
+      respond({ result });
+      if (["unlock", "sync", "save", "mutate", "set_preferences", "import", "save_offer_apply", "passkey_approve"].includes(message.action)) refreshActiveBadge().catch(() => {});
+    }, error => respond({ error: error.message || "Operation failed." })); return true;
   }
   if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "inline_choices", "inline_icons", "inline_fill", "autofill_load", "undo_fill", "dismiss_fill"].includes(message?.action)) return false;
   pageMessage(message, sender, respond).catch(() => respond({ error: "Request failed." })); return true;
 });
 
 api.tabs.onRemoved.addListener(tabId => {
+  suggestionCounts.delete(tabId); badgeRequests.delete(tabId);
   fillCycles.delete(tabId); popupNotices.delete(tabId);
   for (const [id, p] of pending) if (p.tabId === tabId) finish(id, { error: "Page closed." });
   const offer = offers.get(tabId); if (offer) { clearTimeout(offer.timer); offers.delete(tabId); badge(); }
+  badgeTabs.delete(tabId);
 });
-api.tabs.onUpdated.addListener((tabId, change) => {
-  if (!change.url && change.status !== "loading") return;
-  fillCycles.delete(tabId); popupNotices.delete(tabId);
-  for (const [id, p] of pending) if (p.tabId === tabId) finish(id, { error: "Page navigated." });
+api.tabs.onActivated.addListener(({ tabId }) => { updateSuggestionsBadge(tabId).catch(() => {}); });
+api.tabs.onUpdated.addListener((tabId, change, tab) => {
+  if (change.url || change.status === "loading") {
+    suggestionCounts.delete(tabId); badgeRequests.delete(tabId); badge(tabId);
+    fillCycles.delete(tabId); popupNotices.delete(tabId);
+    for (const [id, p] of pending) if (p.tabId === tabId) finish(id, { error: "Page navigated." });
+  }
+  if (change.status === "complete" && tab?.active) updateSuggestionsBadge(tabId, tab).catch(() => {});
 });
+api.windows?.onFocusChanged?.addListener(windowId => { if (windowId >= 0) refreshActiveBadge().catch(() => {}); });
 api.runtime.onInstalled.addListener(() => {
   api.contextMenus.removeAll().then(() => api.contextMenus.create({ id: "rbw-open", title: "Fill with rbw…", contexts: ["editable"] }));
 });
@@ -419,21 +475,13 @@ async function fillShortcut() {
     const status = await native({ action: "status", account });
     if (!status.unlocked) {
       fillCycles.delete(tab.id);
-      await api.scripting.executeScript({
-        target: { tabId: tab.id, frameIds: [0] },
-        func: showFillNotice,
-        args: [tab.url, { title: "rbw is locked", error: true, message: "Unlock your vault to autofill this page." }]
-      }).catch(() => {});
+      await notifyFill(tab, { title: "rbw is locked", error: true, message: "Unlock your vault to autofill this page." }).catch(() => {});
       return;
     }
     const result = await cachedSearch({ account, url: tab.url, site_only: true, kind: "login" });
     if (!result.items.length) {
       fillCycles.delete(tab.id);
-      await api.scripting.executeScript({
-        target: { tabId: tab.id, frameIds: [0] },
-        func: showFillNotice,
-        args: [tab.url, { title: "No matching logins", error: true, message: "No matching logins found for this page." }]
-      }).catch(() => {});
+      await notifyFill(tab, { title: "No matching logins", error: true, message: "No matching logins found for this page." }).catch(() => {});
       return;
     }
     const signature = JSON.stringify([account, result.items.map(item => item.id)]);
@@ -445,11 +493,7 @@ async function fillShortcut() {
   } catch (err) {
     if (tab) {
       fillCycles.delete(tab.id);
-      await api.scripting.executeScript({
-        target: { tabId: tab.id, frameIds: [0] },
-        func: showFillNotice,
-        args: [tab.url, { title: "Autofill failed", error: true, message: err?.message || "Could not autofill this page." }]
-      }).catch(() => {});
+      await notifyFill(tab, { title: "Autofill failed", error: true, message: err?.message || "Could not autofill this page." }).catch(() => {});
     }
   }
 }
@@ -464,3 +508,5 @@ api.commands.onCommand.addListener(command => {
 api.webNavigation.onCommitted.addListener(details => {
   for (const [id, p] of pending) if (p.tabId === details.tabId && p.frameId === details.frameId) finish(id, { error: "Document navigated." });
 });
+
+refreshActiveBadge().catch(() => {});

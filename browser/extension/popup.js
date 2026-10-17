@@ -94,7 +94,11 @@ function show(page) {
   $("detail-header-actions").hidden = page !== "detail";
   $("edit-header-actions").hidden = page !== "editor";
   $("send-header-actions").hidden = page !== "send-editor";
-  document.querySelectorAll("footer button").forEach(el => el.classList.toggle("selected", el.dataset.page === page));
+  const tab = ["detail", "editor", "approval", "locked"].includes(page) ? "vault" : page === "send-editor" ? "send" : page;
+  document.querySelectorAll("footer button").forEach(el => {
+    const selected = el.dataset.page === tab; el.classList.toggle("selected", selected);
+    if (selected) el.setAttribute("aria-current", "page"); else el.removeAttribute("aria-current");
+  });
   document.querySelector("main").scrollTop = 0;
   remember();
 }
