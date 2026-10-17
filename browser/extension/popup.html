@@ -57,7 +57,14 @@
 <label>Master password<div class="editor-secret"><input id="approval-password" type="password" autocomplete="off" maxlength="4096" spellcheck="false" required><button type="button" id="approval-reveal" class="icon" aria-label="Show" title="Show"><span data-icon="eye"></span></button></div></label>
 <div class="actions"><button type="submit" class="primary"><span data-icon="check"></span>Verify and continue</button><button type="button" id="approval-verify-back"><span data-icon="back"></span>Back</button></div>
 </form>
-<div class="passkey-alternatives"><button id="use-device"><span data-icon="key"></span>Use another authenticator</button><button id="cancel-passkey"><span data-icon="close"></span>Cancel</button></div>
+<div class="passkey-alternatives">
+  <div id="approval-progress" class="passkey-progress" hidden>
+    <p id="approval-progress-text" class="passkey-progress-text">Signing in with passkey…</p>
+    <div class="passkey-spinner-wrap"><span class="spinner" aria-hidden="true"></span></div>
+  </div>
+  <button id="use-device"><span data-icon="key"></span>Use another authenticator</button>
+  <button id="cancel-passkey"><span data-icon="close"></span>Cancel</button>
+</div>
 </section>
 <section id="locked" hidden><div class="lock-art" data-icon="vault"></div><h2>Your vault is locked</h2><p>Unlock your shared rbw-agent to access your vault.</p></section>
 <section id="vault" hidden>

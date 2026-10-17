@@ -198,10 +198,29 @@ details.menu button .svg-icon { width:16px; height:16px; }
 .passkey-choice-text { flex:1; min-width:0; }
 .passkey-choice strong,.passkey-choice small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .passkey-choice strong { font-size:14px; font-weight:600; }
-.passkey-choice small { font-size:12px; color:var(--muted); margin-top:3px; }
+.passkey-choice.is-selected {
+  border-color: var(--accent);
+  background: var(--raised);
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.passkey-choice.is-selected .passkey-choice-icon {
+  background: var(--accent);
+  color: var(--bg);
+}
+.passkey-choices.is-busy {
+  pointer-events: none;
+}
+.passkey-choices.is-busy .passkey-choice:not(.is-selected) {
+  opacity: 0.45;
+}
 .passkey-alternatives { display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:14px; margin-top:16px; }
 .passkey-alternatives button { display:flex; align-items:center; justify-content:center; gap:8px; }
 #cancel-passkey { border-color:transparent; color:var(--muted); }
+.passkey-progress { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:12px 8px; text-align:center; }
+.passkey-progress-text { margin:0; font-size:14px; font-weight:500; color:var(--text); }
+.passkey-spinner-wrap { display:flex; align-items:center; justify-content:center; }
+.passkey-spinner-wrap .spinner { width:24px; height:24px; border-width:3px; border-color:var(--line); border-top-color:var(--accent); }
 #approval-verification h3 { margin:0 0 8px; color:var(--text); }
 .passkey-empty { display:grid; justify-items:center; text-align:center; padding:24px 12px; gap:10px; color:var(--muted); }
 

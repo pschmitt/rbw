@@ -5,8 +5,9 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.24
+## Features in 0.2.25
 
+- Passkey progress feedback: choosing an account immediately highlights the selected card, disables choices, and replaces the "Use another authenticator" / "Cancel" buttons with dedicated in-panel status text and a loading spinner for real-time progress.
 - Streamlined popup layout: footer bar replaced with a clickable view switcher dropdown on the header title (Vault, Generator, Send, Health), persistent Settings header action with quick access to in-popup settings and options page, and an animated Floating Action Button (FAB) for Add that collapses to an icon on scroll.
 - Neutral charcoal surfaces throughout the popup, sidebar, settings, inline
   suggestions and notifications. Active navigation has a clear filled state,
