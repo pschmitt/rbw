@@ -5,7 +5,7 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.13
+## Features in 0.2.14
 
 - A dark vault layout with search, type/folder/collection filters, favorites,
   archive and trash views; light and system themes are also available.
