@@ -5,9 +5,10 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.27
+## Features in 0.2.28
 
-- Fixed FAB button clipping: clamped popup height to 600px to respect Firefox's maximum extension popup ceiling and switched `#add.fab` to fixed positioning so the Add action is never cropped.
+- Fixed FAB button clipping and scroll behavior: clamped popup height to 600px and stabilized its compact transition while scrolling.
+- Kept the app icon aligned when the Back chevron appears in the header.
 - "Crabify" autofill animation: optional playful crab crawling across form fields during autofill, toggled via settings.
 - AMO compliance: eliminated unsafe `innerHTML` assignments in vendor dependencies for a clean automated AMO linter validation.
 - Animated form element autofill: inputs dynamically highlight with a staggered glowing pulse and subtle scale when autofilled, and smoothly pulse on Undo.

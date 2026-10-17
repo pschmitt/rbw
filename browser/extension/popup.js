@@ -40,8 +40,10 @@ function loading(active) {
   document.querySelector("main")?.setAttribute("aria-busy", String(!!loadingRequests));
 }
 function updateFab() {
-  const scrolled = document.querySelector("main").scrollTop > 15;
-  $("add").classList.toggle("collapsed", scrolled);
+  const main = document.querySelector("main");
+  const fab = $("add");
+  const threshold = fab.classList.contains("collapsed") ? 8 : 24;
+  fab.classList.toggle("collapsed", main.scrollTop > threshold);
 }
 window.addEventListener("pagehide", remember);
 document.addEventListener("visibilitychange", () => { if (document.hidden) remember(); });
