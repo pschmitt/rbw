@@ -40,7 +40,7 @@ for target in ("firefox", "chromium"):
             "open-vault": {"suggested_key": {"default": "Ctrl+Shift+Y"}, "description": "Open rbw vault"},
             "fill-login": {"suggested_key": {"default": "Ctrl+Shift+L"}, "description": "Fill matching login"},
         },
-        "icons": {str(size): f"icons/rbw-{size}.png" for size in [16, 32, 48, 96, 128]},
+        "icons": {str(size): f"icons/rbw-{size}.png" for size in [16, 32, 48, 64, 96, 128, 256]},
         "action": {"default_popup": "popup.html", "default_title": "rbw", "default_icon": toolbar_icons},
         "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'"},
     }
