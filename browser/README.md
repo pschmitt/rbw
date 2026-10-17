@@ -5,7 +5,7 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.5
+## Features in 0.2.7
 
 - A dark vault layout with search, type/folder/collection filters, favorites,
   archive and trash views; light and system themes are also available.
@@ -16,6 +16,9 @@ is no browser vault cache, HTTP listener or separate browser agent.
   Item edits use revision guards and preserve existing passkeys natively.
 - Explicit login/card/identity autofill; username-only flows, same-origin
   frames and open shadow roots; keyboard commands and a context menu.
+  The fill shortcut fills the first match and cycles through matches when
+  repeated within 30 seconds; opening the vault has a separate shortcut. A brief
+  page notification identifies the filled login and username, without passwords.
   Login/custom-field filling rechecks the URI in rbw and the current document.
   Forms are never submitted automatically. Optional on-load filling is off by
   default and only fills a single matching, unprotected login.
@@ -24,6 +27,9 @@ is no browser vault cache, HTTP listener or separate browser agent.
   popup. The badge indicates pending suggestions, which expire in two minutes.
 - Password, passphrase, numeric, alphanumeric and easy-to-read generators using
   CLI defaults; native clipboard operations use the agent's clearing policy.
+- Passkey approval in the toolbar popup, with a badge to resume if automatic
+  opening is unavailable. Conditional requests wait for a toolbar click;
+  dismissing the popup keeps the request pending until cancellation or expiry.
 - Passkey registration and authentication, including discoverable credentials,
   explicit account/item selection, abort/timeouts, another-authenticator
   fallback, UUID and `b64.` credential IDs, and relying-party validation using

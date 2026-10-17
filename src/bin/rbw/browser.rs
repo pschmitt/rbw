@@ -524,7 +524,7 @@ fn dispatch(
                     ensure!(matches(entry, uris, &url)?, "site mismatch");
                     let custom = entry.fields.iter().map(|f| Ok(json!({"name": f.name.as_deref().map(|v| decrypt(entry, v)).transpose()?, "value": f.value.as_deref().map(|v| decrypt(entry, v)).transpose()?, "type": match f.ty { Some(rbw::api::FieldType::Hidden) => "hidden", Some(rbw::api::FieldType::Boolean) => "boolean", Some(rbw::api::FieldType::Linked) => "linked", _ => "text" }}))).collect::<anyhow::Result<Vec<_>>>()?;
                     Ok(
-                        json!({"custom": custom, "username": username.as_deref().map(|s| decrypt(entry, s)).transpose()?,
+                        json!({"name": decrypt(entry, &entry.name)?, "custom": custom, "username": username.as_deref().map(|s| decrypt(entry, s)).transpose()?,
                         "password": password.as_deref().map(|s| decrypt(entry, s)).transpose()?}),
                     )
                 }

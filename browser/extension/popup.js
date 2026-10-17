@@ -1,6 +1,10 @@
 if (new URLSearchParams(location.search).get("surface") === "window") document.documentElement.dataset.surface = "window";
 const api = globalThis.browser || chrome;
 const $ = id => document.getElementById(id);
+for (const label of document.querySelectorAll("[data-extension-version]")) {
+  label.textContent = `v${api.runtime.getManifest().version}`;
+  label.title = "Loaded rbw extension version";
+}
 const labels = { login: "Login", card: "Card", identity: "Identity", secure_note: "Secure note", ssh_key: "SSH key" };
 const icons = { login: "▣", card: "▰", identity: "♙", secure_note: "▤", ssh_key: "⌘" };
 const schema = {
@@ -51,6 +55,16 @@ function selectOptions(id, values, label) {
   const selected = $(id).value;
   $(id).replaceChildren(new Option(label, ""), ...values.map(v => new Option(typeof v === "string" ? v : v.name, typeof v === "string" ? v : v.id)));
   $(id).value = selected;
+}
+async function activeApproval() {
+  const [tab] = await api.tabs.query({ active: true, currentWindow: true });
+  const requests = await request("pending");
+  return requests.find(p => p.tabId === tab?.id)?.id || null;
+}
+async function finishApproval(text) {
+  approvalId = null; message(text);
+  if (document.documentElement.dataset.surface !== "window") window.close();
+  else await refresh();
 }
 async function refresh() {
   clearVault();
@@ -217,13 +231,13 @@ async function showApproval(id) {
   const approve = async item => {
     const password = $("approval-password").value; $("approval-password").value = "";
     if (pending.verification === "required" && !password) { $("approval-password").focus(); throw new Error("Enter your master password to verify this passkey operation."); }
-    message("Waiting for rbw…"); await request("passkey_approve", { request: id, item, password: password || null }); approvalId = null; message("Passkey request completed."); await refresh(); };
+    message("Waiting for rbw…"); await request("passkey_approve", { request: id, item, password: password || null }); await finishApproval("Passkey request completed."); };
   if (pending.method === "create") $("approval-items").append(button("Create in a new login", () => approve(null), "primary"));
   for (const item of result.items) $("approval-items").append(button(`${pending.method === "create" ? "Add to" : "Use"} ${item.name} · ${item.username || ""}`, () => approve(item.id)));
   if (pending.method === "get" && !result.items.length) $("approval-items").append(element("p", "No matching passkeys in this account. Try another account or authenticator.", "hint"));
 }
-$("use-device").onclick = () => attempt(async () => { await request("passkey_decline", { request: approvalId, fallback: true }); approvalId = null; await refresh(); });
-$("cancel-passkey").onclick = () => attempt(async () => { await request("passkey_decline", { request: approvalId }); approvalId = null; await refresh(); });
+$("use-device").onclick = () => attempt(async () => { await request("passkey_decline", { request: approvalId, fallback: true }); await finishApproval("Passkey request declined."); });
+$("cancel-passkey").onclick = () => attempt(async () => { await request("passkey_decline", { request: approvalId }); await finishApproval("Passkey request declined."); });
 for (const action of ["unlock", "lock", "sync"]) $(action).onclick = () => attempt(async () => { message("Working…"); await request(action); message(""); await refresh(); });
 $("unlock-form").onsubmit = event => {
   event.preventDefault();
@@ -273,6 +287,10 @@ for (const id of ["setting-passkeys", "setting-save", "theme"]) $(id).onchange =
   preference = await request("set_preferences", { preferences: { passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value } }); applyTheme(preference.theme);
 });
 setInterval(() => attempt(async () => {
+  if (!approvalId) {
+    const id = await activeApproval();
+    if (id) { approvalId = id; await refresh(); return; }
+  }
   const status = await request("status");
   if (!unlocked && status.unlocked) { await refresh(); return; }
   if (unlocked && !status.unlocked) { unlocked = false; clearVault(); show("locked"); message("Vault locked by rbw-agent."); }
@@ -280,9 +298,12 @@ setInterval(() => attempt(async () => {
 attempt(async () => {
   preference = await request("preferences"); applyTheme(preference.theme);
   $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme;
+  if (!approvalId) approvalId = await activeApproval();
   // Populate the account selector before applying a remembered selection.
   const status = await request("status"); selectOptions("account", status.accounts, "Primary account"); $("account").value = preference.account;
   await refresh();
+  const notice = await request("popup_notice");
+  if (notice && !approvalId) message(notice.text, notice.error);
 });
 
 async function send(method, data = {}) { return request("send", { method, data }); }

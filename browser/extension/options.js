@@ -1,5 +1,6 @@
 const api = globalThis.browser || chrome;
 const $ = id => document.getElementById(id);
+document.querySelector("[data-extension-version]").textContent = `v${api.runtime.getManifest().version}`;
 async function request(action, values = {}) {
   const response = await api.runtime.sendMessage({ action, account: $("account").value, ...values });
   if (!response || response.error) throw new Error(response?.error || "Background unavailable.");

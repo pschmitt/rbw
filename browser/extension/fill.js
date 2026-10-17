@@ -42,3 +42,32 @@ function fillPage(expectedUrl, data) {
   }
   return count;
 }
+
+
+/* Render a transient notice without publishing vault metadata in the page DOM. */
+function showFillNotice(expectedUrl, notice) {
+  if (location.href !== expectedUrl || window !== window.top) return;
+  document.getElementById("rbw-fill-notice")?.remove();
+  const host = document.createElement("div"); host.id = "rbw-fill-notice";
+  host.style.cssText = "all:initial!important;position:fixed!important;inset:16px 16px auto auto!important;z-index:2147483647!important;pointer-events:none!important;max-width:calc(100vw - 32px)!important;";
+  const shadow = host.attachShadow({ mode: "closed" });
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(":host{all:initial}.notice{box-sizing:border-box;display:flex;align-items:start;gap:12px;width:340px;max-width:calc(100vw - 32px);padding:12px 14px;border:1px solid #67adff;border-radius:12px;background:#10182b;color:#e6e9f1;box-shadow:0 6px 24px #0006;font:14px/1.4 system-ui,sans-serif;pointer-events:none}.text{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}small{color:#91a4c3;font-size:12px;margin-top:2px}button{flex-shrink:0;pointer-events:auto;cursor:pointer;border:0;border-radius:6px;background:transparent;color:#91a4c3;font:20px/1 system-ui;padding:4px}button:hover,button:focus-visible{background:#1e293e;color:#e6e9f1;outline:1px solid #67adff}");
+  shadow.adoptedStyleSheets = [sheet];
+  const box = document.createElement("div"); box.className = "notice"; box.setAttribute("role", "status"); box.setAttribute("aria-live", "polite");
+  const text = document.createElement("div"); text.className = "text";
+  const title = document.createElement("strong");
+  const cycle = Number.isInteger(notice.position) && Number.isInteger(notice.total) && notice.total > 1 ? ` · ${notice.position}/${notice.total}` : "";
+  title.textContent = `rbw · Autofilled${cycle}`;
+  const account = document.createElement("small");
+  account.textContent = [String(notice.name || "Item").slice(0, 256), notice.username ? String(notice.username).slice(0, 256) : ""].filter(Boolean).join(" · ");
+  account.title = account.textContent;
+  text.append(title, account);
+  const close = document.createElement("button"); close.type = "button"; close.textContent = "×"; close.setAttribute("aria-label", "Dismiss autofill notification");
+  let timer;
+  const dismiss = () => { clearTimeout(timer); host.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = event => { if (event.key === "Escape") dismiss(); };
+  close.addEventListener("click", dismiss); document.addEventListener("keydown", onKey);
+  box.append(text, close); shadow.append(box); document.documentElement.append(host);
+  timer = setTimeout(dismiss, 4500);
+}

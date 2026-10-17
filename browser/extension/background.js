@@ -5,6 +5,8 @@ let serial = 0;
 let queue = Promise.resolve();
 const pending = new Map();
 const offers = new Map();
+const fillCycles = new Map();
+const popupNotices = new Map();
 const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, theme: "dark", account: "" };
 async function settings() { return { ...defaults, ...(await api.storage.local.get("preferences")).preferences }; }
 let nativePort;
@@ -42,12 +44,12 @@ async function activeTab() {
 function badge() {
   api.action.setBadgeBackgroundColor({ color: "#64abff" });
   api.action.setBadgeText({ text: pending.size + offers.size ? String(pending.size + offers.size) : "" });
+  api.action.setTitle({ title: pending.size ? "rbw — Passkey approval waiting. Click to continue." : "rbw" });
 }
 function finish(id, response) {
   const operation = pending.get(id);
   if (!operation) return;
   clearTimeout(operation.timer); pending.delete(id); badge(); operation.respond(response);
-  if (operation.windowId) api.windows.remove(operation.windowId).catch(() => {});
 }
 async function checkDocument(operation) {
   const tab = await api.tabs.get(operation.tabId);
@@ -102,17 +104,24 @@ async function pageMessage(message, sender, respond) {
   pending.set(id, operation); badge();
   if (!message.conditional) {
     try {
-      const window = await api.windows.create({ url: api.runtime.getURL(`popup.html?surface=window&request=${id}`), type: "popup", width: 430, height: 640 });
-      if (pending.has(id)) operation.windowId = window.id;
-    } catch (_) { finish(id, { fallback: true }); }
+      const tab = await api.tabs.get(sender.tab.id);
+      const window = await api.windows.getLastFocused();
+      // Open the toolbar UI only for the active page in the focused window.
+      // If the browser refuses, keep the request badged for a manual click.
+      if (pending.has(id) && tab.active && window.focused && tab.windowId === window.id) {
+        await api.action.openPopup({ windowId: tab.windowId });
+      }
+    } catch (_) { /* The toolbar badge remains available until cancellation/expiry. */ }
   }
 }
 async function fill(message, account) {
   const tab = await activeTab();
-  let credential;
+  if (message.expectedTab !== undefined && (tab.id !== message.expectedTab || tab.url !== message.expectedUrl)) throw new Error("The active page changed.");
+  let credential, label;
   if (message.type && message.type !== "login") {
     const detail = await native({ action: "detail", account, item: message.item });
     credential = { ...detail.cipher.data, custom: detail.cipher.fields };
+    label = detail.cipher.name;
     if (!["card", "identity"].includes(credential.type)) throw new Error("This item cannot fill a form.");
   } else {
     credential = { type: "login", ...await native({ action: "credential", account, item: message.item, url: tab.url }) };
@@ -128,6 +137,9 @@ async function fill(message, account) {
     } catch (error) { if (frame.frameId === 0 && frames.length === 1) throw error; }
   }
   if (!count) throw new Error("No supported fields found on this page.");
+  // Only public display metadata goes to the notice, never the credential.
+  const notice = { name: label || credential.name || "Item", username: credential.type === "login" ? credential.username : null, position: message.cycleIndex, total: message.cycleCount };
+  await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: showFillNotice, args: [tab.url, notice] }).catch(() => {});
   return count;
 }
 async function handle(message) {
@@ -137,12 +149,18 @@ async function handle(message) {
     case "status": case "sync": case "audit":
       return native({ action: message.action, account });
     case "lock":
+      fillCycles.clear(); popupNotices.clear();
       for (const id of [...pending.keys()]) finish(id, { error: "Vault locked." });
       for (const offer of offers.values()) clearTimeout(offer.timer); offers.clear(); badge();
       return native({ action: "lock", account });
     case "export": return native({ action: "export", account, format: message.format, password: message.password || null, attachments: !!message.attachments });
     case "import": return native({ action: "import", account, token: message.token, password: message.password || null, overwrite: !!message.overwrite });
     case "agent_settings": return native({ action: "agent_settings", account });
+    case "popup_notice": {
+      const [tab] = await api.tabs.query({ active: true, currentWindow: true });
+      const notice = popupNotices.get(tab?.id); popupNotices.delete(tab?.id);
+      return notice && notice.url === tab.url && notice.expires > Date.now() ? notice : null;
+    }
     case "preferences": return settings();
     case "set_preferences": {
       const old = await settings();
@@ -169,7 +187,7 @@ async function handle(message) {
     case "copy": return native({ action: "copy", account, item: message.item, field: message.field });
     case "generate": return native({ action: "generate", account, length: message.length || null, passphrase: !!message.passphrase, mode: message.mode || null });
     case "fill": return fill(message, account);
-    case "pending": return [...pending.values()].map(p => ({ id: p.id, method: p.method, origin: p.origin, user: p.options.user?.name, rp: p.options.rp?.id || p.options.rpId || new URL(p.origin).hostname, verification: (p.method === "create" ? p.options.authenticatorSelection?.userVerification : p.options.userVerification) || "preferred" }));
+    case "pending": return [...pending.values()].map(p => ({ id: p.id, tabId: p.tabId, method: p.method, origin: p.origin, user: p.options.user?.name, rp: p.options.rp?.id || p.options.rpId || new URL(p.origin).hostname, verification: (p.method === "create" ? p.options.authenticatorSelection?.userVerification : p.options.userVerification) || "preferred" }));
     case "passkey_choices": {
       const p = pending.get(message.request); if (!p) throw new Error("This request has expired.");
       await checkDocument(p);
@@ -221,29 +239,57 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
 });
 
 api.tabs.onRemoved.addListener(tabId => {
+  fillCycles.delete(tabId); popupNotices.delete(tabId);
   for (const [id, p] of pending) if (p.tabId === tabId) finish(id, { error: "Page closed." });
   const offer = offers.get(tabId); if (offer) { clearTimeout(offer.timer); offers.delete(tabId); badge(); }
 });
 api.tabs.onUpdated.addListener((tabId, change) => {
   if (!change.url && change.status !== "loading") return;
+  fillCycles.delete(tabId); popupNotices.delete(tabId);
   for (const [id, p] of pending) if (p.tabId === tabId) finish(id, { error: "Page navigated." });
-});
-api.windows.onRemoved.addListener(windowId => {
-  for (const [id, p] of pending) if (p.windowId === windowId) finish(id, { fallback: true });
 });
 api.runtime.onInstalled.addListener(() => {
   api.contextMenus.removeAll().then(() => api.contextMenus.create({ id: "rbw-open", title: "Fill with rbw…", contexts: ["editable"] }));
 });
 api.contextMenus.onClicked.addListener(() => api.action.openPopup().catch(() => api.windows.create({ url: api.runtime.getURL("popup.html?surface=window"), type: "popup", width: 460, height: 680 })));
-api.commands.onCommand.addListener(async command => {
-  if (command === "open-vault") return api.action.openPopup();
+async function fillShortcut() {
+  let tab;
+  try {
+    tab = await activeTab();
+    const prefs = await settings(); const account = prefs.account || null;
+    const status = await native({ action: "status", account });
+    if (!status.unlocked) {
+      popupNotices.set(tab.id, { url: tab.url, text: "Unlock rbw to autofill this page, then press the fill shortcut again.", error: false, expires: Date.now() + 60000 });
+      fillCycles.delete(tab.id);
+      api.action.openPopup({ windowId: tab.windowId }).catch(() => {});
+      return;
+    }
+    const result = await native({ action: "search", account, query: "", url: tab.url, site_only: true, kind: "login" });
+    if (!result.items.length) {
+      popupNotices.set(tab.id, { url: tab.url, text: "No matching logins for this page. Choose a login or add one to your vault.", error: false, expires: Date.now() + 60000 });
+      fillCycles.delete(tab.id);
+      api.action.openPopup({ windowId: tab.windowId }).catch(() => {});
+      return;
+    }
+    const signature = JSON.stringify([account, result.items.map(item => item.id)]);
+    const previous = fillCycles.get(tab.id);
+    const index = previous?.url === tab.url && previous.signature === signature && Date.now() - previous.time < 30000 ? (previous.index + 1) % result.items.length : 0;
+    await fill({ item: result.items[index].id, expectedTab: tab.id, expectedUrl: tab.url, cycleIndex: index + 1, cycleCount: result.items.length }, account);
+    fillCycles.set(tab.id, { url: tab.url, signature, index, time: Date.now() });
+    popupNotices.delete(tab.id);
+  } catch (_) {
+    if (tab) {
+      fillCycles.delete(tab.id);
+      popupNotices.set(tab.id, { url: tab.url, text: "Could not autofill this page. Unlock your vault if needed, check that it has a matching login and the page has login fields, then press the fill shortcut again.", error: true, expires: Date.now() + 60000 });
+    }
+    api.action.openPopup().catch(() => {});
+  }
+}
+api.commands.onCommand.addListener(command => {
+  if (command === "open-vault") { api.action.openPopup().catch(() => {}); return; }
   if (command === "fill-login") {
-    try {
-      const prefs = await settings(); const tab = await activeTab();
-      const result = await native({ action: "search", account: prefs.account || null, query: "", url: tab.url, site_only: true, kind: "login" });
-      if (result.items.length === 1) await fill({ item: result.items[0].id }, prefs.account || null);
-      else await api.action.openPopup();
-    } catch (_) { api.action.openPopup().catch(() => {}); }
+    // Serialize repeated presses so they advance through matches in order.
+    const operation = queue.then(fillShortcut); queue = operation.catch(() => {});
   }
 });
 
