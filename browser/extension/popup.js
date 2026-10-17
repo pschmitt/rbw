@@ -42,9 +42,17 @@ function loading(active) {
   else loadingTimer = setTimeout(() => { $("loading").hidden = false; }, 150);
   document.querySelector("main").setAttribute("aria-busy", String(!!loadingRequests));
 }
+function updateFab() {
+  const scrolled = document.querySelector("main").scrollTop > 15;
+  $("add").classList.toggle("collapsed", scrolled);
+}
 window.addEventListener("pagehide", remember);
 document.addEventListener("visibilitychange", () => { if (document.hidden) remember(); });
-document.querySelector("main").addEventListener("scroll", () => { clearTimeout(stateTimer); stateTimer = setTimeout(remember, 80); }, { passive: true });
+document.querySelector("main").addEventListener("scroll", () => {
+  updateFab();
+  clearTimeout(stateTimer);
+  stateTimer = setTimeout(remember, 80);
+}, { passive: true });
 async function request(action, values = {}) {
   const busy = !["preferences", "pending", "save_offers", "popup_notice", "status", "favicon", "popup_state", "save_popup_state", "totp"].includes(action);
   if (busy) loading(true);
@@ -78,11 +86,26 @@ function actionButton(label, name, action, cls) {
   const el = button("", action, cls); el.append(icon(name)); if (label && !cls?.split(" ").includes("icon")) el.append(element("span", label)); el.title = label; el.setAttribute("aria-label", label); return el;
 }
 function pretty(value) { return value.replaceAll("_", " ").replace(/^./, c => c.toUpperCase()); }
+function countVisibleTabs() {
+  const visibility = { generator: preference.showGenerator !== false, send: preference.showSend === true, health: preference.showHealth === true };
+  let count = 0;
+  for (const el of document.querySelectorAll("#title-dropdown button")) {
+    if (el.dataset.tab === "vault" || visibility[el.dataset.tab] !== false) count++;
+  }
+  return count;
+}
+function updateTitleMenuState() {
+  const isTopTab = ["vault", "generator", "send", "health"].includes(currentPage) && unlocked;
+  const hasMultiple = countVisibleTabs() > 1 && isTopTab;
+  $("title-chevron").hidden = !hasMultiple;
+  $("title-menu").classList.toggle("is-disabled", !hasMultiple);
+  if (!hasMultiple && $("title-menu").open) $("title-menu").open = false;
+}
 function show(page) {
   stopTotp();
   remember();
   currentPage = page;
-  const subpage = ["detail", "editor", "send-editor"].includes(page);
+  const subpage = ["detail", "editor", "send-editor", "settings"].includes(page);
   $("back").hidden = !subpage;
   $("account-toggle").classList.toggle("is-subpage", subpage);
   $("account-toggle").setAttribute("aria-label", subpage ? "Back" : "Account menu");
@@ -91,33 +114,34 @@ function show(page) {
   for (const id of ["vault", "generator", "send", "send-editor", "health", "settings", "detail", "editor", "approval", "locked"]) $(id).hidden = id !== page;
   $("title").textContent = ({ vault: "Vault", generator: "Generator", health: "Vault health", settings: "Settings", send: "Send", "send-editor": "Edit Send", detail: "Item", editor: currentItem ? "Edit item" : "New item", approval: "Passkey", locked: "Vault" })[page];
   $("add").hidden = !["vault", "send"].includes(page) || !unlocked;
+  $("add").classList.remove("collapsed");
   $("open-sidebar").hidden = subpage || document.documentElement.dataset.surface === "window";
-  $("open-options").hidden = subpage;
+  $("open-options").hidden = subpage && page !== "settings";
+  $("open-options").classList.toggle("selected", page === "settings");
   $("detail-header-actions").hidden = page !== "detail";
   $("edit-header-actions").hidden = page !== "editor";
   $("send-header-actions").hidden = page !== "send-editor";
+  if ($("title-menu").open) $("title-menu").open = false;
   const tab = ["detail", "editor", "approval", "locked"].includes(page) ? "vault" : page === "send-editor" ? "send" : page;
-  document.querySelectorAll("footer button").forEach(el => {
-    const selected = el.dataset.page === tab; el.classList.toggle("selected", selected);
+  document.querySelectorAll("#title-dropdown button").forEach(el => {
+    const selected = el.dataset.tab === tab; el.classList.toggle("selected", selected);
     if (selected) el.setAttribute("aria-current", "page"); else el.removeAttribute("aria-current");
   });
+  updateTitleMenuState();
   document.querySelector("main").scrollTop = 0;
   remember();
 }
 function applyTabs() {
-  const visibility = { generator: preference.showGenerator !== false, send: preference.showSend === true, health: preference.showHealth === true, settings: preference.showSettings !== false };
-  let count = 0;
-  for (const el of document.querySelectorAll("footer button")) {
-    const isVisible = el.dataset.page === "vault" || visibility[el.dataset.page] !== false;
-    el.hidden = !isVisible;
-    if (isVisible) count++;
+  const visibility = { generator: preference.showGenerator !== false, send: preference.showSend === true, health: preference.showHealth === true };
+  for (const el of document.querySelectorAll("#title-dropdown button")) {
+    el.hidden = el.dataset.tab !== "vault" && visibility[el.dataset.tab] === false;
   }
   for (const [page, visible] of Object.entries(visibility)) {
     const el = $("setting-" + page);
     if (el) el.checked = visible;
   }
-  document.querySelector("footer").hidden = count <= 1;
-  if (currentPage !== "vault" && visibility[currentPage === "send-editor" ? "send" : currentPage] === false) show(unlocked ? "vault" : "locked");
+  updateTitleMenuState();
+  if (["generator", "send", "health"].includes(currentPage) && visibility[currentPage] === false) show(unlocked ? "vault" : "locked");
 }
 api.storage.onChanged.addListener((changes, area) => {
   if (area !== "local" || !changes.preferences) return;
@@ -626,10 +650,20 @@ $("header-save-send").onclick = () => $("send-form").requestSubmit();
 
 $("edit-type").onchange = () => renderEditFields();
 $("add-custom").onclick = () => addCustom();
-async function navigateBack() { if (currentPage === "editor" && currentItem) await openDetail(currentItem); else if (currentPage === "send-editor") await loadSends(); else await refresh(); }
-for (const el of document.querySelectorAll("footer button")) el.onclick = () => attempt(async () => {
-  const page = el.dataset.page;
-  if (page === "vault") await refresh(); else if (page === "send") await loadSends(); else show(page);
+async function navigateBack() { if (currentPage === "editor" && currentItem) await openDetail(currentItem); else if (currentPage === "send-editor") await loadSends(); else if (currentPage === "settings") show("vault"); else await refresh(); }
+for (const el of document.querySelectorAll("#title-dropdown button")) el.onclick = () => attempt(async () => {
+  $("title-menu").open = false;
+  const tab = el.dataset.tab;
+  if (tab === "vault") await refresh(); else if (tab === "send") await loadSends(); else show(tab);
+});
+$("title-summary").onclick = event => {
+  if ($("title-menu").classList.contains("is-disabled")) event.preventDefault();
+};
+document.addEventListener("click", event => {
+  if (!event.target.closest("#title-menu")) $("title-menu").open = false;
+});
+window.addEventListener("keydown", event => {
+  if (event.key === "Escape" && $("title-menu").open) $("title-menu").open = false;
 });
 $("generate").onclick = () => attempt(async () => {
   const value = $("length").value;
@@ -648,10 +682,15 @@ $("open-sidebar").onclick = () => attempt(async () => {
   if (api.sidebarAction) await api.sidebarAction.open();
   else { const window = await api.windows.getCurrent(); await api.sidePanel.open({ windowId: window.id }); }
 });
-$("open-options").onclick = () => api.runtime.openOptionsPage();
+$("open-options").onclick = event => {
+  if (event.ctrlKey || event.metaKey || event.shiftKey) api.runtime.openOptionsPage();
+  else if (currentPage === "settings") attempt(navigateBack);
+  else show("settings");
+};
+$("settings-open-options").onclick = () => api.runtime.openOptionsPage();
 function applyTheme(theme) { document.documentElement.dataset.theme = theme === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme; }
-for (const id of ["setting-autofill", "setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-settings", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
-  preference = await request("set_preferences", { preferences: { autoFill: $("setting-autofill").checked, passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, showSettings: $("setting-settings").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
+for (const id of ["setting-autofill", "setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
+  preference = await request("set_preferences", { preferences: { autoFill: $("setting-autofill").checked, passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
 });
 setInterval(() => attempt(async () => {
   if (!approvalId) {
@@ -668,7 +707,7 @@ attempt(async () => {
     const initial = await request("bootstrap");
     preference = initial.preferences; applyTheme(preference.theme); applyTabs();
     $("setting-autofill").checked = preference.autoFill !== false;
-    $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons; $("setting-settings").checked = preference.showSettings !== false;
+    $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
     if (!approvalId) approvalId = await activeApproval();
     const status = initial.status;
     renderAccounts(status.accounts || [], status.primary, preference.account);
@@ -689,6 +728,7 @@ attempt(async () => {
         show(saved.page); applyTabs();
       }
       document.querySelector("main").scrollTop = saved.scroll;
+      updateFab();
     }
     ready = true; remember();
     const notice = await request("popup_notice");

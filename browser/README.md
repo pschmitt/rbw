@@ -5,13 +5,9 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.23
+## Features in 0.2.24
 
-- Polished popup layout: increased popup height, improved spacing between adjacent
-  action buttons, and moved the sidebar and add-on settings shortcuts directly into
-  the header as compact icon actions.
-- Configurable footer tabs: the Settings tab can now be hidden via preferences,
-  and the footer is hidden entirely when only one tab is active.
+- Streamlined popup layout: footer bar replaced with a clickable view switcher dropdown on the header title (Vault, Generator, Send, Health), persistent Settings header action with quick access to in-popup settings and options page, and an animated Floating Action Button (FAB) for Add that collapses to an icon on scroll.
 - Neutral charcoal surfaces throughout the popup, sidebar, settings, inline
   suggestions and notifications. Active navigation has a clear filled state,
   including the parent tab while viewing an item or editor.

@@ -4,11 +4,25 @@
 <body>
 <header>
 <button id="account-toggle" class="avatar" aria-label="Account menu" title="Account menu · Double-click to open in a window"><span id="back" data-icon="chevron-left" hidden></span><img src="icons/rbw-32.png" width="32" height="32" alt="rbw"></button>
-<div class="heading"><h1 id="title">Vault</h1><span id="loading" role="status" aria-label="Loading" title="Loading" hidden><span class="spinner" aria-hidden="true"></span></span><span class="version" data-extension-version></span></div>
+<div class="heading">
+  <details id="title-menu" class="title-menu">
+    <summary id="title-summary" aria-label="Switch vault view">
+      <h1 id="title">Vault</h1>
+      <span id="title-chevron" data-icon="chevron-down"></span>
+      <span id="loading" role="status" aria-label="Loading" title="Loading" hidden><span class="spinner" aria-hidden="true"></span></span>
+    </summary>
+    <div id="title-dropdown" class="title-dropdown" role="menu">
+      <button type="button" data-tab="vault"><span data-icon="vault"></span> Vault</button>
+      <button type="button" data-tab="generator"><span data-icon="generator"></span> Generator</button>
+      <button type="button" data-tab="send" hidden><span data-icon="send"></span> Send</button>
+      <button type="button" data-tab="health" hidden><span data-icon="health"></span> Vault health</button>
+    </div>
+  </details>
+  <span class="version" data-extension-version></span>
+</div>
 <div id="header-actions">
 <button id="open-sidebar" class="icon" title="Open sidebar" aria-label="Open sidebar"><span data-icon="sidebar"></span></button>
-<button id="open-options" class="icon" title="Open add-on settings" aria-label="Open add-on settings"><span data-icon="settings"></span></button>
-<button id="add" class="primary"><span data-icon="plus"></span> Add</button>
+<button id="open-options" class="icon" title="Settings" aria-label="Settings"><span data-icon="settings"></span></button>
 <div id="detail-header-actions" class="header-group" hidden>
   <button id="header-edit" class="icon" title="Edit item" aria-label="Edit item"><span data-icon="edit"></span></button>
   <details id="detail-menu" class="menu">
@@ -58,8 +72,8 @@
 <section id="send" hidden><div class="actions"><button id="refresh-sends"><span data-icon="refresh"></span>Refresh</button></div><div id="send-items"></div></section>
 <section id="send-editor" hidden><form id="send-form"><label>Name<input id="send-name" required maxlength="1024"></label><label>Text<textarea id="send-text" rows="5" maxlength="100000" spellcheck="false"></textarea></label><label>Or attach a file<input id="send-file" type="file"></label><label>Notes (private)<textarea id="send-notes" rows="2"></textarea></label><label>Delete after (days)<input id="send-days" type="number" min="1" max="30" value="7"></label><label>Expiration<input id="send-expiration" type="datetime-local"></label><label>Maximum accesses (optional)<input id="send-max" type="number" min="1"></label><label>Password (optional; leave blank to preserve)<input id="send-password" type="password" autocomplete="off"></label><label><input id="send-hidden" type="checkbox"> Hide text by default</label><label><input id="send-hide-email" type="checkbox" checked> Hide my email address</label><label><input id="send-disabled" type="checkbox"> Disable access to this Send</label></form></section>
 <section id="health" hidden><h2>Vault health</h2><p>Checks are performed locally. Passwords stay in rbw.</p><button id="audit" class="primary"><span data-icon="health"></span>Check vault</button><div id="audit-results"></div></section>
-<section id="settings" hidden><h2>Settings</h2><label><input id="setting-autofill" type="checkbox"> Auto-fill on page load</label><label><input id="setting-passkeys" type="checkbox"> Use rbw for passkeys</label><label><input id="setting-save" type="checkbox"> Suggest saving submitted logins</label><label><input id="setting-favicons" type="checkbox"> Show website icons</label><label>Appearance<select id="theme"><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option></select></label><h3>Tabs</h3><label><input id="setting-generator" type="checkbox"> Generator</label><label><input id="setting-send" type="checkbox"> Send</label><label><input id="setting-health" type="checkbox"> Health</label><label><input id="setting-settings" type="checkbox"> Settings</label><p class="hint">Vault is always available.</p><h3>Keyboard shortcuts</h3><p><kbd>Ctrl Shift L</kbd> Fill a matching login<br><kbd>Ctrl Shift Y</kbd> Open vault</p><p class="hint">Change shortcut assignments in your browser’s extension settings.</p><h3>Shared vault</h3><p>Lock state, account settings and clipboard clearing are managed by rbw-agent. Configure them with <code>rbw config</code>.</p><div class="actions"><button id="settings-sync"><span data-icon="refresh"></span>Sync vault</button><button id="settings-lock"><span data-icon="lock"></span>Lock vault</button></div><p class="hint">rbw browser <span data-extension-version></span></p></section>
+<section id="settings" hidden><h2>Settings</h2><label><input id="setting-autofill" type="checkbox"> Auto-fill on page load</label><label><input id="setting-passkeys" type="checkbox"> Use rbw for passkeys</label><label><input id="setting-save" type="checkbox"> Suggest saving submitted logins</label><label><input id="setting-favicons" type="checkbox"> Show website icons</label><label>Appearance<select id="theme"><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option></select></label><h3>Tabs</h3><label><input id="setting-generator" type="checkbox"> Generator</label><label><input id="setting-send" type="checkbox"> Send</label><label><input id="setting-health" type="checkbox"> Health</label><p class="hint">Vault is always available.</p><h3>Keyboard shortcuts</h3><p><kbd>Ctrl Shift L</kbd> Fill a matching login<br><kbd>Ctrl Shift Y</kbd> Open vault</p><p class="hint">Change shortcut assignments in your browser’s extension settings.</p><h3>Shared vault</h3><p>Lock state, account settings and clipboard clearing are managed by rbw-agent. Configure them with <code>rbw config</code>.</p><div class="actions"><button id="settings-sync"><span data-icon="refresh"></span>Sync vault</button><button id="settings-lock"><span data-icon="lock"></span>Lock vault</button><button id="settings-open-options"><span data-icon="popout"></span>Detailed settings</button></div><p class="hint">rbw browser <span data-extension-version></span></p></section>
 </main>
-<footer><button data-page="vault" class="selected"><span data-icon="vault"></span>Vault</button><button data-page="generator"><span data-icon="generator"></span>Generator</button><button data-page="send" hidden><span data-icon="send"></span>Send</button><button data-page="health" hidden><span data-icon="health"></span>Health</button><button data-page="settings"><span data-icon="settings"></span>Settings</button></footer>
+<button id="add" class="fab primary" title="Add" aria-label="Add item" hidden><span data-icon="plus"></span><span class="fab-label">Add</span></button>
 <script src="icons.js"></script><script src="vendor/marked.js"></script><script src="vendor/purify.js"></script><script src="popup.js"></script>
 </body></html>
