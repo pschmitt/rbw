@@ -4,9 +4,13 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import tomllib
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
+# The extension shares rbw's version: one release ships the CLI, native host
+# and both browser packages.
+VERSION = tomllib.loads((ROOT.parent / "Cargo.toml").read_text())["package"]["version"]
 for target in ("firefox", "chromium"):
     dest = ROOT / "dist" / target
     if dest.exists():
@@ -27,7 +31,7 @@ for target in ("firefox", "chromium"):
     manifest = {
         "manifest_version": 3,
         "name": "rbw",
-        "version": "0.2.35",
+        "version": VERSION,
         "description": "Use your existing rbw-agent vault in the browser.",
         "permissions": ["nativeMessaging", "activeTab", "scripting", "storage", "contextMenus", "webNavigation"],
         "host_permissions": ["https://*/*", "http://*/*"],

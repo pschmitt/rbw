@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### Changed
+
+* The browser extension now shares rbw's version and is released together
+  with it: `v*` releases ship the CLI, native host and both signed browser
+  packages. `tools/release.sh` (`prepare`, `packages`, `tag`) drives a release;
+  the separate browser extension release workflow is gone.
+* Browser autofill hardening (extension 0.2.34–0.2.35): inline suggestions and
+  the save prompt render in extension frames with background click
+  verification against clickjacking; fills skip hidden, tiny or off-page fields
+  and stay within the focused form; hidden custom fields and linked
+  SSN/passport/license values are not auto-filled; on-load autofill and website
+  icons default to off; plain-HTTP pages are never filled.
+* The browser save prompt shares the autofill chooser's header (Keep open,
+  close button, auto-close progress) and hides after 20 seconds; buttons have
+  icons and the site's icon or the rbw logo is shown. Submitted credentials
+  are compared with this site's stored logins: an identical login (for
+  example one just autofilled) no longer prompts, and a stored username with a
+  different password offers "Update password" directly.
+* CI builds unsigned browser packages on every push and pull request
+  (`browser-extensions-unsigned` artifact). Docker images build natively per
+  architecture (no QEMU) with cargo-chef dependency caching.
+
+### Fixed
+
+* URI matching: `StartsWith` now requires the same origin, so
+  `https://example.com` no longer matches `https://example.com.evil.net/`.
+  Scheme-less URIs no longer match plain-HTTP pages in the browser.
+
 ## [2.21.2] - 2026-10-18
 
 ### Added

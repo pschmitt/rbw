@@ -1,6 +1,9 @@
 # rbw browser extension
 
 Firefox and Chromium share an extension and a native `rbw-browser` launcher.
+Since 2.22.0 the extension is versioned and released together with rbw; see
+`CHANGELOG.md` for new changes. The sections below cover earlier `0.2.x`
+extension releases.
 The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
@@ -254,13 +257,21 @@ Browser restarts or acceptance of newly requested permissions may be necessary.
 
 `browser/packages/` holds signed distribution artifacts and the public Chromium
 identity. Never put private signing keys or AMO credentials in the repository.
-After changing extension sources, bump the extension version in `build.py` and
-`nix/browser.nix`. The main-branch build workflow signs changed packages through
-AMO and with the existing Chromium key when the checked-in packages do not match
-the source. It reads `RBW_AMO_API_KEY`, `RBW_AMO_API_SECRET` and
-`RBW_CHROMIUM_SIGNING_KEY` from GitHub Actions secrets. Run the **browser
-extension release** workflow from `main` after the build passes to publish the
-verified packages as a `browser-vVERSION` GitHub release.
+The extension shares rbw's version: `build.py` and `nix/browser.nix` read it
+from `Cargo.toml`, so there is nothing to bump separately. The main-branch build
+workflow signs changed packages through AMO and with the existing Chromium key
+when the checked-in packages do not match the source. It reads
+`RBW_AMO_API_KEY`, `RBW_AMO_API_SECRET` and `RBW_CHROMIUM_SIGNING_KEY` from
+GitHub Actions secrets. AMO signs each version once, so every release that
+changes extension sources needs a new rbw version. Release with
+`tools/release.sh` (or the `just release-*` recipes):
+
+1. `prepare X.Y.Z` bumps `Cargo.toml`/`Cargo.lock`, dates the changelog,
+   commits and pushes.
+2. `packages` waits for that commit's build, verifies the signed packages
+   against the committed source and commits and pushes them.
+3. `tag` waits for green build, test and docker runs on that commit and pushes
+   a GPG-signed `vX.Y.Z` tag; the release workflow publishes everything.
 The generated icon source is `browser/icon-source.png`; prompt provenance is
 recorded in `browser/icon-prompt.txt`, with sized toolbar assets in
 `browser/extension/icons/`.
@@ -296,8 +307,8 @@ alone does not cover these executables.
 Tagged CLI releases include the checked-in Mozilla-signed Firefox XPI and signed
 Chromium CRX, named `rbw-browser-VERSION-firefox.xpi` and
 `rbw-browser-VERSION-chromium.crx`. They are included in `SHA256SUMS` and the
-release provenance attestation. The extension version is independent of the CLI
-version. Main-branch build artifacts also include both extension packages.
+release provenance attestation. Since 2.22.0 the extension version
+matches the CLI version (earlier extension releases were `browser-v0.2.x`). Main-branch build artifacts also include both extension packages.
 
 `python3 browser/release.py --output dist` verifies that both signed packages
 match the shared extension source and generated manifests before preparing

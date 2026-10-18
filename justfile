@@ -165,6 +165,18 @@ nix-build host=default-host:
 # Run the full local/remote validation suite.
 check: format-check cargo-check clippy deny test doc nix-check
 
+# Bump rbw and the browser extension to VERSION, date the changelog, commit and push.
+release-prepare version:
+    tools/release.sh prepare '{{ version }}'
+
+# Commit and push the signed browser packages built for HEAD by CI.
+release-packages:
+    tools/release.sh packages
+
+# Push a GPG-signed vVERSION tag once build, test and docker are green for HEAD.
+release-tag:
+    tools/release.sh tag
+
 # Remove Cargo's build output.
 clean:
     cargo clean
