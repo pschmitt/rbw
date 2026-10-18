@@ -11,6 +11,8 @@ const suggestionCounts = new Map();
 const badgeRequests = new Map();
 const badgeTabs = new Set();
 const popupNotices = new Map();
+const shortcutTimers = new Map();
+const contentShortcutTimes = new Map();
 // Only list metadata lives here. No details, notes, passwords or persistent storage.
 const listCache = new Map();
 const searchPending = new Map();
@@ -84,17 +86,55 @@ async function fetchFavicon(origin) {
   } catch (_) { /* Missing icons retain the local item-type icon. */ }
   if (generation === metadataEpoch) cacheFor(faviconCache, origin, value, 5 * 60 * 1000, 128); return value;
 }
-const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: true, crabify: false, theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true };
-async function settings() { return { ...defaults, ...(await api.storage.local.get("preferences")).preferences }; }
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: true, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true };
+function isAutofillBlocked(pageUrl, blocklist) {
+  let page;
+  try { page = new URL(pageUrl); } catch (_) { return false; }
+  for (const raw of String(blocklist || "").split(/\r?\n/)) {
+    const entry = raw.trim();
+    if (!entry || entry.startsWith("#")) continue;
+    if (/^https?:\/\//i.test(entry)) {
+      let target;
+      try { target = new URL(entry); } catch (_) { continue; }
+      if (page.origin !== target.origin) continue;
+      const path = target.pathname.replace(/\/+$/, "") || "/";
+      if (path === "/" || page.pathname === path || page.pathname.startsWith(`${path}/`)) return true;
+      continue;
+    }
+    if (entry.includes("/") || entry.includes("?") || entry.includes("#")) continue;
+    let domain;
+    try { domain = new URL(`https://${entry.replace(/^\*\./, "")}`).hostname.toLowerCase(); } catch (_) { continue; }
+    if (page.hostname.toLowerCase() === domain || page.hostname.toLowerCase().endsWith(`.${domain}`)) return true;
+  }
+  return false;
+}
+function isItemAutofillExcluded(item, excludedItems) {
+  return typeof item === "string" && Array.isArray(excludedItems) && excludedItems.includes(item);
+}
+async function settings() {
+  const stored = (await api.storage.local.get("preferences")).preferences || {};
+  const result = { ...defaults, ...stored };
+  result.animations = ["off", "on", "plaid"].includes(stored.animations) ? stored.animations : stored.crabify === true ? "plaid" : "on";
+  result.animationSpeed = ["slow", "normal", "fast"].includes(stored.animationSpeed) ? stored.animationSpeed : "normal";
+  delete result.crabify;
+  return result;
+}
 let nativePort;
 const nativeRequests = new Map();
 function native(request) {
   if (!nativePort) {
-    nativePort = api.runtime.connectNative("org.rbw.browser");
+    try { nativePort = api.runtime.connectNative("org.rbw.browser"); }
+    catch (cause) {
+      const error = new Error(`Could not open the rbw native host connection. Check its manifest and installation, then check browser.clients.${cause?.message ? ` Browser detail: ${cause.message}` : ""}`);
+      error.diagnostic = { kind: "native-host-connect-error", occurredAt: new Date().toISOString(), host: "org.rbw.browser", browserDetail: cause?.message || null };
+      throw error;
+    }
     nativePort.onMessage.addListener(response => {
       if (response.code === "browser_not_authorized") {
         clearMetadata(); popupStates.clear();
-        for (const entry of nativeRequests.values()) entry.reject(new Error(response.error));
+        const error = new Error(response.error);
+        error.diagnostic = { kind: "native-host-authorization-denied", occurredAt: new Date().toISOString(), host: "org.rbw.browser", browserDetail: response.error };
+        for (const entry of nativeRequests.values()) entry.reject(error);
         nativeRequests.clear();
         return;
       }
@@ -103,8 +143,17 @@ function native(request) {
       if (response.error) entry.reject(new Error(response.error)); else entry.resolve(response.result);
     });
     nativePort.onDisconnect.addListener(() => {
+      const browserError = api.runtime.lastError?.message;
       nativePort = null; clearMetadata(); popupStates.clear();
-      for (const entry of nativeRequests.values()) entry.reject(new Error("Cannot connect to rbw. Check the native host installation and browser.clients allowlist, then retry."));
+      const detail = browserError ? ` Browser detail: ${browserError}` : "";
+      const error = new Error(`The rbw native host disconnected before replying. Check that rbw-browser, rbw, and rbw-agent are installed together, that the native host manifest points to rbw-browser, and that this extension is allowed by browser.clients.${detail}`);
+      error.diagnostic = {
+        kind: "native-host-disconnect",
+        occurredAt: new Date().toISOString(),
+        host: "org.rbw.browser",
+        browserDetail: browserError || null,
+      };
+      for (const entry of nativeRequests.values()) entry.reject(error);
       nativeRequests.clear();
     });
   }
@@ -112,6 +161,21 @@ function native(request) {
     const id = ++serial; nativeRequests.set(id, { resolve, reject });
     try { nativePort.postMessage({ ...request, id }); } catch (error) { nativeRequests.delete(id); reject(error); }
   });
+}
+
+function reportPasskeyProgress(request, step, retry = false) {
+  api.runtime.sendMessage({ action: "passkey_progress", request, step, retry }).catch(() => {});
+}
+
+async function syncPasskeyStage(account, request, step, failureMessage) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    reportPasskeyProgress(request, step, attempt > 0);
+    try {
+      return await native({ action: "sync", account });
+    } catch (_) {
+      if (attempt === 1) throw new Error(failureMessage);
+    }
+  }
 }
 
 async function activeTab() {
@@ -141,9 +205,15 @@ async function updateSuggestionsBadge(tabId, knownTab) {
     const url = new URL(tab.url);
     if (!["https:", "http:"].includes(url.protocol)) throw new Error("No login matching on internal pages.");
     const prefs = await settings();
+    if (isAutofillBlocked(tab.url, prefs.autofillBlocklist)) {
+      if (badgeRequests.get(tabId) !== token) return;
+      suggestionCounts.set(tabId, { url: tab.url, count: 0 }); badge(tabId);
+      return;
+    }
     const result = await cachedSearch({ account: prefs.account || null, url: tab.url, site_only: true, kind: "login" });
     if (badgeRequests.get(tabId) !== token) return;
-    suggestionCounts.set(tabId, { url: tab.url, count: result.total ?? result.items.length }); badge(tabId);
+    const count = result.items.filter(item => !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems)).length;
+    suggestionCounts.set(tabId, { url: tab.url, count }); badge(tabId);
   } catch (_) {
     if (badgeRequests.get(tabId) !== token) return;
     suggestionCounts.delete(tabId); badge(tabId);
@@ -165,7 +235,8 @@ async function getNotificationIcon() {
 async function notifyFill(tab, notice) {
   // Bundle the local brand image into the isolated notice; no public resources
   // or website requests are needed for notification branding.
-  return api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: showFillNotice, args: [tab.url, { ...notice, icon: await getNotificationIcon() }] });
+  const prefs = await settings();
+  return api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: showFillNotice, args: [tab.url, { ...notice, animations: prefs.animations, animationSpeed: prefs.animationSpeed, icon: await getNotificationIcon() }] });
 }
 async function notifySaveOffer(tabId, offer) {
   return api.tabs.sendMessage(tabId, { action: "rbw_save_offer", offer: { origin: offer.origin, username: offer.username } });
@@ -243,27 +314,30 @@ async function pageMessage(message, sender, respond) {
     return respond({ result: restored });
   }
   const prefs = await settings();
+  const autofillBlocked = isAutofillBlocked(sender.url, prefs.autofillBlocklist);
   if (message.action === "passkey_available") return respond({ result: prefs.passkeys });
   if (message.action === "autofill_load") {
-    if (!prefs.autoFill || sender.frameId !== 0 || !sender.tab.active) return respond({ result: false });
+    if (!prefs.autoFill || autofillBlocked || sender.frameId !== 0 || !sender.tab.active) return respond({ result: false });
     const results = await cachedSearch({ account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
-    if (!results.items.length || results.items[0].protected) return respond({ result: false });
-    return respond({ result: await fill({ item: results.items[0].id, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, prefs.account || null) });
+    const eligible = results.items.filter(item => !item.protected && !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems));
+    if (!eligible.length) return respond({ result: false });
+    return respond({ result: await fill({ item: eligible[0].id, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, prefs.account || null) });
   }
   if (message.action === "inline_choices") {
-    if (!prefs.inlineSuggestions) return respond({ result: [] });
+    if (!prefs.inlineSuggestions || autofillBlocked) return respond({ result: [] });
     const kind = message.kind === "card" ? "card" : "login";
     try {
       const result = await cachedSearch(kind === "card"
         ? { account: prefs.account || null, kind: "card" }
         : { account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
-      const items = result.items.filter(v => !v.protected).slice(0, 5).map(v => ({ id: v.id, name: v.name, username: v.username, kind,
+      const eligible = result.items.filter(v => !v.protected && !isItemAutofillExcluded(v.id, prefs.autofillExcludedItems));
+      const items = eligible.slice(0, 5).map(v => ({ id: v.id, name: v.name, username: v.username, brand: kind === "card" ? String(v.username || "").split(",", 1)[0].trim() : null, kind,
         favicon: kind === "login" && prefs.favicons ? faviconCache.get(v.iconOrigin)?.value || null : null }));
-      return respond({ result: items, appIcon: await getNotificationIcon() });
+      return respond({ result: items, total: Math.max(eligible.length, (result.total ?? result.items.length) - (result.items.length - eligible.length)), appIcon: await getNotificationIcon() });
     } catch (_) { return respond({ result: [] }); }
   }
   if (message.action === "inline_icons") {
-    if (!prefs.inlineSuggestions || !prefs.favicons) return respond({ result: [] });
+    if (!prefs.inlineSuggestions || !prefs.favicons || autofillBlocked) return respond({ result: [] });
     // Resolve icons only for this page's matching items, never arbitrary page-supplied URLs.
     const result = await cachedSearch({ account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
     const items = await Promise.all(result.items.slice(0, 5).map(async item => ({ id: item.id, favicon: item.iconOrigin ? await favicon(item.iconOrigin) : null })));
@@ -272,8 +346,25 @@ async function pageMessage(message, sender, respond) {
   if (message.action === "inline_fill") {
     const tab = await activeTab();
     if (tab.id !== sender.tab.id || new URL(tab.url).origin !== url.origin) return respond({ error: "Page changed." });
+    if (autofillBlocked) return respond({ error: "Autofill is blocked for this site in rbw settings." });
     const kind = message.kind === "card" ? "card" : "login";
-    return respond({ result: await fill({ item: message.item, type: kind }, prefs.account || null) });
+    return respond({ result: await fill({ item: message.item, type: kind, displayName: message.name }, prefs.account || null) });
+  }
+  if (message.action === "inline_search_cards") {
+    if (autofillBlocked) return respond({ result: [], total: 0 });
+    try {
+      const result = await cachedSearch({ account: prefs.account || null, query: String(message.query || "").slice(0, 256), kind: "card" });
+      const eligible = result.items.filter(item => !item.protected && !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems));
+      return respond({ result: eligible.slice(0, 50).map(item => ({ id: item.id, name: item.name, brand: String(item.username || "").split(",", 1)[0].trim() })), total: Math.max(eligible.length, (result.total ?? result.items.length) - (result.items.length - eligible.length)) });
+    } catch (_) { return respond({ result: [], total: 0 }); }
+  }
+  if (message.action === "keyboard_fill_shortcut") {
+    const tabId = sender.tab.id;
+    contentShortcutTimes.set(tabId, Date.now());
+    clearTimeout(shortcutTimers.get(tabId)); shortcutTimers.delete(tabId);
+    const operation = queue.then(() => fillShortcut(tabId));
+    queue = operation.catch(() => {});
+    return respond({ result: await operation });
   }
   if (message.action === "save_offer") {
     if (!prefs.savePrompts || typeof message.username !== "string" || typeof message.password !== "string" || message.password.length > 4096 || message.username.length > 1024) return respond({ result: false });
@@ -305,9 +396,13 @@ async function pageMessage(message, sender, respond) {
 async function fill(message, account) {
   const tab = await activeTab();
   if (message.expectedTab !== undefined && (tab.id !== message.expectedTab || tab.url !== message.expectedUrl)) throw new Error("The active page changed.");
+  const prefs = await settings();
+  if (isAutofillBlocked(tab.url, prefs.autofillBlocklist)) throw new Error("Autofill is blocked for this site in rbw settings.");
+  if (isItemAutofillExcluded(message.item, prefs.autofillExcludedItems)) throw new Error("This item is marked Do not autofill.");
   const token = crypto.randomUUID();
-  await api.tabs.sendMessage(tab.id, { action: "rbw_fill_state", token, active: true }).catch(() => {});
+  await api.tabs.sendMessage(tab.id, { action: "rbw_fill_state", token, active: true, item: message.item, name: message.displayName }).catch(() => {});
   let count = 0;
+  let securityCodeFieldPresent = false;
   try {
     let credential, label;
     if (message.type && message.type !== "login") {
@@ -318,28 +413,40 @@ async function fill(message, account) {
     } else {
       credential = { type: "login", ...await native({ action: "credential", account, item: message.item, url: tab.url }) };
     }
+    await api.tabs.sendMessage(tab.id, { action: "rbw_fill_state", token, active: true, item: message.item, name: label || credential.name || message.displayName }).catch(() => {});
     const current = await activeTab();
     if (current.id !== tab.id || current.url !== tab.url) throw new Error("Page changed. Choose Fill again.");
     const frames = await api.webNavigation.getAllFrames({ tabId: tab.id });
     const filledFrames = [];
     const prefs = await settings();
-    const fillOptions = { crabify: prefs.crabify === true, icon: prefs.crabify ? await getNotificationIcon() : null };
+    const cardSecurityCode = ["fill", "clipboard"].includes(prefs.cardSecurityCode) ? prefs.cardSecurityCode : "off";
+    const fillOptions = { animations: prefs.animations, animationSpeed: prefs.animationSpeed, icon: prefs.animations === "plaid" ? await getNotificationIcon() : null, cardSecurityCode };
     for (const frame of frames.filter(f => { try { return new URL(f.url).origin === new URL(tab.url).origin; } catch (_) { return false; } })) {
       try {
         const results = await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [frame.frameId] }, func: fillPage, args: [frame.url, credential, token, fillOptions] });
-        const filled = results[0]?.result || 0;
-        count += filled; if (filled) filledFrames.push({ frameId: frame.frameId, url: frame.url });
+        const result = results[0]?.result || {};
+        const filled = typeof result === "number" ? result : result.count || 0;
+        count += filled;
+        securityCodeFieldPresent ||= result.securityCodeFieldPresent === true;
+        if (filled) filledFrames.push({ frameId: frame.frameId, url: frame.url });
       } catch (error) { if (frame.frameId === 0 && frames.length === 1) throw error; }
     }
     if (!count) throw new Error("No supported fields found on this page.");
+    const hasSecurityCode = credential.type === "card" && typeof credential.code === "string" && credential.code.length > 0;
+    let copiedSecurityCode = false;
+    let securityCodeCopyFailed = false;
+    if (cardSecurityCode === "clipboard" && hasSecurityCode) {
+      try { await native({ action: "copy_text", account, text: credential.code }); copiedSecurityCode = true; }
+      catch (_) { securityCodeCopyFailed = true; }
+    }
     clearTimeout(fillUndos.get(tab.id)?.timer);
     fillUndos.set(tab.id, { token, url: tab.url, frames: filledFrames, timer: setTimeout(() => { if (fillUndos.get(tab.id)?.token === token) fillUndos.delete(tab.id); }, 10000) });
     // Only public display metadata goes to the notice, never the credential.
-    const notice = { undoToken: token, name: label || credential.name || "Item", username: credential.type === "login" ? credential.username : null, position: message.cycleIndex, total: message.cycleCount };
+    const notice = { undoToken: token, name: label || credential.name || "Item", username: credential.type === "login" ? credential.username : null, position: message.cycleIndex, total: message.cycleCount, message: copiedSecurityCode ? "Card security code copied to clipboard." : securityCodeCopyFailed ? "Card fields filled, but the security code could not be copied." : hasSecurityCode && securityCodeFieldPresent && cardSecurityCode === "off" ? "Security code left blank. Set Card security code to Fill the field in rbw settings." : hasSecurityCode && !securityCodeFieldPresent && cardSecurityCode === "fill" ? "No security-code field found on this page." : null };
     await notifyFill(tab, notice).catch(() => {});
     return count;
   } finally {
-    await api.tabs.sendMessage(tab.id, { action: "rbw_fill_state", token, active: false, filled: count > 0 }).catch(() => {});
+    await api.tabs.sendMessage(tab.id, { action: "rbw_fill_state", token, active: false, item: message.item, filled: count > 0 }).catch(() => {});
   }
 }
 async function handle(message) {
@@ -388,12 +495,20 @@ async function handle(message) {
     case "set_preferences": {
       const old = await settings();
       const next = { ...old, ...Object.fromEntries(Object.entries(message.preferences || {}).filter(([k, v]) => (k in defaults) && typeof v === typeof defaults[k])) };
+      next.autofillBlocklist = String(next.autofillBlocklist || "").slice(0, 16384);
+      next.autofillExcludedItems = Array.isArray(next.autofillExcludedItems) ? [...new Set(next.autofillExcludedItems.filter(item => typeof item === "string" && item.length > 0 && item.length <= 128))].slice(0, 10000) : [];
+      if (!["off", "on", "plaid"].includes(next.animations)) next.animations = "on";
+      if (!["slow", "normal", "fast"].includes(next.animationSpeed)) next.animationSpeed = "normal";
+      if (!["off", "fill", "clipboard"].includes(next.cardSecurityCode)) next.cardSecurityCode = "off";
       if (next.account !== old.account || !next.favicons) clearMetadata();
       await api.storage.local.set({ preferences: next }); return next;
     }
     case "search": {
       let tab; try { tab = await activeTab(); } catch (_) { /* Search also works on internal pages. */ }
       const query = { action: "search", account, query: String(message.query || ""), url: tab?.url || null, site_only: !!message.siteOnly, kind: message.kind || null, folder: message.folder || null, collection: message.collection || null, view: message.view || null };
+      const prefs = await settings();
+      const blockedPage = query.url && isAutofillBlocked(query.url, prefs.autofillBlocklist);
+      if (blockedPage && query.site_only) return { items: [], total: 0 };
       if (query.view === "home" && !query.query && !query.site_only) {
         // Favorites are independent of the active tab; only suggestions need site matching.
         const favoritesQuery = { ...query, url: null, view: "favorites" };
@@ -402,6 +517,7 @@ async function handle(message) {
           const entry = listCache.get(snapshotKey);
           const favorites = entry?.expires > Date.now() ? entry.value : null;
           if (!favorites) return null;
+          if (blockedPage) return favorites;
           const matchingKey = JSON.stringify({ ...query, site_only: true, kind: query.kind || "login", view: null });
           const site = listCache.get(matchingKey);
           const matching = site?.expires > Date.now() ? site.value : null;
@@ -412,14 +528,20 @@ async function handle(message) {
         }
         const [favorites, matching] = await Promise.all([
           cachedSearch(favoritesQuery),
-          query.url ? cachedSearch({ ...query, site_only: true, kind: query.kind || "login", view: null }) : Promise.resolve({ items: [] }),
+          query.url && !blockedPage ? cachedSearch({ ...query, site_only: true, kind: query.kind || "login", view: null }) : Promise.resolve({ items: [] }),
         ]);
-        const ids = new Set(matching.items.map(item => item.id));
-        const items = [...matching.items, ...favorites.items.filter(item => !ids.has(item.id))];
+        const eligibleMatches = matching.items.filter(item => !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems));
+        const ids = new Set(eligibleMatches.map(item => item.id));
+        const items = [...eligibleMatches, ...favorites.items.filter(item => !ids.has(item.id))];
         return { ...favorites, items, total: items.length };
       }
       if (message.snapshot) return null;
-      return cachedSearch(query);
+      const result = await cachedSearch(query);
+      if (query.site_only) {
+        const items = result.items.filter(item => !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems));
+        return { ...result, items, total: items.length };
+      }
+      return result;
     }
     case "favicon": return (await settings()).favicons ? favicon(message.origin) : null;
     case "folders": return native({ action: "folders", account, method: message.method, id: message.id || null, name: message.name || null });
@@ -449,7 +571,28 @@ async function handle(message) {
     case "passkey_approve": {
       const p = pending.get(message.request); if (!p) throw new Error("This request has expired.");
       await checkDocument(p);
-      const result = await native({ action: p.method === "get" ? "passkey_get" : "passkey_create", account, item: message.item || null, password: typeof message.password === "string" ? message.password : null, origin: p.origin, options: p.options });
+      let result;
+      if (p.method === "get") {
+        await syncPasskeyStage(account, p.id, "before", "Could not sync the vault before signing in. Nothing was signed; sync the vault and try again.");
+        if (!pending.has(p.id)) throw new Error("The request was cancelled.");
+        await checkDocument(p);
+        reportPasskeyProgress(p.id, "signing");
+        result = await native({ action: "passkey_get", account, item: message.item || null, password: typeof message.password === "string" ? message.password : null, origin: p.origin, options: p.options });
+        const counter = result?.counter;
+        if (!Number.isSafeInteger(counter) || counter < 0) throw new Error("The passkey counter could not be confirmed.");
+        reportPasskeyProgress(p.id, "after");
+        try {
+          await syncPasskeyStage(account, p.id, "after", "The passkey counter was saved, but the vault could not sync afterward. Sync the vault before trying again.");
+          await native({ action: "passkey_verify", account, item: message.item || null, origin: p.origin, options: p.options, counter });
+        } catch (_) {
+          throw new Error("The passkey counter was saved, but the vault could not sync afterward. Sync the vault before trying again.");
+        }
+        if (!pending.has(p.id)) throw new Error("The request was cancelled.");
+        await checkDocument(p);
+        delete result.counter;
+      } else {
+        result = await native({ action: "passkey_create", account, item: message.item || null, password: typeof message.password === "string" ? message.password : null, origin: p.origin, options: p.options });
+      }
       await checkDocument(p);
       if (!pending.has(p.id)) throw new Error("The request was cancelled.");
       finish(p.id, { result }); return true;
@@ -478,9 +621,9 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
     operation.then(result => {
       respond({ result });
       if (["unlock", "sync", "save", "mutate", "set_preferences", "import", "save_offer_apply", "passkey_approve"].includes(message.action)) refreshActiveBadge().catch(() => {});
-    }, error => respond({ error: error.message || "Operation failed." })); return true;
+    }, error => respond({ error: error.message || "Operation failed.", diagnostic: error.diagnostic || null })); return true;
   }
-  if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "save_offer_choices", "save_offer_apply", "save_offer_dismiss", "inline_choices", "inline_icons", "inline_fill", "autofill_load", "undo_fill", "dismiss_fill"].includes(message?.action)) return false;
+  if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "save_offer_choices", "save_offer_apply", "save_offer_dismiss", "inline_choices", "inline_icons", "inline_fill", "inline_search_cards", "keyboard_fill_shortcut", "autofill_load", "undo_fill", "dismiss_fill"].includes(message?.action)) return false;
   pageMessage(message, sender, respond).catch(() => respond({ error: "Request failed." })); return true;
 });
 
@@ -508,12 +651,17 @@ api.windows?.onFocusChanged?.addListener(windowId => { if (windowId >= 0) refres
 api.runtime.onInstalled.addListener(() => {
   api.contextMenus.removeAll().then(() => api.contextMenus.create({ id: "rbw-open", title: "Fill with rbw…", contexts: ["editable"] }));
 });
-api.contextMenus.onClicked.addListener(() => api.action.openPopup().catch(() => api.windows.create({ url: api.runtime.getURL("popup.html?surface=window"), type: "popup", width: 460, height: 680 })));
-async function fillShortcut() {
+api.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== "rbw-open" || !tab?.id) return;
+  api.tabs.sendMessage(tab.id, { action: "open_inline_suggestions" }, { frameId: info.frameId || 0 }).catch(() => {});
+});
+async function fillShortcut(tabId) {
   let tab;
   try {
-    tab = await activeTab();
+    tab = tabId === undefined ? await activeTab() : await api.tabs.get(tabId);
+    if (!tab?.url || !/^https?:\/\//.test(tab.url)) throw new Error("Open an HTTP or HTTPS page first.");
     const prefs = await settings(); const account = prefs.account || null;
+    if (isAutofillBlocked(tab.url, prefs.autofillBlocklist)) throw new Error("Autofill is blocked for this site in rbw settings.");
     const status = await native({ action: "status", account });
     if (!status.unlocked) {
       fillCycles.delete(tab.id);
@@ -521,15 +669,16 @@ async function fillShortcut() {
       return;
     }
     const result = await cachedSearch({ account, url: tab.url, site_only: true, kind: "login" });
-    if (!result.items.length) {
+    const eligible = result.items.filter(item => !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems));
+    if (!eligible.length) {
       fillCycles.delete(tab.id);
       await notifyFill(tab, { title: "No matching logins", error: true, message: "No matching logins found for this page." }).catch(() => {});
       return;
     }
-    const signature = JSON.stringify([account, result.items.map(item => item.id)]);
+    const signature = JSON.stringify([account, eligible.map(item => item.id)]);
     const previous = fillCycles.get(tab.id);
-    const index = previous?.url === tab.url && previous.signature === signature && Date.now() - previous.time < 30000 ? (previous.index + 1) % result.items.length : 0;
-    await fill({ item: result.items[index].id, expectedTab: tab.id, expectedUrl: tab.url, cycleIndex: index + 1, cycleCount: result.items.length }, account);
+    const index = previous?.url === tab.url && previous.signature === signature && Date.now() - previous.time < 30000 ? (previous.index + 1) % eligible.length : 0;
+    await fill({ item: eligible[index].id, displayName: eligible[index].name, expectedTab: tab.id, expectedUrl: tab.url, cycleIndex: index + 1, cycleCount: eligible.length }, account);
     fillCycles.set(tab.id, { url: tab.url, signature, index, time: Date.now() });
     popupNotices.delete(tab.id);
   } catch (err) {
@@ -542,8 +691,22 @@ async function fillShortcut() {
 api.commands.onCommand.addListener(command => {
   if (command === "open-vault") { api.action.openPopup().catch(() => {}); return; }
   if (command === "fill-login") {
-    // Serialize repeated presses so they advance through matches in order.
-    const operation = queue.then(fillShortcut); queue = operation.catch(() => {});
+    // Firefox may reserve this shortcut for a browser action. The content
+    // fallback handles the page key event; delay the command path briefly to
+    // avoid filling twice when both events are delivered.
+    api.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+      if (!tab?.id) return;
+      if (Date.now() - (contentShortcutTimes.get(tab.id) || 0) < 500) return;
+      clearTimeout(shortcutTimers.get(tab.id));
+      const timer = setTimeout(() => {
+        shortcutTimers.delete(tab.id);
+        if (Date.now() - (contentShortcutTimes.get(tab.id) || 0) >= 500) {
+          const operation = queue.then(() => fillShortcut(tab.id));
+          queue = operation.catch(() => {});
+        }
+      }, 100);
+      shortcutTimers.set(tab.id, timer);
+    }).catch(() => {});
   }
 });
 

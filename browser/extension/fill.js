@@ -1,26 +1,59 @@
 /* This function is serialized into an isolated world by scripting.executeScript. */
 async function fillPage(expectedUrl, data, fillToken, options = {}) {
   if (location.href !== expectedUrl) throw new Error("Page changed. Choose Fill again.");
+  const speedFactor = options.animationSpeed === "slow" ? 0.65 : options.animationSpeed === "fast" ? 1.5 : 1;
   const all = root => [...root.querySelectorAll("input,textarea,select"), ...[...root.querySelectorAll("*")].filter(el => el.shadowRoot).flatMap(el => all(el.shadowRoot))];
   const fields = all(document).filter(el => !el.disabled && !el.readOnly && el.getClientRects().length && getComputedStyle(el).visibility !== "hidden" && el.type !== "hidden");
   const previous = new Map();
   const read = el => ({ value: el.value, checked: el.checked });
-  const setter = (el, value) => {
+  const brandNames = {
+    visa: ["visa"],
+    mastercard: ["mastercard", "master card", "mc"],
+    mc: ["mastercard", "master card", "mc"],
+    amex: ["amex", "american express", "americanexpress"],
+    americanexpress: ["amex", "american express", "americanexpress"],
+    discover: ["discover"]
+  };
+  const optionNames = value => {
+    const normalized = String(value).trim().toLowerCase();
+    return brandNames[normalized.replace(/[^a-z]/g, "")] || [normalized];
+  };
+  const setter = (el, value, field = null) => {
     if (value == null || !el) return;
     if (!previous.has(el)) previous.set(el, { before: read(el) });
     const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     if (el instanceof HTMLInputElement && el.type === "checkbox") Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked").set.call(el, value === true || value === "true");
     else if (el instanceof HTMLSelectElement) {
-      const option = [...el.options].find(o => o.value.toLowerCase() === String(value).toLowerCase() || o.textContent.trim().toLowerCase() === String(value).toLowerCase());
+      const values = optionNames(value);
+      const options = [...el.options];
+      let option = options.find(o => values.includes(o.value.trim().toLowerCase()) || values.includes(o.textContent.trim().toLowerCase()));
+      if (!option && field === "cc-exp-month") {
+        const month = Number.parseInt(String(value), 10);
+        if (month >= 1 && month <= 12) {
+          const names = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+          option = options.find(o => [o.value, o.textContent].some(label => {
+            const normalized = label.trim().toLowerCase();
+            return Number.parseInt(normalized, 10) === month || normalized === names[month - 1] || normalized === names[month - 1].slice(0, 3);
+          }));
+        }
+      }
+      if (!option && field === "cc-exp-year") {
+        const year = String(value).trim();
+        option = options.find(o => [o.value, o.textContent].some(label => {
+          const candidate = label.trim().match(/(?:19|20|21)\d{2}|\d{2}/)?.[0];
+          return candidate === year || (year.length === 2 && candidate?.slice(-2) === year);
+        }));
+      }
       if (option) Object.getOwnPropertyDescriptor(proto, "value").set.call(el, option.value);
     } else Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
     el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true }));
   };
   let count = 0;
+  let securityCodeFieldPresent = false;
   const assignments = [];
-  const put = (el, value) => {
+  const put = (el, value, field = null) => {
     if (el && value != null) {
-      assignments.push({ el, value });
+      assignments.push({ el, value, field });
       count++;
     }
   };
@@ -38,17 +71,26 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     put(user, data.username); put(password, data.password);
     if (password) password.focus(); else user?.focus();
   } else {
-    const names = data.type === "card" ? { "cc-name": "cardholder_name", "cc-number": "number", "cc-exp-month": "exp_month", "cc-exp-year": "exp_year", "cc-csc": "code", "cc-type": "brand" } : { "given-name": "first_name", "additional-name": "middle_name", "family-name": "last_name", "address-line1": "address1", "address-line2": "address2", "address-line3": "address3", "address-level2": "city", "address-level1": "state", "postal-code": "postal_code", "country": "country", "country-name": "country", "tel": "phone", "email": "email", "username": "username", "honorific-prefix": "title" };
+    const names = data.type === "card" ? { "cc-name": "cardholder_name", "cc-number": "number", "cc-exp-month": "exp_month", "cc-exp-year": "exp_year", "cc-type": "brand" } : { "given-name": "first_name", "additional-name": "middle_name", "family-name": "last_name", "address-line1": "address1", "address-line2": "address2", "address-line3": "address3", "address-level2": "city", "address-level1": "state", "postal-code": "postal_code", "country": "country", "country-name": "country", "tel": "phone", "email": "email", "username": "username", "honorific-prefix": "title" };
+    if (data.type === "card" && options.cardSecurityCode === "fill") names["cc-csc"] = "code";
     const activeForm = data.type === "card" ? document.activeElement?.form : null;
     const targets = activeForm ? fields.filter(el => el.form === activeForm) : fields;
     for (const el of targets) {
-      const name = el.autocomplete?.split(/\s+/).at(-1);
-      if (names[name]) put(el, data[names[name]]);
+      const name = (el.getAttribute("autocomplete") || el.autocomplete || "").toLowerCase().split(/\s+/).at(-1);
+      const fieldLabel = [el.id, el.name, el.getAttribute("aria-label"), el.getAttribute("placeholder")].filter(Boolean).join(" ");
+      const securityCodeField = data.type === "card" && (name === "cc-csc" || /(^|[^a-z])(cvv2?|cvc2?|csc|security[ _-]?code)([^a-z]|$)/i.test(fieldLabel));
+      if (securityCodeField) {
+        securityCodeFieldPresent = true;
+        if (options.cardSecurityCode === "fill") put(el, data.code);
+        continue;
+      }
+      if (names[name]) put(el, data[names[name]], name);
       if (name === "cc-exp" && data.exp_month && data.exp_year) put(el, `${data.exp_month.padStart(2, "0")}/${data.exp_year.slice(-2)}`);
       if (name === "name") put(el, [data.first_name, data.middle_name, data.last_name].filter(Boolean).join(" "));
     }
   }
   for (const field of data.custom || []) {
+    if (data.type === "card" && field.type === "linked" && field.value === "303" && options.cardSecurityCode !== "fill") continue;
     const el = fields.find(el => el.id === field.name || el.name === field.name);
     if (el) {
       const linked = { 100: "username", 101: "password", 300: "cardholder_name", 301: "exp_month", 302: "exp_year", 303: "code", 304: "brand", 305: "number", 400: "title", 401: "first_name", 402: "middle_name", 403: "last_name", 404: "address1", 405: "address2", 406: "address3", 407: "city", 408: "state", 409: "postal_code", 410: "country", 412: "email", 413: "phone", 414: "ssn", 415: "username", 416: "passport_number", 417: "license_number" };
@@ -57,10 +99,11 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     }
   }
 
-  const runCrab = (el, finalVal, iconUrl) => new Promise(resolve => {
+  const runCrab = (el, finalVal, iconUrl, field) => new Promise(resolve => {
     const rect = el.getBoundingClientRect();
-    if (!rect.width || !rect.height || typeof finalVal !== "string") {
-      setter(el, finalVal); resolve(); return;
+    const isTextControl = el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement && !["checkbox", "radio", "button", "submit", "reset", "hidden", "file"].includes(el.type);
+    if (!rect.width || !rect.height || !isTextControl || typeof finalVal !== "string") {
+      setter(el, finalVal, field); resolve(); return;
     }
     const crab = document.createElement("div");
     crab.setAttribute("aria-hidden", "true");
@@ -71,7 +114,7 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     document.documentElement.appendChild(crab);
 
     const travel = Math.max(28, Math.min(rect.width - crabSize - 8, Math.max(50, finalVal.length * 8)));
-    const duration = Math.min(260, Math.max(150, finalVal.length * 13));
+    const duration = Math.round(Math.min(260, Math.max(150, finalVal.length * 13)) / speedFactor);
     const startTime = performance.now();
 
     function frame(now) {
@@ -83,13 +126,13 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
       crab.style.transform = `translate(${curX}px, ${bob}px) rotate(${angle}deg)`;
 
       const curLen = Math.min(finalVal.length, Math.max(1, Math.floor(p * finalVal.length)));
-      setter(el, finalVal.slice(0, curLen));
+      setter(el, finalVal.slice(0, curLen), field);
 
       if (p < 1) {
         requestAnimationFrame(frame);
       } else {
-        setter(el, finalVal);
-        crab.style.transition = "transform 0.12s ease-out, opacity 0.12s ease-out";
+        setter(el, finalVal, field);
+        crab.style.transition = `transform ${120 / speedFactor}ms ease-out, opacity ${120 / speedFactor}ms ease-out`;
         crab.style.transform = `translate(${travel}px, -10px) scale(1.25) rotate(0deg)`;
         crab.style.opacity = "0";
         if (typeof el.animate === "function") {
@@ -97,26 +140,68 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
             el.animate([
               { boxShadow: "0 0 0 3px rgba(96, 165, 250, 0.75), 0 0 12px rgba(96, 165, 250, 0.35)", backgroundColor: "rgba(96, 165, 250, 0.1)" },
               { boxShadow: "0 0 0 0 rgba(96, 165, 250, 0)", backgroundColor: "transparent" }
-            ], { duration: 400, easing: "ease-out" });
+          ], { duration: 400 / speedFactor, easing: "ease-out" });
           } catch (_) {}
         }
-        setTimeout(() => { crab.remove(); resolve(); }, 130);
+        setTimeout(() => { crab.remove(); resolve(); }, 130 / speedFactor);
       }
     }
     requestAnimationFrame(frame);
   });
 
+  const runType = (el, finalVal, field) => new Promise(resolve => {
+    const isText = el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement && !["checkbox", "radio", "button", "submit", "reset", "hidden", "file"].includes(el.type);
+    if (!isText || typeof finalVal !== "string" || finalVal.length < 2) {
+      setter(el, finalVal, field); resolve(); return;
+    }
+    const delay = Math.max(1, Math.min(8, 240 / finalVal.length) / speedFactor);
+    let length = 0;
+    const typeNext = () => {
+      length++;
+      setter(el, finalVal.slice(0, length), field);
+      if (length < finalVal.length) setTimeout(typeNext, delay);
+      else resolve();
+    };
+    typeNext();
+  });
+
   if (count) {
     const reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (options.crabify && options.icon && !reducedMotion) {
+    const animate = !reducedMotion && options.animations !== "off";
+    const typeable = el => el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement && !["checkbox", "radio", "button", "submit", "reset", "hidden", "file"].includes(el.type);
+    let animationTask = null;
+    if (animate && (options.animations === "plaid" && options.icon || options.animations === "on")) {
       for (const item of assignments) {
-        await runCrab(item.el, item.value, options.icon);
+        if (!previous.has(item.el)) previous.set(item.el, { before: read(item.el) });
+        const state = previous.get(item.el);
+        if (typeable(item.el) && typeof item.value === "string") state.filled = { value: item.value, checked: state.before.checked };
+        else {
+          setter(item.el, item.value, item.field);
+          state.filled = read(item.el);
+        }
       }
+      animationTask = (async () => {
+        if (options.animations === "plaid" && options.icon) {
+          for (const item of assignments) await runCrab(item.el, item.value, options.icon, item.field);
+        } else {
+          for (const item of assignments) await runType(item.el, item.value, item.field);
+          assignments.forEach((item, index) => {
+            if (typeof item.el.animate !== "function") return;
+            try {
+              item.el.animate([
+                { boxShadow: "0 0 0 2px rgba(96, 165, 250, 0.55)", backgroundColor: "rgba(96, 165, 250, 0.08)" },
+                { boxShadow: "0 0 0 0 rgba(96, 165, 250, 0)", backgroundColor: "transparent" }
+              ], { duration: 300 / speedFactor, delay: index * 40 / speedFactor, easing: "ease-out" });
+            } catch (_) {}
+          });
+        }
+      })();
+      animationTask.catch(() => { for (const item of assignments) setter(item.el, item.value, item.field); });
     } else {
       for (const item of assignments) {
-        setter(item.el, item.value);
+        setter(item.el, item.value, item.field);
       }
-      if (!reducedMotion) {
+      if (animate) {
         assignments.forEach((item, index) => {
           const el = item.el;
           if (typeof el.animate !== "function") return;
@@ -139,8 +224,8 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
                 transform: "scale(1)"
               }
             ], {
-              duration: 600,
-              delay: index * 75,
+              duration: 600 / speedFactor,
+              delay: index * 75 / speedFactor,
               easing: "cubic-bezier(0.16, 1, 0.3, 1)"
             });
           } catch (_) {}
@@ -148,7 +233,7 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
       }
     }
     const token = fillToken || crypto.randomUUID();
-    for (const [el, state] of previous) state.filled = read(el);
+    for (const [el, state] of previous) if (!state.filled) state.filled = read(el);
     const undo = { token, restore: () => {
       let restored = 0;
       for (const [el, state] of previous) {
@@ -158,12 +243,12 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
         if (el.type === "checkbox") Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked").set.call(el, state.before.checked);
         else Object.getOwnPropertyDescriptor(proto, "value").set.call(el, state.before.value);
         el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); restored++;
-        if (typeof el.animate === "function" && (!window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches)) {
+        if (options.animations !== "off" && typeof el.animate === "function" && (!window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches)) {
           try {
             el.animate([
               { boxShadow: "0 0 0 2px rgba(239, 169, 185, 0.7)", backgroundColor: "rgba(239, 169, 185, 0.12)" },
               { boxShadow: "0 0 0 0 rgba(239, 169, 185, 0)", backgroundColor: "transparent" }
-            ], { duration: 400, easing: "ease-out" });
+            ], { duration: 400 / speedFactor, easing: "ease-out" });
           } catch (_) {}
         }
       }
@@ -172,7 +257,7 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     globalThis.__rbwUndoFill?.clear(); globalThis.__rbwUndoFill = undo;
     setTimeout(() => { undo.clear(); if (globalThis.__rbwUndoFill === undo) delete globalThis.__rbwUndoFill; }, 10000);
   }
-  return count;
+  return { count, securityCodeFieldPresent };
 }
 
 
@@ -187,14 +272,35 @@ function undoPageFill(expectedUrl, token, restore) {
 /* Render a transient notice without publishing vault metadata in the page DOM. */
 function showFillNotice(expectedUrl, notice) {
   if (location.href !== expectedUrl || window !== window.top) return;
-  document.getElementById("rbw-fill-notice")?.remove();
+  const speedFor = value => value === "slow" ? 0.65 : value === "fast" ? 1.5 : 1;
+  const speedFactor = speedFor(notice.animationSpeed);
+  const enterDuration = Math.round(360 / speedFactor);
+  const exitDuration = Math.round(120 / speedFactor);
+  const previousHost = document.getElementById("rbw-fill-notice");
+  if (previousHost) {
+    previousHost.__rbwDispose?.();
+    previousHost.removeAttribute("id");
+    if (previousHost.dataset.animations !== "off" && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      const previousSpeed = speedFor(previousHost.dataset.animationSpeed);
+      const outgoingDuration = Math.round(180 / previousSpeed);
+      previousHost.style.setProperty("transition", `opacity ${outgoingDuration}ms ease-in, transform ${outgoingDuration}ms ease-in`, "important");
+      previousHost.style.setProperty("pointer-events", "none", "important");
+      previousHost.getBoundingClientRect();
+      previousHost.style.setProperty("opacity", "0", "important");
+      previousHost.style.setProperty("transform", "translateX(-28px)", "important");
+      setTimeout(() => previousHost.remove(), outgoingDuration + 20);
+    } else previousHost.remove();
+  }
   const host = document.createElement("div"); host.id = "rbw-fill-notice";
+  host.dataset.animations = notice.animations === "off" ? "off" : notice.animations === "plaid" ? "plaid" : "on";
+  host.dataset.animationSpeed = notice.animationSpeed;
   host.style.cssText = "all:initial!important;position:fixed!important;inset:16px 16px auto auto!important;z-index:2147483647!important;pointer-events:none!important;max-width:calc(100vw - 32px)!important;";
   const shadow = host.attachShadow({ mode: "closed" });
   const sheet = new CSSStyleSheet();
   const border = notice.error ? "#efa9b9" : "#555555";
   const bg = notice.error ? "#302528" : "#282828";
-  sheet.replaceSync(`:host{all:initial}.notice{box-sizing:border-box;display:flex;align-items:center;gap:10px;width:360px;max-width:calc(100vw - 32px);padding:10px 12px;border:1px solid ${border};border-radius:12px;background:${bg};color:#efefef;box-shadow:0 6px 24px #0006;font:14px/1.4 system-ui,sans-serif;pointer-events:none}.brand{width:30px;height:30px;object-fit:contain;flex-shrink:0}.text{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}small{color:#adadad;font-size:12px;margin-top:2px}button{flex-shrink:0;pointer-events:auto;cursor:pointer;border:0;border-radius:6px;background:transparent;color:#adadad;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}button svg{width:18px;height:18px;display:block;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}button:hover,button:focus-visible{background:#383838;color:#efefef;outline:1px solid #d0d0d0}.notice{animation:rbw-in 160ms ease-out both}.notice.closing{animation:rbw-out 120ms ease-in both}@keyframes rbw-in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}@keyframes rbw-out{to{opacity:0;transform:translateY(-4px)}}@media(prefers-reduced-motion:reduce){.notice,.notice.closing{animation:none}}`);
+  const motionRules = notice.animations === "off" ? "" : `@media(prefers-reduced-motion:no-preference){.notice{opacity:0;transform:translateX(40px)}.notice.entering{animation:rbw-in ${enterDuration}ms cubic-bezier(.16,1,.3,1) both}.notice.closing{animation:rbw-out ${exitDuration}ms ease-in both}@keyframes rbw-in{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}@keyframes rbw-out{to{opacity:0;transform:translateX(16px)}}}`;
+  sheet.replaceSync(`:host{all:initial}.notice{box-sizing:border-box;display:flex;align-items:center;gap:10px;width:360px;max-width:calc(100vw - 32px);padding:10px 12px;border:1px solid ${border};border-radius:12px;background:${bg};color:#efefef;box-shadow:0 6px 24px #0006;font:14px/1.4 system-ui,sans-serif;pointer-events:none}.brand{width:30px;height:30px;object-fit:contain;flex-shrink:0}.text{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}small{color:#adadad;font-size:12px;margin-top:2px}button{flex-shrink:0;pointer-events:auto;cursor:pointer;border:0;border-radius:6px;background:transparent;color:#adadad;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}button svg{width:18px;height:18px;display:block;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}button:hover,button:focus-visible{background:#383838;color:#efefef;outline:1px solid #d0d0d0}${motionRules}`);
   shadow.adoptedStyleSheets = [sheet];
   const box = document.createElement("div"); box.className = "notice"; box.setAttribute("role", "status"); box.setAttribute("aria-live", "polite");
   const text = document.createElement("div"); text.className = "text";
@@ -220,13 +326,15 @@ function showFillNotice(expectedUrl, notice) {
   const api = globalThis.browser || chrome;
   const clearUndo = () => { if (undo) api.runtime.sendMessage({ action: "dismiss_fill", token: undo }).catch(() => {}); };
   let closing = false;
+  const onKey = event => { if (event.key === "Escape") dismiss(); };
+  const cleanup = () => { clearTimeout(timer); document.removeEventListener("keydown", onKey); delete host.__rbwDispose; };
   const dismiss = () => {
     if (closing) return; closing = true;
-    clearTimeout(timer); clearUndo(); document.removeEventListener("keydown", onKey);
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) host.remove();
-    else { box.classList.add("closing"); setTimeout(() => host.remove(), 140); }
+    cleanup(); clearUndo();
+    if (host.dataset.animations === "off" || matchMedia("(prefers-reduced-motion: reduce)").matches) host.remove();
+    else { box.classList.add("closing"); setTimeout(() => host.remove(), exitDuration + 20); }
   };
-  const onKey = event => { if (event.key === "Escape") dismiss(); };
+  host.__rbwDispose = cleanup;
   close.addEventListener("click", dismiss); document.addEventListener("keydown", onKey);
   if (notice.icon) { const image = document.createElement("img"); image.className = "brand"; image.alt = "rbw"; image.src = notice.icon; box.append(image); }
   box.append(text);
@@ -246,5 +354,6 @@ function showFillNotice(expectedUrl, notice) {
     }); box.append(undoButton);
   }
   box.append(close); shadow.append(box); document.documentElement.append(host);
+  requestAnimationFrame(() => { if (host.isConnected) box.classList.add("entering"); });
   timer = setTimeout(dismiss, undo ? 8000 : 4500);
 }

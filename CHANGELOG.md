@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [2.21.2] - 2026-10-18
+
+### Added
+
+* Browser passkey authentication reports before-sync, signing and after-sync
+  progress, retries a failed sync once, and confirms the reserved passkey
+  counter from the synchronized vault before returning the assertion.
+* Browser autofill supports credit cards, animated fills and notifications,
+  inline search, and per-site and per-item autofill exclusions.
+
 ## [2.21.1] - 2026-10-17
 
 ### Fixed

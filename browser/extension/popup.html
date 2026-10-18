@@ -47,6 +47,21 @@
 <div id="message" class="popup-notification" role="status" aria-live="polite" hidden><span id="message-text"></span><button id="dismiss-message" aria-label="Dismiss notification" title="Dismiss"><span data-icon="close"></span></button></div>
 <main>
 <section id="unlock-panel" hidden><form id="unlock-form"><label>Master password<input id="unlock-password" maxlength="4096" type="password" autocomplete="off" spellcheck="false" required autofocus></label><button type="submit" class="primary"><span data-icon="unlock"></span>Unlock</button><button type="button" id="unlock-configured"><span data-icon="settings"></span>Use configured unlock method</button></form><p class="hint">Sent directly to your shared rbw-agent. Never saved by the extension.</p></section>
+<section id="diagnostic" class="diagnostic-page" hidden>
+  <div class="diagnostic-emblem" data-icon="health"></div>
+  <h2>Could not connect to rbw</h2>
+  <p id="diagnostic-summary" class="diagnostic-summary"></p>
+  <details class="diagnostic-details" open>
+    <summary>Connection details</summary>
+    <pre id="diagnostic-trace"></pre>
+  </details>
+  <div id="diagnostic-actions" class="actions">
+    <button id="diagnostic-copy"><span data-icon="copy"></span>Copy diagnostic trace</button>
+    <button id="diagnostic-retry" class="primary"><span data-icon="refresh"></span>Retry connection</button>
+  </div>
+  <p id="diagnostic-copy-status" class="hint" aria-live="polite"></p>
+  <p class="hint">Check that <code>rbw-browser</code>, <code>rbw</code>, and <code>rbw-agent</code> are installed together, and that this extension is listed under <code>browser.clients</code>.</p>
+</section>
 <section id="approval" hidden>
 <div id="approval-intro" class="passkey-intro"><span class="passkey-emblem" data-icon="key"></span><div><h2 id="approval-title"></h2><p id="approval-origin"></p></div></div>
 <p id="approval-description" class="hint"></p>
@@ -54,6 +69,11 @@
   <span class="passkey-progress-emblem" data-icon="key"></span>
   <div class="passkey-progress-account"><span id="approval-progress-icon" class="passkey-choice-icon" data-icon="key"></span><span><strong id="approval-progress-name"></strong><small id="approval-progress-username"></small></span></div>
   <p id="approval-progress-text" class="passkey-progress-text">Signing in with passkey…</p>
+  <ol id="approval-progress-steps" class="passkey-progress-steps" aria-label="Passkey sign-in progress">
+    <li data-step="before">Sync vault before signing</li>
+    <li data-step="signing">Sign with the passkey</li>
+    <li data-step="after">Sync updated vault</li>
+  </ol>
   <div class="passkey-spinner-wrap"><span class="spinner" aria-hidden="true"></span></div>
 </div>
 <div id="approval-items" class="passkey-choices"></div>
@@ -80,7 +100,7 @@
 <section id="send" hidden><div class="actions"><button id="refresh-sends"><span data-icon="refresh"></span>Refresh</button></div><div id="send-items"></div></section>
 <section id="send-editor" hidden><form id="send-form"><label>Name<input id="send-name" required maxlength="1024"></label><label>Text<textarea id="send-text" rows="5" maxlength="100000" spellcheck="false"></textarea></label><label>Or attach a file<input id="send-file" type="file"></label><label>Notes (private)<textarea id="send-notes" rows="2"></textarea></label><label>Delete after (days)<input id="send-days" type="number" min="1" max="30" value="7"></label><label>Expiration<input id="send-expiration" type="datetime-local"></label><label>Maximum accesses (optional)<input id="send-max" type="number" min="1"></label><label>Password (optional; leave blank to preserve)<input id="send-password" type="password" autocomplete="off"></label><label><input id="send-hidden" type="checkbox"> Hide text by default</label><label><input id="send-hide-email" type="checkbox" checked> Hide my email address</label><label><input id="send-disabled" type="checkbox"> Disable access to this Send</label></form></section>
 <section id="health" hidden><h2>Vault health</h2><p>Checks are performed locally. Passwords stay in rbw.</p><button id="audit" class="primary"><span data-icon="health"></span>Check vault</button><div id="audit-results"></div></section>
-<section id="settings" hidden><h2>Settings</h2><label><input id="setting-autofill" type="checkbox"> Auto-fill on page load</label><label><input id="setting-crabify" type="checkbox"> Crabify autofill animation</label><label><input id="setting-passkeys" type="checkbox"> Use rbw for passkeys</label><label><input id="setting-save" type="checkbox"> Suggest saving submitted logins</label><label><input id="setting-favicons" type="checkbox"> Show website icons</label><label>Appearance<select id="theme"><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option></select></label><h3>Tabs</h3><label><input id="setting-generator" type="checkbox"> Generator</label><label><input id="setting-send" type="checkbox"> Send</label><label><input id="setting-health" type="checkbox"> Health</label><p class="hint">Vault is always available.</p><h3>Keyboard shortcuts</h3><p><kbd>Ctrl Shift L</kbd> Fill a matching login<br><kbd>Ctrl Shift Y</kbd> Open vault</p><p class="hint">Change shortcut assignments in your browser’s extension settings.</p><h3>Shared vault</h3><p>Lock state, account settings and clipboard clearing are managed by rbw-agent. Configure them with <code>rbw config</code>.</p><div class="actions"><button id="settings-sync"><span data-icon="refresh"></span>Sync vault</button><button id="settings-lock"><span data-icon="lock"></span>Lock vault</button><button id="settings-open-options"><span data-icon="popout"></span>Detailed settings</button></div><p class="hint">rbw browser <span data-extension-version></span></p></section>
+<section id="settings" hidden><h2>Settings</h2><label><input id="setting-autofill" type="checkbox"> Auto-fill on page load</label><label>Animations<select id="setting-animations"><option value="off">Off</option><option value="on">On</option><option value="plaid">Plaid</option></select></label><label>Animation speed<select id="setting-animation-speed"><option value="slow">Slow</option><option value="normal">Normal</option><option value="fast">Fast</option></select></label><p class="hint">On types values quickly; Plaid adds the crab effect. Off fills immediately.</p><label>Card security code (CVV/CVC)<select id="setting-card-code"><option value="off">Off</option><option value="fill">Fill the field</option><option value="clipboard">Copy to clipboard</option></select></label><p class="hint">Off by default. Clipboard copies follow rbw’s configured clipboard timeout.</p><label><input id="setting-passkeys" type="checkbox"> Use rbw for passkeys</label><label><input id="setting-save" type="checkbox"> Suggest saving submitted logins</label><label><input id="setting-favicons" type="checkbox"> Show website icons</label><label>Appearance<select id="theme"><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option></select></label><h3>Tabs</h3><label><input id="setting-generator" type="checkbox"> Generator</label><label><input id="setting-send" type="checkbox"> Send</label><label><input id="setting-health" type="checkbox"> Health</label><p class="hint">Vault is always available.</p><h3>Keyboard shortcuts</h3><p><kbd>Ctrl Shift L</kbd> Fill a matching login<br><kbd>Ctrl Shift Y</kbd> Open vault</p><p class="hint">Change shortcut assignments in your browser’s extension settings.</p><h3>Shared vault</h3><p>Lock state, account settings and clipboard clearing are managed by rbw-agent. Configure them with <code>rbw config</code>.</p><div class="actions"><button id="settings-sync"><span data-icon="refresh"></span>Sync vault</button><button id="settings-lock"><span data-icon="lock"></span>Lock vault</button><button id="settings-open-options"><span data-icon="popout"></span>Detailed settings</button></div><p class="hint">rbw browser <span data-extension-version></span></p></section>
 </main>
 <button id="add" class="fab primary" title="Add" aria-label="Add item" hidden><span data-icon="plus"></span><span class="fab-label">Add</span></button>
 <script src="icons.js"></script><script src="vendor/marked.js"></script><script src="vendor/purify.js"></script><script src="popup.js"></script>

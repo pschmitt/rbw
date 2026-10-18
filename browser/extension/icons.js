@@ -40,6 +40,20 @@ function icon(name) {
     svg.append(r, t);
     return svg;
   }
+  if (name === 'discover') {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('class', 'svg-icon brand-icon');
+    const rect = document.createElementNS(svg.namespaceURI, 'rect');
+    rect.setAttribute('x', '2'); rect.setAttribute('y', '4'); rect.setAttribute('width', '20'); rect.setAttribute('height', '16'); rect.setAttribute('rx', '3'); rect.setAttribute('fill', '#ffffff');
+    const text = document.createElementNS(svg.namespaceURI, 'text');
+    text.setAttribute('x', '11.5'); text.setAttribute('y', '14.2'); text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('font-family', 'system-ui,-apple-system,sans-serif'); text.setAttribute('font-weight', '900');
+    text.setAttribute('font-size', '5.5'); text.setAttribute('fill', '#202020'); text.textContent = 'DISC';
+    const arc = document.createElementNS(svg.namespaceURI, 'path');
+    arc.setAttribute('d', 'M14.5 15.7a4.2 4.2 0 0 0 6-3.7'); arc.setAttribute('fill', 'none'); arc.setAttribute('stroke', '#f58220'); arc.setAttribute('stroke-width', '2.1');
+    svg.append(rect, text, arc);
+    return svg;
+  }
   const paths = {
     vault: ['rect:3,3,18,18,2', 'circle:12,12,5', 'M12 7v3m5 2h-3m-2 5v-3m-5-2h3'],
     key: ['circle:8,15,5', 'm11.5 11.5 8-8L22 6l-2 2-2-2-2 2 2 2-3 3'],

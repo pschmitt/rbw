@@ -25,11 +25,12 @@ const secret = name => ["password", "totp", "code", "number", "ssn", "license_nu
 let sendId = null;
 let totpTimer;
 function stopTotp() { clearTimeout(totpTimer); }
+const initialSearch = new URLSearchParams(location.search).get("search");
 let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
 let loadingRequests = 0, loadingTimer, notificationTimer, stateTimer, ready = false;
 const filterIds = ["query", "kind", "folder", "collection", "view"];
 function remember() {
-  if (!ready || !unlocked || approvalId || ["approval", "locked"].includes(currentPage)) return;
+  if (!ready || !unlocked || approvalId || initialSearch || ["approval", "locked", "diagnostic"].includes(currentPage)) return;
   const page = currentPage === "editor" ? (currentItem ? "detail" : "vault") : currentPage === "send-editor" ? "send" : currentPage;
   const state = { page, item: currentItem, expanded: !$("filters").hidden, scroll: document.querySelector("main").scrollTop,
     filters: Object.fromEntries(filterIds.map(id => [id, $(id).value])) };
@@ -58,7 +59,11 @@ async function request(action, values = {}) {
   if (busy) loading(true);
   try {
     const response = await api.runtime.sendMessage({ action, account: $("account").value, ...values });
-    if (response?.error) throw new Error(response.error);
+    if (response?.error) {
+      const error = new Error(response.error);
+      if (response.diagnostic) error.diagnostic = response.diagnostic;
+      throw error;
+    }
     if (!response) throw new Error("Extension background unavailable.");
     return response.result;
   } finally { if (busy) loading(false); }
@@ -74,12 +79,57 @@ function message(text, error = false) {
 }
 $("dismiss-message").onclick = () => message("");
 async function attempt(fn) { try { await fn(); } catch (error) {
+  if (error.diagnostic) { showDiagnostic(error.diagnostic, error.message); return; }
   if (error.message.startsWith("Browser access denied.")) {
     unlocked = false; clearVault(); show("locked");
     $("unlock-panel").hidden = true; $("locked").hidden = true;
   }
   message(error.message, true);
 } }
+function showDiagnostic(diagnostic, summary) {
+  const trace = {
+    ...diagnostic,
+    summary,
+    extension: {
+      id: api.runtime.id,
+      version: api.runtime.getManifest()?.version || "unknown",
+    },
+    browser: navigator.userAgent,
+    platform: navigator.platform,
+  };
+  $("diagnostic-summary").textContent = summary;
+  $("diagnostic-trace").textContent = JSON.stringify(trace, null, 2);
+  $("diagnostic-copy-status").textContent = "";
+  show("diagnostic");
+}
+$("diagnostic-copy").onclick = () => {
+  const trace = $("diagnostic-trace").textContent;
+  const field = element("textarea");
+  field.value = trace; field.setAttribute("readonly", "");
+  field.style.position = "fixed"; field.style.opacity = "0";
+  document.body.append(field); field.select();
+  const copied = document.execCommand("copy"); field.remove();
+  $("diagnostic-copy-status").textContent = copied ? "Diagnostic trace copied." : "Copy failed. Select the trace above and copy it manually.";
+};
+$("diagnostic-retry").onclick = () => window.location.reload();
+const passkeyProgressLabels = {
+  before: "Syncing vault before signing…",
+  signing: "Signing with your passkey…",
+  after: "Syncing the updated vault…",
+};
+function updatePasskeyProgress(step, retry = false) {
+  if (!passkeyProgressLabels[step] || !$("approval-progress-steps")) return;
+  const order = ["before", "signing", "after"];
+  const active = order.indexOf(step);
+  for (const [index, name] of order.entries()) {
+    const row = $("approval-progress-steps").querySelector(`[data-step="${name}"]`);
+    row.dataset.state = index < active ? "done" : index === active ? "active" : "pending";
+  }
+  $("approval-progress-text").textContent = retry ? `Retrying: ${passkeyProgressLabels[step]}` : passkeyProgressLabels[step];
+}
+api.runtime.onMessage.addListener(message => {
+  if (message?.action === "passkey_progress" && message.request === approvalId) updatePasskeyProgress(message.step, message.retry);
+});
 function element(tag, text, cls) { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; }
 function button(label, action, cls) { const el = element("button", label, cls); el.type = "button"; el.onclick = () => attempt(async () => { el.disabled = true; try { await action(); } finally { el.disabled = false; } }); return el; }
 function actionButton(label, name, action, cls) {
@@ -105,14 +155,14 @@ function show(page) {
   stopTotp();
   remember();
   currentPage = page;
-  const subpage = ["detail", "editor", "send-editor", "settings"].includes(page);
+  const subpage = ["detail", "editor", "send-editor", "settings", "diagnostic"].includes(page);
   $("back").hidden = !subpage;
   $("account-toggle").classList.toggle("is-subpage", subpage);
   $("account-toggle").setAttribute("aria-label", subpage ? "Back" : "Account menu");
   $("account-toggle").title = `${subpage ? "Back" : "Account menu"} · Double-click to open in a window`;
   $("unlock-panel").hidden = unlocked || !["locked", "approval"].includes(page);
-  for (const id of ["vault", "generator", "send", "send-editor", "health", "settings", "detail", "editor", "approval", "locked"]) $(id).hidden = id !== page;
-  $("title").textContent = ({ vault: "Vault", generator: "Generator", health: "Vault health", settings: "Settings", send: "Send", "send-editor": "Edit Send", detail: "Item", editor: currentItem ? "Edit item" : "New item", approval: "Passkey request", locked: "Vault" })[page];
+  for (const id of ["vault", "generator", "send", "send-editor", "health", "settings", "detail", "editor", "approval", "locked", "diagnostic"]) $(id).hidden = id !== page;
+  $("title").textContent = ({ vault: "Vault", generator: "Generator", health: "Vault health", settings: "Settings", send: "Send", "send-editor": "Edit Send", detail: "Item", editor: currentItem ? "Edit item" : "New item", approval: "Passkey request", locked: "Vault", diagnostic: "Connection problem" })[page];
   $("add").hidden = !["vault", "send"].includes(page) || !unlocked;
   $("add").classList.remove("collapsed");
   $("open-sidebar").hidden = subpage || document.documentElement.dataset.surface === "window";
@@ -122,7 +172,7 @@ function show(page) {
   $("edit-header-actions").hidden = page !== "editor";
   $("send-header-actions").hidden = page !== "send-editor";
   if ($("title-menu").open) $("title-menu").open = false;
-  const tab = ["detail", "editor", "approval", "locked"].includes(page) ? "vault" : page === "send-editor" ? "send" : page;
+  const tab = ["detail", "editor", "approval", "locked", "diagnostic"].includes(page) ? "vault" : page === "send-editor" ? "send" : page;
   document.querySelectorAll("#title-dropdown button").forEach(el => {
     const selected = el.dataset.tab === tab; el.classList.toggle("selected", selected);
     if (selected) el.setAttribute("aria-current", "page"); else el.removeAttribute("aria-current");
@@ -247,10 +297,12 @@ function itemRow(item) {
   const title = element("div", null, "item-title");
   if (item.favorite) { const star = icon("star"); star.classList.add("favorite-icon"); title.append(star); }
   title.append(element("strong", item.name)); main.append(title, element("small", item.username || labels[item.type])); row.append(main);
+  const autofillExcluded = Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(item.id);
+  if (autofillExcluded) title.append(element("small", "Autofill off", "item-autofill-disabled"));
   const actions = element("div", null, "item-actions");
   if (item.deleted) actions.append(actionButton("Restore", "archive", async () => { await request("mutate", { item: item.id, mutation: "restore" }); await search(); }));
   else {
-    if (item.matched || ["card", "identity"].includes(item.type)) { const fill = actionButton("Fill", "fill", async () => { const n = await request("fill", { item: item.id, type: item.type }); message(`Filled ${n} fields. Submit the form when ready.`); }); fill.title = "Fill"; fill.setAttribute("aria-label", `Fill ${item.name}`); actions.append(fill); }
+    if (!autofillExcluded && (item.matched || ["card", "identity"].includes(item.type))) { const fill = actionButton("Fill", "fill", async () => { const n = await request("fill", { item: item.id, type: item.type }); message(`Filled ${n} fields. Submit the form when ready.`); }); fill.title = "Fill"; fill.setAttribute("aria-label", `Fill ${item.name}`); actions.append(fill); }
     const field = item.type === "login" ? "password" : item.type === "card" ? "number" : item.type === "identity" ? "email" : item.type === "ssh_key" ? "public_key" : "notes";
     const copy = actionButton("Copy", "copy", () => copyField(item.id, field, true)); copy.title = "Copy"; copy.setAttribute("aria-label", `Copy ${field}`); actions.append(copy);
     const menu = element("details", null, "menu"); const summary = element("summary"); summary.append(icon("more")); summary.setAttribute("aria-label", `Actions for ${item.name}`); menu.append(summary);
@@ -417,6 +469,20 @@ async function openDetail(item) {
   currentItem = item; currentDetail = detail; show("detail");
   const content = $("detail-content"); content.replaceChildren(element("h2", detail.cipher.name));
   const data = detail.cipher.data;
+  if (["login", "card", "identity"].includes(data.type)) {
+    const label = element("label", null, "item-autofill-setting");
+    const checkbox = element("input"); checkbox.type = "checkbox"; checkbox.checked = Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(item);
+    checkbox.onchange = async () => {
+      const excluded = new Set(Array.isArray(preference.autofillExcludedItems) ? preference.autofillExcludedItems : []);
+      if (checkbox.checked) excluded.add(item); else excluded.delete(item);
+      try {
+        preference = await request("set_preferences", { preferences: { autofillExcludedItems: [...excluded] } });
+        message(checkbox.checked ? "This item is excluded from autofill." : "This item can autofill again.");
+        await search();
+      } catch (error) { checkbox.checked = !checkbox.checked; message(error.message, true); }
+    };
+    label.append(checkbox, document.createTextNode(" Do not autofill this item")); content.append(label);
+  }
   for (const [field, value] of Object.entries(data)) {
     if (["type", "uris", "fido2_credentials", "totp"].includes(field) || value == null || value === "") continue;
     content.append(detailField(field === "totp" ? "Authenticator key" : pretty(field), String(value), item, field, secret(field)));
@@ -587,6 +653,9 @@ async function showApproval(id) {
     $("approval-verification").hidden = true;
     $("approval-progress-name").textContent = selectedChoiceEl?.dataset.name || pending.user || "New login";
     $("approval-progress-username").textContent = selectedChoiceEl?.dataset.username || pending.origin;
+    $("approval-progress-steps").hidden = pending.method !== "get";
+    for (const row of $("approval-progress-steps").querySelectorAll("[data-step]")) row.dataset.state = "pending";
+    if (pending.method === "get") updatePasskeyProgress("before");
     $("approval-progress-icon").replaceChildren(icon("key"));
     if (selectedChoiceEl?.dataset.iconOrigin) {
       const origin = selectedChoiceEl.dataset.iconOrigin;
@@ -613,6 +682,7 @@ async function showApproval(id) {
     $("use-device").hidden = false;
     $("cancel-passkey").hidden = false;
     $("approval-items").classList.remove("is-busy");
+    $("approval-progress-steps").hidden = true;
     for (const btn of $("approval-items").querySelectorAll(".passkey-choice")) {
       btn.classList.remove("is-selected");
     }
@@ -833,8 +903,9 @@ $("open-options").onclick = event => {
 };
 $("settings-open-options").onclick = () => api.runtime.openOptionsPage();
 function applyTheme(theme) { document.documentElement.dataset.theme = theme === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme; }
-for (const id of ["setting-autofill", "setting-crabify", "setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
-  preference = await request("set_preferences", { preferences: { autoFill: $("setting-autofill").checked, crabify: $("setting-crabify").checked, passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
+for (const id of ["setting-autofill", "setting-animations", "setting-animation-speed", "setting-card-code", "setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
+  $("setting-animation-speed").disabled = $("setting-animations").value === "off";
+  preference = await request("set_preferences", { preferences: { autoFill: $("setting-autofill").checked, animations: $("setting-animations").value, animationSpeed: $("setting-animation-speed").value, cardSecurityCode: $("setting-card-code").value, passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
 });
 setInterval(() => attempt(async () => {
   if (!approvalId) {
@@ -851,12 +922,20 @@ attempt(async () => {
     const initial = await request("bootstrap");
     preference = initial.preferences; applyTheme(preference.theme); applyTabs();
     $("setting-autofill").checked = preference.autoFill !== false;
-    $("setting-crabify").checked = preference.crabify === true;
+    $("setting-animations").value = preference.animations;
+    $("setting-animation-speed").value = preference.animationSpeed; $("setting-animation-speed").disabled = preference.animations === "off";
+    $("setting-card-code").value = ["fill", "clipboard"].includes(preference.cardSecurityCode) ? preference.cardSecurityCode : "off";
     $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
     if (!approvalId) approvalId = await activeApproval();
     const status = initial.status;
     renderAccounts(status.accounts || [], status.primary, preference.account);
-    const saved = status.unlocked && !approvalId ? initial.saved : null;
+    const saved = status.unlocked && !approvalId && !initialSearch ? initial.saved : null;
+    if (initialSearch) {
+      $("view").value = "vault";
+      $("kind").value = initialSearch === "cards" ? "card" : initialSearch === "logins" ? "login" : "";
+      $("filters").hidden = false;
+      $("filter-toggle").setAttribute("aria-expanded", "true");
+    }
     if (saved) {
       for (const id of filterIds) {
         const value = saved.filters[id];

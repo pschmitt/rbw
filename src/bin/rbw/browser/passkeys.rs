@@ -171,6 +171,17 @@ pub fn authenticate(
     )
 }
 
+pub fn confirm_counter(
+    item: &str,
+    origin: &str,
+    options: &Value,
+    counter: u32,
+) -> anyhow::Result<Value> {
+    let rp = relying_party(origin, options, false)?;
+    passkey::browser_confirm_counter(item, &rp, counter)?;
+    Ok(json!(true))
+}
+
 pub fn register(
     item: Option<&str>,
     origin: &str,

@@ -134,6 +134,21 @@ fn stored_counter(
 }
 
 fn advance(selected: &Selected, counter: u32) -> anyhow::Result<()> {
+    advance_inner(selected, counter, true)
+}
+
+fn advance_for_browser(
+    selected: &Selected,
+    counter: u32,
+) -> anyhow::Result<()> {
+    advance_inner(selected, counter, false)
+}
+
+fn advance_inner(
+    selected: &Selected,
+    counter: u32,
+    synchronize: bool,
+) -> anyhow::Result<()> {
     let old = stored_counter(&selected.credential)?;
     anyhow::ensure!(
         counter >= old,
@@ -179,7 +194,19 @@ fn advance(selected: &Selected, counter: u32) -> anyhow::Result<()> {
         &entry.history,
         &entry.cipher_write_meta(),
     )?;
-    commands::after_server_write(&mut db, tokens)
+    if synchronize {
+        commands::after_server_write(&mut db, tokens)
+    } else {
+        if let Some(tokens) = tokens {
+            db.access_token = Some(tokens.access_token);
+            if let Some(refresh_token) = tokens.refresh_token {
+                db.refresh_token = Some(refresh_token);
+            }
+            commands::save_db(&db)
+                .map_err(commands::write_committed_error)?;
+        }
+        Ok(())
+    }
 }
 
 /// After a counter write: pull the vault from the server again and check that it
@@ -530,14 +557,30 @@ pub fn browser_assert(
     allow: &[String],
     verified: bool,
 ) -> anyhow::Result<Value> {
-    let mut result = assertion_value(
-        args, rp_id, origin, challenge, allow, verified, true,
-    )?;
-    if let Some(object) = result.as_object_mut() {
-        object.remove("counter");
-    }
-    result["clientExtensionResults"] = json!({});
-    Ok(result)
+    assertion_value(args, rp_id, origin, challenge, allow, verified, true)
+}
+
+pub fn browser_confirm_counter(
+    item: &str,
+    rp_id: &str,
+    expected: u32,
+) -> anyhow::Result<()> {
+    let args = FindArgs {
+        needles: vec![commands::parse_needle(item)?],
+        user: None,
+        folder: None,
+        collection: None,
+        org: None,
+        ignorecase: false,
+        exact: false,
+    };
+    let fresh = select_cached(&args, Some(rp_id))?;
+    let stored = stored_counter(&fresh.credential)?;
+    anyhow::ensure!(
+        stored >= expected,
+        "the synchronized vault does not contain the reserved passkey counter"
+    );
+    Ok(())
 }
 
 fn assertion_value(
@@ -583,7 +626,7 @@ fn assertion_value(
         select(args, rp_id)?
     };
     if preserve_zero && stored_counter(&selected.credential)? > 0 {
-        selected = select(args, rp_id)?;
+        selected = select_cached(args, rp_id)?;
     }
     let c = &selected.credential;
     anyhow::ensure!(
@@ -620,9 +663,15 @@ fn assertion_value(
         next_counter(previous)?
     };
     if reserved > previous {
-        advance(&selected, reserved)?;
+        if preserve_zero {
+            advance_for_browser(&selected, reserved)?;
+        } else {
+            advance(&selected, reserved)?;
+        }
         warn_counter_enabled(previous, reserved);
-        confirm_synced(args, rp_id, &selected, reserved)?;
+        if !preserve_zero {
+            confirm_synced(args, rp_id, &selected, reserved)?;
+        }
     }
     let (client_data, auth_data, signature) = if verified {
         sign_assertion(&key, rp, &origin, challenge, reserved)?

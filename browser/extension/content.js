@@ -38,25 +38,157 @@
 (() => {
   try { if (window.top.location.origin !== location.origin) return; } catch (_) { return; }
   const api = globalThis.browser || chrome;
-  let host, generation = 0, filled = false, movedPosition = null;
+  const autofillGate = globalThis.__rbwAutofillGate || (globalThis.__rbwAutofillGate = { waiting: document.readyState === "loading", pending: false, completed: false });
+  let host, generation = 0, filled = false, dismissed = false, activeFillItem = null, activeFillName = null, lastFilledItem = null, lastFilledName = null, fillBanner = null, movedPosition = null, closeTimer = null, closeCountdownTimer = null, closeProgressFrame = null, closeProgress = null, closeProgressFill = null, closeStopButton = null, cardCloseStopped = false, contextMenuTarget = null;
   const fills = new Set();
+  const itemRows = new Map();
+  const cardBrandIcon = brand => {
+    const value = String(brand || "").toLowerCase().replace(/[^a-z]/g, "");
+    if (value.includes("visa")) return "visa";
+    if (value.includes("mastercard") || value === "mc") return "mastercard";
+    if (value.includes("amex") || value.includes("americanexpress")) return "amex";
+    if (value.includes("discover")) return "discover";
+    return "card";
+  };
   api.runtime.onMessage.addListener((message, sender) => {
-    if (sender.id !== api.runtime.id || message?.action !== "rbw_fill_state") return;
-    close();
-    if (message.active) fills.add(message.token);
-    else { fills.delete(message.token); filled ||= message.filled === true; }
+    if (sender.id !== api.runtime.id) return;
+    if (message?.action === "open_inline_suggestions") {
+      let input = contextMenuTarget || document.activeElement;
+      contextMenuTarget = null;
+      while (input?.shadowRoot?.activeElement) input = input.shadowRoot.activeElement;
+      showInlineSuggestions(input, true);
+      return;
+    }
+    if (message?.action !== "rbw_fill_state") return;
+    if (message.active) {
+      fills.add(message.token);
+      activeFillItem = message.item || null;
+      activeFillName = message.name || activeFillName;
+      lastFilledItem = null;
+      lastFilledName = null;
+    } else {
+      fills.delete(message.token);
+      if (message.filled) { lastFilledItem = message.item || null; lastFilledName = activeFillName; filled = true; }
+      if (!fills.size) { activeFillItem = null; activeFillName = null; }
+    }
+    updateFillHighlight();
   });
   // Only deliberate interaction re-enables suggestions after filling; focus() is trusted too.
   document.addEventListener("pointerdown", event => { if (event.isTrusted && !fills.size) filled = false; }, true);
   document.addEventListener("keydown", event => { if (event.isTrusted && !fills.size && event.key !== "Escape") filled = false; }, true);
-  function close() { ++generation; host?.remove(); host = null; }
-  document.addEventListener("focusin", async event => {
-    const input = event.composedPath()[0];
-    if (filled || fills.size) { close(); return; }
+  function close() { clearTimeout(closeTimer); clearInterval(closeCountdownTimer); if (closeProgressFrame !== null) cancelAnimationFrame(closeProgressFrame); closeTimer = null; closeCountdownTimer = null; closeProgressFrame = null; closeProgress = null; closeProgressFill = null; closeStopButton = null; cardCloseStopped = false; ++generation; host?.remove(); host = null; fillBanner = null; itemRows.clear(); }
+  function dismissSuggestions() { dismissed = true; close(); }
+  function stopCardCloseCountdown(selectedHost) {
+    if (host !== selectedHost || !closeProgress || !closeProgressFill) return;
+    clearTimeout(closeTimer); clearInterval(closeCountdownTimer);
+    closeTimer = null; closeCountdownTimer = null;
+    if (closeProgressFrame !== null) cancelAnimationFrame(closeProgressFrame);
+    closeProgressFrame = null;
+    cardCloseStopped = true;
+    closeProgress.hidden = true;
+    if (closeStopButton) closeStopButton.hidden = true;
+  }
+  function startCardCloseCountdown(selectedHost) {
+    clearTimeout(closeTimer); clearInterval(closeCountdownTimer);
+    if (cardCloseStopped || !closeProgress || !closeProgressFill) return;
+    let remaining = 5;
+    closeProgress.hidden = false;
+    if (closeStopButton) closeStopButton.hidden = false;
+    closeProgress.setAttribute("aria-label", "Card autofill window closes in five seconds");
+    closeProgress.setAttribute("aria-valuenow", String(remaining));
+    if (closeProgressFrame !== null) cancelAnimationFrame(closeProgressFrame);
+    closeProgressFill.style.transition = "none";
+    closeProgressFill.style.transform = "scaleX(1)";
+    void closeProgressFill.getBoundingClientRect();
+    closeProgressFill.style.transition = "transform 5s linear";
+    closeProgressFrame = requestAnimationFrame(() => {
+      closeProgressFrame = null;
+      if (host === selectedHost) closeProgressFill.style.transform = "scaleX(0)";
+    });
+    closeCountdownTimer = setInterval(() => {
+      remaining--;
+      if (remaining > 0) closeProgress.setAttribute("aria-valuenow", String(remaining));
+    }, 1000);
+    closeTimer = setTimeout(() => { if (host === selectedHost) close(); }, 5000);
+  }
+  async function fillItem(item, name, kind) {
+    const selectedHost = host;
+    const response = await api.runtime.sendMessage({ action: "inline_fill", item, name, kind }).catch(() => null);
+    if (kind === "card" && selectedHost && host === selectedHost && !response?.error && Number(response?.result) > 0) {
+      startCardCloseCountdown(selectedHost);
+    }
+  }
+  function updateFillHighlight() {
+    for (const [id, button] of itemRows) {
+      const active = activeFillItem === id;
+      const complete = !active && lastFilledItem === id;
+      button.classList.toggle("is-filling", active);
+      button.classList.toggle("is-filled", complete);
+      let status = button.querySelector(".fill-state");
+      if (active || complete) {
+        if (!status) { status = document.createElement("small"); status.className = "fill-state"; button.querySelector(".text-col")?.append(status); }
+        status.textContent = active ? "Filling…" : "Filled";
+      } else status?.remove();
+    }
+    if (fillBanner) {
+      const name = activeFillName || lastFilledName;
+      fillBanner.hidden = !name;
+      fillBanner.textContent = activeFillName ? `Filling ${name}…` : name ? `Filled ${name}` : "";
+      fillBanner.classList.toggle("is-filling", !!activeFillName);
+    }
+  }
+  document.addEventListener("contextmenu", event => {
+    if (!event.isTrusted) return;
+    const target = event.composedPath()[0];
+    if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable)) contextMenuTarget = target;
+  }, true);
+  async function openCardSearch(box, titleText, searchInput) {
+    titleText.textContent = "rbw · Search all cards";
+    itemRows.clear();
+    for (const child of [...box.children].slice(1)) child.remove();
+    const controls = document.createElement("div"); controls.className = "card-search";
+    const query = searchInput || document.createElement("input"); query.type = "search"; query.placeholder = "Search all cards"; query.setAttribute("aria-label", "Search all cards");
+    const count = document.createElement("small"); count.className = "card-search-count"; count.textContent = "Loading cards…";
+    const results = document.createElement("div"); results.className = "card-search-results";
+    fillBanner = document.createElement("div"); fillBanner.className = "fill-banner"; fillBanner.hidden = true;
+    controls.append(query); box.append(controls, fillBanner, count, results);
+    let sequence = 0, timer;
+    const search = async () => {
+      const current = ++sequence;
+      count.textContent = "Searching…";
+      const response = await api.runtime.sendMessage({ action: "inline_search_cards", query: query.value }).catch(() => null);
+      if (current !== sequence || !results.isConnected) return;
+      const items = response?.result || [];
+      results.replaceChildren();
+      count.textContent = response?.total > items.length ? `Showing ${items.length} of ${response.total} cards` : `${items.length} ${items.length === 1 ? "card" : "cards"}`;
+      if (!items.length) { const empty = document.createElement("p"); empty.className = "inline-empty"; empty.textContent = "No matching cards."; results.append(empty); return; }
+      for (const item of items) {
+        const button = document.createElement("button"); button.type = "button"; button.className = "item-btn"; itemRows.set(item.id, button);
+        const iconCol = document.createElement("span"); iconCol.className = "icon-col"; iconCol.append(icon(cardBrandIcon(item.brand)));
+        const textCol = document.createElement("div"); textCol.className = "text-col";
+        const name = document.createElement("strong"); name.textContent = item.name; textCol.append(name);
+        if (item.brand) { const brand = document.createElement("small"); brand.textContent = item.brand; textCol.append(brand); }
+        button.append(iconCol, textCol);
+        button.addEventListener("pointerdown", event => { if (event.isTrusted) event.preventDefault(); });
+        button.addEventListener("click", event => { if (event.isTrusted) fillItem(item.id, item.name, "card"); });
+        results.append(button);
+      }
+      updateFillHighlight();
+    };
+    query.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 180); });
+    await search();
+  }
+  async function showInlineSuggestions(input, explicit = false) {
+    if (host && (input === host || host.contains(input))) return;
+    if ((!explicit && (dismissed || filled || autofillGate.waiting || autofillGate.pending || autofillGate.completed)) || fills.size) { close(); return; }
     const autocomplete = (input?.getAttribute?.("autocomplete") || "").toLowerCase().split(/\s+/);
     const cardField = ["cc-name", "cc-number", "cc-exp", "cc-exp-month", "cc-exp-year", "cc-csc", "cc-type"].some(value => autocomplete.includes(value));
     const loginField = input instanceof HTMLInputElement && ["password", "email", "text"].includes(input.type) && (input.type !== "text" || autocomplete.includes("username"));
-    if (!(input instanceof HTMLInputElement || input instanceof HTMLSelectElement) || !event.isTrusted || !isSecureContext || (!cardField && !loginField)) { if (!host?.contains(input)) close(); return; }
+    const editableTarget = input instanceof HTMLInputElement || input instanceof HTMLSelectElement || (explicit && (input instanceof HTMLTextAreaElement || (input instanceof HTMLElement && input.isContentEditable)));
+    if (!editableTarget || !isSecureContext || (!cardField && !loginField && !explicit)) { if (!host?.contains(input)) close(); return; }
+    const defaultOption = input instanceof HTMLSelectElement ? [...input.options].find(option => option.defaultSelected) || input.options[0] : null;
+    const alreadyFilled = input instanceof HTMLSelectElement ? input.value !== (defaultOption?.value || "") : String(input.value || "").trim() !== "";
+    if (alreadyFilled && !explicit) { close(); return; }
     const kind = cardField ? "card" : "login";
     close(); const current = generation;
     const result = await api.runtime.sendMessage({ action: "inline_choices", kind }).catch(() => null);
@@ -65,7 +197,9 @@
     host = document.createElement("div");
     const shadow = host.attachShadow({ mode: "closed" });
     const style = document.createElement("style");
-    style.textContent = ":host{all:initial}.box{box-sizing:border-box;font:13px/1.4 system-ui,sans-serif;color:#efefef;background:#282828;border:1px solid #555555;border-radius:10px;box-shadow:0 6px 20px #0006;overflow:hidden;max-width:380px}.header{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:#202020;border-bottom:1px solid #494949}.drag-handle{display:flex;align-items:center;gap:7px;flex:1;min-width:0;border:0;padding:0;background:transparent;text-align:left;cursor:grab;touch-action:none;user-select:none}.drag-handle:active{cursor:grabbing}.drag-handle:focus-visible{outline:1px solid #d0d0d0;outline-offset:3px;border-radius:3px}.grip{width:12px;height:16px;fill:#adadad;flex-shrink:0}.title{display:flex;align-items:center;gap:6px;color:#adadad;font-size:11px;font-weight:600;letter-spacing:0.3px;text-transform:uppercase}.app-icon{width:14px;height:14px;object-fit:contain;flex-shrink:0;border-radius:2px}.dismiss-btn{display:flex;align-items:center;justify-content:center;border:0;background:transparent;color:#adadad;padding:2px 4px;border-radius:4px;cursor:pointer;line-height:1}.dismiss-btn:hover,.dismiss-btn:focus-visible{color:#efefef;background:#383838}.dismiss-btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}.item-btn{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;border-top:1px solid #383838;padding:8px 12px;background:#282828;color:#efefef;font:13px system-ui,sans-serif;cursor:pointer}.item-btn:first-of-type{border-top:0}.item-btn:hover,.item-btn:focus-visible{background:#383838;outline:none}.icon-col{width:20px;height:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:3px}.icon-col img{width:18px;height:18px;border-radius:3px;object-fit:contain}.icon-col svg{width:18px;height:18px;stroke:#d0d0d0;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.text-col{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}strong{font-weight:500;font-size:13px}small{color:#adadad;font-size:11px;margin-top:1px}";
+    style.textContent = ":host{all:initial}.box{box-sizing:border-box;font:13px/1.4 system-ui,sans-serif;color:#efefef;background:#282828;border:1px solid #555555;border-radius:10px;box-shadow:0 6px 20px #0006;overflow:hidden;max-width:380px}.header{position:relative;display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:#202020;border-bottom:1px solid #494949}.drag-handle{display:flex;align-items:center;gap:7px;flex:1;min-width:0;border:0;padding:0;background:transparent;text-align:left;cursor:grab;touch-action:none;user-select:none}.drag-handle:active{cursor:grabbing}.drag-handle:focus-visible{outline:1px solid #d0d0d0;outline-offset:3px;border-radius:3px}.grip{width:12px;height:16px;fill:#adadad;flex-shrink:0}.title{display:flex;align-items:center;gap:6px;color:#adadad;font-size:11px;font-weight:600;letter-spacing:0.3px;text-transform:uppercase}.app-icon{width:14px;height:14px;object-fit:contain;flex-shrink:0;border-radius:2px}.autoclose-progress{position:absolute;left:0;right:0;bottom:0;height:3px;overflow:hidden;background:#3b3b3b;pointer-events:none}.autoclose-progress-fill{display:block;width:100%;height:100%;background:#8ab4f8;transform:scaleX(1);transform-origin:left center}.timer-stop-btn{border:0;border-radius:4px;padding:3px 6px;background:transparent;color:#adadad;font:11px system-ui,sans-serif;cursor:pointer}.timer-stop-btn:hover,.timer-stop-btn:focus-visible{background:#383838;color:#efefef;outline:1px solid #777}.timer-stop-btn[hidden],.autoclose-progress[hidden]{display:none}.dismiss-btn{display:flex;align-items:center;justify-content:center;border:0;background:transparent;color:#adadad;padding:2px 4px;border-radius:4px;cursor:pointer;line-height:1}.dismiss-btn:hover,.dismiss-btn:focus-visible{color:#efefef;background:#383838}.dismiss-btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}.item-btn{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;border-top:1px solid #383838;padding:8px 12px;background:#282828;color:#efefef;font:13px system-ui,sans-serif;cursor:pointer}.item-btn:first-of-type{border-top:0}.item-btn:hover,.item-btn:focus-visible{background:#383838;outline:none}.icon-col{width:20px;height:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:3px}.icon-col img{width:18px;height:18px;border-radius:3px;object-fit:contain}.icon-col svg{width:18px;height:18px;stroke:#d0d0d0;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.text-col{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}strong{font-weight:500;font-size:13px}small{color:#adadad;font-size:11px;margin-top:1px}";
+    style.textContent += ".icon-col svg.brand-icon{width:24px;height:24px;stroke:none}.item-btn.is-filling{background:#383838;box-shadow:inset 3px 0 #8ab4f8,inset 0 0 0 1px #8ab4f8}.item-btn.is-filled{background:#303a32;box-shadow:inset 3px 0 #81c995}.fill-state{color:#a8c7fa!important;font-weight:600}.item-btn.is-filled .fill-state{color:#81c995!important}.fill-banner{padding:7px 12px;border-bottom:1px solid #494949;background:#26344a;color:#d3e3fd;font-size:12px;font-weight:600}.fill-banner.is-filling:before{content:'';display:inline-block;width:9px;height:9px;margin-right:7px;border:2px solid #7895bd;border-top-color:#d3e3fd;border-radius:50%;vertical-align:-2px;animation:rbw-spin .8s linear infinite}@keyframes rbw-spin{to{transform:rotate(360deg)}}";
+    style.textContent += ".more{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border-top:1px solid #494949;color:#adadad;font:11px system-ui,sans-serif}.more button{display:flex;align-items:center;gap:5px;border:1px solid #555;border-radius:6px;padding:5px 7px;background:#303030;color:#efefef;font:11px system-ui,sans-serif;cursor:pointer}.more button:hover,.more button:focus-visible{background:#383838;outline:1px solid #d0d0d0}.more button .svg-icon{width:14px;height:14px;stroke:currentColor;fill:none}.card-search{padding:8px 10px}.card-search input{box-sizing:border-box;width:100%;border:1px solid #555;border-radius:6px;padding:8px 10px;background:#202020;color:#efefef;font:13px system-ui,sans-serif;outline:none}.card-search input:focus{border-color:#8ab4f8;box-shadow:0 0 0 1px #8ab4f8}.card-search-count{padding:0 12px 6px;color:#adadad}.card-search-results{max-height:45vh;overflow:auto}.inline-empty{margin:0;padding:14px 12px;color:#adadad}";
     shadow.append(style);
     const box = document.createElement("div"); box.className = "box";
     const header = document.createElement("div"); header.className = "header";
@@ -76,27 +210,49 @@
     }
     const titleText = document.createElement("span"); titleText.textContent = kind === "card" ? "rbw · Payment cards" : "rbw · Autofill";
     title.append(titleText);
+    const progress = document.createElement("div"); progress.className = "autoclose-progress"; progress.hidden = true; progress.setAttribute("role", "progressbar"); progress.setAttribute("aria-label", "Card autofill window closes in five seconds"); progress.setAttribute("aria-valuemin", "0"); progress.setAttribute("aria-valuemax", "5"); progress.setAttribute("aria-valuenow", "5");
+    const progressFill = document.createElement("span"); progressFill.className = "autoclose-progress-fill"; progress.append(progressFill);
+    if (kind === "card") { closeProgress = progress; closeProgressFill = progressFill; }
+    const keepOpen = document.createElement("button"); keepOpen.className = "timer-stop-btn"; keepOpen.type = "button"; keepOpen.textContent = "Keep open"; keepOpen.title = "Stop the auto-close timer"; keepOpen.setAttribute("aria-label", "Keep this window open"); keepOpen.hidden = true;
+    keepOpen.addEventListener("click", event => { if (event.isTrusted) stopCardCloseCountdown(host); });
+    if (kind === "card") closeStopButton = keepOpen;
     const dismiss = document.createElement("button"); dismiss.className = "dismiss-btn"; dismiss.type = "button"; dismiss.title = "Dismiss"; dismiss.setAttribute("aria-label", "Dismiss");
     const closeIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg"); closeIcon.setAttribute("viewBox", "0 0 24 24"); closeIcon.setAttribute("aria-hidden", "true");
     const closePath = document.createElementNS(closeIcon.namespaceURI, "path"); closePath.setAttribute("d", "M18 6 6 18M6 6l12 12"); closeIcon.append(closePath); dismiss.append(closeIcon);
-    dismiss.addEventListener("click", event => { if (event.isTrusted) close(); });
+    dismiss.addEventListener("click", event => { if (event.isTrusted) dismissSuggestions(); });
     const handle = document.createElement("button"); handle.type = "button"; handle.className = "drag-handle";
     handle.setAttribute("aria-label", "Move autofill suggestions"); handle.title = "Drag to move · Arrow keys to adjust · Home to reset";
     const grip = document.createElementNS(closeIcon.namespaceURI, "svg"); grip.setAttribute("viewBox", "0 0 12 16"); grip.setAttribute("class", "grip"); grip.setAttribute("aria-hidden", "true");
     for (const x of [3, 9]) for (const y of [3, 8, 13]) { const dot = document.createElementNS(closeIcon.namespaceURI, "circle"); dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("r", "1"); grip.append(dot); }
-    handle.append(grip, title); header.append(handle, dismiss); box.append(header);
+    handle.append(grip, title); header.append(handle, keepOpen, dismiss, progress); box.append(header);
+    fillBanner = document.createElement("div"); fillBanner.className = "fill-banner"; fillBanner.hidden = true; box.append(fillBanner);
 
     const iconTargets = new Map();
+    const suggestions = document.createElement("div");
+    let cardSearchInput = null, searchMode = false;
+    if (kind === "card") {
+      const controls = document.createElement("div"); controls.className = "card-search";
+      cardSearchInput = document.createElement("input"); cardSearchInput.type = "search"; cardSearchInput.placeholder = "Search all cards"; cardSearchInput.setAttribute("aria-label", "Search all cards");
+      cardSearchInput.addEventListener("input", () => {
+        if (searchMode || !cardSearchInput.value.trim()) return;
+        searchMode = true;
+        openCardSearch(box, titleText, cardSearchInput);
+      });
+      controls.append(cardSearchInput); box.append(controls);
+    }
     for (const item of result.result) {
       const button = document.createElement("button"); button.type = "button"; button.className = "item-btn";
+      itemRows.set(item.id, button);
       const iconCol = document.createElement("span"); iconCol.className = "icon-col";
       if (item.favicon) {
         const img = document.createElement("img"); img.src = item.favicon; img.alt = "";
         iconCol.append(img);
+      } else if (kind === "card") {
+        iconCol.append(icon(cardBrandIcon(item.brand)));
       } else {
         const itemIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg"); itemIcon.setAttribute("viewBox", "0 0 24 24"); itemIcon.setAttribute("aria-hidden", "true");
         const itemPath = document.createElementNS(itemIcon.namespaceURI, "path");
-        itemPath.setAttribute("d", kind === "card" ? "M3 6.5A2.5 2.5 0 0 1 5.5 4h13A2.5 2.5 0 0 1 21 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5zM3 9h18M7 15h4" : "M13 15a5 5 0 1 1-1.5-3.5l8-8L22 6l-2 2-2-2-2 2 2 2-3 3"); itemIcon.append(itemPath); iconCol.append(itemIcon);
+        itemPath.setAttribute("d", "M13 15a5 5 0 1 1-1.5-3.5l8-8L22 6l-2 2-2-2-2 2 2 2-3 3"); itemIcon.append(itemPath); iconCol.append(itemIcon);
       }
       iconTargets.set(item.id, iconCol);
       const textCol = document.createElement("div"); textCol.className = "text-col";
@@ -108,8 +264,15 @@
       }
       button.append(iconCol, textCol);
       button.addEventListener("pointerdown", event => { if (event.isTrusted) event.preventDefault(); });
-      button.addEventListener("click", async event => { if (!event.isTrusted) return; close(); await api.runtime.sendMessage({ action: "inline_fill", item: item.id, kind }).catch(() => {}); });
-      box.append(button);
+      button.addEventListener("click", event => { if (event.isTrusted) fillItem(item.id, item.name, kind); });
+      suggestions.append(button);
+    }
+    box.append(suggestions);
+    updateFillHighlight();
+    if (kind === "card" && Number(result.total) > result.result.length) {
+      const more = document.createElement("div"); more.className = "more";
+      const count = document.createElement("span"); count.textContent = `Showing ${result.result.length} of ${result.total} cards · Search to find another`;
+      more.append(count); box.append(more);
     }
     shadow.append(box);
     const rect = input.getBoundingClientRect();
@@ -152,7 +315,8 @@
         image.onload = () => { if (generation === current && host) target.replaceChildren(image); };
       }
     }).catch(() => {});
-  });
+  }
+  document.addEventListener("focusin", event => showInlineSuggestions(event.composedPath()[0]));
   document.addEventListener("keydown", event => { if (event.key === "Escape") close(); });
   window.addEventListener("scroll", close, true); window.addEventListener("resize", close);
 })();
@@ -235,19 +399,34 @@
 })();
 
 if (window === window.top) {
+  const autofillGate = globalThis.__rbwAutofillGate || (globalThis.__rbwAutofillGate = { waiting: false, pending: false, completed: false });
+  document.addEventListener("keydown", event => {
+    const modifier = /Mac|iPhone|iPad/.test(navigator.platform) ? event.metaKey : event.ctrlKey;
+    if (!event.isTrusted || event.repeat || !modifier || !event.shiftKey || event.altKey || event.key.toLowerCase() !== "l") return;
+    event.preventDefault();
+    (globalThis.browser || chrome).runtime.sendMessage({ action: "keyboard_fill_shortcut" }).catch(() => {});
+  }, true);
   const loaded = () => {
+    autofillGate.waiting = false;
     let observer, timer, expiry;
     const eligible = () => document.querySelector('input[type="password"]:not([autocomplete="new-password"]),input[autocomplete="username"]');
     const check = () => {
       if (!eligible()) return false;
       observer?.disconnect(); clearTimeout(timer); clearTimeout(expiry);
-      (globalThis.browser || chrome).runtime.sendMessage({ action: "autofill_load" }).catch(() => {});
+      autofillGate.pending = true;
+      (globalThis.browser || chrome).runtime.sendMessage({ action: "autofill_load" }).then(response => {
+        autofillGate.pending = false;
+        autofillGate.completed = Number(response?.result) > 0;
+      }).catch(() => { autofillGate.pending = false; });
       return true;
     };
     if (check()) return;
     // Briefly cover asynchronously rendered sign-in forms without keeping a
     // permanent observer or querying the vault on ordinary content/search pages.
-    observer = new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(check, 250); });
+    observer = new MutationObserver(() => {
+      if (eligible()) { check(); return; }
+      clearTimeout(timer); timer = setTimeout(check, 250);
+    });
     observer.observe(document.documentElement, { childList: true, subtree: true });
     expiry = setTimeout(() => { observer.disconnect(); clearTimeout(timer); }, 10000);
   };

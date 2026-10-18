@@ -65,6 +65,12 @@ enum Operation {
         origin: String,
         options: Value,
     },
+    PasskeyVerify {
+        item: String,
+        origin: String,
+        options: Value,
+        counter: u32,
+    },
     PasskeyCreate {
         password: Option<String>,
         item: Option<String>,
@@ -732,6 +738,14 @@ fn dispatch(
                     &origin,
                     &options,
                     password.as_deref(),
+                ),
+                Operation::PasskeyVerify {
+                    item,
+                    origin,
+                    options,
+                    counter,
+                } => passkeys::confirm_counter(
+                    &item, &origin, &options, counter,
                 ),
                 Operation::PasskeyCreate {
                     password,

@@ -5,11 +5,24 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.31
+## Features in 0.2.32
 
-- Passkey sign-in shows the selected account and a clear progress state.
+- Passkey sign-in shows the selected account and tracks the initial vault sync,
+  signing and final counter sync. A failed sync is retried once.
 - Login save and update prompts appear inline in the page.
-- Credit cards can be selected and filled from matching payment forms.
+- Credit cards can be selected and filled from matching payment forms. Card
+  brand icons appear in inline suggestions and type is filled when a recognized
+  field is present. CVV/CVC handling is configurable: off by default, fill the
+  field, or copy to the clipboard. When off, the notice explains that the code
+  was intentionally left blank.
+
+- Context-menu autofill opens the inline chooser at the field. Login and card
+  choices support search, and the selected item is highlighted while filling.
+- Autofill supports configurable typing and notification animations, with an
+  adjustable speed. The card chooser shows its five-second close progress and
+  a Keep open control.
+- Autofill can be blocked by domain or URL path, or disabled for individual
+  login, card and identity items.
 
 ## Features in 0.2.30
 - Keep the app icon fixed when the back chevron appears in the popup header.
@@ -22,7 +35,7 @@ is no browser vault cache, HTTP listener or separate browser agent.
 
 - Fixed FAB button clipping and scroll behavior: clamped popup height to 600px and stabilized its compact transition while scrolling.
 - Kept the app icon aligned when the Back chevron appears in the header.
-- "Crabify" autofill animation: optional playful crab crawling across form fields during autofill, toggled via settings.
+- Autofill animations: off, quick typing with field highlights, or Plaid mode with a crab crawling across form fields; speed can be set to slow, normal, or fast when animations are enabled.
 - AMO compliance: eliminated unsafe `innerHTML` assignments in vendor dependencies for a clean automated AMO linter validation.
 - Animated form element autofill: inputs dynamically highlight with a staggered glowing pulse and subtle scale when autofilled, and smoothly pulse on Undo.
 - Cleaner popup header: removed redundant header loading spinner in favor of dedicated in-section progress feedback.

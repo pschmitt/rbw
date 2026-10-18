@@ -27,13 +27,13 @@ for target in ("firefox", "chromium"):
     manifest = {
         "manifest_version": 3,
         "name": "rbw",
-        "version": "0.2.31",
+        "version": "0.2.32",
         "description": "Use your existing rbw-agent vault in the browser.",
         "permissions": ["nativeMessaging", "activeTab", "scripting", "storage", "contextMenus", "webNavigation"],
         "host_permissions": ["https://*/*", "http://*/*"],
         "content_scripts": [
             {"matches": ["https://*/*", "http://localhost/*"], "js": ["webauthn.js"], "run_at": "document_start", "all_frames": True, "world": "MAIN"},
-            {"matches": ["https://*/*", "http://localhost/*"], "js": ["content.js"], "run_at": "document_start", "all_frames": True},
+            {"matches": ["https://*/*", "http://localhost/*"], "js": ["icons.js", "content.js"], "run_at": "document_start", "all_frames": True},
         ],
         "options_ui": {"page": "options.html", "open_in_tab": True},
         "commands": {
