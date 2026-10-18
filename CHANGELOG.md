@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.22.2] - 2026-10-18
+
 ### Added
 
 * `defaultUriMatch: base_domain` (also selectable in the browser add-on
