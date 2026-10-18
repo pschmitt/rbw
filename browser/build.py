@@ -27,7 +27,7 @@ for target in ("firefox", "chromium"):
     manifest = {
         "manifest_version": 3,
         "name": "rbw",
-        "version": "0.2.34",
+        "version": "0.2.35",
         "description": "Use your existing rbw-agent vault in the browser.",
         "permissions": ["nativeMessaging", "activeTab", "scripting", "storage", "contextMenus", "webNavigation"],
         "host_permissions": ["https://*/*", "http://*/*"],
@@ -35,6 +35,7 @@ for target in ("firefox", "chromium"):
             {"matches": ["https://*/*", "http://localhost/*"], "js": ["webauthn.js"], "run_at": "document_start", "all_frames": True, "world": "MAIN"},
             {"matches": ["https://*/*", "http://localhost/*"], "js": ["icons.js", "content.js"], "run_at": "document_start", "all_frames": True},
         ],
+        "web_accessible_resources": [{"resources": ["inline.html"], "matches": ["https://*/*", "http://localhost/*"]}],
         "options_ui": {"page": "options.html", "open_in_tab": True},
         "commands": {
             "open-vault": {"suggested_key": {"default": "Ctrl+Shift+Y"}, "description": "Open rbw vault"},

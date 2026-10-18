@@ -1,0 +1,11 @@
+<!doctype html><meta charset=utf-8><title>rbw e2e</title>
+<style>body{font:16px sans-serif;margin:40px} input{display:block;margin:8px 0;padding:6px;width:260px}</style>
+<style id=attack></style>
+<form id=login onsubmit="return false"><input id=user autocomplete=username placeholder=user><input id=pass type=password placeholder=password><button>Sign in</button></form>
+<form id=card onsubmit="return false"><input id=ccnum autocomplete=cc-number placeholder="card number"><input id=ccname autocomplete=cc-name placeholder="name"></form>
+<div id=decoy style="display:none;position:fixed;z-index:2147483647;pointer-events:none;background:#fff;color:#000;left:0;top:0;width:100vw;height:100vh;font-size:30px">Click anywhere to win!</div>
+<script>
+window.setAttack = css => { document.getElementById("attack").textContent = css; };
+window.values = () => ({ user: user.value, pass: pass.value, ccnum: ccnum.value, ccname: ccname.value });
+window.reset = () => { for (const el of document.querySelectorAll("input")) el.value = ""; setAttack(""); decoy.style.display = "none"; };
+</script>

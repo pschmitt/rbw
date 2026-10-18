@@ -5,6 +5,19 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
+## Features in 0.2.35
+
+- Inline login/card suggestions and the save-login prompt render inside an
+  extension frame. Pages cannot read, script or restyle their contents, and
+  the frame's session token reaches it only through a message addressed to the
+  extension origin. Each fill or save click is verified in the background:
+  Chromium additionally requires IntersectionObserver v2 visibility, and both
+  browsers briefly force every page element (including pass-through
+  `pointer-events:none` decoys, also inside shadow roots) to be hit-testable
+  and confirm the frame is topmost, unscaled, unfiltered and fully opaque.
+- End-to-end tests in `browser/tests/e2e/` drive both browsers with trusted
+  input against a stub native host (see "Build and load").
+
 ## Features in 0.2.34
 
 Security hardening following an internal review:
@@ -223,6 +236,11 @@ python3 browser/install.py --host /absolute/path/to/rbw-browser --chromium-id EX
 Add `--chrome` to register for Google Chrome too. Native installation supports
 Linux; sandboxed browser packages may need extra integration. Refresh open site
 tabs after installing an update so they receive the updated content scripts.
+
+Run `browser/tests/e2e/run.sh chromium|firefox [page.html|csp.html]` on a
+scratch host to exercise inline fills, saves and clickjacking attempts in a
+real browser. It needs Nix, uses an isolated HOME and a stub native host, and
+never touches a vault.
 
 ## Nix installation and signed updates
 

@@ -241,8 +241,106 @@ async function notifyFill(tab, notice) {
   const prefs = await settings();
   return api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: showFillNotice, args: [tab.url, { ...notice, animations: prefs.animations, animationSpeed: prefs.animationSpeed, icon: await getNotificationIcon() }] });
 }
+// Inline UI sessions: a content script opens one and hands its token only to
+// the extension frame it created. The frame's port is the sole way to act.
+const inlineSessions = new Map();
+function openInlineSession(values) {
+  for (const [token, session] of inlineSessions) if (session.tabId === values.tabId && session.frameId === values.frameId && session.mode === values.mode) closeInlineSession(token);
+  if (inlineSessions.size >= 32) closeInlineSession(inlineSessions.keys().next().value);
+  const token = crypto.randomUUID();
+  inlineSessions.set(token, { ...values, token, port: null, timer: setTimeout(() => closeInlineSession(token), 600000) });
+  return token;
+}
+function closeInlineSession(token, notify = false) {
+  const session = inlineSessions.get(token); if (!session) return;
+  inlineSessions.delete(token); clearTimeout(session.timer);
+  try { session.port?.disconnect(); } catch (_) { /* Already closed. */ }
+  if (notify) api.tabs.sendMessage(session.tabId, { action: "rbw_inline_close", token }, { frameId: session.frameId }).catch(() => {});
+}
+function closeTabInlineSessions(tabId) { for (const [token, session] of inlineSessions) if (session.tabId === tabId) closeInlineSession(token); }
+// Pages can hide or cover the frame. Briefly force every page element to be
+// hit-testable (a user-origin !important rule beats any page style, including
+// pointer-events:none decoys), then let the content script check that the
+// frame is unclipped, untransformed, opaque and topmost at the click point.
+async function verifyInlineClick(session, x, y) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+  const target = { tabId: session.tabId, frameIds: [session.frameId] };
+  const css = "*,*::before,*::after{pointer-events:auto!important}";
+  try { await api.scripting.insertCSS({ target, css, origin: "USER" }); } catch (_) { return false; }
+  try { return (await api.tabs.sendMessage(session.tabId, { action: "rbw_inline_verify", token: session.token, x, y }, { frameId: session.frameId }))?.ok === true; }
+  catch (_) { return false; }
+  finally { await api.scripting.removeCSS({ target, css, origin: "USER" }).catch(() => {}); }
+}
+async function inlineMessage(port, message, state) {
+  if (!state.session) {
+    const session = message?.type === "init" && inlineSessions.get(message.token);
+    if (!session || session.port || session.tabId !== port.sender.tab.id) { port.disconnect(); return; }
+    session.port = port; state.session = session;
+    port.onDisconnect.addListener(() => { if (session.port === port) closeInlineSession(session.token, true); });
+    port.postMessage({ type: "init", ...session.payload });
+    return;
+  }
+  const session = state.session;
+  const relay = action => api.tabs.sendMessage(session.tabId, { action, token: session.token, height: message.height }, { frameId: session.frameId }).catch(() => {});
+  if (message.type === "size") { if (Number.isFinite(message.height)) relay("rbw_inline_size"); return; }
+  if (message.type === "close") { closeInlineSession(session.token, true); return; }
+  const prefs = await settings(); const account = prefs.account || null;
+  if (session.mode === "choices") {
+    if (message.type === "icons") {
+      if (session.kind !== "login" || !prefs.favicons || isAutofillBlocked(session.url, prefs.autofillBlocklist)) return;
+      const result = await cachedSearch({ account, url: session.url, site_only: true, kind: "login" });
+      const items = await Promise.all(result.items.filter(item => session.allowed.has(item.id)).map(async item => ({ id: item.id, favicon: item.iconOrigin ? await favicon(item.iconOrigin) : null })));
+      port.postMessage({ type: "icons", items });
+    } else if (message.type === "search" && session.kind === "card") {
+      const result = await cachedSearch({ account, query: String(message.query || "").slice(0, 256), kind: "card" });
+      const eligible = result.items.filter(item => !item.protected && !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems));
+      const items = eligible.slice(0, 50).map(item => ({ id: item.id, name: item.name, brand: String(item.username || "").split(",", 1)[0].trim() }));
+      for (const item of items) { session.allowed.add(item.id); session.items.set(item.id, item); }
+      port.postMessage({ type: "results", sequence: message.sequence, items, total: Math.max(eligible.length, (result.total ?? result.items.length) - (result.items.length - eligible.length)) });
+    } else if (message.type === "fill" && session.allowed.has(message.item)) {
+      const item = session.items.get(message.item) || {};
+      if (!await verifyInlineClick(session, message.x, message.y)) { port.postMessage({ type: "rejected", error: "rbw could not confirm that its window is fully visible. Click again." }); return; }
+      const tab = await activeTab();
+      if (tab.id !== session.tabId || new URL(tab.url).origin !== new URL(session.url).origin) throw new Error("Page changed.");
+      await api.tabs.sendMessage(session.tabId, { action: "rbw_inline_refocus", token: session.token }, { frameId: session.frameId }).catch(() => {});
+      port.postMessage({ type: "state", item: message.item, active: true, name: item.name });
+      try {
+        const count = await fill({ item: message.item, type: session.kind, displayName: item.name, expectedTab: tab.id, expectedUrl: tab.url }, account);
+        port.postMessage({ type: "state", item: message.item, active: false, filled: count > 0, name: item.name });
+      } catch (error) { port.postMessage({ type: "state", item: message.item, active: false, error: error.message || "Could not fill this page." }); }
+    }
+    return;
+  }
+  const offer = offers.get(session.tabId);
+  if (!offer || offer.origin !== session.origin) { port.postMessage({ type: "save_result", error: "Save suggestion expired." }); return; }
+  if (message.type === "save_choices") {
+    try {
+      const result = await cachedSearch({ account, query: offer.username || "", kind: "login" });
+      port.postMessage({ type: "save_choices", items: result.items.slice(0, 30).map(item => ({ id: item.id, name: item.name, username: item.username })) });
+    } catch (_) { port.postMessage({ type: "save_choices", items: [] }); }
+  } else if (message.type === "save") {
+    if (!await verifyInlineClick(session, message.x, message.y)) { port.postMessage({ type: "save_result", error: "rbw could not confirm that its window is fully visible. Click again." }); return; }
+    try { await applySaveOffer(session.tabId, typeof message.item === "string" ? message.item : null, account); }
+    catch (error) { port.postMessage({ type: "save_result", error: error.message || "Could not save login." }); return; }
+    closeInlineSession(session.token, true); refreshActiveBadge().catch(() => {});
+  } else if (message.type === "dismiss") {
+    clearTimeout(offer.timer); offers.delete(session.tabId); badge();
+    closeInlineSession(session.token, true);
+  }
+}
+api.runtime.onConnect.addListener(port => {
+  if (port.name !== "rbw-inline") return;
+  const sender = port.sender;
+  if (sender?.id !== api.runtime.id || !sender.tab || sender.url?.split(/[?#]/)[0] !== api.runtime.getURL("inline.html")) { port.disconnect(); return; }
+  const state = { session: null };
+  let chain = Promise.resolve();
+  port.onMessage.addListener(message => {
+    chain = chain.then(() => inlineMessage(port, message, state)).catch(error => { try { port.postMessage({ type: "rejected", error: error.message || "Request failed." }); } catch (_) { /* Closed. */ } });
+  });
+});
 async function notifySaveOffer(tabId, offer) {
-  return api.tabs.sendMessage(tabId, { action: "rbw_save_offer", offer: { origin: offer.origin, username: offer.username } });
+  const token = openInlineSession({ mode: "save", tabId, frameId: 0, origin: offer.origin, url: offer.url, payload: { mode: "save", host: new URL(offer.origin).host, username: offer.username } });
+  return api.tabs.sendMessage(tabId, { action: "rbw_save_offer", token, origin: offer.origin }, { frameId: 0 });
 }
 
 async function applySaveOffer(tabId, item, account) {
@@ -280,25 +378,6 @@ async function pageMessage(message, sender, respond) {
   const url = new URL(sender.url);
   if (!sender.tab.url || new URL(sender.tab.url).origin !== url.origin) return respond({ fallback: true });
   if (url.protocol !== "https:" && !(url.protocol === "http:" && url.hostname === "localhost")) return respond({ fallback: true });
-  if (message.action === "save_offer_choices") {
-    const offer = offers.get(sender.tab.id);
-    if (!offer || new URL(offer.origin).origin !== url.origin) return respond({ result: [] });
-    try {
-      const result = await cachedSearch({ account: (await settings()).account || null, query: offer.username || "", kind: "login" });
-      return respond({ result: result.items.slice(0, 30).map(item => ({ id: item.id, name: item.name, username: item.username })) });
-    } catch (_) { return respond({ result: [] }); }
-  }
-  if (message.action === "save_offer_apply") {
-    const offer = offers.get(sender.tab.id);
-    if (!offer || new URL(offer.origin).origin !== url.origin) return respond({ error: "Save suggestion expired." });
-    return respond({ result: await applySaveOffer(sender.tab.id, message.item || null, (await settings()).account || null) });
-  }
-  if (message.action === "save_offer_dismiss") {
-    const offer = offers.get(sender.tab.id);
-    if (offer) clearTimeout(offer.timer);
-    offers.delete(sender.tab.id); badge();
-    return respond({ result: true });
-  }
   if (message.action === "passkey_cancel") {
     for (const [id, p] of pending) if (p.tabId === sender.tab.id && p.pageRequest === message.request) finish(id, { error: "Cancelled." });
     return respond({ result: true });
@@ -326,40 +405,21 @@ async function pageMessage(message, sender, respond) {
     if (!eligible.length) return respond({ result: false });
     return respond({ result: await fill({ item: eligible[0].id, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, prefs.account || null) });
   }
-  if (message.action === "inline_choices") {
-    if (!prefs.inlineSuggestions || autofillBlocked) return respond({ result: [] });
+  if (message.action === "inline_open") {
+    if (!prefs.inlineSuggestions || autofillBlocked) return respond({ result: null });
     const kind = message.kind === "card" ? "card" : "login";
     try {
       const result = await cachedSearch(kind === "card"
         ? { account: prefs.account || null, kind: "card" }
         : { account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
       const eligible = result.items.filter(v => !v.protected && !isItemAutofillExcluded(v.id, prefs.autofillExcludedItems));
-      const items = eligible.slice(0, 5).map(v => ({ id: v.id, name: v.name, username: v.username, brand: kind === "card" ? String(v.username || "").split(",", 1)[0].trim() : null, kind,
+      if (!eligible.length) return respond({ result: null });
+      const items = eligible.slice(0, 5).map(v => ({ id: v.id, name: v.name, username: v.username, brand: kind === "card" ? String(v.username || "").split(",", 1)[0].trim() : null,
         favicon: kind === "login" && prefs.favicons ? faviconCache.get(v.iconOrigin)?.value || null : null }));
-      return respond({ result: items, total: Math.max(eligible.length, (result.total ?? result.items.length) - (result.items.length - eligible.length)), appIcon: await getNotificationIcon() });
-    } catch (_) { return respond({ result: [] }); }
-  }
-  if (message.action === "inline_icons") {
-    if (!prefs.inlineSuggestions || !prefs.favicons || autofillBlocked) return respond({ result: [] });
-    // Resolve icons only for this page's matching items, never arbitrary page-supplied URLs.
-    const result = await cachedSearch({ account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
-    const items = await Promise.all(result.items.slice(0, 5).map(async item => ({ id: item.id, favicon: item.iconOrigin ? await favicon(item.iconOrigin) : null })));
-    return respond({ result: items });
-  }
-  if (message.action === "inline_fill") {
-    const tab = await activeTab();
-    if (tab.id !== sender.tab.id || new URL(tab.url).origin !== url.origin) return respond({ error: "Page changed." });
-    if (autofillBlocked) return respond({ error: "Autofill is blocked for this site in rbw settings." });
-    const kind = message.kind === "card" ? "card" : "login";
-    return respond({ result: await fill({ item: message.item, type: kind, displayName: message.name }, prefs.account || null) });
-  }
-  if (message.action === "inline_search_cards") {
-    if (autofillBlocked) return respond({ result: [], total: 0 });
-    try {
-      const result = await cachedSearch({ account: prefs.account || null, query: String(message.query || "").slice(0, 256), kind: "card" });
-      const eligible = result.items.filter(item => !item.protected && !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems));
-      return respond({ result: eligible.slice(0, 50).map(item => ({ id: item.id, name: item.name, brand: String(item.username || "").split(",", 1)[0].trim() })), total: Math.max(eligible.length, (result.total ?? result.items.length) - (result.items.length - eligible.length)) });
-    } catch (_) { return respond({ result: [], total: 0 }); }
+      const total = Math.max(eligible.length, (result.total ?? result.items.length) - (result.items.length - eligible.length));
+      const token = openInlineSession({ mode: "choices", kind, tabId: sender.tab.id, frameId: sender.frameId, url: sender.url, allowed: new Set(items.map(v => v.id)), items: new Map(items.map(v => [v.id, v])), payload: { mode: "choices", kind, items, total } });
+      return respond({ result: token, appIcon: await getNotificationIcon() });
+    } catch (_) { return respond({ result: null }); }
   }
   if (message.action === "keyboard_fill_shortcut") {
     const tabId = sender.tab.id;
@@ -627,7 +687,7 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
       if (["unlock", "sync", "save", "mutate", "set_preferences", "import", "save_offer_apply", "passkey_approve"].includes(message.action)) refreshActiveBadge().catch(() => {});
     }, error => respond({ error: error.message || "Operation failed.", diagnostic: error.diagnostic || null })); return true;
   }
-  if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "save_offer_choices", "save_offer_apply", "save_offer_dismiss", "inline_choices", "inline_icons", "inline_fill", "inline_search_cards", "keyboard_fill_shortcut", "autofill_load", "undo_fill", "dismiss_fill"].includes(message?.action)) return false;
+  if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "inline_open", "keyboard_fill_shortcut", "autofill_load", "undo_fill", "dismiss_fill"].includes(message?.action)) return false;
   pageMessage(message, sender, respond).catch(() => respond({ error: "Request failed." })); return true;
 });
 
@@ -635,6 +695,7 @@ api.tabs.onRemoved.addListener(tabId => {
   suggestionCounts.delete(tabId); badgeRequests.delete(tabId);
   fillCycles.delete(tabId); popupNotices.delete(tabId);
   for (const [id, p] of pending) if (p.tabId === tabId) finish(id, { error: "Page closed." });
+  closeTabInlineSessions(tabId);
   const offer = offers.get(tabId); if (offer) { clearTimeout(offer.timer); offers.delete(tabId); badge(); }
   badgeTabs.delete(tabId);
 });
@@ -644,6 +705,7 @@ api.tabs.onUpdated.addListener((tabId, change, tab) => {
     suggestionCounts.delete(tabId); badgeRequests.delete(tabId); badge(tabId);
     fillCycles.delete(tabId); popupNotices.delete(tabId);
     for (const [id, p] of pending) if (p.tabId === tabId) finish(id, { error: "Page navigated." });
+    closeTabInlineSessions(tabId);
   }
   const offer = offers.get(tabId);
   if (change.status === "complete" && tab?.url && offer && new URL(tab.url).origin === offer.origin) {
