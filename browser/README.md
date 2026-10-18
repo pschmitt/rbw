@@ -203,11 +203,12 @@ Browser restarts or acceptance of newly requested permissions may be necessary.
 `browser/packages/` holds signed distribution artifacts and the public Chromium
 identity. Never put private signing keys or AMO credentials in the repository.
 After changing extension sources, bump the extension version in `build.py` and
-`nix/browser.nix`, then run the **browser extension release** workflow from
-`main`. It signs the Firefox package through AMO and the Chromium package with
-the existing key, then creates a `browser-vVERSION` GitHub release. The
-workflow reads `RBW_AMO_API_KEY`, `RBW_AMO_API_SECRET` and
-`RBW_CHROMIUM_SIGNING_KEY` from GitHub Actions secrets.
+`nix/browser.nix`. The main-branch build workflow signs changed packages through
+AMO and with the existing Chromium key when the checked-in packages do not match
+the source. It reads `RBW_AMO_API_KEY`, `RBW_AMO_API_SECRET` and
+`RBW_CHROMIUM_SIGNING_KEY` from GitHub Actions secrets. Run the **browser
+extension release** workflow from `main` after the build passes to publish the
+verified packages as a `browser-vVERSION` GitHub release.
 The generated icon source is `browser/icon-source.png`; prompt provenance is
 recorded in `browser/icon-prompt.txt`, with sized toolbar assets in
 `browser/extension/icons/`.
