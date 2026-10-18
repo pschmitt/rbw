@@ -333,7 +333,7 @@ function itemRow(item) {
       entries.append(
         actionButton("Copy username", "identity", () => copyField(item.id, "username")),
         actionButton("Copy password", "key", () => copyField(item.id, "password")),
-        actionButton("Copy verification code", "generator", () => copyField(item.id, "totp"))
+        actionButton("Copy TOTP", "generator", () => copyField(item.id, "totp"))
       );
     }
     entries.append(actionButton(item.favorite ? "Remove favorite" : "Favorite", "star", async () => { await request("mutate", { item: item.id, mutation: "favorite" }); await search(); }),
@@ -360,7 +360,7 @@ async function copyField(item, field, allowFallback = false) {
       for (const alt of ["totp", "username", "custom/0"]) {
         try {
           await request("copy", { item, field: alt });
-          message(`Copied ${alt === "totp" ? "verification code" : alt === "username" ? "username" : "field"} to clipboard.`);
+          message(`Copied ${alt === "totp" ? "TOTP" : alt === "username" ? "username" : "field"} to clipboard.`);
           return;
         } catch (_) {}
       }
@@ -424,14 +424,14 @@ function noteField(text, item) {
   toolbar.append(toggle, actionButton("Copy", "copy", () => copyField(item, "notes"))); section.append(toolbar, content); render(); return section;
 }
 function totpField(item) {
-  const section = element("div", null, "field totp-field"); section.append(element("span", "Verification code"));
+  const section = element("div", null, "field totp-field"); section.append(element("span", "TOTP"));
   const row = element("div", null, "field-value"); const code = element("div", "••• •••", "totp-code");
   const actions = element("div", null, "field-actions");
-  const copy = actionButton("Copy verification code", "copy", () => copyField(item, "totp"), "icon"); copy.disabled = true;
+  const copy = actionButton("Copy TOTP", "copy", () => copyField(item, "totp"), "icon"); copy.disabled = true;
   actions.append(copy); row.append(code, actions);
   const countdown = element("small", "Generating code…", "hint");
   // A continuously shrinking bar, like the inline dialogs' auto-close progress.
-  const progress = element("div", null, "totp-progress"); progress.setAttribute("role", "progressbar"); progress.setAttribute("aria-label", "Verification code validity");
+  const progress = element("div", null, "totp-progress"); progress.setAttribute("role", "progressbar"); progress.setAttribute("aria-label", "TOTP validity");
   const fill = element("span", null, "totp-progress-fill"); progress.append(fill);
   section.append(row, countdown, progress);
   let state;
@@ -453,7 +453,7 @@ function totpField(item) {
       fill.style.transform = `scaleX(${Math.min(1, left / state.period)})`; progress.classList.toggle("is-expiring", remaining <= 5);
     } catch (_) {
       if (!current()) return;
-      state = null; code.textContent = "Unavailable"; copy.disabled = true; countdown.textContent = "Could not generate verification code.";
+      state = null; code.textContent = "Unavailable"; copy.disabled = true; countdown.textContent = "Could not generate the TOTP.";
     }
     if (current()) totpTimer = setTimeout(tick, state ? 250 : 3000);
   };
