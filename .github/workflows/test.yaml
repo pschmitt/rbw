@@ -73,7 +73,9 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: RUSTDOCFLAGS="-Dwarnings" cargo doc --all-features
+      # Only our own crates: documenting every dependency took minutes and
+      # isn't needed to keep rbw's docs warning-free.
+      - run: RUSTDOCFLAGS="-Dwarnings" cargo doc --no-deps --all-features
       - run: cargo test --doc --all-features
   # Real-server tests, distinct from `test`'s mocked-HTTP unit tests: these
   # register an actual account on a throwaway Vaultwarden container and

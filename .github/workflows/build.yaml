@@ -41,8 +41,23 @@ jobs:
         id: package-check
         continue-on-error: true
         run: python3 browser/release.py --output dist
-      - name: Sign Firefox package with AMO
+      # AMO signs each version once, so only sign a version that has no signed
+      # package yet (a release commit). Other extension changes just wait for
+      # the next release instead of failing the signing step.
+      - name: Decide whether to sign
+        id: sign
         if: steps.package-check.outcome == 'failure'
+        run: |
+          source=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          packaged=$(python3 -c 'import json, zipfile; print(json.loads(zipfile.ZipFile("browser/packages/rbw-firefox.xpi").read("manifest.json"))["version"])')
+          if [[ "$source" == "$packaged" ]]
+          then
+            echo "::notice::Extension sources changed since the signed $packaged packages; they are signed on the next release commit."
+          else
+            echo "needed=1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Sign Firefox package with AMO
+        if: steps.sign.outputs.needed == '1'
         run: |
           npm install --global web-ext@8
           web-ext sign \
@@ -54,9 +69,9 @@ jobs:
           WEB_EXT_API_KEY: ${{ secrets.RBW_AMO_API_KEY }}
           WEB_EXT_API_SECRET: ${{ secrets.RBW_AMO_API_SECRET }}
       - uses: browser-actions/setup-chrome@v2
-        if: steps.package-check.outcome == 'failure'
+        if: steps.sign.outputs.needed == '1'
       - name: Sign Chromium package
-        if: steps.package-check.outcome == 'failure'
+        if: steps.sign.outputs.needed == '1'
         env:
           CRX_PRIVATE_KEY: ${{ secrets.RBW_CHROMIUM_SIGNING_KEY }}
         run: |
@@ -72,8 +87,10 @@ jobs:
           cp browser/dist/chromium.crx browser/packages/rbw-chromium.crx
           rm -f "$key_file"
       - name: Verify signed browser packages
+        if: steps.package-check.outcome == 'success' || steps.sign.outputs.needed == '1'
         run: python3 browser/release.py --output dist
       - uses: actions/upload-artifact@v7
+        if: steps.package-check.outcome == 'success' || steps.sign.outputs.needed == '1'
         with:
           name: browser-extensions
           path: |
