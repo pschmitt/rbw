@@ -1,6 +1,7 @@
 //! `WebAuthn` responses contain public data and signatures only. Keys stay native.
 use anyhow::{ensure, Context as _};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine as _};
+use p256::elliptic_curve::Generate as _;
 use serde_cbor::Value as Cbor;
 use serde_json::{json, Value};
 use sha2::Digest as _;
@@ -265,9 +266,9 @@ pub fn register(
             .any(|c| c.rp_id.as_deref() == Some(&rp)),
         "entry already contains a passkey for this relying party"
     );
-    let key = p256::ecdsa::SigningKey::random(&mut rand_8::rngs::OsRng);
+    let key = p256::ecdsa::SigningKey::generate();
     let id = uuid::Uuid::new_v4();
-    let point = key.verifying_key().to_encoded_point(false);
+    let point = key.verifying_key().to_sec1_point(false);
     let x = point.x().context("missing public x")?;
     let y = point.y().context("missing public y")?;
     let cose = Cbor::Map(std::collections::BTreeMap::from([
