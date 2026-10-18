@@ -32,7 +32,7 @@ jobs:
         env:
           WEB_EXT_API_KEY: ${{ secrets.RBW_AMO_API_KEY }}
           WEB_EXT_API_SECRET: ${{ secrets.RBW_AMO_API_SECRET }}
-      - uses: browser-actions/setup-chrome@v1
+      - uses: browser-actions/setup-chrome@v2
         if: steps.package-check.outcome == 'failure'
       - name: Sign Chromium package
         if: steps.package-check.outcome == 'failure'
