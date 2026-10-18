@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.22.3] - 2026-10-19
+
 ### Added
 
 * Keyboard navigation in the browser: the popup focuses its search field when
