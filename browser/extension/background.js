@@ -86,7 +86,7 @@ async function fetchFavicon(origin) {
   } catch (_) { /* Missing icons retain the local item-type icon. */ }
   if (generation === metadataEpoch) cacheFor(faviconCache, origin, value, 5 * 60 * 1000, 128); return value;
 }
-const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: true, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true };
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: false };
 function isAutofillBlocked(pageUrl, blocklist) {
   let page;
   try { page = new URL(pageUrl); } catch (_) { return false; }
@@ -182,6 +182,9 @@ async function activeTab() {
   const [tab] = await api.tabs.query({ active: true, currentWindow: true });
   if (!tab?.url || !/^https?:\/\//.test(tab.url)) throw new Error("Open an HTTP or HTTPS page first.");
   return tab;
+}
+function isSecureFillUrl(url) {
+  try { const u = new URL(url); return u.protocol === "https:" || (u.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname)); } catch (_) { return false; }
 }
 function badge(tabId) {
   if (tabId === undefined) {
@@ -395,6 +398,7 @@ async function pageMessage(message, sender, respond) {
 }
 async function fill(message, account) {
   const tab = await activeTab();
+  if (!isSecureFillUrl(tab.url)) throw new Error("rbw does not fill passwords into insecure HTTP pages.");
   if (message.expectedTab !== undefined && (tab.id !== message.expectedTab || tab.url !== message.expectedUrl)) throw new Error("The active page changed.");
   const prefs = await settings();
   if (isAutofillBlocked(tab.url, prefs.autofillBlocklist)) throw new Error("Autofill is blocked for this site in rbw settings.");
@@ -660,6 +664,7 @@ async function fillShortcut(tabId) {
   try {
     tab = tabId === undefined ? await activeTab() : await api.tabs.get(tabId);
     if (!tab?.url || !/^https?:\/\//.test(tab.url)) throw new Error("Open an HTTP or HTTPS page first.");
+    if (!isSecureFillUrl(tab.url)) throw new Error("rbw does not fill passwords into insecure HTTP pages.");
     const prefs = await settings(); const account = prefs.account || null;
     if (isAutofillBlocked(tab.url, prefs.autofillBlocklist)) throw new Error("Autofill is blocked for this site in rbw settings.");
     const status = await native({ action: "status", account });

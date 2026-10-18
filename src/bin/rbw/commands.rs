@@ -2556,7 +2556,16 @@ pub fn matches_url(
             url == given_host_port
         }
         rbw::api::UriMatchType::StartsWith => {
-            given_url.to_string().starts_with(url)
+            // Compare against the normalized stored URL so that an origin
+            // like "https://example.com" cannot match
+            // "https://example.com.evil.net/".
+            match url::Url::parse(url) {
+                Ok(stored) if stored.host_str().is_some() => {
+                    stored.origin() == given_url.origin()
+                        && given_url.as_str().starts_with(stored.as_str())
+                }
+                _ => given_url.to_string().starts_with(url),
+            }
         }
         rbw::api::UriMatchType::Exact => {
             if given_url.path() == "/" {
@@ -20629,6 +20638,25 @@ pub fn generate_totp(secret: &str) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod test {
+    #[test]
+    fn starts_with_requires_same_origin() {
+        let sw = Some(rbw::api::UriMatchType::StartsWith);
+        let m = |stored: &str, page: &str| {
+            super::matches_url(stored, sw, &url::Url::parse(page).unwrap())
+        };
+        assert!(!m("https://example.com", "https://example.com.evil.net/"));
+        assert!(!m("https://example.com/", "https://example.com.evil.net/"));
+        assert!(m(
+            "https://example.com/app",
+            "https://example.com/app/login"
+        ));
+        assert!(!m("https://example.com/app", "https://example.com/other"));
+        assert!(m("https://example.com", "https://example.com/"));
+        assert!(m("https://example.com", "https://example.com/some/page"));
+        assert!(!m("https://example.com", "http://example.com/"));
+        assert!(!m("https://example.com", "https://example.com:8443/"));
+    }
+
     #[test]
     fn browser_totp_codes_include_their_actual_validity_window() {
         // Public RFC-style test material, never a real authenticator key.

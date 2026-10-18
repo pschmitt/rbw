@@ -1,4 +1,33 @@
 /* ISOLATED world: the background obtains the site from MessageSender.url. */
+// Anti-clickjacking: action clicks need a trusted, settled, unobscured, fully opaque, focused UI.
+const rbwHardenCss = "display:block!important;opacity:1!important;filter:none!important;transform:none!important;translate:none!important;scale:none!important;rotate:none!important;clip-path:none!important;clip:auto!important;mask:none!important;mix-blend-mode:normal!important;overflow:visible!important;";
+const rbwGuard = () => {
+  const state = { at: performance.now(), io: null, seen: !("IntersectionObserver" in globalThis && "isVisible" in IntersectionObserverEntry.prototype), visible: true };
+  state.watch = host => {
+    if (state.seen) return;
+    try { state.visible = false; state.io = new IntersectionObserver(entries => { state.seen = true; state.visible = entries[entries.length - 1].isVisible === true; }, { trackVisibility: true, delay: 100 }); state.io.observe(host); } catch (_) { state.seen = true; state.visible = true; }
+  };
+  state.reset = () => { state.at = performance.now(); };
+  state.stop = () => { state.io?.disconnect(); state.io = null; };
+  state.allow = (event, host) => {
+    try {
+      if (!event.isTrusted || !host?.isConnected || performance.now() - state.at < 500 || !state.seen || !state.visible) return false;
+      if (document.visibilityState !== "visible" || !document.hasFocus()) return false;
+      if (host.checkVisibility && !host.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true })) return false;
+      let opacity = 1;
+      for (let node = host; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        opacity *= Number(style.opacity);
+        if (style.display === "none" || style.visibility !== "visible" || style.filter !== "none" || (style.clipPath || "none") !== "none" || (style.maskImage || style.webkitMaskImage || "none") !== "none" || style.mixBlendMode !== "normal" || (node === host && style.transform !== "none")) return false;
+      }
+      if (!(opacity >= 0.95)) return false;
+      let x = event.clientX, y = event.clientY;
+      if (!event.detail) { const rect = event.currentTarget?.getBoundingClientRect?.(); if (!rect) return false; x = rect.left + rect.width / 2; y = rect.top + rect.height / 2; }
+      return document.elementsFromPoint(x, y)[0] === host;
+    } catch (_) { return false; }
+  };
+  return state;
+};
 (() => {
   try { if (window.top.location.origin !== location.origin) return; } catch (_) { return; }
   const api = globalThis.browser || chrome;
@@ -74,9 +103,12 @@
     updateFillHighlight();
   });
   // Only deliberate interaction re-enables suggestions after filling; focus() is trusted too.
+  let ui = null, lastInteraction = { el: null, at: -Infinity };
+  const noteInteraction = event => { if (event.isTrusted) lastInteraction = { el: event.type === "keydown" && event.key === "Tab" ? null : event.composedPath()[0], at: performance.now() }; };
+  document.addEventListener("pointerdown", noteInteraction, true); document.addEventListener("keydown", noteInteraction, true);
   document.addEventListener("pointerdown", event => { if (event.isTrusted && !fills.size) filled = false; }, true);
   document.addEventListener("keydown", event => { if (event.isTrusted && !fills.size && event.key !== "Escape") filled = false; }, true);
-  function close() { clearTimeout(closeTimer); clearInterval(closeCountdownTimer); if (closeProgressFrame !== null) cancelAnimationFrame(closeProgressFrame); closeTimer = null; closeCountdownTimer = null; closeProgressFrame = null; closeProgress = null; closeProgressFill = null; closeStopButton = null; cardCloseStopped = false; ++generation; host?.remove(); host = null; fillBanner = null; itemRows.clear(); }
+  function close() { clearTimeout(closeTimer); clearInterval(closeCountdownTimer); if (closeProgressFrame !== null) cancelAnimationFrame(closeProgressFrame); closeTimer = null; closeCountdownTimer = null; closeProgressFrame = null; closeProgress = null; closeProgressFill = null; closeStopButton = null; cardCloseStopped = false; ++generation; ui?.stop(); ui = null; host?.remove(); host = null; fillBanner = null; itemRows.clear(); }
   function dismissSuggestions() { dismissed = true; close(); }
   function stopCardCloseCountdown(selectedHost) {
     if (host !== selectedHost || !closeProgress || !closeProgressFill) return;
@@ -143,7 +175,7 @@
     if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable)) contextMenuTarget = target;
   }, true);
   async function openCardSearch(box, titleText, searchInput) {
-    titleText.textContent = "rbw · Search all cards";
+    titleText.textContent = "rbw · Search all cards"; ui?.reset();
     itemRows.clear();
     for (const child of [...box.children].slice(1)) child.remove();
     const controls = document.createElement("div"); controls.className = "card-search";
@@ -159,7 +191,7 @@
       const response = await api.runtime.sendMessage({ action: "inline_search_cards", query: query.value }).catch(() => null);
       if (current !== sequence || !results.isConnected) return;
       const items = response?.result || [];
-      results.replaceChildren();
+      results.replaceChildren(); ui?.reset();
       count.textContent = response?.total > items.length ? `Showing ${items.length} of ${response.total} cards` : `${items.length} ${items.length === 1 ? "card" : "cards"}`;
       if (!items.length) { const empty = document.createElement("p"); empty.className = "inline-empty"; empty.textContent = "No matching cards."; results.append(empty); return; }
       for (const item of items) {
@@ -170,7 +202,7 @@
         if (item.brand) { const brand = document.createElement("small"); brand.textContent = item.brand; textCol.append(brand); }
         button.append(iconCol, textCol);
         button.addEventListener("pointerdown", event => { if (event.isTrusted) event.preventDefault(); });
-        button.addEventListener("click", event => { if (event.isTrusted) fillItem(item.id, item.name, "card"); });
+        button.addEventListener("click", event => { if (ui?.allow(event, host)) fillItem(item.id, item.name, "card"); });
         results.append(button);
       }
       updateFillHighlight();
@@ -189,6 +221,7 @@
     const defaultOption = input instanceof HTMLSelectElement ? [...input.options].find(option => option.defaultSelected) || input.options[0] : null;
     const alreadyFilled = input instanceof HTMLSelectElement ? input.value !== (defaultOption?.value || "") : String(input.value || "").trim() !== "";
     if (alreadyFilled && !explicit) { close(); return; }
+    if (cardField && !explicit && (performance.now() - lastInteraction.at > 1000 || (lastInteraction.el && lastInteraction.el !== input))) { close(); return; }
     const kind = cardField ? "card" : "login";
     close(); const current = generation;
     const result = await api.runtime.sendMessage({ action: "inline_choices", kind }).catch(() => null);
@@ -264,7 +297,7 @@
       }
       button.append(iconCol, textCol);
       button.addEventListener("pointerdown", event => { if (event.isTrusted) event.preventDefault(); });
-      button.addEventListener("click", event => { if (event.isTrusted) fillItem(item.id, item.name, kind); });
+      button.addEventListener("click", event => { if (ui?.allow(event, host)) fillItem(item.id, item.name, kind); });
       suggestions.append(button);
     }
     box.append(suggestions);
@@ -276,7 +309,7 @@
     }
     shadow.append(box);
     const rect = input.getBoundingClientRect();
-    host.style.cssText = `position:fixed!important;z-index:2147483647!important;top:0!important;left:0!important;width:${Math.max(0, Math.min(380, Math.max(rect.width, 240), innerWidth - 16))}px!important;visibility:hidden!important`;
+    host.style.cssText = `position:fixed!important;z-index:2147483647!important;top:0!important;left:0!important;width:${Math.max(0, Math.min(380, Math.max(rect.width, 240), innerWidth - 16))}px!important;visibility:hidden!important;pointer-events:auto!important;${rbwHardenCss}`;
     document.documentElement.append(host);
     const position = (x, y) => {
       const size = box.getBoundingClientRect();
@@ -285,6 +318,7 @@
       return point;
     };
     position(movedPosition?.x ?? rect.left, movedPosition?.y ?? rect.bottom + 4); host.style.setProperty("visibility", "visible", "important");
+    ui = rbwGuard(); ui.watch(host);
     let drag;
     handle.addEventListener("pointerdown", event => {
       if (!event.isTrusted || event.button !== 0) return;
@@ -327,7 +361,8 @@
   try { if (window.top.location.origin !== location.origin) return; } catch (_) { return; }
   const api = globalThis.browser || chrome;
   let host, shadow, offer;
-  const close = () => { host?.remove(); host = null; shadow = null; offer = null; };
+  let ui = null;
+  const close = () => { ui?.stop(); ui = null; host?.remove(); host = null; shadow = null; offer = null; };
   const send = (action, values = {}) => api.runtime.sendMessage({ action, ...values });
   const text = (tag, value, className) => {
     const node = document.createElement(tag); node.textContent = value;
@@ -339,7 +374,7 @@
     if (value?.origin !== location.origin) return;
     offer = value;
     host = document.createElement("div");
-    host.style.cssText = "all:initial!important;position:fixed!important;inset:16px 16px auto auto!important;z-index:2147483647!important;pointer-events:none!important;max-width:calc(100vw - 32px)!important";
+    host.style.cssText = "all:initial!important;position:fixed!important;inset:16px 16px auto auto!important;z-index:2147483647!important;pointer-events:none!important;max-width:calc(100vw - 32px)!important;" + rbwHardenCss;
     shadow = host.attachShadow({ mode: "closed" });
     const style = document.createElement("style");
     style.textContent = ":host{all:initial}.card{box-sizing:border-box;width:380px;max-width:calc(100vw - 32px);padding:16px;border:1px solid #555;border-radius:14px;background:#242424;color:#f2f2f2;box-shadow:0 12px 36px #0008;font:14px/1.45 system-ui,sans-serif;pointer-events:auto}.head{display:flex;align-items:flex-start;gap:12px}.logo{width:34px;height:34px;object-fit:contain;flex:none;border-radius:8px}.copy{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}strong{font-size:15px;font-weight:650}small{margin-top:3px;color:#b9b9b9;font-size:12px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}button,select{box-sizing:border-box;font:inherit;color:inherit;border:1px solid #555;border-radius:8px;background:#303030;padding:8px 11px}button{cursor:pointer}button:hover,button:focus-visible{border-color:#aaa;background:#383838;outline:2px solid #aaa;outline-offset:1px}button.primary{background:#e1e1e1;color:#202020;border-color:#e1e1e1;font-weight:650}button.primary:hover{background:#fff}.dismiss{margin-left:auto;padding:5px 9px;color:#c3c3c3}.picker{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid #494949}.picker[hidden]{display:none}.picker select{min-width:0;width:100%;background:#303030}.status{grid-column:1/-1;min-height:18px;margin:0;color:#f0b4c0;font-size:12px}.status:empty{display:none}@media(prefers-reduced-motion:no-preference){.card{animation:enter 180ms ease-out both}@keyframes enter{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}}";
@@ -354,7 +389,7 @@
     const actions = document.createElement("div"); actions.className = "actions";
     const save = document.createElement("button"); save.className = "primary"; save.type = "button"; save.textContent = "Save new login";
     save.addEventListener("click", async event => {
-      if (!event.isTrusted) return;
+      if (!ui?.allow(event, host)) return;
       save.disabled = true; choose.disabled = true; dismiss.disabled = true; status.textContent = "Saving and syncing…";
       const result = await send("save_offer_apply").catch(error => ({ error: error.message || "Could not save login." }));
       if (result?.error) { status.textContent = result.error; save.disabled = false; choose.disabled = false; dismiss.disabled = false; }
@@ -381,7 +416,7 @@
     });
     select.addEventListener("change", () => { update.disabled = !select.value; });
     update.addEventListener("click", async event => {
-      if (!event.isTrusted || !select.value) return;
+      if (!ui?.allow(event, host) || !select.value) return;
       save.disabled = true; choose.disabled = true; update.disabled = true; dismiss.disabled = true; status.textContent = "Updating and syncing…";
       const result = await send("save_offer_apply", { item: select.value }).catch(error => ({ error: error.message || "Could not update login." }));
       if (result?.error) { status.textContent = result.error; save.disabled = false; choose.disabled = false; update.disabled = false; dismiss.disabled = false; }
@@ -389,6 +424,7 @@
     });
     picker.append(select, update, status); actions.append(save, choose); card.append(head, actions, picker); shadow.append(style, card);
     document.documentElement.append(host);
+    ui = rbwGuard(); ui.watch(host);
     status.textContent = "";
   }
   api.runtime.onMessage.addListener((message, sender) => {

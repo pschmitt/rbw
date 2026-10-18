@@ -3,7 +3,23 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
   if (location.href !== expectedUrl) throw new Error("Page changed. Choose Fill again.");
   const speedFactor = options.animationSpeed === "slow" ? 0.65 : options.animationSpeed === "fast" ? 1.5 : 1;
   const all = root => [...root.querySelectorAll("input,textarea,select"), ...[...root.querySelectorAll("*")].filter(el => el.shadowRoot).flatMap(el => all(el.shadowRoot))];
-  const fields = all(document).filter(el => !el.disabled && !el.readOnly && el.getClientRects().length && getComputedStyle(el).visibility !== "hidden" && el.type !== "hidden");
+  const parentOf = n => n.parentElement || n.getRootNode().host;
+  const isFillable = el => {
+    if (el.disabled || el.readOnly || el.type === "hidden") return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 8 || rect.height < 8) return false;
+    const doc = document.documentElement;
+    if (rect.right + scrollX <= 0 || rect.bottom + scrollY <= 0 || rect.left + scrollX >= Math.max(doc.scrollWidth, innerWidth) || rect.top + scrollY >= Math.max(doc.scrollHeight, innerHeight)) return false;
+    if (typeof el.checkVisibility === "function" ? !el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) : getComputedStyle(el).visibility === "hidden") return false;
+    let opacity = 1;
+    for (let n = el; n; n = parentOf(n)) {
+      const style = getComputedStyle(n);
+      opacity *= Number(style.opacity || 1);
+      if (!(opacity >= 0.1) || style.display === "none" || /inset\(\s*(50|100)%|circle\(\s*0(px|%)?\s*[a-z)]/i.test(style.clipPath)) return false;
+    }
+    return true;
+  };
+  const fields = all(document).filter(isFillable);
   const previous = new Map();
   const read = el => ({ value: el.value, checked: el.checked });
   const brandNames = {
@@ -51,6 +67,7 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
   let count = 0;
   let securityCodeFieldPresent = false;
   const assignments = [];
+  let scoped = fields;
   const put = (el, value, field = null) => {
     if (el && value != null) {
       assignments.push({ el, value, field });
@@ -68,13 +85,25 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     // Username-only flows require explicit login semantics; never guess a search box.
     const usernameOnly = el => el.autocomplete?.split(/\s+/).includes("username") || /username|identifier|login/i.test([el.id, el.name].join(" ")) || (recognizable(el) && /login|sign.?in|auth/i.test([el.form?.id, el.form?.name, el.form?.getAttribute("action"), el.form?.getAttribute("aria-label")].filter(Boolean).join(" ")));
     const user = password ? users.find(recognizable) || (password.form ? users.filter(el => el.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING).at(-1) : null) : users.find(usernameOnly);
+    scoped = password?.form ? fields.filter(el => el.form === password.form) : fields;
     put(user, data.username); put(password, data.password);
     if (password) password.focus(); else user?.focus();
   } else {
     const names = data.type === "card" ? { "cc-name": "cardholder_name", "cc-number": "number", "cc-exp-month": "exp_month", "cc-exp-year": "exp_year", "cc-type": "brand" } : { "given-name": "first_name", "additional-name": "middle_name", "family-name": "last_name", "address-line1": "address1", "address-line2": "address2", "address-line3": "address3", "address-level2": "city", "address-level1": "state", "postal-code": "postal_code", "country": "country", "country-name": "country", "tel": "phone", "email": "email", "username": "username", "honorific-prefix": "title" };
     if (data.type === "card" && options.cardSecurityCode === "fill") names["cc-csc"] = "code";
-    const activeForm = data.type === "card" ? document.activeElement?.form : null;
-    const targets = activeForm ? fields.filter(el => el.form === activeForm) : fields;
+    let focused = document.activeElement;
+    while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+    if (!fields.includes(focused)) throw new Error("Focus a field in the form you want to fill.");
+    const within = (box, n) => { for (; n; n = parentOf(n)) if (n === box) return true; return false; };
+    if (focused.form) scoped = fields.filter(el => el.form === focused.form);
+    else {
+      let box = null;
+      for (let n = parentOf(focused); n && n !== document.body && n !== document.documentElement; n = parentOf(n)) {
+        if (n.matches?.('fieldset,form,[role="form"]') || fields.filter(el => within(n, el)).length >= 3) { box = n; break; }
+      }
+      scoped = box ? fields.filter(el => within(box, el)) : [focused];
+    }
+    const targets = scoped;
     for (const el of targets) {
       const name = (el.getAttribute("autocomplete") || el.autocomplete || "").toLowerCase().split(/\s+/).at(-1);
       const fieldLabel = [el.id, el.name, el.getAttribute("aria-label"), el.getAttribute("placeholder")].filter(Boolean).join(" ");
@@ -90,8 +119,10 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     }
   }
   for (const field of data.custom || []) {
+    if (field.type === "hidden") continue;
     if (data.type === "card" && field.type === "linked" && field.value === "303" && options.cardSecurityCode !== "fill") continue;
-    const el = fields.find(el => el.id === field.name || el.name === field.name);
+    if (data.type !== "login" && field.type === "linked" && ["414", "416", "417"].includes(String(field.value))) continue;
+    const el = scoped.find(el => el.id === field.name || el.name === field.name);
     if (el) {
       const linked = { 100: "username", 101: "password", 300: "cardholder_name", 301: "exp_month", 302: "exp_year", 303: "code", 304: "brand", 305: "number", 400: "title", 401: "first_name", 402: "middle_name", 403: "last_name", 404: "address1", 405: "address2", 406: "address3", 407: "city", 408: "state", 409: "postal_code", 410: "country", 412: "email", 413: "phone", 414: "ssn", 415: "username", 416: "passport_number", 417: "license_number" };
       const value = field.type === "linked" ? field.value === "418" ? [data.first_name, data.middle_name, data.last_name].filter(Boolean).join(" ") : data[linked[field.value]] : field.value;

@@ -5,6 +5,26 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
+## Features in 0.2.34
+
+Security hardening following an internal review:
+
+- Inline suggestions and the save prompt ignore clicks unless rbw's overlay is
+  the topmost, fully opaque element under the pointer, has been visible for
+  500 ms, and the page is focused. Pages cannot restyle the overlay
+  invisible. The card chooser opens automatically only after a real click or
+  key press in that field.
+- Fills skip fields that are tiny, transparent, off-page or clipped away.
+  Card and identity fills require a focused field and stay within its form.
+  Hidden-type custom fields are never filled automatically, and linked SSN,
+  passport and license fields are never filled from card or identity items.
+- On-load autofill and website icons are now off by default. Existing stored
+  preferences are kept.
+- Filling refuses plain-HTTP pages other than localhost. On an HTTP page only
+  explicitly `http:` URIs match; scheme-less URIs no longer do.
+- The Starts with URI match type requires the same origin, so
+  `https://example.com` no longer matches `https://example.com.evil.net/`.
+
 ## Features in 0.2.33
 
 - Passkey sign-in shows the selected account and tracks the initial vault sync,
@@ -108,8 +128,9 @@ is no browser vault cache, HTTP listener or separate browser agent.
   repeated within 30 seconds; opening the vault has a separate shortcut. A brief
   page notification identifies the filled login and username, without passwords.
   Login/custom-field filling rechecks the URI in rbw and the current document.
-  Forms are never submitted automatically. On-load filling is enabled by
-  default and fills the first matching login unless it requires reprompt.
+  Forms are never submitted automatically. On-load filling is off by
+  default; when enabled it fills the first matching login unless it requires
+  reprompt.
 - Inline matching-login suggestions in login fields. Submitted credentials can
   be saved or used to update an existing matching login after approval in the
   popup. The badge indicates pending suggestions, which expire in two minutes.

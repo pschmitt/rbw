@@ -395,9 +395,7 @@ fn dispatch(
                          -> anyhow::Result<bool> {
                             for uri in uris {
                                 let value = decrypt(entry, &uri.uri)?;
-                                if url.scheme() == "http"
-                                    && value.starts_with("https:")
-                                {
+                                if skip_insecure_uri(url, &value) {
                                     continue;
                                 }
                                 if commands::matches_url(
@@ -1187,6 +1185,17 @@ fn decrypt(entry: &rbw::db::Entry, value: &str) -> anyhow::Result<String> {
     actions::decrypt(value, entry.key.as_deref(), entry.org_id.as_deref())
 }
 
+/// On a plain-HTTP page (other than loopback) only URIs that are explicitly
+/// `http:` may match; `https:` and scheme-less values are skipped.
+fn skip_insecure_uri(url: &url::Url, value: &str) -> bool {
+    url.scheme() == "http"
+        && !matches!(
+            url.host_str(),
+            Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+        )
+        && !value.trim_start().to_ascii_lowercase().starts_with("http:")
+}
+
 fn matches(
     entry: &rbw::db::Entry,
     uris: &[rbw::db::Uri],
@@ -1196,7 +1205,7 @@ fn matches(
     // when the configured URI matching rule would otherwise permit it.
     for uri in uris {
         let value = decrypt(entry, &uri.uri)?;
-        if url.scheme() == "http" && value.starts_with("https:") {
+        if skip_insecure_uri(url, &value) {
             continue;
         }
         if commands::matches_url(&value, uri.match_type, url) {

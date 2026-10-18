@@ -921,7 +921,7 @@ attempt(async () => {
   try {
     const initial = await request("bootstrap");
     preference = initial.preferences; applyTheme(preference.theme); applyTabs();
-    $("setting-autofill").checked = preference.autoFill !== false;
+    $("setting-autofill").checked = preference.autoFill === true;
     $("setting-animations").value = preference.animations;
     $("setting-animation-speed").value = preference.animationSpeed; $("setting-animation-speed").disabled = preference.animations === "off";
     $("setting-card-code").value = ["fill", "clipboard"].includes(preference.cardSecurityCode) ? preference.cardSecurityCode : "off";
