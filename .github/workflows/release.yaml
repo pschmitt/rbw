@@ -195,6 +195,7 @@ jobs:
             ${{ github.workspace }}/dist/*.tar.gz
             ${{ github.workspace }}/dist/*.xpi
             ${{ github.workspace }}/dist/*.crx
+            ${{ github.workspace }}/dist/SHA256SUMS
       - name: Prepare release notes
         run: |
           version="${GITHUB_REF_NAME#v}"

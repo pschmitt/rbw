@@ -52,6 +52,9 @@ jobs:
             org.opencontainers.image.version=${{ steps.platform.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          # BuildKit provenance and SBOM attestations travel with each image.
+          provenance: mode=max
+          sbom: true
           cache-from: type=gha,scope=docker-${{ steps.platform.outputs.pair }}
           cache-to: type=gha,mode=max,scope=docker-${{ steps.platform.outputs.pair }}
       - run: |
@@ -70,6 +73,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -105,4 +110,15 @@ jobs:
             --annotation "index:org.opencontainers.image.version=${{ steps.meta.outputs.version }}" \
             --annotation "index:org.opencontainers.image.revision=${{ github.sha }}" \
             $(printf '${{ env.IMAGE }}@sha256:%s ' *)
-      - run: docker buildx imagetools inspect "${{ env.IMAGE }}:latest"
+      - id: digest
+        run: |
+          docker buildx imagetools inspect "${{ env.IMAGE }}:latest"
+          digest=$(docker buildx imagetools inspect "${{ env.IMAGE }}:latest" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+      # GitHub build provenance for the multi-arch image, stored in GHCR too;
+      # verify with `gh attestation verify oci://ghcr.io/pschmitt/rbw:latest -R pschmitt/rbw`.
+      - uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
