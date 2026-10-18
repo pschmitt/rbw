@@ -11,6 +11,27 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  # Every push and pull request: unsigned packages for temporary loading
+  # (Firefox about:debugging, Chromium "Load unpacked" after unzipping).
+  browser-unsigned:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check extension scripts
+        run: |
+          for script in browser/extension/*.js
+          do
+            node --check "$script"
+          done
+      - name: Build unsigned browser packages
+        run: python3 browser/build.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: browser-extensions-unsigned
+          path: |
+            browser/dist/rbw-firefox.zip
+            browser/dist/rbw-chromium.zip
+          if-no-files-found: error
   browser:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest

@@ -3,17 +3,29 @@
 # Build stage: compile the two binaries this repo produces (`rbw` and
 # `rbw-agent`, both under src/bin/) with plain cargo. The version pinned
 # here should track Cargo.toml's `rust-version` (MSRV); bump both together.
-FROM rust:1.99-bookworm AS build
+FROM rust:1.99-bookworm AS chef
+RUN cargo install cargo-chef --locked --version 0.1.78
 WORKDIR /build
 
+# cargo-chef splits dependency compilation into its own layer, keyed only on
+# the dependency graph, so CI's layer cache (type=gha) can skip rebuilding
+# dependencies when only rbw's own sources change.
+FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+RUN cargo chef prepare --recipe-path recipe.json
 
+FROM chef AS build
+COPY --from=planner /build/recipe.json recipe.json
 # --no-default-features: this drops the `clipboard` cargo feature (arboard),
 # which otherwise pulls in wayland-data-control system deps at build time.
 # A container has no clipboard/display to speak of, so there's nothing for
 # that feature to do here anyway - dropping it keeps the build stage free of
 # libxkbcommon/wayland-client headers and their transitive build deps.
+RUN cargo chef cook --release --no-default-features --recipe-path recipe.json --bin rbw --bin rbw-agent
+
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
 RUN cargo build --release --no-default-features --bin rbw --bin rbw-agent \
     && install -Dm755 target/release/rbw /out/usr/bin/rbw \
     && install -Dm755 target/release/rbw-agent /out/usr/bin/rbw-agent
