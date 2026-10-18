@@ -82,22 +82,23 @@ scratch host to exercise inline fills, saves and clickjacking attempts in a
 real browser. It needs Nix, uses an isolated HOME and a stub native host, and
 never touches a vault.
 
-## Nix installation and signed updates
+## Nix
 
-The flake exports `firefox-addon`, `chromium-addon`, and `browser-native-host`.
-Add the Firefox add-on to `extensions.packages` and the host to both browsers'
-`nativeMessagingHosts`. For Chromium use `chromium-addon.extensionId`,
-`crxPath = "${chromiumAddon}/rbw.crx"`, and `chromium-addon.version` in
-`programs.chromium.extensions`. Firefox's XPI must be AMO-signed (unlisted is
-sufficient); Chromium uses a CRX3 package with the existing signing identity.
-Browser restarts or acceptance of newly requested permissions may be necessary.
+Installing the add-ons, the native messaging host and the allowlist with
+NixOS or Home Manager is described in [nix.md](nix.md).
+
+## Signed packages and releases
+
+Firefox's XPI must be AMO-signed (unlisted is sufficient); Chromium uses a CRX3
+package with the existing signing identity.
 
 `browser/packages/` holds signed distribution artifacts and the public Chromium
 identity. Never put private signing keys or AMO credentials in the repository.
 The extension shares rbw's version: `build.py` and `nix/browser.nix` read it
 from `Cargo.toml`, so there is nothing to bump separately. The main-branch build
-workflow signs changed packages through AMO and with the existing Chromium key
-when the checked-in packages do not match the source. It reads
+workflow signs the packages through AMO and with the existing Chromium key when
+the source version has no signed package yet, i.e. on release commits; other
+extension changes wait for the next release. It reads
 `RBW_AMO_API_KEY`, `RBW_AMO_API_SECRET` and `RBW_CHROMIUM_SIGNING_KEY` from
 GitHub Actions secrets. AMO signs each version once, so every release that
 changes extension sources needs a new rbw version. Release with

@@ -35,8 +35,8 @@ browser:
       executableRoots: [/nix/store/...-firefox]
 ```
 
-Manual installs, the allowlist's rules and the Nix/Home Manager wiring are in
-the [reference](../docs/browser.md).
+NixOS and Home Manager setup is in [docs/nix.md](../docs/nix.md); manual
+installs and the allowlist's rules are in the [reference](../docs/browser.md).
 
 ## Development
 

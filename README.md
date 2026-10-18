@@ -37,8 +37,9 @@ cargo install --locked --git https://github.com/pschmitt/rbw
 ```
 
 You also need [`pinentry`](https://www.gnupg.org/related_software/pinentry/)
-for password prompts. Signed, attested release archives and the Nix/Home
-Manager setup are described in [docs/install.md](docs/install.md).
+for password prompts. Signed, attested release archives are described in
+[docs/install.md](docs/install.md); for Nix, Home Manager and the browser
+extension on NixOS see [docs/nix.md](docs/nix.md).
 
 ## Quick start
 
@@ -61,7 +62,8 @@ rest. On bitwarden.com, run `rbw register` first
 
 | Topic | |
 |---|---|
-| [Installation](docs/install.md) | Cargo, release verification, Home Manager |
+| [Installation](docs/install.md) | Cargo and release verification |
+| [Nix](docs/nix.md) | Flake, overlay, Home Manager module, browser setup |
 | [Configuration](docs/configuration.md) | `config.yaml`, accounts, aliases, profiles |
 | [Usage](docs/usage.md) | Everyday commands, search, attachments, 2FA |
 | [Passkeys](docs/passkeys.md) | Counters and browser injection |
