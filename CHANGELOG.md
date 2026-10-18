@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.22.1] - 2026-10-18
+
 ### Added
 
 * `defaultUriMatch` config option (`rbw config set defaultUriMatch host`, Home
