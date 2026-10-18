@@ -136,6 +136,8 @@ header, #message { flex-shrink:0; }
 .svg-icon { display:inline-block; width:20px; height:20px; flex:none; vertical-align:middle; }
 .brand-icon { width:26px; height:20px; border-radius:3px; }
 button:has(>.svg-icon), button:has(>[data-icon]) { display:inline-flex; align-items:center; justify-content:center; gap:5px; }
+/* Keep the title menu's icon and label left-aligned despite the generic icon-button rule. */
+.title-dropdown button:has(>[data-icon]) { display:flex; justify-content:flex-start; }
 /* This rule is as specific as the generic :has() rule and preserves the fixed logo slot. */
 button.avatar { display:grid; justify-content:end; gap:0; }
 [data-icon] { display:inline-flex; align-items:center; justify-content:center; }
