@@ -160,7 +160,7 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@v23
       # Keep the Nix store between runs; with crane, rbw's dependencies are a
       # separate derivation that only changes with Cargo.lock or the toolchain.
-      - uses: nix-community/cache-nix-action@v6
+      - uses: nix-community/cache-nix-action@v7
         with:
           primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-
