@@ -61,29 +61,34 @@ async function favicon(origin) {
   const operation = fetchFavicon(origin); faviconPending.set(origin, operation);
   try { return await operation; } finally { if (faviconPending.get(origin) === operation) faviconPending.delete(origin); }
 }
-async function fetchFavicon(origin) {
-  const generation = metadataEpoch;
-  const url = new URL(origin);
-  if (url.origin !== origin || url.username || url.password || !(url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "localhost"))) return null;
-  const cached = faviconCache.get(origin); if (cached) return cached.value;
-  let value = null;
+// Fetch an icon without cookies or referrer and return it as a bounded data
+// URL, or null. SVG is fine: images cannot run scripts.
+const ICON_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/x-icon", "image/vnd.microsoft.icon", "image/avif", "image/svg+xml"];
+async function iconDataUrl(source) {
   try {
-    const response = await fetch(origin + "/favicon.ico", { credentials: "omit", referrerPolicy: "no-referrer", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(3000) });
+    const response = await fetch(source, { credentials: "omit", referrerPolicy: "no-referrer", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(3000) });
     const type = response.headers.get("content-type")?.split(";")[0].trim();
-    if (!response.ok || !["image/png", "image/jpeg", "image/gif", "image/webp", "image/x-icon", "image/vnd.microsoft.icon", "image/avif"].includes(type)) throw new Error("No icon");
-    if (Number(response.headers.get("content-length")) > 128 * 1024) throw new Error("Icon too large");
+    if (!response.ok || !ICON_TYPES.includes(type)) return null;
+    if (Number(response.headers.get("content-length")) > 128 * 1024) return null;
     const reader = response.body.getReader(); let length = 0; const chunks = [];
     while (true) {
       const { done, value: chunk } = await reader.read(); if (done) break;
       length += chunk.length;
-      if (length > 128 * 1024) { await reader.cancel(); throw new Error("Icon too large"); }
+      if (length > 128 * 1024) { await reader.cancel(); return null; }
       chunks.push(chunk);
     }
     const bytes = new Uint8Array(length); let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
     let binary = ""; for (const byte of bytes) binary += String.fromCharCode(byte);
-    value = `data:${type};base64,${btoa(binary)}`;
-  } catch (_) { /* Missing icons retain the local item-type icon. */ }
+    return `data:${type};base64,${btoa(binary)}`;
+  } catch (_) { return null; /* Missing icons retain the local item-type icon. */ }
+}
+async function fetchFavicon(origin) {
+  const generation = metadataEpoch;
+  const url = new URL(origin);
+  if (url.origin !== origin || url.username || url.password || !(url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "localhost"))) return null;
+  const cached = faviconCache.get(origin); if (cached) return cached.value;
+  const value = await iconDataUrl(origin + "/favicon.ico");
   if (generation === metadataEpoch) cacheFor(faviconCache, origin, value, 5 * 60 * 1000, 128); return value;
 }
 const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: false };
@@ -226,15 +231,18 @@ async function refreshActiveBadge() {
   const [tab] = await api.tabs.query({ active: true, currentWindow: true });
   if (tab?.id !== undefined) await updateSuggestionsBadge(tab.id, tab);
 }
-let notificationIcon;
-async function getNotificationIcon() {
-  notificationIcon ||= fetch(api.runtime.getURL("icons/rbw-32.png")).then(async response => {
+// Bundled images as data URLs, for UI injected into pages (which cannot load
+// extension resources). The toolbar crab brands inline headers.
+const bundledIcons = new Map();
+function bundledIcon(path) {
+  if (!bundledIcons.has(path)) bundledIcons.set(path, fetch(api.runtime.getURL(path)).then(async response => {
     const bytes = new Uint8Array(await response.arrayBuffer()); let binary = "";
     for (const byte of bytes) binary += String.fromCharCode(byte);
     return "data:image/png;base64," + btoa(binary);
-  }).catch(() => null);
-  return notificationIcon;
+  }).catch(() => null));
+  return bundledIcons.get(path);
 }
+const getNotificationIcon = () => bundledIcon("icons/rbw-32.png");
 async function notifyFill(tab, notice) {
   // Bundle the local brand image into the isolated notice; no public resources
   // or website requests are needed for notification branding.
@@ -315,8 +323,11 @@ async function inlineMessage(port, message, state) {
   if (!offer || offer.origin !== session.origin) { port.postMessage({ type: "save_result", error: "Save suggestion expired." }); return; }
   if (message.type === "save_choices") {
     try {
-      const result = await cachedSearch({ account, query: offer.username || "", kind: "login" });
-      port.postMessage({ type: "save_choices", items: result.items.slice(0, 30).map(item => ({ id: item.id, name: item.name, username: item.username })) });
+      // Only this site's logins can be updated (rbw rechecks the URI natively).
+      const result = await cachedSearch({ account, url: offer.url, site_only: true, kind: "login" });
+      const user = (offer.username || "").trim().toLowerCase();
+      const items = result.items.filter(item => !item.protected).sort((a, b) => (String(b.username || "").toLowerCase() === user) - (String(a.username || "").toLowerCase() === user));
+      port.postMessage({ type: "save_choices", items: items.slice(0, 30).map(item => ({ id: item.id, name: item.name, username: item.username })) });
     } catch (_) { port.postMessage({ type: "save_choices", items: [] }); }
   } else if (message.type === "save") {
     if (!await verifyInlineClick(session, message.x, message.y)) { port.postMessage({ type: "save_result", error: "rbw could not confirm that its window is fully visible. Click again." }); return; }
@@ -338,8 +349,39 @@ api.runtime.onConnect.addListener(port => {
     chain = chain.then(() => inlineMessage(port, message, state)).catch(error => { try { port.postMessage({ type: "rejected", error: error.message || "Request failed." }); } catch (_) { /* Closed. */ } });
   });
 });
+// Compare a submitted login with this site's stored logins, natively and in
+// memory only: identical credentials (e.g. just autofilled) need no prompt; a
+// stored username with another password becomes an update suggestion.
+// Reprompt-protected logins are never decrypted here, so they never prompt.
+async function classifySaveOffer(account, url, username, password) {
+  let result;
+  try { result = await cachedSearch({ account, url, site_only: true, kind: "login" }); } catch (_) { return { saved: false, update: null }; }
+  const user = username.trim().toLowerCase();
+  let update = null;
+  for (const item of result.items) {
+    if (user && String(item.username || "").trim().toLowerCase() !== user) continue;
+    if (item.protected) return { saved: true, update: null };
+    let stored;
+    try { stored = await native({ action: "credential", account, item: item.id, url }); } catch (_) { continue; }
+    if (stored.password === password) return { saved: true, update: null };
+    if (user && !update) update = { id: item.id, name: item.name, username: item.username || "" };
+  }
+  return { saved: false, update };
+}
+// The page's own icon, which the browser already loaded; the user is on this
+// site, so unlike vault favicons this reveals nothing new to it.
+async function saveOfferIcon(tabId, offer) {
+  try {
+    const source = (await api.tabs.get(tabId)).favIconUrl;
+    if (typeof source === "string" && source.length <= 180000 && /^data:image\/(png|jpeg|gif|webp|x-icon|vnd\.microsoft\.icon|avif|svg\+xml)[;,]/i.test(source)) return source;
+    if (typeof source === "string" && /^https:\/\//i.test(source)) {
+      const value = await iconDataUrl(source); if (value) return value;
+    }
+    return await favicon(offer.origin);
+  } catch (_) { return null; }
+}
 async function notifySaveOffer(tabId, offer) {
-  const token = openInlineSession({ mode: "save", tabId, frameId: 0, origin: offer.origin, url: offer.url, payload: { mode: "save", host: new URL(offer.origin).host, username: offer.username } });
+  const token = openInlineSession({ mode: "save", tabId, frameId: 0, origin: offer.origin, url: offer.url, payload: { mode: "save", host: new URL(offer.origin).host, username: offer.username, update: offer.update || null, favicon: await saveOfferIcon(tabId, offer) } });
   return api.tabs.sendMessage(tabId, { action: "rbw_save_offer", token, origin: offer.origin }, { frameId: 0 });
 }
 
@@ -418,7 +460,7 @@ async function pageMessage(message, sender, respond) {
         favicon: kind === "login" && prefs.favicons ? faviconCache.get(v.iconOrigin)?.value || null : null }));
       const total = Math.max(eligible.length, (result.total ?? result.items.length) - (result.items.length - eligible.length));
       const token = openInlineSession({ mode: "choices", kind, tabId: sender.tab.id, frameId: sender.frameId, url: sender.url, allowed: new Set(items.map(v => v.id)), items: new Map(items.map(v => [v.id, v])), payload: { mode: "choices", kind, items, total } });
-      return respond({ result: token, appIcon: await getNotificationIcon() });
+      return respond({ result: token, appIcon: await bundledIcon("icons/toolbar-48.png") });
     } catch (_) { return respond({ result: null }); }
   }
   if (message.action === "keyboard_fill_shortcut") {
@@ -432,8 +474,10 @@ async function pageMessage(message, sender, respond) {
   if (message.action === "save_offer") {
     if (!prefs.savePrompts || typeof message.username !== "string" || typeof message.password !== "string" || message.password.length > 4096 || message.username.length > 1024) return respond({ result: false });
     const tabId = sender.tab.id;
+    const known = await classifySaveOffer(prefs.account || null, sender.url, message.username, message.password);
+    if (known.saved) return respond({ result: false });
     const previous = offers.get(tabId); if (previous) clearTimeout(previous.timer);
-    const offer = { origin: url.origin, url: sender.url, username: message.username, password: message.password, timer: setTimeout(() => { offers.delete(tabId); badge(); api.tabs.sendMessage(tabId, { action: "rbw_save_offer_clear" }).catch(() => {}); }, 120000) };
+    const offer = { origin: url.origin, url: sender.url, username: message.username, password: message.password, update: known.update, timer: setTimeout(() => { offers.delete(tabId); badge(); api.tabs.sendMessage(tabId, { action: "rbw_save_offer_clear" }).catch(() => {}); }, 120000) };
     offers.set(tabId, offer);
     notifySaveOffer(tabId, offer).catch(() => {});
     badge(); return respond({ result: true });

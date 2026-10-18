@@ -94,35 +94,76 @@ function renderChoices(data) {
     send({ type: "icons" });
   }
 }
+const SAVE_TIMEOUT = 20000;
+// Header shared in look with the inline chooser: title, Keep open, close and
+// an auto-close progress bar.
+function header(titleText, onClose) {
+  const head = element("div", null, "header");
+  const title = element("span", null, "title");
+  const appIcon = element("img", null, "app-icon"); appIcon.alt = ""; appIcon.src = "icons/toolbar-48.png";
+  title.append(appIcon, element("span", titleText));
+  const keepOpen = element("button", "Keep open", "timer-stop-btn"); keepOpen.type = "button"; keepOpen.title = "Stop the auto-close timer"; keepOpen.hidden = true;
+  const close = element("button", null, "dismiss-btn"); close.type = "button"; close.title = "Dismiss"; close.setAttribute("aria-label", "Dismiss"); close.append(icon("close"));
+  close.addEventListener("click", event => { if (event.isTrusted) onClose(); });
+  const progress = element("div", null, "autoclose-progress"); progress.hidden = true; progress.setAttribute("role", "progressbar");
+  const bar = element("span", null, "autoclose-progress-fill"); progress.append(bar);
+  head.append(title, keepOpen, close, progress);
+  let timer = null;
+  const stop = () => { clearTimeout(timer); timer = null; progress.hidden = true; keepOpen.hidden = true; };
+  const start = (ms, onTimeout) => {
+    stop(); progress.hidden = false; keepOpen.hidden = false;
+    progress.setAttribute("aria-label", `Closes in ${Math.round(ms / 1000)} seconds`);
+    bar.style.transition = "none"; bar.style.transform = "scaleX(1)"; void bar.getBoundingClientRect();
+    bar.style.transition = `transform ${ms}ms linear`;
+    requestAnimationFrame(() => { bar.style.transform = "scaleX(0)"; });
+    timer = setTimeout(onTimeout, ms);
+  };
+  keepOpen.addEventListener("click", event => { if (event.isTrusted) stop(); });
+  return { head, start, stop };
+}
+const labelled = (button, iconName, text) => { button.append(icon(iconName), element("span", text)); return button; };
 function renderSave(data) {
   root.className = "save";
+  const update = data.update;
+  const top = header("rbw · Save login", () => send({ type: "dismiss" }));
+  const body = element("div", null, "body");
   const head = element("div", null, "head");
-  const logo = element("img", null, "logo"); logo.alt = ""; logo.src = "icons/rbw-48.png";
-  const copy = element("div", null, "copy"); copy.append(element("strong", "Save this login?"), element("small", `${data.host}${data.username ? ` · ${data.username}` : ""}`));
-  const dismiss = element("button", "Dismiss", "dismiss"); dismiss.type = "button";
-  dismiss.addEventListener("click", event => { if (event.isTrusted) send({ type: "dismiss" }); });
-  head.append(logo, copy, dismiss);
+  // The site's own icon; rbw's logo is already in the header.
+  const logo = element("span", null, "logo");
+  if (data.favicon) { const image = element("img"); image.alt = ""; image.src = data.favicon; image.onerror = () => image.replaceWith(icon("key")); logo.append(image); }
+  else logo.append(icon("key"));
+  const copy = element("div", null, "copy");
+  copy.append(element("strong", update ? `Update password for ${update.name}?` : "Save this login?"),
+    element("small", `${data.host}${(update?.username || data.username) ? ` · ${update?.username || data.username}` : ""}`));
+  head.append(logo, copy);
   const actions = element("div", null, "actions");
-  const save = element("button", "Save new login", "primary"); save.type = "button";
-  const choose = element("button", "Update existing"); choose.type = "button";
+  const primary = labelled(element("button", null, "primary"), update ? "check" : "plus", update ? "Update password" : "Save new login"); primary.type = "button";
+  const secondary = update ? labelled(element("button"), "plus", "Save as new") : labelled(element("button"), "edit", "Update existing"); secondary.type = "button";
   const picker = element("div", null, "picker"); picker.hidden = true;
   const select = element("select"); select.setAttribute("aria-label", "Choose an existing login"); select.append(new Option("Choose a login…", ""));
-  const update = element("button", "Update login", "primary"); update.type = "button"; update.disabled = true;
+  const apply = labelled(element("button", null, "primary"), "check", "Update login"); apply.type = "button"; apply.disabled = true;
   const status = element("p", "", "status");
   notice = status;
-  const busy = (value, text = "") => { for (const button of [save, choose, update, dismiss]) button.disabled = value; if (!value) update.disabled = !select.value; status.textContent = text; };
-  save.addEventListener("click", event => { if (act(event, { type: "save", item: null })) busy(true, "Saving and syncing…"); });
-  choose.addEventListener("click", event => { if (!event.isTrusted) return; picker.hidden = false; choose.disabled = true; status.textContent = "Loading matching logins…"; send({ type: "save_choices" }); });
-  select.addEventListener("change", () => { update.disabled = !select.value; });
-  update.addEventListener("click", event => { if (select.value && act(event, { type: "save", item: select.value })) busy(true, "Updating and syncing…"); });
+  const buttons = [primary, secondary, apply];
+  const busy = (value, text = "") => { for (const button of buttons) button.disabled = value; if (!value) apply.disabled = !select.value; status.textContent = text; };
+  const engaged = () => top.stop();
+  primary.addEventListener("click", event => { engaged(); if (act(event, { type: "save", item: update ? update.id : null })) busy(true, update ? "Updating and syncing…" : "Saving and syncing…"); });
+  if (update) secondary.addEventListener("click", event => { engaged(); if (act(event, { type: "save", item: null })) busy(true, "Saving and syncing…"); });
+  else secondary.addEventListener("click", event => { if (!event.isTrusted) return; engaged(); picker.hidden = false; secondary.disabled = true; status.textContent = "Loading this site's logins…"; send({ type: "save_choices" }); });
+  select.addEventListener("change", () => { engaged(); apply.disabled = !select.value; });
+  apply.addEventListener("click", event => { engaged(); if (select.value && act(event, { type: "save", item: select.value })) busy(true, "Updating and syncing…"); });
   session.saveChoices = items => {
     select.replaceChildren(new Option("Choose a login…", ""));
     for (const item of items) select.append(new Option(item.username ? `${item.name} · ${item.username}` : item.name, item.id));
-    status.textContent = select.options.length > 1 ? "" : "No matching logins found."; choose.disabled = false;
+    status.textContent = select.options.length > 1 ? "" : "No logins for this site."; secondary.disabled = false;
   };
   session.saveResult = error => busy(false, error || "");
-  picker.append(select, update, status); actions.append(save, choose);
-  root.replaceChildren(head, actions, picker);
+  picker.append(select, apply);
+  actions.append(primary, secondary);
+  body.append(head, actions, picker, status);
+  root.replaceChildren(top.head, body);
+  // Hide after a while; the offer stays available from the toolbar badge.
+  top.start(SAVE_TIMEOUT, () => send({ type: "close" }));
 }
 function connect(value) {
   port = api.runtime.connect({ name: "rbw-inline" });

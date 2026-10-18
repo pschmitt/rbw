@@ -15,7 +15,7 @@ import time
 # host in the page and click at fixed offsets inside it.
 HOST_JS = """(save) => { const el = [...document.documentElement.children].filter(e => e.tagName === 'DIV' && (e.getAttribute('style') || '').includes('2147483647') && (e.getAttribute('style') || '').includes('inset') === !!save).pop();
   if (!el || getComputedStyle(el).visibility !== 'visible') return null; const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; }"""
-OFFSETS = {"login": (60, 50), "card": (60, 102), "save": (70, 82)}
+OFFSETS = {"login": (60, 50), "card": (60, 102), "save": (70, 102)}
 SHADOW_DECOY = "() => { const h = document.createElement('span'); document.documentElement.append(h); const r = h.attachShadow({ mode: 'closed' }); const d = document.createElement('div'); d.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;background:#fff'; r.append(d); }"
 
 
@@ -32,6 +32,7 @@ class ChromiumPage:
     def click(self, selector): self.page.click(selector)
     def fill(self, selector, value): self.page.fill(selector, value)
     def key(self, key, selector=None): (self.page.press(selector, key) if selector else self.page.keyboard.press(key))
+    def screenshot(self, path, rect): self.page.screenshot(path=path, clip={"x": rect["x"] - 8, "y": rect["y"] - 8, "width": rect["w"] + 16, "height": rect["h"] + 16})
     def close(self): self.context.close(); self.playwright.stop()
 
 
@@ -57,6 +58,7 @@ class FirefoxPage:
         value = {"Enter": Keys.ENTER, "Escape": Keys.ESCAPE}[key]
         if selector: self.driver.find_element("css selector", selector).send_keys(value)
         else: ActionChains(self.driver).send_keys(value).perform()
+    def screenshot(self, path, _rect): self.driver.save_screenshot(path)
     def close(self): self.driver.quit()
 
 
@@ -91,9 +93,13 @@ def main():
 
     def values(): return page.evaluate("values()")
 
+    def shoot(name, rect):
+        if os.environ.get("RBW_E2E_SCREENSHOTS"): time.sleep(0.6); page.screenshot(os.path.join(os.environ["RBW_E2E_SCREENSHOTS"], f"{args.browser}-{name}.png"), rect)
+
     try:
         fresh(); page.click("#pass"); opened = host()
         check("login chooser opens in extension frame", opened is not None)
+        if opened: shoot("chooser", opened)
         if opened:
             click_in("login"); v = values()
             check("login fill via frame", v["pass"] == "pw-from-rbw" and v["user"] == "alice", str(v))
@@ -128,12 +134,26 @@ def main():
             click_in("card"); v = values()
             check("card fill via frame", v["ccnum"] == "4111111111111111" and v["ccname"] == "Alice Test", str(v))
 
-        fresh(); page.fill("#user", "bob"); page.fill("#pass", "hunter2"); page.key("Escape"); page.key("Enter", "#pass")
-        opened = host("save")
-        check("save prompt opens in extension frame", opened is not None)
+        def submit(user, password):
+            fresh(); page.fill("#user", user); page.fill("#pass", password); page.key("Escape"); page.key("Enter", "#pass")
+
+        def logged(entry):
+            with open(os.environ["RBW_E2E_LOG"]) as log: return entry in log.read().split()
+
+        submit("bob", "hunter2"); opened = host("save")
+        if opened: shoot("save-new", opened)
+        check("save prompt opens for a new login", opened is not None)
         if opened:
-            click_in("save")
-            with open(os.environ["RBW_E2E_LOG"]) as log: check("save prompt saves", "save" in log.read().split())
+            click_in("save"); check("save prompt saves a new login", logged("save:"))
+
+        submit("alice", "pw-from-rbw")
+        check("no save prompt for an already stored login", host("save", timeout=3.0) is None)
+
+        submit("Alice", "changed-password"); opened = host("save")
+        if opened: shoot("save-update", opened)
+        check("update prompt for a stored username with a new password", opened is not None)
+        if opened:
+            click_in("save"); check("update prompt updates the stored login", logged("save:login-1"))
     finally:
         page.close()
     print(f"{sum(results)}/{len(results)} passed")

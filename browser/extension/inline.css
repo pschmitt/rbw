@@ -27,23 +27,38 @@ small{color:#adadad;font-size:11px;margin-top:1px}
 .card-search-count{padding:0 12px 6px;color:#adadad}
 .card-search-results{max-height:280px;overflow:auto}
 .inline-empty{margin:0;padding:14px 12px;color:#adadad}
-main.save{box-sizing:border-box;padding:16px;border:1px solid #555;border-radius:14px;background:#242424;color:#f2f2f2;font:14px/1.45 system-ui,sans-serif}
-.save .head{display:flex;align-items:flex-start;gap:12px}
-.save .logo{width:34px;height:34px;object-fit:contain;flex:none;border-radius:8px}
+.header{position:relative;display:flex;align-items:center;gap:4px;padding:6px 10px;background:#202020;border-bottom:1px solid #494949}
+.title{display:flex;align-items:center;gap:6px;flex:1;min-width:0;color:#adadad;font-size:11px;font-weight:600;letter-spacing:0.3px;text-transform:uppercase}
+.app-icon{width:18px;height:18px;object-fit:contain;flex-shrink:0}
+.autoclose-progress{position:absolute;left:0;right:0;bottom:0;height:3px;overflow:hidden;background:#3b3b3b;pointer-events:none}
+.autoclose-progress-fill{display:block;width:100%;height:100%;background:#8ab4f8;transform:scaleX(1);transform-origin:left center}
+.timer-stop-btn{border:0;border-radius:4px;padding:3px 6px;background:transparent;color:#adadad;font:11px system-ui,sans-serif;cursor:pointer}
+.timer-stop-btn:hover,.timer-stop-btn:focus-visible{background:#383838;color:#efefef;outline:1px solid #777}
+.timer-stop-btn[hidden],.autoclose-progress[hidden]{display:none}
+.dismiss-btn{display:flex;align-items:center;justify-content:center;border:0;background:transparent;color:#adadad;padding:2px 4px;border-radius:4px;cursor:pointer;line-height:1}
+.dismiss-btn:hover,.dismiss-btn:focus-visible{color:#efefef;background:#383838;outline:none}
+.dismiss-btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+main.save{box-sizing:border-box;border:1px solid #555;border-radius:10px;overflow:hidden;background:#282828;color:#efefef;font:13px/1.4 system-ui,sans-serif}
+.save .body{padding:12px 14px 14px}
+.save .head{display:flex;align-items:center;gap:12px}
+.save .logo{width:32px;height:32px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:6px;background:#383838;overflow:hidden}
+.save .logo img{width:24px;height:24px;object-fit:contain}
+.save .logo svg{width:18px;height:18px;stroke:#d0d0d0;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .save .copy{min-width:0;flex:1}
-.save strong{font-size:15px;font-weight:650}
-.save small{margin-top:3px;color:#b9b9b9;font-size:12px}
-.save .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
-.save button,.save select{box-sizing:border-box;font:inherit;color:inherit;border:1px solid #555;border-radius:8px;background:#303030;padding:8px 11px}
-.save button{cursor:pointer}
-.save button:hover,.save button:focus-visible{border-color:#aaa;background:#383838;outline:2px solid #aaa;outline-offset:1px}
-.save button.primary{background:#e1e1e1;color:#202020;border-color:#e1e1e1;font-weight:650}
-.save button.primary:hover{background:#fff}
-.save .dismiss{margin-left:auto;padding:5px 9px;color:#c3c3c3}
+.save .copy strong{font-size:14px;font-weight:600}
+.save .copy small{margin-top:2px;color:#adadad;font-size:12px}
+.save .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.save .actions button,.save .picker button,.save select{box-sizing:border-box;font:13px system-ui,sans-serif;color:#efefef;border:1px solid #555;border-radius:6px;background:#303030;padding:7px 11px}
+.save .actions button,.save .picker button{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.save .actions button svg,.save .picker button svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.save .actions button:hover,.save .actions button:focus-visible,.save .picker button:hover,.save .picker button:focus-visible{background:#383838;border-color:#8a8a8a;outline:none}
+.save button.primary{background:#e1e1e1;color:#202020;border-color:#e1e1e1;font-weight:600}
+.save button.primary:hover,.save button.primary:focus-visible{background:#fff;border-color:#fff}
+.save button:disabled{opacity:.55;cursor:default}
 .save .picker{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid #494949}
 .save .picker[hidden]{display:none}
-.save .picker select{min-width:0;width:100%;background:#303030}
-.save .status{grid-column:1/-1;min-height:18px;margin:0;color:#f0b4c0;font-size:12px}
+.save .picker select{min-width:0;width:100%}
+.save .status{min-height:0;margin:8px 0 0;color:#f0b4c0;font-size:12px}
 .save .status:empty{display:none}
 .notice{padding:6px 12px;color:#f0c674;font-size:11px}
 .notice:empty{display:none}

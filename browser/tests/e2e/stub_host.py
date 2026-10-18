@@ -14,7 +14,7 @@ while True:
     header = sys.stdin.buffer.read(4)
     if len(header) < 4: break
     request = json.loads(sys.stdin.buffer.read(struct.unpack("@I", header)[0]))
-    action = request.get("action"); log.write(action + "\n"); log.flush()
+    action = request.get("action"); log.write(f"{action}:{request.get('item') or ''}\n"); log.flush()
     if action == "status": result = {"unlocked": True, "accounts": ["test"], "primary": "test"}
     elif action == "search":
         items = [CARD] if request.get("kind") == "card" else [LOGIN] if request.get("kind") in (None, "login") else []
