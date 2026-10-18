@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.22.0] - 2026-10-18
+
 ### Changed
 
 * The browser extension now shares rbw's version and is released together
