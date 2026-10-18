@@ -64,35 +64,37 @@ function updateState(state) {
   banner.classList.toggle("is-filling", !!state.active); banner.classList.toggle("is-error", !!state.error);
   banner.textContent = state.error || (state.active ? `Filling ${state.name}…` : state.filled ? `Filled ${state.name}` : "");
 }
+// Logins search only this site's matches (rbw never fills another site's
+// login); cards are not tied to a site, so their search covers all cards.
 function renderChoices(data) {
   root.className = "choices"; rows.clear();
+  const card = data.kind === "card";
+  const noun = (count = 2) => card ? (count === 1 ? "card" : "cards") : (count === 1 ? "login" : "logins");
   banner = element("div", null, "fill-banner"); banner.hidden = true;
   notice = element("div", null, "notice");
   const list = element("div");
   for (const item of data.items) list.append(itemButton(item, data.kind));
-  if (data.kind === "card") {
-    const controls = element("div", null, "card-search");
-    const query = element("input"); query.type = "search"; query.placeholder = "Search all cards"; query.setAttribute("aria-label", "Search all cards");
-    const count = element("small", null, "card-search-count"); count.hidden = true;
-    let timer, sequence = 0;
-    query.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => send({ type: "search", query: query.value, sequence: ++sequence }), 180); });
-    controls.append(query);
-    root.replaceChildren(banner, controls, count, list, notice);
-    if (Number(data.total) > data.items.length) {
-      const more = element("div", null, "more"); more.append(element("span", `Showing ${data.items.length} of ${data.total} cards · Search to find another`)); list.after(more);
-    }
-    session.results = (results) => {
-      if (results.sequence !== sequence) return;
-      root.querySelector(".more")?.remove(); rows.clear();
-      count.hidden = false; list.className = "card-search-results";
-      count.textContent = results.total > results.items.length ? `Showing ${results.items.length} of ${results.total} cards` : `${results.items.length} ${results.items.length === 1 ? "card" : "cards"}`;
-      list.replaceChildren(...(results.items.length ? results.items.map(item => itemButton(item, "card")) : [element("p", "No matching cards.", "inline-empty")]));
-      settle();
-    };
-  } else {
-    root.replaceChildren(banner, list, notice);
-    send({ type: "icons" });
+  const controls = element("div", null, "card-search");
+  const label = card ? "Search all cards" : "Search this site's logins";
+  const query = element("input"); query.type = "search"; query.placeholder = label; query.setAttribute("aria-label", label);
+  const count = element("small", null, "card-search-count"); count.hidden = true;
+  let timer, sequence = 0;
+  query.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => send({ type: "search", query: query.value, sequence: ++sequence }), 180); });
+  controls.append(query);
+  root.replaceChildren(banner, controls, count, list, notice);
+  if (Number(data.total) > data.items.length) {
+    const more = element("div", null, "more"); more.append(element("span", `Showing ${data.items.length} of ${data.total} ${noun()} · Search to find another`)); list.after(more);
   }
+  session.results = (results) => {
+    if (results.sequence !== sequence) return;
+    root.querySelector(".more")?.remove(); rows.clear();
+    count.hidden = false; list.className = "card-search-results";
+    count.textContent = results.total > results.items.length ? `Showing ${results.items.length} of ${results.total} ${noun()}` : `${results.items.length} ${noun(results.items.length)}`;
+    list.replaceChildren(...(results.items.length ? results.items.map(item => itemButton(item, data.kind)) : [element("p", `No matching ${noun()}.`, "inline-empty")]));
+    settle();
+    if (!card && results.items.length) send({ type: "icons" });
+  };
+  if (!card) send({ type: "icons" });
 }
 const SAVE_TIMEOUT = 20000;
 // Header shared in look with the inline chooser: title, Keep open, close and

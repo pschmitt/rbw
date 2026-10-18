@@ -11,9 +11,10 @@ is no browser vault cache, HTTP listener or separate browser agent.
 ## URI matching
 
 Logins match pages by each URI's match detection, as in Bitwarden. URIs without
-their own setting use rbw's `defaultUriMatch` (Base domain unless configured),
-which the add-on options can override for this browser only. The item editor
-sets match detection per URI.
+their own setting use rbw's `defaultUriMatch`: `domain` (the default) matches
+the saved host and its subdomains, `base_domain` matches like Bitwarden's
+"Base domain". The add-on options can override the default for this browser
+only, and the item editor sets match detection per URI.
 
 ## Features in 0.2.35
 

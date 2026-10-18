@@ -93,7 +93,7 @@ async function fetchFavicon(origin) {
 }
 const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: false, uriMatchDefault: "" };
 // Empty means "use rbw's defaultUriMatch"; otherwise an override for this browser.
-const URI_MATCH_TYPES = ["domain", "host", "starts_with", "exact", "regular_expression", "never"];
+const URI_MATCH_TYPES = ["domain", "base_domain", "host", "starts_with", "exact", "regular_expression", "never"];
 let uriMatchOverride = null;
 function isAutofillBlocked(pageUrl, blocklist) {
   let page;
@@ -129,9 +129,58 @@ async function settings() {
   uriMatchOverride = result.uriMatchDefault || null;
   return result;
 }
+// Toolbar feedback while the vault syncs: the crab gets a small badge with
+// rotating sync arrows. Writes sync afterwards, so they count as well.
+const SYNCING_ACTIONS = ["sync", "save", "mutate", "import", "set_collections", "upload_finish", "attachment_delete"];
+const syncAnimation = { active: 0, timer: null, frame: 0, bitmaps: null };
+async function toolbarBitmaps() {
+  const icons = api.runtime.getManifest().action?.default_icon || {};
+  syncAnimation.bitmaps ||= Promise.all([16, 32].map(async size => [size, await createImageBitmap(await (await fetch(api.runtime.getURL(icons[size] || `icons/toolbar-${size}.png`))).blob())]));
+  return syncAnimation.bitmaps;
+}
+function syncFrame(bitmap, size, angle) {
+  const canvas = new OffscreenCanvas(size, size); const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0, size, size);
+  const r = size * 0.3, cx = size - r - 0.5, cy = size - r - 0.5;
+  ctx.fillStyle = "#1e1e1e"; ctx.strokeStyle = "#e8e8e8"; ctx.lineWidth = Math.max(1, size / 20);
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = "#8ab4f8"; ctx.fillStyle = "#8ab4f8"; ctx.lineWidth = Math.max(1.2, size / 14); ctx.lineCap = "round";
+  for (const offset of [0, Math.PI]) {
+    const start = angle + offset, end = start + Math.PI * 0.62, a = r * 0.58;
+    ctx.beginPath(); ctx.arc(cx, cy, a, start, end); ctx.stroke();
+    const tip = { x: cx + a * Math.cos(end), y: cy + a * Math.sin(end) }, head = Math.max(1.5, size / 10);
+    ctx.beginPath(); ctx.moveTo(tip.x + head * Math.cos(end + Math.PI / 2), tip.y + head * Math.sin(end + Math.PI / 2));
+    ctx.lineTo(tip.x + head * 0.9 * Math.cos(end), tip.y + head * 0.9 * Math.sin(end));
+    ctx.lineTo(tip.x - head * 0.2 * Math.cos(end + Math.PI / 2), tip.y - head * 0.2 * Math.sin(end + Math.PI / 2)); ctx.fill();
+  }
+  return ctx.getImageData(0, 0, size, size);
+}
+async function drawSyncFrame() {
+  try {
+    const bitmaps = await toolbarBitmaps(); if (!syncAnimation.active) return;
+    const angle = (syncAnimation.frame++ % 12) * (Math.PI / 6);
+    await api.action.setIcon({ imageData: Object.fromEntries(bitmaps.map(([size, bitmap]) => [size, syncFrame(bitmap, size, angle)])) });
+  } catch (_) { /* Cosmetic only. */ }
+}
+function syncStarted() {
+  if (syncAnimation.active++) return;
+  drawSyncFrame(); syncAnimation.timer = setInterval(drawSyncFrame, 120);
+}
+function syncFinished() {
+  if (--syncAnimation.active > 0) return;
+  syncAnimation.active = 0; clearInterval(syncAnimation.timer); syncAnimation.timer = null;
+  Promise.resolve(api.action.setIcon({ path: api.runtime.getManifest().action?.default_icon })).catch(() => {});
+}
 let nativePort;
 const nativeRequests = new Map();
 function native(request) {
+  if (!SYNCING_ACTIONS.includes(request.action) && !(request.action === "folders" && request.method !== "list")) return nativeCall(request);
+  syncStarted();
+  const call = (async () => nativeCall(request))();
+  call.then(syncFinished, syncFinished);
+  return call;
+}
+function nativeCall(request) {
   if (!nativePort) {
     try { nativePort = api.runtime.connectNative("org.rbw.browser"); }
     catch (cause) {
@@ -304,12 +353,17 @@ async function inlineMessage(port, message, state) {
     if (message.type === "icons") {
       if (session.kind !== "login" || !prefs.favicons || isAutofillBlocked(session.url, prefs.autofillBlocklist)) return;
       const result = await cachedSearch({ account, url: session.url, site_only: true, kind: "login" });
-      const items = await Promise.all(result.items.filter(item => session.allowed.has(item.id)).map(async item => ({ id: item.id, favicon: item.iconOrigin ? await favicon(item.iconOrigin) : null })));
+      const items = await Promise.all(result.items.filter(item => session.allowed.has(item.id)).slice(0, 50).map(async item => ({ id: item.id, favicon: item.iconOrigin ? await favicon(item.iconOrigin) : null })));
       port.postMessage({ type: "icons", items });
-    } else if (message.type === "search" && session.kind === "card") {
-      const result = await cachedSearch({ account, query: String(message.query || "").slice(0, 256), kind: "card" });
+    } else if (message.type === "search") {
+      // Logins: only this site's matches, which rbw rechecks natively on fill.
+      const query = String(message.query || "").slice(0, 256);
+      if (session.kind === "login" && isAutofillBlocked(session.url, prefs.autofillBlocklist)) return;
+      const result = await cachedSearch(session.kind === "card" ? { account, query, kind: "card" } : { account, query, url: session.url, site_only: true, kind: "login" });
       const eligible = result.items.filter(item => !item.protected && !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems));
-      const items = eligible.slice(0, 50).map(item => ({ id: item.id, name: item.name, brand: String(item.username || "").split(",", 1)[0].trim() }));
+      const items = eligible.slice(0, 50).map(item => session.kind === "card"
+        ? { id: item.id, name: item.name, brand: String(item.username || "").split(",", 1)[0].trim() }
+        : { id: item.id, name: item.name, username: item.username, favicon: prefs.favicons ? faviconCache.get(item.iconOrigin)?.value || null : null });
       for (const item of items) { session.allowed.add(item.id); session.items.set(item.id, item); }
       port.postMessage({ type: "results", sequence: message.sequence, items, total: Math.max(eligible.length, (result.total ?? result.items.length) - (result.items.length - eligible.length)) });
     } else if (message.type === "fill" && session.allowed.has(message.item)) {

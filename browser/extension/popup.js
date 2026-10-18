@@ -429,7 +429,10 @@ function totpField(item) {
   const actions = element("div", null, "field-actions");
   const copy = actionButton("Copy verification code", "copy", () => copyField(item, "totp"), "icon"); copy.disabled = true;
   actions.append(copy); row.append(code, actions);
-  const countdown = element("small", "Generating code…", "hint"); const progress = element("progress"); progress.setAttribute("aria-label", "Verification code validity");
+  const countdown = element("small", "Generating code…", "hint");
+  // A continuously shrinking bar, like the inline dialogs' auto-close progress.
+  const progress = element("div", null, "totp-progress"); progress.setAttribute("role", "progressbar"); progress.setAttribute("aria-label", "Verification code validity");
+  const fill = element("span", null, "totp-progress-fill"); progress.append(fill);
   section.append(row, countdown, progress);
   let state;
   const current = () => section.isConnected && currentPage === "detail" && currentItem === item && unlocked;
@@ -444,13 +447,15 @@ function totpField(item) {
         code.textContent = /^\d{6}$/.test(state.code) ? `${state.code.slice(0, 3)} ${state.code.slice(3)}` : state.code;
         copy.disabled = false;
       }
-      const remaining = Math.max(0, Math.ceil(state.expiresAt - Date.now() / 1000));
-      countdown.textContent = `${remaining}s remaining`; progress.max = state.period; progress.value = remaining;
+      const left = Math.max(0, state.expiresAt - Date.now() / 1000), remaining = Math.ceil(left);
+      countdown.textContent = `${remaining}s remaining`;
+      progress.setAttribute("aria-valuemax", String(state.period)); progress.setAttribute("aria-valuenow", String(remaining));
+      fill.style.transform = `scaleX(${Math.min(1, left / state.period)})`; progress.classList.toggle("is-expiring", remaining <= 5);
     } catch (_) {
       if (!current()) return;
       state = null; code.textContent = "Unavailable"; copy.disabled = true; countdown.textContent = "Could not generate verification code.";
     }
-    if (current()) totpTimer = setTimeout(tick, state ? 500 : 3000);
+    if (current()) totpTimer = setTimeout(tick, state ? 250 : 3000);
   };
   // The detail DOM is attached by the caller in the current task.
   totpTimer = setTimeout(tick, 0); return section;
@@ -481,20 +486,6 @@ async function openDetail(item) {
       const image = element("img", null, "detail-favicon"); image.src = favicon; image.alt = "";
       image.onerror = () => image.remove(); title.prepend(image);
     }).catch(() => {});
-  }
-  if (["login", "card", "identity"].includes(data.type)) {
-    const label = element("label", null, "item-autofill-setting");
-    const checkbox = element("input"); checkbox.type = "checkbox"; checkbox.checked = Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(item);
-    checkbox.onchange = async () => {
-      const excluded = new Set(Array.isArray(preference.autofillExcludedItems) ? preference.autofillExcludedItems : []);
-      if (checkbox.checked) excluded.add(item); else excluded.delete(item);
-      try {
-        preference = await request("set_preferences", { preferences: { autofillExcludedItems: [...excluded] } });
-        message(checkbox.checked ? "This item is excluded from autofill." : "This item can autofill again.");
-        await search();
-      } catch (error) { checkbox.checked = !checkbox.checked; message(error.message, true); }
-    };
-    label.append(checkbox, document.createTextNode(" Do not autofill this item")); content.append(label);
   }
   const entries = Object.entries(data);
   const orderedEntries = data.type === "login"
@@ -592,6 +583,7 @@ function renderEditFields(data = {}) {
     $("edit-fields").append(label);
   }
   $("uri-label").hidden = type !== "login";
+  $("edit-advanced").hidden = !["login", "card", "identity"].includes(type);
 }
 // Per-URI match detection, as in Bitwarden. "Default" follows this browser's
 // override of rbw's defaultUriMatch (see the add-on options).
@@ -611,7 +603,10 @@ function addUri(uri = {}) {
 }
 async function labelUriDefaults() {
   const [prefs, policy] = await Promise.all([request("preferences"), request("agent_settings")]);
-  const uriDefaultName = uriMatchNames[prefs.uriMatchDefault || policy.defaultUriMatch] || "Base domain";
+  // Defaults also include rbw's own host-and-subdomains matching, which a
+  // single URI cannot select (its "domain" is Bitwarden's base domain).
+  const defaultNames = { ...uriMatchNames, domain: "Domain and subdomains", base_domain: "Base domain" };
+  const uriDefaultName = defaultNames[prefs.uriMatchDefault || policy.defaultUriMatch] || defaultNames.domain;
   $("uri-default").textContent = `Default is ${uriDefaultName}${prefs.uriMatchDefault ? " (this browser's override)" : " (rbw setting)"}.`;
 }
 $("add-uri").onclick = () => addUri().focus();
@@ -669,6 +664,10 @@ function editItem(fresh = false) {
   if (!$("edit-uris").children.length) addUri();
   labelUriDefaults().catch(() => {});
   $("custom-fields").replaceChildren(); for (const field of cipher.fields || []) addCustom(field);
+  // Autofill exclusion is a browser preference keyed by item ID, so new items get it after saving.
+  $("edit-no-autofill").checked = !!currentItem && Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(currentItem);
+  $("edit-no-autofill").disabled = !currentItem;
+  $("edit-no-autofill-hint").textContent = currentItem ? "Inline suggestions, on-load autofill and the fill shortcut skip this item." : "Save the item first to exclude it from autofill.";
   $("edit-passkeys").textContent = currentDetail?.passkeys.length ? "Existing passkeys are preserved by rbw. Their private keys never enter this editor." : "";
   renderAttachments(currentDetail, currentItem);
   renderEditFields(cipher.data); show("editor"); $("edit-name").focus();
@@ -684,6 +683,11 @@ $("edit-form").onsubmit = event => { event.preventDefault(); attempt(async () =>
     type: card.querySelector(".custom-type-select")?.value || "text"
   }));
   await request("save", { item: currentItem, revision: currentDetail?.revision, cipher: { name: $("edit-name").value, folder: $("edit-folder").value || null, notes: $("edit-notes").value || null, data, fields } });
+  if (currentItem && ["login", "card", "identity"].includes(type)) {
+    const excluded = new Set(Array.isArray(preference.autofillExcludedItems) ? preference.autofillExcludedItems : []);
+    if ($("edit-no-autofill").checked) excluded.add(currentItem); else excluded.delete(currentItem);
+    if (excluded.size !== (preference.autofillExcludedItems || []).length) preference = await request("set_preferences", { preferences: { autofillExcludedItems: [...excluded] } });
+  }
   message("Saved and synchronized."); await refresh();
 }); };
 async function suggestions() {

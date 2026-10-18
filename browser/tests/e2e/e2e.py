@@ -15,7 +15,7 @@ import time
 # host in the page and click at fixed offsets inside it.
 HOST_JS = """(save) => { const el = [...document.documentElement.children].filter(e => e.tagName === 'DIV' && (e.getAttribute('style') || '').includes('2147483647') && (e.getAttribute('style') || '').includes('inset') === !!save).pop();
   if (!el || getComputedStyle(el).visibility !== 'visible') return null; const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; }"""
-OFFSETS = {"login": (60, 50), "card": (60, 102), "save": (70, 102)}
+OFFSETS = {"login": (60, 102), "card": (60, 102), "search": (60, 40), "result": (60, 130), "save": (70, 102)}
 SHADOW_DECOY = "() => { const h = document.createElement('span'); document.documentElement.append(h); const r = h.attachShadow({ mode: 'closed' }); const d = document.createElement('div'); d.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;background:#fff'; r.append(d); }"
 
 
@@ -32,6 +32,7 @@ class ChromiumPage:
     def click(self, selector): self.page.click(selector)
     def fill(self, selector, value): self.page.fill(selector, value)
     def key(self, key, selector=None): (self.page.press(selector, key) if selector else self.page.keyboard.press(key))
+    def type_text(self, text): self.page.keyboard.type(text, delay=20)
     def screenshot(self, path, rect): self.page.screenshot(path=path, clip={"x": rect["x"] - 8, "y": rect["y"] - 8, "width": rect["w"] + 16, "height": rect["h"] + 16})
     def close(self): self.context.close(); self.playwright.stop()
 
@@ -59,6 +60,9 @@ class FirefoxPage:
         if selector: self.driver.find_element("css selector", selector).send_keys(value)
         else: ActionChains(self.driver).send_keys(value).perform()
     def screenshot(self, path, _rect): self.driver.save_screenshot(path)
+    def type_text(self, text):
+        from selenium.webdriver.common.action_chains import ActionChains
+        ActionChains(self.driver).send_keys(text).perform()
     def close(self): self.driver.quit()
 
 
@@ -103,6 +107,13 @@ def main():
         if opened:
             click_in("login"); v = values()
             check("login fill via frame", v["pass"] == "pw-from-rbw" and v["user"] == "alice", str(v))
+
+        fresh(); page.click("#pass"); opened = host()
+        if opened:
+            click_in("search"); page.type_text("Test Login"); time.sleep(1.2)
+            shoot("login-search", page.evaluate(HOST_JS, False))
+            click_in("result"); v = values()
+            check("login search finds and fills a site login", v["pass"] == "pw-from-rbw" and v["user"] == "alice", str(v))
 
         fresh(); page.click("#pass")
         if host():

@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Added
+
+* `defaultUriMatch: base_domain` (also selectable in the browser add-on
+  options) opts into Bitwarden's base-domain matching for URIs without their
+  own match type.
+* The inline login chooser has the same search field as the card chooser; it
+  searches this site's matching logins.
+* The toolbar icon shows an animated sync badge while the extension syncs or
+  saves.
+
+### Changed
+
+* `defaultUriMatch: domain` is rbw's matching again (the stored host and its
+  subdomains) and remains the default, reverting 2.22.1's switch to
+  Bitwarden's base domain. URIs explicitly set to "Base domain" keep
+  Bitwarden's meaning.
+* "Do not autofill this item" moved from the item view to an "Advanced"
+  section at the bottom of the item editor.
+
+### Fixed
+
+* The add-on options page no longer cuts off below 600 pixels.
+
 ## [2.22.1] - 2026-10-18
 
 ### Added

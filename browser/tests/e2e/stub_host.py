@@ -17,7 +17,10 @@ while True:
     action = request.get("action"); log.write(f"{action}:{request.get('item') or ''}\n"); log.flush()
     if action == "status": result = {"unlocked": True, "accounts": ["test"], "primary": "test"}
     elif action == "search":
-        items = [CARD] if request.get("kind") == "card" else [LOGIN] if request.get("kind") in (None, "login") else []
+        logins = [LOGIN] + [{**LOGIN, "id": f"login-{n}", "name": f"Other Login {n}", "username": f"user{n}"} for n in range(2, 8)]
+        items = [CARD] if request.get("kind") == "card" else logins if request.get("kind") in (None, "login") else []
+        query = (request.get("query") or "").lower()
+        items = [item for item in items if query in f"{item['name']} {item['username']}".lower()]
         result = {"items": items, "limit": 200, "total": len(items), "folders": [], "collections": []}
     elif action == "credential": result = {"name": "Test Login", "custom": [], "username": "alice", "password": "pw-from-rbw"}
     elif action == "detail": result = {"cipher": {"name": "Test Visa", "data": {"type": "card", "cardholder_name": "Alice Test", "number": "4111111111111111", "brand": "Visa", "exp_month": "12", "exp_year": "2030", "code": "123"}, "fields": []}, "revision": "r1"}

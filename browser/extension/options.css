@@ -1,5 +1,5 @@
 html { width:auto; height:auto; min-height:100%; overflow:auto; }
-body { width:auto; height:auto; max-width:760px; margin:auto; padding:24px; }
+body { width:auto; height:auto; max-height:none; overflow:visible; max-width:760px; margin:auto; padding:24px; }
 header { border-radius:12px; gap:15px; }
 main { overflow:visible; padding:0; }
 section { background:var(--panel); border:1px solid var(--line); border-radius:12px; margin:16px 0; padding:8px 24px 20px; }
