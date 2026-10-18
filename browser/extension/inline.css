@@ -6,7 +6,8 @@ strong{font-weight:500;font-size:13px}
 small{color:#adadad;font-size:11px;margin-top:1px}
 .item-btn{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;border-top:1px solid #383838;padding:8px 12px;background:#282828;color:#efefef;font:13px system-ui,sans-serif;cursor:pointer}
 .item-btn:first-of-type{border-top:0}
-.item-btn:hover,.item-btn:focus-visible{background:#383838;outline:none}
+.item-btn:hover,.item-btn:focus-visible,.item-btn.is-active{background:#383838;outline:none}
+.item-btn.is-active{box-shadow:inset 3px 0 #8ab4f8}
 .icon-col{width:20px;height:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:3px}
 .icon-col img{width:18px;height:18px;border-radius:3px;object-fit:contain}
 .icon-col svg{width:18px;height:18px;stroke:#d0d0d0;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}

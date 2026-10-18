@@ -56,7 +56,7 @@ class FirefoxPage:
     def key(self, key, selector=None):
         from selenium.webdriver.common.action_chains import ActionChains
         from selenium.webdriver.common.keys import Keys
-        value = {"Enter": Keys.ENTER, "Escape": Keys.ESCAPE}[key]
+        value = {"Enter": Keys.ENTER, "Escape": Keys.ESCAPE, "ArrowDown": Keys.ARROW_DOWN, "ArrowUp": Keys.ARROW_UP}[key]
         if selector: self.driver.find_element("css selector", selector).send_keys(value)
         else: ActionChains(self.driver).send_keys(value).perform()
     def screenshot(self, path, _rect): self.driver.save_screenshot(path)
@@ -117,6 +117,12 @@ def main():
 
         fresh(); page.click("#pass")
         if host():
+            click_in("search"); page.type_text("Other Login 3"); time.sleep(1.2)
+            page.key("ArrowDown"); page.key("Enter"); time.sleep(1.5)
+            check("arrow keys and Enter fill the highlighted login", values()["pass"] == "pw-from-rbw")
+
+        fresh(); page.click("#pass")
+        if host():
             click_in("login", settle=0)
             check("click within 500 ms is ignored", values()["pass"] == "")
             click_in("login", settle=0.3)
@@ -144,6 +150,12 @@ def main():
         if opened:
             click_in("card"); v = values()
             check("card fill via frame", v["ccnum"] == "4111111111111111" and v["ccname"] == "Alice Test", str(v))
+
+        fresh(); page.click("#ccnum")
+        if host():
+            click_in("search"); page.type_text("Visa"); time.sleep(1.2)
+            page.key("ArrowDown"); page.key("Enter"); time.sleep(1.5)
+            check("arrow keys and Enter fill the highlighted card", values()["ccnum"] == "4111111111111111")
 
         def submit(user, password):
             fresh(); page.fill("#user", user); page.fill("#pass", password); page.key("Escape"); page.key("Enter", "#pass")

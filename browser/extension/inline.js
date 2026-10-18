@@ -20,13 +20,15 @@ const cardBrandIcon = brand => {
 const settle = () => { shownAt = performance.now(); };
 const send = message => { try { port?.postMessage(message); } catch (_) { /* The session closed. */ } };
 // Clicks only count once the UI has been visible and still for 500 ms.
-function act(event, message) {
+// `target` is what the user activated; keyboard activations are verified at
+// its centre, like a click there.
+function act(event, message, target = event.currentTarget) {
   if (!event.isTrusted || performance.now() - shownAt < 500 || !visible || document.visibilityState !== "visible" || !document.hasFocus()) {
     if (notice) notice.textContent = "rbw is checking that this window is visible. Click again.";
     return false;
   }
   let x = event.clientX, y = event.clientY;
-  if (!event.detail) { const rect = event.currentTarget.getBoundingClientRect(); x = rect.left + rect.width / 2; y = rect.top + rect.height / 2; }
+  if (!event.detail) { const rect = target.getBoundingClientRect(); x = rect.left + rect.width / 2; y = rect.top + rect.height / 2; }
   if (notice) notice.textContent = "";
   send({ ...message, x, y });
   return true;
@@ -38,7 +40,7 @@ if (trackVisibility) {
 document.addEventListener("keydown", event => { if (event.key === "Escape") send({ type: "close" }); });
 
 function itemButton(item, kind) {
-  const button = element("button", null, "item-btn"); button.type = "button"; rows.set(item.id, button);
+  const button = element("button", null, "item-btn"); button.type = "button"; button.dataset.item = item.id; rows.set(item.id, button);
   const iconCol = element("span", null, "icon-col");
   if (item.favicon) { const img = element("img"); img.src = item.favicon; img.alt = ""; iconCol.append(img); }
   else iconCol.append(icon(kind === "card" ? cardBrandIcon(item.brand) : "key"));
@@ -80,6 +82,23 @@ function renderChoices(data) {
   const count = element("small", null, "card-search-count"); count.hidden = true;
   let timer, sequence = 0;
   query.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => send({ type: "search", query: query.value, sequence: ++sequence }), 180); });
+  // Arrow keys move a highlight through the rows; Enter fills it (or the first row).
+  let active = -1;
+  const buttons = () => [...list.querySelectorAll(".item-btn")];
+  const highlight = index => {
+    const all = buttons(); active = all.length ? (index + all.length) % all.length : -1;
+    all.forEach((button, i) => button.classList.toggle("is-active", i === active));
+    all[active]?.scrollIntoView({ block: "nearest" });
+  };
+  query.addEventListener("keydown", event => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); highlight(active + (event.key === "ArrowDown" ? 1 : -1)); }
+    else if (event.key === "Enter") {
+      event.preventDefault();
+      const target = buttons()[active >= 0 ? active : 0];
+      if (target) act(event, { type: "fill", item: target.dataset.item }, target);
+    }
+  });
+  new MutationObserver(() => { active = -1; }).observe(list, { childList: true });
   controls.append(query);
   root.replaceChildren(banner, controls, count, list, notice);
   if (Number(data.total) > data.items.length) {

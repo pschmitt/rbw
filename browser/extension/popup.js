@@ -153,6 +153,7 @@ function updateTitleMenuState() {
 }
 function show(page) {
   stopTotp();
+  if (page === "vault") requestAnimationFrame(() => { if (currentPage === "vault" && !$("vault").hidden && document.activeElement?.closest?.("#vault") == null) $("query").focus({ preventScroll: true }); });
   remember();
   currentPage = page;
   const subpage = ["detail", "editor", "send-editor", "settings", "diagnostic"].includes(page);
@@ -302,7 +303,7 @@ function itemRow(item) {
   const actions = element("div", null, "item-actions");
   if (item.deleted) actions.append(actionButton("Restore", "archive", async () => { await request("mutate", { item: item.id, mutation: "restore" }); await search(); }));
   else {
-    if (!autofillExcluded && (item.matched || ["card", "identity"].includes(item.type))) { const fill = actionButton("Fill", "fill", async () => { const n = await request("fill", { item: item.id, type: item.type }); message(`Filled ${n} fields. Submit the form when ready.`); }); fill.title = "Fill"; fill.setAttribute("aria-label", `Fill ${item.name}`); actions.append(fill); }
+    if (!autofillExcluded && (item.matched || ["card", "identity"].includes(item.type))) { const fill = actionButton("Fill", "fill", async () => { const n = await request("fill", { item: item.id, type: item.type }); message(`Filled ${n} fields. Submit the form when ready.`); }); fill.title = "Fill"; fill.classList.add("item-fill"); fill.setAttribute("aria-label", `Fill ${item.name}`); actions.append(fill); }
     const field = item.type === "login" ? "password" : item.type === "card" ? "number" : item.type === "identity" ? "email" : item.type === "ssh_key" ? "public_key" : "notes";
     const copy = actionButton("Copy", "copy", () => copyField(item.id, field, true)); copy.title = "Copy"; copy.setAttribute("aria-label", `Copy ${field}`); actions.append(copy);
     const menu = element("details", null, "menu"); const summary = element("summary"); summary.append(icon("more")); summary.setAttribute("aria-label", `Actions for ${item.name}`); menu.append(summary);
@@ -887,6 +888,34 @@ $("account-toggle").ondblclick = () => {
 };
 $("account").onchange = () => attempt(async () => { await request("set_preferences", { preferences: { account: $("account").value } }); await refresh(); });
 $("filter-toggle").onclick = () => { $("filters").hidden = !$("filters").hidden; $("filter-toggle").setAttribute("aria-expanded", String(!$("filters").hidden)); remember(); };
+// Keyboard navigation: arrows move a highlight through the item cards (from
+// the search field or the list), Enter opens the highlighted item and
+// Shift+Enter fills it where filling is offered.
+let activeRow = -1;
+const itemRows = () => [...$("items").querySelectorAll("article")];
+function highlightRow(index, focus) {
+  const rows = itemRows(); activeRow = index >= 0 && rows.length ? Math.min(index, rows.length - 1) : -1;
+  rows.forEach((row, i) => row.classList.toggle("is-active", i === activeRow));
+  rows[activeRow]?.scrollIntoView({ block: "nearest" });
+  if (focus) (rows[activeRow]?.querySelector(".item-main") || $("query")).focus({ preventScroll: true });
+}
+new MutationObserver(() => { activeRow = -1; }).observe($("items"), { childList: true });
+$("vault").addEventListener("keydown", event => {
+  if (currentPage !== "vault" || event.altKey || event.ctrlKey || event.metaKey) return;
+  const inSearch = event.target === $("query"), row = event.target.closest?.("#items article");
+  if (!inSearch && !row) return;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    // In the search field the highlight moves while typing continues; in the
+    // list, focus follows the rows (up from the first returns to search).
+    const current = row ? itemRows().indexOf(row) : activeRow;
+    highlightRow(current < 0 ? (event.key === "ArrowDown" ? 0 : -1) : current + (event.key === "ArrowDown" ? 1 : -1), !inSearch);
+  } else if (event.key === "Enter" && (inSearch || event.shiftKey)) {
+    const target = row || itemRows()[activeRow >= 0 ? activeRow : 0]; if (!target) return;
+    event.preventDefault();
+    (event.shiftKey ? target.querySelector(".item-fill") : target.querySelector(".item-main"))?.click();
+  }
+});
 $("query").oninput = () => { remember(); clearTimeout(timer); ++epoch; timer = setTimeout(() => attempt(search), 180); };
 for (const id of ["kind", "view", "folder", "collection"]) $(id).onchange = () => { remember(); attempt(search); };
 $("add").onclick = () => { if (currentPage === "send") editSend(); else editItem(true); };

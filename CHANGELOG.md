@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+* Keyboard navigation in the browser: the popup focuses its search field when
+  opened; arrow keys move through items, Enter opens one and Shift+Enter
+  fills it. The inline login and card choosers accept arrow keys and Enter
+  in their search field.
+
+### Changed
+
+* The browser popup labels verification codes "TOTP".
+* Much shorter README and browser README; the detailed documentation moved
+  unchanged into `docs/`.
+* The Nix package builds with crane: dependencies are a separate,
+  version-independent derivation, so CI and hosts reuse them instead of
+  recompiling every crate on each rbw change. Tests still run in the build.
+* CI: rustdoc skips dependencies, and the browser extension is only signed on
+  release commits.
+
 ## [2.22.2] - 2026-10-18
 
 ### Added
