@@ -7,6 +7,9 @@
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Builds dependencies in their own derivation, so CI caches and hosts
+    # reuse them instead of recompiling every crate on each rbw change.
+    crane.url = "github:ipetkov/crane";
   };
 
   outputs =
@@ -14,6 +17,7 @@
       self,
       nixpkgs,
       home-manager,
+      crane,
     }:
     let
       systems = [
@@ -43,32 +47,75 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          rbw = pkgs.rustPlatform.buildRustPackage {
+          craneLib = crane.mkLib pkgs;
+          # rbw's own version, normalized out of everything the dependency build
+          # sees, so a release bump keeps that derivation (and its caches).
+          inherit (cargoToml.package) version;
+          depsLock = builtins.toFile "Cargo.lock" (
+            builtins.replaceStrings
+              [ "name = \"rbw\"\nversion = \"${version}\"" ]
+              [ "name = \"rbw\"\nversion = \"0.0.0\"" ]
+              (builtins.readFile ./Cargo.lock)
+          );
+          craneArgs = {
             pname = "rbw";
-            inherit (cargoToml.package) version;
-
+            inherit version;
             src = rbwSource;
-            cargoLock.lockFile = ./Cargo.lock;
-
+            strictDeps = true;
+            # Shared by both builds: vendored crates don't depend on rbw's version.
+            cargoVendorDir = craneLib.vendorCargoDeps { cargoLock = depsLock; };
             # WebAuthn/FIDO2 2FA login; links libudev on Linux.
-            buildFeatures = [ "fido2" ];
+            cargoExtraArgs = "--locked --features fido2";
             nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.pkg-config ];
             buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.udev ];
-
-            postInstall = ''
-              install -Dm755 bin/git-credential-rbw -t "$out/bin"
-              mkdir -p \
-                "$out/share/bash-completion/completions" \
-                "$out/share/fish/vendor_completions.d" \
-                "$out/share/zsh/site-functions"
-              "$out/bin/rbw" completions bash \
-                > "$out/share/bash-completion/completions/rbw"
-              "$out/bin/rbw" completions fish \
-                > "$out/share/fish/vendor_completions.d/rbw.fish"
-              "$out/bin/rbw" completions zsh \
-                > "$out/share/zsh/site-functions/_rbw"
-            '';
           };
+          depsToml = builtins.toFile "Cargo.toml" (
+            builtins.replaceStrings
+              [ "name = \"rbw\"\nversion = \"${version}\"" ]
+              [ "name = \"rbw\"\nversion = \"0.0.0\"" ]
+              (builtins.readFile ./Cargo.toml)
+          );
+          # Built only from the normalized manifests (eval-time files) and stub
+          # targets, unlike crane's mkDummySrc, which also copies the raw ones.
+          depsSrc = pkgs.runCommand "rbw-deps-src" { } ''
+            mkdir -p $out/src/bin/rbw $out/src/bin/rbw-agent $out/src/bin/rbw-browser
+            cp ${depsToml} $out/Cargo.toml
+            cp ${depsLock} $out/Cargo.lock
+            for bin in rbw rbw-agent rbw-browser; do
+              echo 'fn main() {}' > $out/src/bin/$bin/main.rs
+            done
+            touch $out/src/lib.rs
+          '';
+          rbwDeps = craneLib.buildDepsOnly (
+            craneArgs
+            // {
+              pname = "rbw-deps";
+              version = "0";
+              dummySrc = depsSrc;
+            }
+          );
+          rbw = craneLib.buildPackage (
+            craneArgs
+            // {
+              cargoArtifacts = rbwDeps;
+              # The test suite still runs here, reusing the cached dependencies.
+              doCheck = true;
+
+              postInstall = ''
+                install -Dm755 bin/git-credential-rbw -t "$out/bin"
+                mkdir -p \
+                  "$out/share/bash-completion/completions" \
+                  "$out/share/fish/vendor_completions.d" \
+                  "$out/share/zsh/site-functions"
+                "$out/bin/rbw" completions bash \
+                  > "$out/share/bash-completion/completions/rbw"
+                "$out/bin/rbw" completions fish \
+                  > "$out/share/fish/vendor_completions.d/rbw.fish"
+                "$out/bin/rbw" completions zsh \
+                  > "$out/share/zsh/site-functions/_rbw"
+              '';
+            }
+          );
 
           rbwTermux =
             let
