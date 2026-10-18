@@ -467,8 +467,21 @@ async function openDetail(item) {
   const current = ++epoch;
   const detail = await request("detail", { item }); if (current !== epoch) return;
   currentItem = item; currentDetail = detail; show("detail");
-  const content = $("detail-content"); content.replaceChildren(element("h2", detail.cipher.name));
+  const content = $("detail-content");
   const data = detail.cipher.data;
+  const title = element("h2", null, "detail-title");
+  title.append(element("span", detail.cipher.name));
+  const firstUri = (data.uris || []).find(uri => {
+    try { return ["http:", "https:"].includes(new URL(uri.uri).protocol); } catch (_) { return false; }
+  });
+  content.replaceChildren(title);
+  if (preference.favicons && firstUri) {
+    request("favicon", { origin: new URL(firstUri.uri).origin }).then(favicon => {
+      if (!favicon || current !== epoch || currentItem !== item) return;
+      const image = element("img", null, "detail-favicon"); image.src = favicon; image.alt = "";
+      image.onerror = () => image.remove(); title.prepend(image);
+    }).catch(() => {});
+  }
   if (["login", "card", "identity"].includes(data.type)) {
     const label = element("label", null, "item-autofill-setting");
     const checkbox = element("input"); checkbox.type = "checkbox"; checkbox.checked = Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(item);
@@ -483,12 +496,20 @@ async function openDetail(item) {
     };
     label.append(checkbox, document.createTextNode(" Do not autofill this item")); content.append(label);
   }
-  for (const [field, value] of Object.entries(data)) {
+  const entries = Object.entries(data);
+  const orderedEntries = data.type === "login"
+    ? ["username", "password"].map(name => entries.find(([field]) => field === name)).filter(Boolean)
+      .concat(entries.filter(([field]) => !["username", "password"].includes(field)))
+    : entries;
+  for (const [field, value] of orderedEntries) {
     if (["type", "uris", "fido2_credentials", "totp"].includes(field) || value == null || value === "") continue;
     content.append(detailField(field === "totp" ? "Authenticator key" : pretty(field), String(value), item, field, secret(field)));
   }
   if (data.totp) content.append(totpField(item));
-  for (const uri of data.uris || []) content.append(detailField("Website", uri.uri, item, null, false, true));
+  if (data.uris?.length) {
+    content.append(element("h3", "URIs"));
+    for (const uri of data.uris) content.append(detailField("URI", uri.uri, item, null, false, true));
+  }
   if (detail.cipher.notes) content.append(noteField(detail.cipher.notes, item));
   for (const [i, field] of (detail.cipher.fields || []).entries()) content.append(detailField(field.name || "Custom field", field.value || "", item, `custom/${i}`, field.type === "hidden"));
   for (const passkey of detail.passkeys) { content.append(element("h3", "Passkey"), element("p", `${passkey.rp} · ${passkey.user || ""}`), element("p", `Created ${passkey.created || "unknown"}`, "hint")); }
@@ -558,9 +579,16 @@ function renderEditFields(data = {}) {
     input.id = `field-${name}`; input.value = data[name] || ""; input.autocomplete = "off"; input.spellcheck = false;
     if (input.tagName === "INPUT") input.type = secret(name) ? "password" : "text";
     if (input.type === "password") {
-      const row = element("div", null, "editor-secret"); row.append(input, revealButton(input)); label.append(row);
+      const row = element("div", null, "editor-secret"); row.append(input);
+      if (name === "password") {
+        const generate = actionButton("Generate password", "generator", async () => {
+          input.value = await request("generate");
+          message("Generated password added to this form. Save to keep it.");
+        }, "icon");
+        generate.classList.add("generate-password"); row.append(generate);
+      }
+      row.append(revealButton(input)); label.append(row);
     } else label.append(input);
-    if (name === "password") label.append(actionButton("Generate password", "generator", async () => { input.value = await request("generate"); message("Generated password added to this form. Save to keep it."); }));
     $("edit-fields").append(label);
   }
   $("uri-label").hidden = type !== "login";

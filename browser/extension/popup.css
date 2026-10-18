@@ -26,6 +26,8 @@ h1 { font-size:18px; font-weight:600; margin:0; line-height:1.2; }
 .title-dropdown button .svg-icon { width:17px; height:17px; flex-shrink:0; color:var(--accent); }
 .version { display:block; color:var(--muted); font-size:10px; line-height:1.2; font-weight:400; margin-top:1px; }
 h2 { font-size:18px; margin:16px 0 8px; }
+.detail-title { display:flex; align-items:center; gap:8px; }
+.detail-favicon { width:22px; height:22px; flex:none; object-fit:contain; border-radius:4px; }
 h3 { font-size:14px; margin:18px 0 8px; color:var(--muted); font-weight:500; }
 button,input,select,textarea { font:inherit; color:inherit; }
 button { border:1px solid var(--line); border-radius:8px; padding:6px 10px; background:var(--panel); cursor:pointer; }
@@ -187,6 +189,9 @@ details.menu button .svg-icon { width:16px; height:16px; }
 
 .editor-secret { display:flex; align-items:center; gap:4px; margin-top:5px; border:1px solid var(--line); border-radius:6px; background:var(--panel); padding-right:4px; }
 .editor-secret input:not([type=checkbox]) { min-width:0; flex:1; border:0; background:transparent; }
+.editor-secret button.icon { padding:4px; color:var(--muted); }
+.editor-secret button.icon:hover { color:var(--text); background:var(--raised); }
+.editor-secret .svg-icon { width:18px; height:18px; }
 .editor-secret:focus-within { outline:2px solid var(--accent); }
 .editor-secret input:focus-visible { outline:none; }
 .totp-code { flex:1; font:600 26px/1.5 ui-monospace,monospace; letter-spacing:2px; color:var(--accent); }
