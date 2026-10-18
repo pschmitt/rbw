@@ -5,6 +5,12 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
+## Features in 0.2.31
+
+- Passkey sign-in shows the selected account and a clear progress state.
+- Login save and update prompts appear inline in the page.
+- Credit cards can be selected and filled from matching payment forms.
+
 ## Features in 0.2.30
 - Keep the app icon fixed when the back chevron appears in the popup header.
 
@@ -197,7 +203,11 @@ Browser restarts or acceptance of newly requested permissions may be necessary.
 `browser/packages/` holds signed distribution artifacts and the public Chromium
 identity. Never put private signing keys or AMO credentials in the repository.
 After changing extension sources, bump the extension version in `build.py` and
-`nix/browser.nix`, package and re-sign both artifacts using the existing keys.
+`nix/browser.nix`, then run the **browser extension release** workflow from
+`main`. It signs the Firefox package through AMO and the Chromium package with
+the existing key, then creates a `browser-vVERSION` GitHub release. The
+workflow reads `RBW_AMO_API_KEY`, `RBW_AMO_API_SECRET` and
+`RBW_CHROMIUM_SIGNING_KEY` from GitHub Actions secrets.
 The generated icon source is `browser/icon-source.png`; prompt provenance is
 recorded in `browser/icon-prompt.txt`, with sized toolbar assets in
 `browser/extension/icons/`.
@@ -236,7 +246,6 @@ Chromium CRX, named `rbw-browser-VERSION-firefox.xpi` and
 release provenance attestation. The extension version is independent of the CLI
 version. Main-branch build artifacts also include both extension packages.
 
-`python3 browser/release.py --output dist` verifies that both packages match the
-shared extension source and generated manifests before preparing release assets.
-Signing stays outside CI; no extension signing credentials are needed by the
-release workflow.
+`python3 browser/release.py --output dist` verifies that both signed packages
+match the shared extension source and generated manifests before preparing
+release assets.

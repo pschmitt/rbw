@@ -108,7 +108,20 @@ pub fn candidates(origin: &str, options: &Value) -> anyhow::Result<Value> {
             }) {
                 continue;
             }
-            found.push(json!({"id": entry.id, "credential_id": id, "name": super::decrypt(entry, &entry.name)?, "username": decrypt(&credential.user_name)?}));
+            let icon_origin = match &entry.data {
+                rbw::db::EntryData::Login { uris, .. } => uris
+                    .iter()
+                    .filter_map(|uri| super::decrypt(entry, &uri.uri).ok())
+                    .filter_map(|uri| url::Url::parse(&uri).ok())
+                    .find(|uri| {
+                        uri.scheme() == "https"
+                            || (uri.scheme() == "http"
+                                && uri.host_str() == Some("localhost"))
+                    })
+                    .map(|uri| uri.origin().ascii_serialization()),
+                _ => None,
+            };
+            found.push(json!({"id": entry.id, "credential_id": id, "name": super::decrypt(entry, &entry.name)?, "username": decrypt(&credential.user_name)?, "iconOrigin": icon_origin}));
         }
     }
     Ok(json!({"rp": rp, "items": found}))

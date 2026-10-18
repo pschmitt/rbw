@@ -112,7 +112,7 @@ function show(page) {
   $("account-toggle").title = `${subpage ? "Back" : "Account menu"} · Double-click to open in a window`;
   $("unlock-panel").hidden = unlocked || !["locked", "approval"].includes(page);
   for (const id of ["vault", "generator", "send", "send-editor", "health", "settings", "detail", "editor", "approval", "locked"]) $(id).hidden = id !== page;
-  $("title").textContent = ({ vault: "Vault", generator: "Generator", health: "Vault health", settings: "Settings", send: "Send", "send-editor": "Edit Send", detail: "Item", editor: currentItem ? "Edit item" : "New item", approval: "Passkey", locked: "Vault" })[page];
+  $("title").textContent = ({ vault: "Vault", generator: "Generator", health: "Vault health", settings: "Settings", send: "Send", "send-editor": "Edit Send", detail: "Item", editor: currentItem ? "Edit item" : "New item", approval: "Passkey request", locked: "Vault" })[page];
   $("add").hidden = !["vault", "send"].includes(page) || !unlocked;
   $("add").classList.remove("collapsed");
   $("open-sidebar").hidden = subpage || document.documentElement.dataset.surface === "window";
@@ -566,20 +566,13 @@ $("edit-form").onsubmit = event => { event.preventDefault(); attempt(async () =>
 async function suggestions() {
   const area = $("suggestions"); area.replaceChildren();
   for (const pending of await request("pending")) area.append(actionButton(`${pending.method === "create" ? "Save passkey" : "Sign in"} · ${pending.origin}`, "key", () => showApproval(pending.id)));
-  for (const offer of await request("save_offers")) {
-    const card = element("div", null, "field"); card.append(element("strong", `Save login for ${offer.origin}?`), element("p", offer.username || "No username"));
-    card.append(actionButton("Save new", "plus", async () => { await request("save_offer_apply", { tabId: offer.tabId }); await refresh(); }));
-    const select = element("select"); select.append(new Option("Update an existing login…", ""));
-    const logins = await request("search", { query: offer.username, kind: "login" });
-    for (const item of logins.items) select.append(new Option(item.name, item.id));
-    card.append(select, actionButton("Update", "check", async () => { if (!select.value) throw new Error("Choose an existing login."); await request("save_offer_apply", { tabId: offer.tabId, item: select.value }); await refresh(); }), actionButton("Dismiss", "close", async () => { await request("save_offer_dismiss", { tabId: offer.tabId }); await suggestions(); })); area.append(card);
-  }
 }
 async function showApproval(id) {
   approvalId = id; show("approval"); $("approval-items").replaceChildren();
   const pending = (await request("pending")).find(p => p.id === id);
   if (!pending) { approvalId = null; message("Passkey request expired or completed."); show(unlocked ? "vault" : "locked"); return; }
   const title = pending.method === "create" ? "Save a passkey" : "Sign in with a passkey";
+  $("title").textContent = pending.method === "create" ? "Passkey registration requested" : "Passkey login requested";
   $("approval-title").textContent = title;
   $("approval-origin").textContent = pending.origin;
   $("approval-description").textContent = pending.method === "create" ? `Save a passkey for ${pending.user || "this account"} in your vault.` : "Choose an account to continue.";
@@ -588,6 +581,21 @@ async function showApproval(id) {
   const setProgress = (text, selectedChoiceEl = null) => {
     $("approval-progress-text").textContent = text;
     $("approval-progress").hidden = false;
+    $("approval-intro").hidden = true;
+    $("approval-description").hidden = true;
+    $("approval-items").hidden = true;
+    $("approval-verification").hidden = true;
+    $("approval-progress-name").textContent = selectedChoiceEl?.dataset.name || pending.user || "New login";
+    $("approval-progress-username").textContent = selectedChoiceEl?.dataset.username || pending.origin;
+    $("approval-progress-icon").replaceChildren(icon("key"));
+    if (selectedChoiceEl?.dataset.iconOrigin) {
+      const origin = selectedChoiceEl.dataset.iconOrigin;
+      request("favicon", { origin }).then(favicon => {
+        if (!favicon || $("approval-progress").hidden || approvalId !== id) return;
+        const image = document.createElement("img"); image.src = favicon; image.alt = "";
+        $("approval-progress-icon").replaceChildren(image);
+      }).catch(() => {});
+    }
     $("use-device").hidden = true;
     $("cancel-passkey").hidden = true;
     $("approval-items").classList.add("is-busy");
@@ -599,6 +607,9 @@ async function showApproval(id) {
   };
   const resetProgress = () => {
     $("approval-progress").hidden = true;
+    $("approval-intro").hidden = false;
+    $("approval-description").hidden = false;
+    $("approval-items").hidden = false;
     $("use-device").hidden = false;
     $("cancel-passkey").hidden = false;
     $("approval-items").classList.remove("is-busy");
@@ -652,30 +663,48 @@ async function showApproval(id) {
     $("approval-items").hidden = false;
   };
   $("approval-reveal").onclick = () => { const input = $("approval-password"); const reveal = input.type === "password"; input.type = reveal ? "text" : "password"; $("approval-reveal").replaceChildren(icon(reveal ? "eye-off" : "eye")); $("approval-reveal").title = reveal ? "Hide" : "Show"; $("approval-reveal").setAttribute("aria-label", $("approval-reveal").title); };
-  const choice = (name, username, item, create = false) => {
+  const choice = (name, username, item, create = false, iconOrigin = null) => {
     let row;
     row = button("", () => approve(item, row), "passkey-choice");
+    row.dataset.name = name;
+    row.dataset.username = username || "";
+    row.dataset.iconOrigin = iconOrigin || "";
     const emblem = element("span", null, "passkey-choice-icon"); emblem.append(icon(create ? "plus" : "key"));
     const text = element("span", null, "passkey-choice-text"); text.append(element("strong", name)); if (username) text.append(element("small", username));
-    row.append(emblem, text, icon("fill")); return row;
+    row.append(emblem, text, icon("fill"));
+    if (iconOrigin) request("favicon", { origin: iconOrigin }).then(favicon => {
+      if (!favicon || !row.isConnected) return;
+      const image = document.createElement("img"); image.src = favicon; image.alt = "";
+      emblem.replaceChildren(image);
+    }).catch(() => {});
+    return row;
   };
-  if (pending.method === "create") $("approval-items").append(choice("Create a new login", pending.user || "Save in your vault", null, true));
-  for (const item of result.items) $("approval-items").append(choice(item.name, item.username || (pending.method === "create" ? "Add to this login" : "Saved passkey"), item.id));
+  if (pending.method === "create") $("approval-items").append(choice("Create a new login", pending.user || "Save in your vault", null, true, new URL(pending.origin).origin));
+  for (const item of result.items) $("approval-items").append(choice(item.name, item.username || (pending.method === "create" ? "Add to this login" : "Saved passkey"), item.id, false, item.iconOrigin));
   if (pending.method === "get" && !result.items.length) {
     const empty = element("div", null, "passkey-empty"); empty.append(icon("key"), element("strong", "No saved passkey"), element("p", "Try another vault account or use a different authenticator.", "hint")); $("approval-items").append(empty);
   }
 }
 $("use-device").onclick = () => attempt(async () => {
   $("approval-progress-text").textContent = "Switching to another authenticator…";
+  $("approval-progress-name").textContent = new URL($("approval-origin").textContent).hostname;
+  $("approval-progress-username").textContent = "Use another authenticator";
+  $("approval-progress-icon").replaceChildren(icon("key"));
   $("approval-progress").hidden = false;
   $("use-device").hidden = true;
   $("cancel-passkey").hidden = true;
   $("approval-items").classList.add("is-busy");
   try {
+    $("approval-intro").hidden = true;
+    $("approval-description").hidden = true;
+    $("approval-items").hidden = true;
     await request("passkey_decline", { request: approvalId, fallback: true });
     await finishApproval("Passkey request declined.");
   } catch (err) {
     $("approval-progress").hidden = true;
+    $("approval-intro").hidden = false;
+    $("approval-description").hidden = false;
+    $("approval-items").hidden = false;
     $("use-device").hidden = false;
     $("cancel-passkey").hidden = false;
     $("approval-items").classList.remove("is-busy");
@@ -693,6 +722,9 @@ $("cancel-passkey").onclick = () => attempt(async () => {
     await finishApproval("Passkey request declined.");
   } catch (err) {
     $("approval-progress").hidden = true;
+    $("approval-intro").hidden = false;
+    $("approval-description").hidden = false;
+    $("approval-items").hidden = false;
     $("use-device").hidden = false;
     $("cancel-passkey").hidden = false;
     $("approval-items").classList.remove("is-busy");

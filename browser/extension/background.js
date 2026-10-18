@@ -132,7 +132,7 @@ function badge(tabId) {
   const count = suggestionCounts.get(tabId)?.count || 0;
   Promise.resolve(api.action.setBadgeBackgroundColor({ tabId, color: approval || offer ? "#87642a" : "#555555" })).catch(() => {});
   Promise.resolve(api.action.setBadgeText({ tabId, text: approval || offer ? "!" : count ? (count > 99 ? "99+" : String(count)) : "" })).catch(() => {});
-  Promise.resolve(api.action.setTitle({ tabId, title: approval ? "rbw — Passkey approval waiting. Click to continue." : offer ? "rbw — Login ready to save." : count ? `rbw — ${count} matching login${count === 1 ? "" : "s"}` : "rbw" })).catch(() => {});
+  Promise.resolve(api.action.setTitle({ tabId, title: approval ? "rbw — Passkey approval waiting. Click to continue." : offer ? "rbw — Login save suggestion is on this page." : count ? `rbw — ${count} matching login${count === 1 ? "" : "s"}` : "rbw" })).catch(() => {});
 }
 async function updateSuggestionsBadge(tabId, knownTab) {
   const token = {}; badgeRequests.set(tabId, token);
@@ -167,6 +167,25 @@ async function notifyFill(tab, notice) {
   // or website requests are needed for notification branding.
   return api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: showFillNotice, args: [tab.url, { ...notice, icon: await getNotificationIcon() }] });
 }
+async function notifySaveOffer(tabId, offer) {
+  return api.tabs.sendMessage(tabId, { action: "rbw_save_offer", offer: { origin: offer.origin, username: offer.username } });
+}
+
+async function applySaveOffer(tabId, item, account) {
+  const offer = offers.get(tabId); if (!offer) throw new Error("Save suggestion expired.");
+  if (item) {
+    const detail = await native({ action: "detail", account, item });
+    // Recheck the originating site with the same native matcher used for fill.
+    await native({ action: "credential", account, item, url: offer.url });
+    detail.cipher.data.password = offer.password;
+    if (offer.username) detail.cipher.data.username = offer.username;
+    await native({ action: "save", account, item, revision: detail.revision, cipher: detail.cipher });
+  } else {
+    await native({ action: "save", account, item: null, revision: null, cipher: { name: new URL(offer.origin).hostname, data: { type: "login", username: offer.username, password: offer.password, uris: [{ uri: offer.origin }] }, fields: [] } });
+  }
+  clearTimeout(offer.timer); offers.delete(tabId); badge(); clearMetadata();
+  return true;
+}
 
 function finish(id, response) {
   const operation = pending.get(id);
@@ -187,6 +206,25 @@ async function pageMessage(message, sender, respond) {
   const url = new URL(sender.url);
   if (!sender.tab.url || new URL(sender.tab.url).origin !== url.origin) return respond({ fallback: true });
   if (url.protocol !== "https:" && !(url.protocol === "http:" && url.hostname === "localhost")) return respond({ fallback: true });
+  if (message.action === "save_offer_choices") {
+    const offer = offers.get(sender.tab.id);
+    if (!offer || new URL(offer.origin).origin !== url.origin) return respond({ result: [] });
+    try {
+      const result = await cachedSearch({ account: (await settings()).account || null, query: offer.username || "", kind: "login" });
+      return respond({ result: result.items.slice(0, 30).map(item => ({ id: item.id, name: item.name, username: item.username })) });
+    } catch (_) { return respond({ result: [] }); }
+  }
+  if (message.action === "save_offer_apply") {
+    const offer = offers.get(sender.tab.id);
+    if (!offer || new URL(offer.origin).origin !== url.origin) return respond({ error: "Save suggestion expired." });
+    return respond({ result: await applySaveOffer(sender.tab.id, message.item || null, (await settings()).account || null) });
+  }
+  if (message.action === "save_offer_dismiss") {
+    const offer = offers.get(sender.tab.id);
+    if (offer) clearTimeout(offer.timer);
+    offers.delete(sender.tab.id); badge();
+    return respond({ result: true });
+  }
   if (message.action === "passkey_cancel") {
     for (const [id, p] of pending) if (p.tabId === sender.tab.id && p.pageRequest === message.request) finish(id, { error: "Cancelled." });
     return respond({ result: true });
@@ -214,10 +252,13 @@ async function pageMessage(message, sender, respond) {
   }
   if (message.action === "inline_choices") {
     if (!prefs.inlineSuggestions) return respond({ result: [] });
+    const kind = message.kind === "card" ? "card" : "login";
     try {
-      const result = await cachedSearch({ account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
-      const items = result.items.slice(0, 5).map(v => ({ id: v.id, name: v.name, username: v.username,
-        favicon: prefs.favicons ? faviconCache.get(v.iconOrigin)?.value || null : null }));
+      const result = await cachedSearch(kind === "card"
+        ? { account: prefs.account || null, kind: "card" }
+        : { account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
+      const items = result.items.filter(v => !v.protected).slice(0, 5).map(v => ({ id: v.id, name: v.name, username: v.username, kind,
+        favicon: kind === "login" && prefs.favicons ? faviconCache.get(v.iconOrigin)?.value || null : null }));
       return respond({ result: items, appIcon: await getNotificationIcon() });
     } catch (_) { return respond({ result: [] }); }
   }
@@ -231,13 +272,16 @@ async function pageMessage(message, sender, respond) {
   if (message.action === "inline_fill") {
     const tab = await activeTab();
     if (tab.id !== sender.tab.id || new URL(tab.url).origin !== url.origin) return respond({ error: "Page changed." });
-    return respond({ result: await fill({ item: message.item }, prefs.account || null) });
+    const kind = message.kind === "card" ? "card" : "login";
+    return respond({ result: await fill({ item: message.item, type: kind }, prefs.account || null) });
   }
   if (message.action === "save_offer") {
     if (!prefs.savePrompts || typeof message.username !== "string" || typeof message.password !== "string" || message.password.length > 4096 || message.username.length > 1024) return respond({ result: false });
     const tabId = sender.tab.id;
     const previous = offers.get(tabId); if (previous) clearTimeout(previous.timer);
-    offers.set(tabId, { origin: url.origin, url: sender.url, username: message.username, password: message.password, timer: setTimeout(() => { offers.delete(tabId); badge(); }, 120000) });
+    const offer = { origin: url.origin, url: sender.url, username: message.username, password: message.password, timer: setTimeout(() => { offers.delete(tabId); badge(); api.tabs.sendMessage(tabId, { action: "rbw_save_offer_clear" }).catch(() => {}); }, 120000) };
+    offers.set(tabId, offer);
+    notifySaveOffer(tabId, offer).catch(() => {});
     badge(); return respond({ result: true });
   }
   if (!prefs.passkeys) return respond({ fallback: true });
@@ -413,18 +457,7 @@ async function handle(message) {
     case "passkey_decline": finish(message.request, message.fallback ? { fallback: true } : { error: "Passkey request cancelled." }); return true;
     case "save_offers": return [...offers.entries()].map(([tabId, offer]) => ({ tabId, origin: offer.origin, username: offer.username }));
     case "save_offer_apply": {
-      const offer = offers.get(message.tabId); if (!offer) throw new Error("Save suggestion expired.");
-      if (message.item) {
-        const detail = await native({ action: "detail", account, item: message.item });
-        // Recheck the originating site with the same native matcher used for fill.
-        await native({ action: "credential", account, item: message.item, url: offer.url });
-        detail.cipher.data.password = offer.password;
-        if (offer.username) detail.cipher.data.username = offer.username;
-        await native({ action: "save", account, item: message.item, revision: detail.revision, cipher: detail.cipher });
-      } else {
-        await native({ action: "save", account, item: null, revision: null, cipher: { name: new URL(offer.origin).hostname, data: { type: "login", username: offer.username, password: offer.password, uris: [{ uri: offer.origin }] }, fields: [] } });
-      }
-      clearTimeout(offer.timer); offers.delete(message.tabId); badge(); return true;
+      return applySaveOffer(message.tabId, message.item || null, account);
     }
     case "save_offer_dismiss": {
       const offer = offers.get(message.tabId); if (offer) clearTimeout(offer.timer);
@@ -447,7 +480,7 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
       if (["unlock", "sync", "save", "mutate", "set_preferences", "import", "save_offer_apply", "passkey_approve"].includes(message.action)) refreshActiveBadge().catch(() => {});
     }, error => respond({ error: error.message || "Operation failed." })); return true;
   }
-  if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "inline_choices", "inline_icons", "inline_fill", "autofill_load", "undo_fill", "dismiss_fill"].includes(message?.action)) return false;
+  if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "save_offer_choices", "save_offer_apply", "save_offer_dismiss", "inline_choices", "inline_icons", "inline_fill", "autofill_load", "undo_fill", "dismiss_fill"].includes(message?.action)) return false;
   pageMessage(message, sender, respond).catch(() => respond({ error: "Request failed." })); return true;
 });
 
@@ -464,6 +497,10 @@ api.tabs.onUpdated.addListener((tabId, change, tab) => {
     suggestionCounts.delete(tabId); badgeRequests.delete(tabId); badge(tabId);
     fillCycles.delete(tabId); popupNotices.delete(tabId);
     for (const [id, p] of pending) if (p.tabId === tabId) finish(id, { error: "Page navigated." });
+  }
+  const offer = offers.get(tabId);
+  if (change.status === "complete" && tab?.url && offer && new URL(tab.url).origin === offer.origin) {
+    notifySaveOffer(tabId, offer).catch(() => {});
   }
   if (change.status === "complete" && tab?.active) updateSuggestionsBadge(tabId, tab).catch(() => {});
 });

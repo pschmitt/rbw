@@ -53,9 +53,13 @@
   document.addEventListener("focusin", async event => {
     const input = event.composedPath()[0];
     if (filled || fills.size) { close(); return; }
-    if (!(input instanceof HTMLInputElement) || !event.isTrusted || !isSecureContext || !["password", "email", "text"].includes(input.type) || (input.type === "text" && input.autocomplete !== "username")) { if (!host?.contains(input)) close(); return; }
+    const autocomplete = (input?.getAttribute?.("autocomplete") || "").toLowerCase().split(/\s+/);
+    const cardField = ["cc-name", "cc-number", "cc-exp", "cc-exp-month", "cc-exp-year", "cc-csc", "cc-type"].some(value => autocomplete.includes(value));
+    const loginField = input instanceof HTMLInputElement && ["password", "email", "text"].includes(input.type) && (input.type !== "text" || autocomplete.includes("username"));
+    if (!(input instanceof HTMLInputElement || input instanceof HTMLSelectElement) || !event.isTrusted || !isSecureContext || (!cardField && !loginField)) { if (!host?.contains(input)) close(); return; }
+    const kind = cardField ? "card" : "login";
     close(); const current = generation;
-    const result = await api.runtime.sendMessage({ action: "inline_choices" }).catch(() => null);
+    const result = await api.runtime.sendMessage({ action: "inline_choices", kind }).catch(() => null);
     let focused = document.activeElement; while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
     if (current !== generation || !result?.result?.length || focused !== input) return;
     host = document.createElement("div");
@@ -70,7 +74,7 @@
       const appIcon = document.createElement("img"); appIcon.className = "app-icon"; appIcon.alt = ""; appIcon.src = result.appIcon;
       title.append(appIcon);
     }
-    const titleText = document.createElement("span"); titleText.textContent = "rbw · Autofill";
+    const titleText = document.createElement("span"); titleText.textContent = kind === "card" ? "rbw · Payment cards" : "rbw · Autofill";
     title.append(titleText);
     const dismiss = document.createElement("button"); dismiss.className = "dismiss-btn"; dismiss.type = "button"; dismiss.title = "Dismiss"; dismiss.setAttribute("aria-label", "Dismiss");
     const closeIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg"); closeIcon.setAttribute("viewBox", "0 0 24 24"); closeIcon.setAttribute("aria-hidden", "true");
@@ -90,8 +94,9 @@
         const img = document.createElement("img"); img.src = item.favicon; img.alt = "";
         iconCol.append(img);
       } else {
-        const keyIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg"); keyIcon.setAttribute("viewBox", "0 0 24 24"); keyIcon.setAttribute("aria-hidden", "true");
-        const keyPath = document.createElementNS(keyIcon.namespaceURI, "path"); keyPath.setAttribute("d", "M13 15a5 5 0 1 1-1.5-3.5l8-8L22 6l-2 2-2-2-2 2 2 2-3 3"); keyIcon.append(keyPath); iconCol.append(keyIcon);
+        const itemIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg"); itemIcon.setAttribute("viewBox", "0 0 24 24"); itemIcon.setAttribute("aria-hidden", "true");
+        const itemPath = document.createElementNS(itemIcon.namespaceURI, "path");
+        itemPath.setAttribute("d", kind === "card" ? "M3 6.5A2.5 2.5 0 0 1 5.5 4h13A2.5 2.5 0 0 1 21 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5zM3 9h18M7 15h4" : "M13 15a5 5 0 1 1-1.5-3.5l8-8L22 6l-2 2-2-2-2 2 2 2-3 3"); itemIcon.append(itemPath); iconCol.append(itemIcon);
       }
       iconTargets.set(item.id, iconCol);
       const textCol = document.createElement("div"); textCol.className = "text-col";
@@ -103,7 +108,7 @@
       }
       button.append(iconCol, textCol);
       button.addEventListener("pointerdown", event => { if (event.isTrusted) event.preventDefault(); });
-      button.addEventListener("click", async event => { if (!event.isTrusted) return; close(); await api.runtime.sendMessage({ action: "inline_fill", item: item.id }).catch(() => {}); });
+      button.addEventListener("click", async event => { if (!event.isTrusted) return; close(); await api.runtime.sendMessage({ action: "inline_fill", item: item.id, kind }).catch(() => {}); });
       box.append(button);
     }
     shadow.append(box);
@@ -138,7 +143,7 @@
       event.preventDefault(); const bounds = box.getBoundingClientRect(); const step = event.shiftKey ? 40 : 10;
       movedPosition = position(bounds.left + delta[0] * step, bounds.top + delta[1] * step);
     });
-    api.runtime.sendMessage({ action: "inline_icons" }).then(response => {
+    if (kind === "login") api.runtime.sendMessage({ action: "inline_icons" }).then(response => {
       if (generation !== current || !host) return;
       for (const item of response?.result || []) {
         const target = iconTargets.get(item.id);
@@ -150,6 +155,83 @@
   });
   document.addEventListener("keydown", event => { if (event.key === "Escape") close(); });
   window.addEventListener("scroll", close, true); window.addEventListener("resize", close);
+})();
+
+// Save offers stay in the extension background; the page UI only receives the
+// site and username and sends back a selected item ID.
+(() => {
+  try { if (window.top.location.origin !== location.origin) return; } catch (_) { return; }
+  const api = globalThis.browser || chrome;
+  let host, shadow, offer;
+  const close = () => { host?.remove(); host = null; shadow = null; offer = null; };
+  const send = (action, values = {}) => api.runtime.sendMessage({ action, ...values });
+  const text = (tag, value, className) => {
+    const node = document.createElement(tag); node.textContent = value;
+    if (className) node.className = className;
+    return node;
+  };
+  function show(value) {
+    close();
+    if (value?.origin !== location.origin) return;
+    offer = value;
+    host = document.createElement("div");
+    host.style.cssText = "all:initial!important;position:fixed!important;inset:16px 16px auto auto!important;z-index:2147483647!important;pointer-events:none!important;max-width:calc(100vw - 32px)!important";
+    shadow = host.attachShadow({ mode: "closed" });
+    const style = document.createElement("style");
+    style.textContent = ":host{all:initial}.card{box-sizing:border-box;width:380px;max-width:calc(100vw - 32px);padding:16px;border:1px solid #555;border-radius:14px;background:#242424;color:#f2f2f2;box-shadow:0 12px 36px #0008;font:14px/1.45 system-ui,sans-serif;pointer-events:auto}.head{display:flex;align-items:flex-start;gap:12px}.logo{width:34px;height:34px;object-fit:contain;flex:none;border-radius:8px}.copy{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}strong{font-size:15px;font-weight:650}small{margin-top:3px;color:#b9b9b9;font-size:12px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}button,select{box-sizing:border-box;font:inherit;color:inherit;border:1px solid #555;border-radius:8px;background:#303030;padding:8px 11px}button{cursor:pointer}button:hover,button:focus-visible{border-color:#aaa;background:#383838;outline:2px solid #aaa;outline-offset:1px}button.primary{background:#e1e1e1;color:#202020;border-color:#e1e1e1;font-weight:650}button.primary:hover{background:#fff}.dismiss{margin-left:auto;padding:5px 9px;color:#c3c3c3}.picker{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid #494949}.picker[hidden]{display:none}.picker select{min-width:0;width:100%;background:#303030}.status{grid-column:1/-1;min-height:18px;margin:0;color:#f0b4c0;font-size:12px}.status:empty{display:none}@media(prefers-reduced-motion:no-preference){.card{animation:enter 180ms ease-out both}@keyframes enter{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}}";
+    const card = document.createElement("section"); card.className = "card"; card.setAttribute("role", "dialog"); card.setAttribute("aria-label", "Save login in rbw");
+    const head = document.createElement("div"); head.className = "head";
+    const logo = document.createElement("img"); logo.className = "logo"; logo.alt = ""; logo.src = api.runtime.getURL("icons/rbw-48.png");
+    const copy = document.createElement("div"); copy.className = "copy";
+    copy.append(text("strong", "Save this login?"), text("small", `${new URL(value.origin).host}${value.username ? ` · ${value.username}` : ""}`));
+    const dismiss = document.createElement("button"); dismiss.className = "dismiss"; dismiss.type = "button"; dismiss.textContent = "Dismiss";
+    dismiss.addEventListener("click", async event => { if (!event.isTrusted) return; await send("save_offer_dismiss").catch(() => {}); close(); });
+    head.append(logo, copy, dismiss);
+    const actions = document.createElement("div"); actions.className = "actions";
+    const save = document.createElement("button"); save.className = "primary"; save.type = "button"; save.textContent = "Save new login";
+    save.addEventListener("click", async event => {
+      if (!event.isTrusted) return;
+      save.disabled = true; choose.disabled = true; dismiss.disabled = true; status.textContent = "Saving and syncing…";
+      const result = await send("save_offer_apply").catch(error => ({ error: error.message || "Could not save login." }));
+      if (result?.error) { status.textContent = result.error; save.disabled = false; choose.disabled = false; dismiss.disabled = false; }
+      else close();
+    });
+    const choose = document.createElement("button"); choose.type = "button"; choose.textContent = "Update existing";
+    const picker = document.createElement("div"); picker.className = "picker"; picker.hidden = true;
+    const select = document.createElement("select"); select.setAttribute("aria-label", "Choose an existing login");
+    select.append(new Option("Choose a login…", ""));
+    const update = document.createElement("button"); update.className = "primary"; update.type = "button"; update.textContent = "Update login"; update.disabled = true;
+    const status = text("p", "", "status");
+    choose.addEventListener("click", async event => {
+      if (!event.isTrusted) return;
+      picker.hidden = false; choose.disabled = true; status.textContent = "Loading matching logins…";
+      const result = await send("save_offer_choices").catch(() => null);
+      if (!host) return;
+      select.replaceChildren(new Option("Choose a login…", ""));
+      for (const item of result?.result || []) {
+        const label = item.username ? `${item.name} · ${item.username}` : item.name;
+        select.append(new Option(label, item.id));
+      }
+      status.textContent = result?.error || (select.options.length > 1 ? "" : "No matching logins found.");
+      choose.disabled = false;
+    });
+    select.addEventListener("change", () => { update.disabled = !select.value; });
+    update.addEventListener("click", async event => {
+      if (!event.isTrusted || !select.value) return;
+      save.disabled = true; choose.disabled = true; update.disabled = true; dismiss.disabled = true; status.textContent = "Updating and syncing…";
+      const result = await send("save_offer_apply", { item: select.value }).catch(error => ({ error: error.message || "Could not update login." }));
+      if (result?.error) { status.textContent = result.error; save.disabled = false; choose.disabled = false; update.disabled = false; dismiss.disabled = false; }
+      else close();
+    });
+    picker.append(select, update, status); actions.append(save, choose); card.append(head, actions, picker); shadow.append(style, card);
+    document.documentElement.append(host);
+    status.textContent = "";
+  }
+  api.runtime.onMessage.addListener((message, sender) => {
+    if (sender.id !== api.runtime.id) return;
+    if (message?.action === "rbw_save_offer") show(message.offer);
+    if (message?.action === "rbw_save_offer_clear") close();
+  });
 })();
 
 if (window === window.top) {

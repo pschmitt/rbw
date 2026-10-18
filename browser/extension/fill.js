@@ -39,7 +39,9 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     if (password) password.focus(); else user?.focus();
   } else {
     const names = data.type === "card" ? { "cc-name": "cardholder_name", "cc-number": "number", "cc-exp-month": "exp_month", "cc-exp-year": "exp_year", "cc-csc": "code", "cc-type": "brand" } : { "given-name": "first_name", "additional-name": "middle_name", "family-name": "last_name", "address-line1": "address1", "address-line2": "address2", "address-line3": "address3", "address-level2": "city", "address-level1": "state", "postal-code": "postal_code", "country": "country", "country-name": "country", "tel": "phone", "email": "email", "username": "username", "honorific-prefix": "title" };
-    for (const el of fields) {
+    const activeForm = data.type === "card" ? document.activeElement?.form : null;
+    const targets = activeForm ? fields.filter(el => el.form === activeForm) : fields;
+    for (const el of targets) {
       const name = el.autocomplete?.split(/\s+/).at(-1);
       if (names[name]) put(el, data[names[name]]);
       if (name === "cc-exp" && data.exp_month && data.exp_year) put(el, `${data.exp_month.padStart(2, "0")}/${data.exp_year.slice(-2)}`);

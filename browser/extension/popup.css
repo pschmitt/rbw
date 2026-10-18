@@ -219,9 +219,18 @@ details.menu button .svg-icon { width:16px; height:16px; }
 }
 .passkey-alternatives { display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:14px; margin-top:16px; }
 .passkey-alternatives button { display:flex; align-items:center; justify-content:center; gap:8px; }
-#cancel-passkey { border-color:transparent; color:var(--muted); }
-.passkey-progress { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:12px 8px; text-align:center; }
-.passkey-progress-text { margin:0; font-size:14px; font-weight:500; color:var(--text); }
+#cancel-passkey { border-color:var(--line); background:var(--raised); color:var(--text); }
+#cancel-passkey:hover { border-color:var(--accent); background:var(--panel); }
+.passkey-choice-icon img { width:24px; height:24px; border-radius:4px; object-fit:contain; }
+.passkey-progress { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; min-height:300px; margin:20px 4px; padding:28px 18px; text-align:center; background:var(--panel); border:1px solid var(--line); border-radius:14px; }
+.passkey-progress-emblem { display:grid; place-items:center; width:68px; height:68px; border-radius:22px; color:var(--bg); background:var(--accent); box-shadow:0 8px 24px #0004; }
+.passkey-progress-emblem .svg-icon { width:36px; height:36px; }
+.passkey-progress-account { display:flex; align-items:center; justify-content:center; gap:11px; max-width:100%; padding:10px 14px; background:var(--raised); border:1px solid var(--line); border-radius:10px; text-align:left; }
+.passkey-progress-account>span:last-child { min-width:0; }
+.passkey-progress-account strong,.passkey-progress-account small { display:block; max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.passkey-progress-account strong { font-size:15px; font-weight:600; }
+.passkey-progress-account small { margin-top:2px; color:var(--muted); font-size:12px; }
+.passkey-progress-text { margin:4px 0 0; font-size:16px; font-weight:600; color:var(--text); }
 .passkey-spinner-wrap { display:flex; align-items:center; justify-content:center; }
 .passkey-spinner-wrap .spinner { width:24px; height:24px; border-width:3px; border-color:var(--line); border-top-color:var(--accent); }
 #approval-verification h3 { margin:0 0 8px; color:var(--text); }
