@@ -1218,22 +1218,20 @@ fn skip_insecure_uri(url: &url::Url, value: &str) -> bool {
 // request so config changes apply without restarting the browser.
 fn uri_match_default(
     value: Option<&str>,
-) -> anyhow::Result<rbw::api::UriMatchType> {
+) -> anyhow::Result<rbw::config::UriMatchDefault> {
     if let Some(value) = value {
-        return Ok(commands::parse_uri_match_default(value)?.into());
+        return commands::parse_uri_match_default(value);
     }
     Ok(rbw::config::Config::load()
-        .map_or(rbw::config::UriMatchDefault::Domain, |config| {
-            config.default_uri_match
-        })
-        .into())
+        .map(|config| config.default_uri_match)
+        .unwrap_or_default())
 }
 
 fn matches(
     entry: &rbw::db::Entry,
     uris: &[rbw::db::Uri],
     url: &url::Url,
-    default: rbw::api::UriMatchType,
+    default: rbw::config::UriMatchDefault,
 ) -> anyhow::Result<bool> {
     // Never transfer credentials from an HTTPS entry to an HTTP page, even
     // when the configured URI matching rule would otherwise permit it.

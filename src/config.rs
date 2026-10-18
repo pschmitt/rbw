@@ -271,8 +271,10 @@ pub enum ClipboardMechanism {
 
 // Default URI match detection for login URIs without their own match type,
 // like Bitwarden's client setting. Shared by the CLI, TUI and browser
-// extension (which may override it locally). `Domain` compares registrable
-// domains (eTLD+1), as Bitwarden's "Base domain" does.
+// extension (which may override it locally). `Domain` is rbw's matching (the
+// stored host and its subdomains); `BaseDomain` is Bitwarden's (registrable
+// domain, eTLD+1). URIs with an explicit match type always use Bitwarden's
+// meaning of it.
 #[derive(
     serde::Serialize,
     serde::Deserialize,
@@ -287,6 +289,7 @@ pub enum ClipboardMechanism {
 pub enum UriMatchDefault {
     #[default]
     Domain,
+    BaseDomain,
     Host,
     StartsWith,
     Exact,
@@ -300,15 +303,20 @@ impl UriMatchDefault {
     }
 }
 
-impl From<UriMatchDefault> for crate::api::UriMatchType {
-    fn from(value: UriMatchDefault) -> Self {
-        match value {
-            UriMatchDefault::Domain => Self::Domain,
-            UriMatchDefault::Host => Self::Host,
-            UriMatchDefault::StartsWith => Self::StartsWith,
-            UriMatchDefault::Exact => Self::Exact,
-            UriMatchDefault::RegularExpression => Self::RegularExpression,
-            UriMatchDefault::Never => Self::Never,
+impl UriMatchDefault {
+    // The Bitwarden match type this default stands for; `None` for rbw's
+    // own host-and-subdomains matching.
+    pub fn match_type(self) -> Option<crate::api::UriMatchType> {
+        match self {
+            Self::Domain => None,
+            Self::BaseDomain => Some(crate::api::UriMatchType::Domain),
+            Self::Host => Some(crate::api::UriMatchType::Host),
+            Self::StartsWith => Some(crate::api::UriMatchType::StartsWith),
+            Self::Exact => Some(crate::api::UriMatchType::Exact),
+            Self::RegularExpression => {
+                Some(crate::api::UriMatchType::RegularExpression)
+            }
+            Self::Never => Some(crate::api::UriMatchType::Never),
         }
     }
 }

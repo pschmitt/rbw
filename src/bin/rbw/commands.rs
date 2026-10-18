@@ -2523,14 +2523,13 @@ pub struct EditableCustomField {
 
 // The configured `defaultUriMatch`, read once per process (the CLI is
 // short-lived; the browser host reads its config per request instead).
-pub fn configured_uri_match() -> rbw::api::UriMatchType {
-    static DEFAULT: std::sync::OnceLock<rbw::api::UriMatchType> =
+pub fn configured_uri_match() -> rbw::config::UriMatchDefault {
+    static DEFAULT: std::sync::OnceLock<rbw::config::UriMatchDefault> =
         std::sync::OnceLock::new();
     *DEFAULT.get_or_init(|| {
         rbw::config::Config::load()
-            .map_or(rbw::api::UriMatchType::Domain, |config| {
-                config.default_uri_match.into()
-            })
+            .map(|config| config.default_uri_match)
+            .unwrap_or_default()
     })
 }
 
@@ -2566,13 +2565,35 @@ fn same_base_domain(stored: &url::Url, given: &url::Url) -> bool {
     }
 }
 
+// rbw's own default: the stored host (with port) or any of its subdomains.
+fn matches_host_or_subdomain(url: &str, given_url: &url::Url) -> bool {
+    let Some(given_host_port) = host_port(given_url) else {
+        return false;
+    };
+    if let Ok(self_url) = url::Url::parse(url) {
+        if let Some(self_host_port) = host_port(&self_url) {
+            if self_url.scheme() == given_url.scheme()
+                && (self_host_port == given_host_port
+                    || given_host_port
+                        .ends_with(&format!(".{self_host_port}")))
+            {
+                return true;
+            }
+        }
+    }
+    url == given_host_port || given_host_port.ends_with(&format!(".{url}"))
+}
+
 pub fn matches_url(
     url: &str,
     match_type: Option<rbw::api::UriMatchType>,
     given_url: &url::Url,
-    default: rbw::api::UriMatchType,
+    default: rbw::config::UriMatchDefault,
 ) -> bool {
-    match match_type.unwrap_or(default) {
+    let Some(match_type) = match_type.or_else(|| default.match_type()) else {
+        return matches_host_or_subdomain(url, given_url);
+    };
+    match match_type {
         rbw::api::UriMatchType::Domain => {
             let Some((scheme, stored)) = stored_url(url) else {
                 return false;
@@ -2780,9 +2801,9 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
         "clipboard" => {
             Some(clipboard_mechanism_str(config.clipboard).to_string())
         }
-        "defaultUriMatch" => Some(
-            uri_match_type_str(config.default_uri_match.into()).to_string(),
-        ),
+        "defaultUriMatch" => {
+            Some(uri_match_default_str(config.default_uri_match).to_string())
+        }
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     };
     let Some(value) = value else {
@@ -17982,22 +18003,37 @@ fn clipboard_mechanism_str(
     }
 }
 
+fn uri_match_default_str(
+    value: rbw::config::UriMatchDefault,
+) -> &'static str {
+    match value {
+        rbw::config::UriMatchDefault::Domain => "domain",
+        rbw::config::UriMatchDefault::BaseDomain => "base_domain",
+        rbw::config::UriMatchDefault::Host => "host",
+        rbw::config::UriMatchDefault::StartsWith => "starts_with",
+        rbw::config::UriMatchDefault::Exact => "exact",
+        rbw::config::UriMatchDefault::RegularExpression => {
+            "regular_expression"
+        }
+        rbw::config::UriMatchDefault::Never => "never",
+    }
+}
+
+// "domain" is rbw's host-and-subdomains matching; "base_domain" Bitwarden's.
 pub fn parse_uri_match_default(
     s: &str,
 ) -> anyhow::Result<rbw::config::UriMatchDefault> {
-    Ok(match parse_uri_match_type(s)? {
-        rbw::api::UriMatchType::Domain => {
-            rbw::config::UriMatchDefault::Domain
-        }
-        rbw::api::UriMatchType::Host => rbw::config::UriMatchDefault::Host,
-        rbw::api::UriMatchType::StartsWith => {
-            rbw::config::UriMatchDefault::StartsWith
-        }
-        rbw::api::UriMatchType::Exact => rbw::config::UriMatchDefault::Exact,
-        rbw::api::UriMatchType::RegularExpression => {
+    Ok(match s {
+        "domain" => rbw::config::UriMatchDefault::Domain,
+        "base_domain" => rbw::config::UriMatchDefault::BaseDomain,
+        "host" => rbw::config::UriMatchDefault::Host,
+        "starts_with" => rbw::config::UriMatchDefault::StartsWith,
+        "exact" => rbw::config::UriMatchDefault::Exact,
+        "regular_expression" => {
             rbw::config::UriMatchDefault::RegularExpression
         }
-        rbw::api::UriMatchType::Never => rbw::config::UriMatchDefault::Never,
+        "never" => rbw::config::UriMatchDefault::Never,
+        other => anyhow::bail!("unknown default uri match type: '{other}'"),
     })
 }
 
@@ -20716,7 +20752,7 @@ mod test {
                 stored,
                 domain,
                 &url::Url::parse(page).unwrap(),
-                rbw::api::UriMatchType::Domain,
+                rbw::config::UriMatchDefault::Domain,
             )
         };
         assert!(m("https://login.example.com", "https://www.example.com/"));
@@ -20736,16 +20772,43 @@ mod test {
 
     #[test]
     fn default_uri_match_applies_only_without_a_match_type() {
-        use rbw::api::UriMatchType::{Domain, Host, Never};
+        use rbw::api::UriMatchType::{Host, Never};
+        use rbw::config::UriMatchDefault;
         let page = url::Url::parse("https://www.example.com/login").unwrap();
         let m = |stored, match_type, default| {
             super::matches_url(stored, match_type, &page, default)
         };
-        assert!(m("https://example.com", None, Domain));
-        assert!(!m("https://example.com", None, Host));
-        assert!(!m("https://www.example.com", None, Never));
-        assert!(m("https://www.example.com", Some(Host), Never));
-        assert!(!m("https://example.com", Some(Never), Domain));
+        // rbw's default: the stored host and its subdomains only.
+        assert!(m("https://example.com", None, UriMatchDefault::Domain));
+        assert!(!m(
+            "https://login.example.com",
+            None,
+            UriMatchDefault::Domain
+        ));
+        // Bitwarden's base domain, when chosen as the default.
+        assert!(m(
+            "https://login.example.com",
+            None,
+            UriMatchDefault::BaseDomain
+        ));
+        assert!(!m("https://example.com", None, UriMatchDefault::Host));
+        assert!(!m("https://www.example.com", None, UriMatchDefault::Never));
+        // Explicit per-URI match types win over the default.
+        assert!(m(
+            "https://www.example.com",
+            Some(Host),
+            UriMatchDefault::Never
+        ));
+        assert!(!m(
+            "https://example.com",
+            Some(Never),
+            UriMatchDefault::Domain
+        ));
+        assert!(m(
+            "https://login.example.com",
+            Some(rbw::api::UriMatchType::Domain),
+            UriMatchDefault::Domain
+        ));
     }
 
     #[test]
@@ -20754,7 +20817,11 @@ mod test {
             super::parse_uri_match_default("starts_with").unwrap(),
             rbw::config::UriMatchDefault::StartsWith
         );
-        assert!(super::parse_uri_match_default("base_domain").is_err());
+        assert_eq!(
+            super::parse_uri_match_default("base_domain").unwrap(),
+            rbw::config::UriMatchDefault::BaseDomain
+        );
+        assert!(super::parse_uri_match_default("bogus").is_err());
     }
 
     #[test]
@@ -20765,7 +20832,7 @@ mod test {
                 stored,
                 sw,
                 &url::Url::parse(page).unwrap(),
-                rbw::api::UriMatchType::Domain,
+                rbw::config::UriMatchDefault::Domain,
             )
         };
         assert!(!m("https://example.com", "https://example.com.evil.net/"));
@@ -21840,9 +21907,8 @@ mod test {
             ),
             "three"
         );
-        // Base domain: a subdomain login also matches its parent domain.
         assert!(
-            one_match(entries, "https://three.com/", None, None, 2, false),
+            no_matches(entries, "https://three.com/", None, None, false),
             "three"
         );
 
@@ -21862,9 +21928,8 @@ mod test {
             ),
             "five"
         );
-        // Base domain ignores ports for registrable domains, like Bitwarden.
         assert!(
-            one_match(entries, "https://five.com/", None, None, 4, false),
+            no_matches(entries, "https://five.com/", None, None, false),
             "five"
         );
 
@@ -21873,7 +21938,7 @@ mod test {
             "six"
         );
         assert!(
-            one_match(entries, "https://six.com/", None, None, 5, false),
+            no_matches(entries, "https://six.com/", None, None, false),
             "six"
         );
         assert!(

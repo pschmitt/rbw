@@ -447,6 +447,7 @@ let
       defaultUriMatch = mkOption {
         type = types.enum [
           "domain"
+          "base_domain"
           "host"
           "starts_with"
           "exact"
@@ -456,10 +457,13 @@ let
         default = "domain";
         description = ''
           Match type for login URIs that have none of their own, like
-          Bitwarden's "Default URI match detection". `domain` compares
-          registrable domains (eTLD+1, Bitwarden's "Base domain"), so a login
-          for `login.example.com` also matches `www.example.com`. The browser
-          extension uses this default unless overridden in its settings.
+          Bitwarden's "Default URI match detection". `domain` is rbw's
+          matching: the stored host and its subdomains. `base_domain` is
+          Bitwarden's "Base domain": any host sharing the registrable domain
+          (eTLD+1), so a login for `login.example.com` also matches
+          `www.example.com`. URIs with their own match type keep it. The
+          browser extension uses this default unless overridden in its
+          settings.
         '';
       };
       # Mirrors `Vec<ItemAlias>` in `src/config.rs`.
