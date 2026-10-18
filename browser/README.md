@@ -5,7 +5,7 @@ The launcher runs `rbw native-messaging`, using the same account configuration,
 vault database and rbw-agent as the CLI. Vault keys remain in the agent; there
 is no browser vault cache, HTTP listener or separate browser agent.
 
-## Features in 0.2.32
+## Features in 0.2.33
 
 - Passkey sign-in shows the selected account and tracks the initial vault sync,
   signing and final counter sync. A failed sync is retried once.
