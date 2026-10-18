@@ -204,7 +204,7 @@ function clearVault() {
   ++epoch; currentItem = null; currentDetail = null;
   for (const id of ["items", "suggestions", "detail-content", "edit-fields", "custom-fields", "edit-attachments", "audit-results", "approval-items", "send-items"]) $(id).replaceChildren();
   $("send-file").value = "";
-  for (const id of ["unlock-password", "approval-password", "generated", "edit-name", "edit-folder", "edit-uris", "edit-notes", "send-name", "send-text", "send-notes", "send-password"]) $(id).value = "";
+  for (const id of ["unlock-password", "approval-password", "generated", "edit-name", "edit-folder", "edit-notes", "send-name", "send-text", "send-notes", "send-password"]) $(id).value = "";
 }
 function selectOptions(id, values, label) {
   const selected = $(id).value;
@@ -508,7 +508,7 @@ async function openDetail(item) {
   if (data.totp) content.append(totpField(item));
   if (data.uris?.length) {
     content.append(element("h3", "URIs"));
-    for (const uri of data.uris) content.append(detailField("URI", uri.uri, item, null, false, true));
+    for (const uri of data.uris) content.append(detailField(uri.match_type in uriMatchNames ? `URI · ${uriMatchNames[uri.match_type]}` : "URI", uri.uri, item, null, false, true));
   }
   if (detail.cipher.notes) content.append(noteField(detail.cipher.notes, item));
   for (const [i, field] of (detail.cipher.fields || []).entries()) content.append(detailField(field.name || "Custom field", field.value || "", item, `custom/${i}`, field.type === "hidden"));
@@ -593,6 +593,33 @@ function renderEditFields(data = {}) {
   }
   $("uri-label").hidden = type !== "login";
 }
+// Per-URI match detection, as in Bitwarden. "Default" follows this browser's
+// override of rbw's defaultUriMatch (see the add-on options).
+const uriMatchNames = { domain: "Base domain", host: "Host", starts_with: "Starts with", exact: "Exact", regular_expression: "Regular expression", never: "Never" };
+function uriMatchSelect(value = "") {
+  const select = element("select", null, "uri-match"); select.setAttribute("aria-label", "Match detection");
+  select.append(new Option("Default", ""), ...Object.entries(uriMatchNames).map(([key, name]) => new Option(name, key)));
+  select.value = value in uriMatchNames ? value : "";
+  return select;
+}
+function addUri(uri = {}) {
+  const row = element("div", null, "uri-row");
+  const input = element("input", null, "uri-input"); input.value = uri.uri || ""; input.placeholder = "https://example.com"; input.spellcheck = false; input.setAttribute("aria-label", "Website URI");
+  row.append(input, uriMatchSelect(uri.match_type || ""), actionButton("Remove URI", "trash", () => row.remove(), "icon danger"));
+  $("edit-uris").append(row);
+  return input;
+}
+async function labelUriDefaults() {
+  const [prefs, policy] = await Promise.all([request("preferences"), request("agent_settings")]);
+  const uriDefaultName = uriMatchNames[prefs.uriMatchDefault || policy.defaultUriMatch] || "Base domain";
+  $("uri-default").textContent = `Default is ${uriDefaultName}${prefs.uriMatchDefault ? " (this browser's override)" : " (rbw setting)"}.`;
+}
+$("add-uri").onclick = () => addUri().focus();
+$("uri-apply-all").append(new Option("Default", ""), ...Object.entries(uriMatchNames).map(([key, name]) => new Option(name, key)));
+$("uri-apply-all").onchange = () => {
+  if ($("uri-apply-all").value !== "keep") for (const select of document.querySelectorAll(".uri-match")) select.value = $("uri-apply-all").value;
+  $("uri-apply-all").value = "keep";
+};
 function addCustom(field = {}) {
   const card = element("div", null, "custom-card");
   const header = element("div", null, "custom-card-header");
@@ -638,7 +665,9 @@ function editItem(fresh = false) {
   const cipher = currentDetail?.cipher || { name: "", data: { type: "login" } };
   $("edit-name").value = cipher.name; $("edit-folder").value = cipher.folder || ""; $("edit-notes").value = cipher.notes || "";
   $("edit-type").value = cipher.data.type; $("edit-type").disabled = !!currentDetail?.passkeys.length;
-  $("edit-uris").value = (cipher.data.uris || []).map(uri => uri.uri).join("\n");
+  $("edit-uris").replaceChildren(); for (const uri of cipher.data.uris || []) addUri(uri);
+  if (!$("edit-uris").children.length) addUri();
+  labelUriDefaults().catch(() => {});
   $("custom-fields").replaceChildren(); for (const field of cipher.fields || []) addCustom(field);
   $("edit-passkeys").textContent = currentDetail?.passkeys.length ? "Existing passkeys are preserved by rbw. Their private keys never enter this editor." : "";
   renderAttachments(currentDetail, currentItem);
@@ -648,7 +677,7 @@ $("edit-form").onsubmit = event => { event.preventDefault(); attempt(async () =>
   if (attachmentBusy) throw new Error("Wait for the attachment operation to finish before saving.");
   const type = $("edit-type").value; const data = { type };
   for (const name of schema[type]) data[name] = $(`field-${name}`).value || null;
-  if (type === "login") data.uris = $("edit-uris").value.split("\n").map(uri => uri.trim()).filter(Boolean).map(uri => currentDetail?.cipher.data.uris?.find(old => old.uri === uri) || { uri });
+  if (type === "login") data.uris = [...$("edit-uris").children].map(row => ({ uri: row.querySelector(".uri-input").value.trim(), match_type: row.querySelector(".uri-match").value || undefined })).filter(uri => uri.uri);
   const fields = [...$("custom-fields").children].map(card => ({
     name: card.querySelector(".custom-name-input")?.value || "",
     value: card.querySelector(".custom-value-input")?.value || "",

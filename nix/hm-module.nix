@@ -443,6 +443,25 @@ let
           `auto` tries both and succeeds if either one does.
         '';
       };
+      # Mirrors `UriMatchDefault` in `src/config.rs`.
+      defaultUriMatch = mkOption {
+        type = types.enum [
+          "domain"
+          "host"
+          "starts_with"
+          "exact"
+          "regular_expression"
+          "never"
+        ];
+        default = "domain";
+        description = ''
+          Match type for login URIs that have none of their own, like
+          Bitwarden's "Default URI match detection". `domain` compares
+          registrable domains (eTLD+1, Bitwarden's "Base domain"), so a login
+          for `login.example.com` also matches `www.example.com`. The browser
+          extension uses this default unless overridden in its settings.
+        '';
+      };
       # Mirrors `Vec<ItemAlias>` in `src/config.rs`.
       aliases = mkOption {
         type = types.listOf (

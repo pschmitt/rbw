@@ -269,6 +269,50 @@ pub enum ClipboardMechanism {
     Osc52,
 }
 
+// Default URI match detection for login URIs without their own match type,
+// like Bitwarden's client setting. Shared by the CLI, TUI and browser
+// extension (which may override it locally). `Domain` compares registrable
+// domains (eTLD+1), as Bitwarden's "Base domain" does.
+#[derive(
+    serde::Serialize,
+    serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum UriMatchDefault {
+    #[default]
+    Domain,
+    Host,
+    StartsWith,
+    Exact,
+    RegularExpression,
+    Never,
+}
+
+impl UriMatchDefault {
+    pub fn is_default(&self) -> bool {
+        *self == Self::Domain
+    }
+}
+
+impl From<UriMatchDefault> for crate::api::UriMatchType {
+    fn from(value: UriMatchDefault) -> Self {
+        match value {
+            UriMatchDefault::Domain => Self::Domain,
+            UriMatchDefault::Host => Self::Host,
+            UriMatchDefault::StartsWith => Self::StartsWith,
+            UriMatchDefault::Exact => Self::Exact,
+            UriMatchDefault::RegularExpression => Self::RegularExpression,
+            UriMatchDefault::Never => Self::Never,
+        }
+    }
+}
+
 // Points at a Login item, in another configured account's vault, that holds
 // this account's master password. Used by the agent's unlock flow to skip
 // the pinentry prompt: the source account is unlocked (recursively, if it
@@ -562,6 +606,10 @@ pub struct Config {
     // to set the clipboard; see `ClipboardMechanism`.
     #[serde(default)]
     pub clipboard: ClipboardMechanism,
+    // Match type for login URIs that have none of their own; see
+    // `UriMatchDefault`.
+    #[serde(default, skip_serializing_if = "UriMatchDefault::is_default")]
+    pub default_uri_match: UriMatchDefault,
     // Shortcut names for `rbw get`; see `ItemAlias`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<ItemAlias>,

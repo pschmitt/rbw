@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Added
+
+* `defaultUriMatch` config option (`rbw config set defaultUriMatch host`, Home
+  Manager `defaultUriMatch`): the match type for login URIs without their own,
+  like Bitwarden's "Default URI match detection". The browser extension shows
+  rbw's default and can override it per browser in its options.
+* The browser item editor lists URIs one per row with their own match
+  detection (Default, Base domain, Host, Starts with, Exact, Regular
+  expression, Never) and a "Match for all" shortcut; item details show
+  non-default match types.
+
+### Changed
+
+* `Domain` URI matching now works like Bitwarden's "Base domain": hosts match
+  when they share a registrable domain (eTLD+1 per the public suffix list), so
+  a login for `login.example.com` also matches `www.example.com`, and ports
+  are ignored for such domains. IP addresses, `localhost` and other hosts
+  without a registrable domain still need the exact host and port.
+
 ## [2.22.0] - 2026-10-18
 
 ### Changed

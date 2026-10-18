@@ -91,7 +91,10 @@ async function fetchFavicon(origin) {
   const value = await iconDataUrl(origin + "/favicon.ico");
   if (generation === metadataEpoch) cacheFor(faviconCache, origin, value, 5 * 60 * 1000, 128); return value;
 }
-const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: false };
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: false, uriMatchDefault: "" };
+// Empty means "use rbw's defaultUriMatch"; otherwise an override for this browser.
+const URI_MATCH_TYPES = ["domain", "host", "starts_with", "exact", "regular_expression", "never"];
+let uriMatchOverride = null;
 function isAutofillBlocked(pageUrl, blocklist) {
   let page;
   try { page = new URL(pageUrl); } catch (_) { return false; }
@@ -122,6 +125,8 @@ async function settings() {
   result.animations = ["off", "on", "plaid"].includes(stored.animations) ? stored.animations : stored.crabify === true ? "plaid" : "on";
   result.animationSpeed = ["slow", "normal", "fast"].includes(stored.animationSpeed) ? stored.animationSpeed : "normal";
   delete result.crabify;
+  if (!URI_MATCH_TYPES.includes(result.uriMatchDefault)) result.uriMatchDefault = "";
+  uriMatchOverride = result.uriMatchDefault || null;
   return result;
 }
 let nativePort;
@@ -164,6 +169,8 @@ function native(request) {
   }
   return new Promise((resolve, reject) => {
     const id = ++serial; nativeRequests.set(id, { resolve, reject });
+    // URI matching follows this browser's override of rbw's default, if set.
+    if (["search", "credential"].includes(request.action) && request.match_default === undefined) request = { ...request, match_default: uriMatchOverride };
     try { nativePort.postMessage({ ...request, id }); } catch (error) { nativeRequests.delete(id); reject(error); }
   });
 }
@@ -333,7 +340,7 @@ async function inlineMessage(port, message, state) {
     if (!await verifyInlineClick(session, message.x, message.y)) { port.postMessage({ type: "save_result", error: "rbw could not confirm that its window is fully visible. Click again." }); return; }
     try { await applySaveOffer(session.tabId, typeof message.item === "string" ? message.item : null, account); }
     catch (error) { port.postMessage({ type: "save_result", error: error.message || "Could not save login." }); return; }
-    closeInlineSession(session.token, true); refreshActiveBadge().catch(() => {});
+    closeInlineSession(session.token, true); settings().then(() => refreshActiveBadge()).catch(() => {});
   } else if (message.type === "dismiss") {
     clearTimeout(offer.timer); offers.delete(session.tabId); badge();
     closeInlineSession(session.token, true);
@@ -608,7 +615,9 @@ async function handle(message) {
       if (!["off", "on", "plaid"].includes(next.animations)) next.animations = "on";
       if (!["slow", "normal", "fast"].includes(next.animationSpeed)) next.animationSpeed = "normal";
       if (!["off", "fill", "clipboard"].includes(next.cardSecurityCode)) next.cardSecurityCode = "off";
-      if (next.account !== old.account || !next.favicons) clearMetadata();
+      if (!URI_MATCH_TYPES.includes(next.uriMatchDefault)) next.uriMatchDefault = "";
+      uriMatchOverride = next.uriMatchDefault || null;
+      if (next.account !== old.account || !next.favicons || next.uriMatchDefault !== old.uriMatchDefault) clearMetadata();
       await api.storage.local.set({ preferences: next }); return next;
     }
     case "search": {
@@ -728,7 +737,7 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
     if (!independent) queue = operation.catch(() => {});
     operation.then(result => {
       respond({ result });
-      if (["unlock", "sync", "save", "mutate", "set_preferences", "import", "save_offer_apply", "passkey_approve"].includes(message.action)) refreshActiveBadge().catch(() => {});
+      if (["unlock", "sync", "save", "mutate", "set_preferences", "import", "save_offer_apply", "passkey_approve"].includes(message.action)) settings().then(() => refreshActiveBadge()).catch(() => {});
     }, error => respond({ error: error.message || "Operation failed.", diagnostic: error.diagnostic || null })); return true;
   }
   if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "inline_open", "keyboard_fill_shortcut", "autofill_load", "undo_fill", "dismiss_fill"].includes(message?.action)) return false;
@@ -825,4 +834,4 @@ api.webNavigation.onCommitted.addListener(details => {
   for (const [id, p] of pending) if (p.tabId === details.tabId && p.frameId === details.frameId) finish(id, { error: "Document navigated." });
 });
 
-refreshActiveBadge().catch(() => {});
+settings().then(() => refreshActiveBadge()).catch(() => {});

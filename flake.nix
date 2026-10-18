@@ -234,6 +234,7 @@
                 trashed = true;
               };
               clipboard = "auto";
+              defaultUriMatch = "domain";
             }
             + "\n";
         in

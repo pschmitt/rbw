@@ -43,10 +43,15 @@ enum Operation {
         collection: Option<String>,
         #[serde(default)]
         view: Option<String>,
+        // The extension's override of rbw's `defaultUriMatch`, if any.
+        #[serde(default)]
+        match_default: Option<String>,
     },
     Credential {
         item: String,
         url: String,
+        #[serde(default)]
+        match_default: Option<String>,
     },
     Totp {
         item: String,
@@ -315,7 +320,7 @@ fn dispatch(
         Operation::AgentSettings => {
             let config = rbw::config::Config::load()?;
             Ok(
-                json!({"lockTimeout": config.agent.lock_timeout, "syncInterval": config.agent.sync_interval, "passwordGen": config.password_gen, "clipboard": config.clipboard}),
+                json!({"lockTimeout": config.agent.lock_timeout, "syncInterval": config.agent.sync_interval, "passwordGen": config.password_gen, "clipboard": config.clipboard, "defaultUriMatch": config.default_uri_match}),
             )
         }
         Operation::CopyText { text } => {
@@ -366,9 +371,12 @@ fn dispatch(
                     folder,
                     collection,
                     view,
+                    match_default,
                 } => {
                     ensure!(query.len() <= 1024, "query too long");
                     let url = url.as_deref().map(web_url).transpose()?;
+                    let default =
+                        uri_match_default(match_default.as_deref())?;
                     let query = query.to_lowercase();
                     let mut items = Vec::new();
                     let mut folders = std::collections::BTreeSet::new();
@@ -402,6 +410,7 @@ fn dispatch(
                                     &value,
                                     uri.match_type,
                                     url,
+                                    default,
                                 ) {
                                     return Ok(true);
                                 }
@@ -579,8 +588,14 @@ fn dispatch(
                         json!({"items": items, "limit": 200, "total": total, "folders": folders, "collections": collections}),
                     )
                 }
-                Operation::Credential { item, url } => {
+                Operation::Credential {
+                    item,
+                    url,
+                    match_default,
+                } => {
                     let url = web_url(&url)?;
+                    let default =
+                        uri_match_default(match_default.as_deref())?;
                     let entry = entry(&db, &item)?;
                     let rbw::db::EntryData::Login {
                         username,
@@ -591,7 +606,10 @@ fn dispatch(
                     else {
                         anyhow::bail!("not a login");
                     };
-                    ensure!(matches(entry, uris, &url)?, "site mismatch");
+                    ensure!(
+                        matches(entry, uris, &url, default)?,
+                        "site mismatch"
+                    );
                     let custom = entry.fields.iter().map(|f| Ok(json!({"name": f.name.as_deref().map(|v| decrypt(entry, v)).transpose()?, "value": f.value.as_deref().map(|v| decrypt(entry, v)).transpose()?, "type": match f.ty { Some(rbw::api::FieldType::Hidden) => "hidden", Some(rbw::api::FieldType::Boolean) => "boolean", Some(rbw::api::FieldType::Linked) => "linked", _ => "text" }}))).collect::<anyhow::Result<Vec<_>>>()?;
                     Ok(
                         json!({"name": decrypt(entry, &entry.name)?, "custom": custom, "username": username.as_deref().map(|s| decrypt(entry, s)).transpose()?,
@@ -1196,10 +1214,26 @@ fn skip_insecure_uri(url: &url::Url, value: &str) -> bool {
         && !value.trim_start().to_ascii_lowercase().starts_with("http:")
 }
 
+// The extension's override, else rbw's configured `defaultUriMatch`, read per
+// request so config changes apply without restarting the browser.
+fn uri_match_default(
+    value: Option<&str>,
+) -> anyhow::Result<rbw::api::UriMatchType> {
+    if let Some(value) = value {
+        return Ok(commands::parse_uri_match_default(value)?.into());
+    }
+    Ok(rbw::config::Config::load()
+        .map_or(rbw::config::UriMatchDefault::Domain, |config| {
+            config.default_uri_match
+        })
+        .into())
+}
+
 fn matches(
     entry: &rbw::db::Entry,
     uris: &[rbw::db::Uri],
     url: &url::Url,
+    default: rbw::api::UriMatchType,
 ) -> anyhow::Result<bool> {
     // Never transfer credentials from an HTTPS entry to an HTTP page, even
     // when the configured URI matching rule would otherwise permit it.
@@ -1208,7 +1242,7 @@ fn matches(
         if skip_insecure_uri(url, &value) {
             continue;
         }
-        if commands::matches_url(&value, uri.match_type, url) {
+        if commands::matches_url(&value, uri.match_type, url, default) {
             return Ok(true);
         }
     }

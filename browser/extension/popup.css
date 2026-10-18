@@ -353,3 +353,12 @@ details.menu button .svg-icon { width:16px; height:16px; }
     transition: none;
   }
 }
+/* Per-URI rows: address, match detection, remove. */
+.uri-editor { display:grid; gap:6px; margin:10px 0; }
+.uri-editor > span { font-size:13px; }
+.uri-row { display:grid; grid-template-columns:minmax(0, 1fr) auto auto; gap:6px; align-items:center; }
+.uri-row select { width:auto; }
+.uri-row input, .uri-row select { min-width:0; margin:0; }
+.uri-tools { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+.uri-apply { display:flex; align-items:center; gap:6px; margin:0; font-size:12px; color:var(--muted); }
+.uri-apply select { width:auto; margin:0; }
