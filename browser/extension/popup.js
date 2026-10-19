@@ -162,7 +162,8 @@ function show(page) {
   if (currentPage === "editor" && page !== "editor") { forgetEditDraft(); if (!$("message-action").hidden) message(""); }
   remember();
   currentPage = page; document.documentElement.dataset.page = page;
-  if (page === "generator" && !generatedValue) regenerateSoon();
+  if (page === "generator") { if (!generatedValue) regenerateSoon(); renderGeneratorSite().catch(() => {}); }
+  else if (!$("gen-picker").hidden) closeGeneratorPicker();
   const subpage = ["detail", "editor", "send-editor", "settings", "diagnostic"].includes(page);
   $("back").hidden = !subpage;
   $("account-toggle").classList.toggle("is-subpage", subpage);
@@ -211,7 +212,7 @@ function clearVault() {
   ++epoch; currentItem = null; currentDetail = null;
   for (const id of ["items", "suggestions", "detail-content", "edit-fields", "custom-fields", "edit-attachments", "audit-results", "approval-items", "send-items"]) $(id).replaceChildren();
   $("send-file").value = "";
-  generatedValue = ""; $("generated").replaceChildren(); delete $("generated").closest(".gen-card").dataset.strength;
+  generatedValue = ""; $("generated").replaceChildren(); closeGeneratorPicker(); delete $("generated").closest(".gen-card").dataset.strength;
   for (const id of ["unlock-password", "approval-password", "edit-name", "edit-folder", "edit-notes", "send-name", "send-text", "send-notes", "send-password"]) $(id).value = "";
 }
 function selectOptions(id, values, label) {
@@ -1133,6 +1134,61 @@ $("length").onchange = () => { saveGenerator(); regenerateSoon(); };
 $("gen-symbols").onchange = () => { generator.symbols = $("gen-symbols").checked; saveGenerator(); renderGeneratorControls(); regenerateSoon(); };
 $("gen-readable").onchange = () => { generator.readable = $("gen-readable").checked; saveGenerator(); renderGeneratorControls(); regenerateSoon(); };
 $("generate").onclick = () => attempt(generatePassword);
+// Save the generated value: into a new login for the current site, or as the
+// new password of an existing login. Both open the editor for review.
+async function generatorSite() {
+  for (const query of [{ active: true, currentWindow: true }, { active: true, lastFocusedWindow: true }]) {
+    try { const [tab] = await api.tabs.query(query); if (/^https?:\/\//.test(tab?.url || "")) return new URL(tab.url); } catch (_) { /* Try the next window. */ }
+  }
+  return null;
+}
+async function renderGeneratorSite() {
+  const site = await generatorSite();
+  $("gen-save-site").textContent = site ? `Save for ${site.hostname.replace(/^www\./, "")}` : "Save as a new vault item";
+}
+function requireGenerated() {
+  if (!generatedValue) throw new Error("Generate a value first.");
+  if (!unlocked) throw new Error("Unlock the vault to save it.");
+  return generatedValue;
+}
+function closeGeneratorPicker() { $("gen-picker").hidden = true; $("gen-save-existing").setAttribute("aria-expanded", "false"); }
+$("gen-save-new").onclick = () => attempt(async () => {
+  const password = requireGenerated(); const site = await generatorSite();
+  const cipher = { name: site ? site.hostname.replace(/^www\./, "") : "", folder: null, notes: null, data: { type: "login", username: "", password, uris: site ? [{ uri: site.origin }] : [] }, fields: [] };
+  closeGeneratorPicker(); editItem(true, { item: null, revision: null, cipher, noAutofill: false });
+  $("field-username")?.focus();
+  message("Generated password filled in. Add a username and save.");
+});
+let pickerEpoch = 0; let pickerTimer = null;
+async function loadGeneratorPicker() {
+  const current = ++pickerEpoch; const query = $("gen-picker-query").value.trim();
+  const result = await request("search", query ? { query, kind: "login", view: "vault" } : { query: "", siteOnly: true, kind: "login" });
+  if (current !== pickerEpoch) return;
+  const items = result.items.filter(item => item.type === "login" && !item.deleted).slice(0, 50);
+  const list = $("gen-picker-items"); list.replaceChildren();
+  if (items.length) list.append(element("h4", query ? "Matching logins" : "Logins for this site"));
+  for (const item of items) {
+    const choice = element("button"); choice.type = "button";
+    choice.append(element("strong", item.name), element("small", item.username || "No username"));
+    choice.onclick = () => attempt(() => updateWithGenerated(item.id)); list.append(choice);
+  }
+  if (!items.length) list.append(element("p", query ? "No logins match." : "No logins for this site. Search your vault above.", "empty"));
+}
+async function updateWithGenerated(id) {
+  const password = requireGenerated();
+  await openDetail(id);
+  const cipher = structuredClone(currentDetail.cipher); cipher.data = { ...cipher.data, password };
+  const noAutofill = Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(id);
+  closeGeneratorPicker(); editItem(false, { item: id, revision: currentDetail.revision, cipher, noAutofill });
+  message("New password filled in. Review and save to update this login.");
+}
+$("gen-save-existing").onclick = () => attempt(async () => {
+  requireGenerated();
+  if (!$("gen-picker").hidden) { closeGeneratorPicker(); return; }
+  $("gen-picker").hidden = false; $("gen-save-existing").setAttribute("aria-expanded", "true");
+  $("gen-picker-query").value = ""; await loadGeneratorPicker(); $("gen-picker-query").focus();
+});
+$("gen-picker-query").oninput = () => { clearTimeout(pickerTimer); pickerTimer = setTimeout(() => attempt(loadGeneratorPicker), 150); };
 $("copy-generated").onclick = () => attempt(async () => {
   if (!generatedValue) throw new Error("Generate a value first.");
   await request("copy_text", { text: generatedValue });

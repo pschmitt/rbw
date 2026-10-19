@@ -434,6 +434,24 @@ input.gen-range::-moz-range-track { background:transparent; }
 input.gen-range:focus-visible { outline:2px solid var(--accent); outline-offset:6px; }
 .gen-range-scale { display:flex; justify-content:space-between; color:var(--muted); font-size:11px; }
 .gen-hint { margin:4px 2px 0; }
+.gen-save { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:10px 0 0; }
+.gen-save button { display:flex; align-items:center; justify-content:flex-start; gap:10px; margin:0!important; padding:10px; border-radius:12px; text-align:left; background:var(--panel); }
+.gen-save button:hover, .gen-save button[aria-expanded=true] { background:var(--raised); border-color:var(--text); }
+.gen-save button>.svg-icon { flex:none; width:30px; height:30px; padding:6px; border-radius:9px; background:var(--raised); }
+.gen-save button:hover>.svg-icon, .gen-save button[aria-expanded=true]>.svg-icon { background:var(--panel); }
+.gen-save button>span { min-width:0; }
+.gen-save strong { display:block; font-size:13px; font-weight:600; }
+.gen-save small { display:block; overflow:hidden; color:var(--muted); font-size:11px; white-space:nowrap; text-overflow:ellipsis; }
+.gen-picker { margin-top:8px; padding:8px; }
+.gen-picker .search { margin-bottom:6px; }
+#gen-picker-items { max-height:220px; overflow-y:auto; }
+#gen-picker-items h4 { margin:8px 4px 4px; color:var(--muted); font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.6px; }
+#gen-picker-items button { display:flex; flex-direction:column; align-items:flex-start; width:100%; margin:0!important; padding:7px 9px; border:0; border-radius:8px; background:transparent; text-align:left; }
+#gen-picker-items button:hover, #gen-picker-items button:focus-visible { background:var(--raised); }
+#gen-picker-items strong, #gen-picker-items small { display:block; max-width:100%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+#gen-picker-items strong { font-weight:500; }
+#gen-picker-items small { color:var(--muted); font-size:12px; }
+#gen-picker-items .empty { padding:14px; font-size:13px; }
 @media (prefers-reduced-motion:reduce) { .gen-value.is-fresh, .gen-regenerate.is-spinning .svg-icon { animation:none; } #gen-meter-fill { transition:none; } }
 
 /* Send list */

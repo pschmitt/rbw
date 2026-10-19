@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+* Browser generator: save the generated password straight into a vault
+  item. "New login" opens the editor prefilled for the current site (name
+  and URI from the active tab); "Update a login" picks a login for this site
+  (or any login, via search) and opens it with the new password filled in.
+  Both wait for you to review and save.
+
 ## [2.22.9] - 2026-10-19
 
 ### Changed

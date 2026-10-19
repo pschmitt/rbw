@@ -103,6 +103,14 @@
     <button id="copy-generated" type="button" class="primary gen-copy"><span data-icon="copy"></span><span id="copy-generated-label">Copy</span></button>
   </div>
 </div>
+<div class="gen-save">
+  <button id="gen-save-new" type="button"><span data-icon="plus"></span><span><strong>New login</strong><small id="gen-save-site">Save as a new vault item</small></span></button>
+  <button id="gen-save-existing" type="button" aria-expanded="false" aria-controls="gen-picker"><span data-icon="edit"></span><span><strong>Update a login</strong><small>Replace its password</small></span></button>
+</div>
+<div id="gen-picker" class="gen-panel gen-picker" hidden>
+  <div class="search"><span data-icon="search"></span><input id="gen-picker-query" type="search" autocomplete="off" placeholder="Search logins" aria-label="Search logins"></div>
+  <div id="gen-picker-items"></div>
+</div>
 <div id="gen-type" class="segmented" role="radiogroup" aria-label="Type">
   <button type="button" role="radio" data-type="password">Password</button>
   <button type="button" role="radio" data-type="passphrase">Passphrase</button>
