@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.22.8] - 2026-10-19
+
 ### Fixed
 
 * Browser: a browser still running from before a Nix upgrade replaced its
