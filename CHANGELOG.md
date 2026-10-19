@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.22.10] - 2026-10-20
+
 ### Added
 
 * Browser generator: save the generated password straight into a vault
@@ -24,6 +26,11 @@
   start focused on Cancel.
 * New items created from a saved login or a new passkey drop a leading
   `www.` from the site name (`passkeys.io`, not `www.passkeys.io`).
+
+* Dependencies: tokio 1.54.0, a lock file refresh of transitive crates and
+  the Nix flake inputs, and web-ext 10 for signing the Firefox package.
+  Renovate now also tracks `flake.lock`, transitive `Cargo.lock` updates
+  and the web-ext pin.
 
 ### Fixed
 
