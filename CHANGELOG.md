@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.22.9] - 2026-10-19
+
 ### Changed
 
 * Browser passkey popup: dropped the redundant spinner below the progress
