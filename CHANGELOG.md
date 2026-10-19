@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Browser passkey popup: dropped the redundant spinner below the progress
+  steps, and the toolbar popup now sizes to its content on the passkey
+  approval page instead of always being 600px tall.
+
 ## [2.22.8] - 2026-10-19
 
 ### Fixed

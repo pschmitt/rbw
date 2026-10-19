@@ -123,6 +123,9 @@ pre { white-space:pre-wrap; overflow-wrap:anywhere; font:13px ui-monospace,monos
 kbd { font:12px ui-monospace,monospace; background:var(--raised); border:1px solid var(--line); padding:2px 5px; border-radius:4px; }
 [hidden] { display:none!important; }
 html[data-surface=window] { width:100%; height:100%; }
+/* The passkey approval popup only needs as much room as its content. */
+html[data-page=approval]:not([data-surface=window]), html[data-page=approval]:not([data-surface=window]) body { height:auto; }
+html[data-page=approval]:not([data-surface=window]) main { padding-bottom:12px; }
 html[data-surface=window] body { width:100%; height:100%; min-width:0; margin:0; }
 
 header, #message { flex-shrink:0; }
@@ -258,8 +261,6 @@ details.menu button .svg-icon { width:16px; height:16px; }
 /* Sync steps spin a refresh glyph while they run. */
 .passkey-progress-steps li[data-step="before"][data-state="active"]::before { border:0; border-radius:0; background:var(--text); box-shadow:none; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 7v5h-5M4 17v-5h5'/%3E%3Cpath d='M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 7v5h-5M4 17v-5h5'/%3E%3Cpath d='M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6'/%3E%3C/svg%3E") center/contain no-repeat; animation:spin 1s linear infinite; }
 @media (prefers-reduced-motion:reduce) { .passkey-progress-steps li::before { animation:none !important; } }
-.passkey-spinner-wrap { display:flex; align-items:center; justify-content:center; }
-.passkey-spinner-wrap .spinner { width:24px; height:24px; border-width:3px; border-color:var(--line); border-top-color:var(--accent); }
 #approval-verification h3 { margin:0 0 8px; color:var(--text); }
 .passkey-empty { display:grid; justify-items:center; text-align:center; padding:24px 12px; gap:10px; color:var(--muted); }
 

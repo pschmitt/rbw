@@ -161,7 +161,7 @@ function show(page) {
   // Resume and discard prompts only make sense inside the editor.
   if (currentPage === "editor" && page !== "editor") { forgetEditDraft(); if (!$("message-action").hidden) message(""); }
   remember();
-  currentPage = page;
+  currentPage = page; document.documentElement.dataset.page = page;
   const subpage = ["detail", "editor", "send-editor", "settings", "diagnostic"].includes(page);
   $("back").hidden = !subpage;
   $("account-toggle").classList.toggle("is-subpage", subpage);
