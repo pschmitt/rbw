@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.22.5] - 2026-10-19
+
 ### Changed
 
 * The toolbar sync indicator sits in the top-right corner of the rbw icon,
