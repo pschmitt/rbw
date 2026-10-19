@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.22.4] - 2026-10-19
+
 ### Changed
 
 * Browser custom fields also match a form field by its label, placeholder,
