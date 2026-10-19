@@ -4,6 +4,7 @@
   "labels": [
     "dependencies"
   ],
+  "prHourlyLimit": 0,
   "extends": [
     "config:recommended",
     ":semanticCommits"
