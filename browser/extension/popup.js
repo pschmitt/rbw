@@ -162,6 +162,7 @@ function show(page) {
   if (currentPage === "editor" && page !== "editor") { forgetEditDraft(); if (!$("message-action").hidden) message(""); }
   remember();
   currentPage = page; document.documentElement.dataset.page = page;
+  if (page === "generator" && !generatedValue) regenerateSoon();
   const subpage = ["detail", "editor", "send-editor", "settings", "diagnostic"].includes(page);
   $("back").hidden = !subpage;
   $("account-toggle").classList.toggle("is-subpage", subpage);
@@ -210,7 +211,8 @@ function clearVault() {
   ++epoch; currentItem = null; currentDetail = null;
   for (const id of ["items", "suggestions", "detail-content", "edit-fields", "custom-fields", "edit-attachments", "audit-results", "approval-items", "send-items"]) $(id).replaceChildren();
   $("send-file").value = "";
-  for (const id of ["unlock-password", "approval-password", "generated", "edit-name", "edit-folder", "edit-notes", "send-name", "send-text", "send-notes", "send-password"]) $(id).value = "";
+  generatedValue = ""; $("generated").replaceChildren(); delete $("generated").closest(".gen-card").dataset.strength;
+  for (const id of ["unlock-password", "approval-password", "edit-name", "edit-folder", "edit-notes", "send-name", "send-text", "send-notes", "send-password"]) $(id).value = "";
 }
 function selectOptions(id, values, label) {
   const selected = $(id).value;
@@ -1064,11 +1066,79 @@ window.addEventListener("keydown", event => {
     }
   }
 });
-$("generate").onclick = () => attempt(async () => {
-  const value = $("length").value;
-  $("generated").value = await request("generate", { length: value ? Number(value) : null, passphrase: $("gen-mode").value === "passphrase", mode: $("gen-mode").value });
+// Generator: alphabet sizes match rbw's pwgen (src/pwgen.rs); passphrases
+// draw from the 7776-word EFF long list.
+const GENERATOR_TYPES = {
+  password: { label: "Characters", min: 8, max: 128, initial: 40 },
+  passphrase: { label: "Words", min: 3, max: 12, initial: 6 },
+  pin: { label: "Digits", min: 4, max: 32, initial: 8 },
+};
+const generator = (() => {
+  const fallback = { type: "password", lengths: {}, symbols: true, readable: false };
+  try { return { ...fallback, ...JSON.parse(localStorage.getItem("rbw-generator") || "{}") }; } catch (_) { return fallback; }
+})();
+let generatedValue = ""; let generateTimer = null; let copiedTimer = null;
+function saveGenerator() { try { localStorage.setItem("rbw-generator", JSON.stringify(generator)); } catch (_) { /* Per-viewer convenience only. */ } }
+function generatorMode() {
+  if (generator.type === "passphrase") return "passphrase";
+  if (generator.type === "pin") return "numbers";
+  return generator.readable ? "nonconfusables" : generator.symbols ? "all" : "no_symbols";
+}
+function generatorLength() {
+  const spec = GENERATOR_TYPES[generator.type];
+  const length = Number(generator.lengths[generator.type]);
+  return Number.isInteger(length) ? Math.min(spec.max, Math.max(spec.min, length)) : spec.initial;
+}
+function renderGeneratorControls() {
+  const spec = GENERATOR_TYPES[generator.type]; const length = generatorLength();
+  for (const option of $("gen-type").querySelectorAll("button")) option.setAttribute("aria-checked", String(option.dataset.type === generator.type));
+  Object.assign($("length"), { min: spec.min, max: spec.max, value: length });
+  $("length").style.setProperty("--fill", `${(length - spec.min) / (spec.max - spec.min) * 100}%`);
+  $("gen-length-label").textContent = spec.label; $("gen-length-value").textContent = length;
+  $("gen-range-min").textContent = spec.min; $("gen-range-max").textContent = spec.max;
+  $("gen-password-options").hidden = generator.type !== "password";
+  $("gen-symbols").checked = generator.symbols && !generator.readable; $("gen-symbols").disabled = generator.readable;
+  $("gen-symbols").closest(".switch-row").classList.toggle("is-disabled", generator.readable);
+  $("gen-readable").checked = generator.readable;
+}
+function renderGenerated(value) {
+  generatedValue = value; const out = $("generated");
+  out.classList.toggle("is-passphrase", generator.type === "passphrase");
+  if (generator.type === "passphrase") out.replaceChildren(...value.split(" ").map(word => element("span", word, "w")));
+  else out.replaceChildren(...[...value].map(c => /[0-9]/.test(c) ? element("span", c, "d") : /[A-Za-z]/.test(c) ? document.createTextNode(c) : element("span", c, "s")));
+  out.classList.remove("is-fresh"); void out.offsetWidth; out.classList.add("is-fresh");
+  const pool = { all: 94, no_symbols: 62, numbers: 10, nonconfusables: 24, passphrase: 7776 }[generatorMode()];
+  const units = generator.type === "passphrase" ? value.split(" ").length : value.length;
+  const bits = Math.round(units * Math.log2(pool));
+  const [strength, label] = bits < 45 ? ["weak", "Weak"] : bits < 65 ? ["fair", "Fair"] : bits < 100 ? ["strong", "Strong"] : ["excellent", "Excellent"];
+  $("generated").closest(".gen-card").dataset.strength = strength;
+  $("gen-meter-fill").style.width = `${Math.min(100, Math.max(6, bits / 160 * 100))}%`;
+  $("gen-strength-label").textContent = label; $("gen-entropy").textContent = `${bits} bits`;
+}
+async function generatePassword() {
+  clearTimeout(generateTimer);
+  $("generate").classList.remove("is-spinning"); void $("generate").offsetWidth; $("generate").classList.add("is-spinning");
+  renderGenerated(await request("generate", { length: generatorLength(), passphrase: generator.type === "passphrase", mode: generatorMode() }));
+}
+function regenerateSoon(delay = 0) { clearTimeout(generateTimer); generateTimer = setTimeout(() => attempt(generatePassword), delay); }
+renderGeneratorControls();
+$("gen-type").onclick = event => {
+  const type = event.target.closest("button")?.dataset.type; if (!type || type === generator.type) return;
+  generator.type = type; saveGenerator(); renderGeneratorControls(); regenerateSoon();
+};
+$("length").oninput = () => {
+  generator.lengths[generator.type] = Number($("length").value); renderGeneratorControls(); regenerateSoon(120);
+};
+$("length").onchange = () => { saveGenerator(); regenerateSoon(); };
+$("gen-symbols").onchange = () => { generator.symbols = $("gen-symbols").checked; saveGenerator(); renderGeneratorControls(); regenerateSoon(); };
+$("gen-readable").onchange = () => { generator.readable = $("gen-readable").checked; saveGenerator(); renderGeneratorControls(); regenerateSoon(); };
+$("generate").onclick = () => attempt(generatePassword);
+$("copy-generated").onclick = () => attempt(async () => {
+  if (!generatedValue) throw new Error("Generate a value first.");
+  await request("copy_text", { text: generatedValue });
+  clearTimeout(copiedTimer); $("copy-generated").classList.add("is-copied"); $("copy-generated-label").textContent = "Copied";
+  copiedTimer = setTimeout(() => { $("copy-generated").classList.remove("is-copied"); $("copy-generated-label").textContent = "Copy"; }, 1600);
 });
-$("copy-generated").onclick = () => attempt(async () => { if (!$("generated").value) throw new Error("Generate a value first."); await request("copy_text", { text: $("generated").value }); message("Copied generated value with rbw clipboard clearing."); });
 $("audit").onclick = () => attempt(async () => {
   message("Checking vault locally…"); const result = await request("audit");
   $("audit-results").replaceChildren(element("h3", `Reused passwords · ${result.reused.length} groups`));
@@ -1149,33 +1219,89 @@ attempt(async () => {
 });
 
 async function send(method, data = {}) { return request("send", { method, data }); }
+const SEND_DAYS = [1, 2, 3, 7, 14, 30];
+let sendType = "text";
+function relativeDays(date) {
+  const hours = (new Date(date).getTime() - Date.now()) / 3600000;
+  if (hours < 1) return "within the hour";
+  if (hours < 24) return `in ${Math.round(hours)} hours`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? "in 1 day" : `in ${days} days`;
+}
 async function loadSends() {
   show("send"); message("Loading Sends…");
   const items = await send("list"); $("send-items").replaceChildren();
+  const files = items.filter(item => item.type === 1).length;
+  $("send-summary").textContent = items.length ? `${items.length} active · ${files} ${files === 1 ? "file" : "files"}` : "";
   for (const item of items) {
-    const row = element("article"); const image = element("span", null, "item-icon"); image.append(icon(item.type === 1 ? "note" : "send")); row.append(image);
+    const row = element("article", null, `send-row${item.disabled ? " is-disabled" : ""}`);
+    const badge = element("span", null, "send-badge"); badge.append(icon(item.type === 1 ? "upload" : "note")); row.append(badge);
     const main = button("", async () => editSend(await send("detail", { id: item.id })), "item-main");
-    main.append(element("strong", item.name), element("small", `${item.disabled ? "Disabled · " : ""}${item.accessCount || 0} accesses · ${item.deletionDate?.slice(0, 10) || ""}`)); row.append(main);
-    row.append(actionButton("Copy link", "copy", async () => { await send("copy", { id: item.id }); message("Send link copied using rbw clipboard settings."); }));
-    row.append(actionButton("Delete", "trash", async () => { if (!confirm("Permanently delete this Send?")) return; await send("delete", { id: item.id }); await loadSends(); }, "danger"));
-    if (item.hasPassword) row.append(actionButton("Remove password", "key", async () => { if (!confirm("Remove this Send’s access password?")) return; await send("remove_password", { id: item.id }); await loadSends(); }));
+    const meta = element("div", null, "send-meta");
+    const chip = (text, cls, name) => { const el = element("span", null, cls); if (name) el.append(icon(name)); el.append(document.createTextNode(text)); meta.append(el); };
+    if (item.disabled) chip("Disabled", "is-off");
+    if (item.deletionDate) { const soon = new Date(item.deletionDate).getTime() - Date.now() < 86400000 * 2; chip(`Deletes ${relativeDays(item.deletionDate)}`, soon ? "is-soon" : ""); }
+    chip(item.maxAccessCount ? `${item.accessCount || 0}/${item.maxAccessCount} views` : `${item.accessCount || 0} views`, item.maxAccessCount && (item.accessCount || 0) >= item.maxAccessCount ? "is-off" : "");
+    if (item.hasPassword) chip("Password", "", "lock");
+    main.append(element("strong", item.name), meta); row.append(main);
+    const actions = element("div", null, "item-actions");
+    actions.append(actionButton("Copy link", "copy", async () => { await send("copy", { id: item.id }); message("Send link copied using rbw clipboard settings."); }));
+    if (item.hasPassword) actions.append(actionButton("Remove password", "unlock", async () => { if (!confirm("Remove this Send’s access password?")) return; await send("remove_password", { id: item.id }); await loadSends(); }));
+    actions.append(actionButton("Delete", "trash", async () => { if (!confirm("Permanently delete this Send?")) return; await send("delete", { id: item.id }); await loadSends(); }, "danger"));
+    row.append(actions);
     $("send-items").append(row);
   }
-  if (!items.length) $("send-items").append(element("p", "No Sends yet. Choose Add to share encrypted text or a file.", "empty")); message("");
+  if (!items.length) {
+    const empty = element("div", null, "send-empty"); const art = element("span", null, "send-empty-art"); art.append(icon("send"));
+    const create = actionButton("New Send", "plus", async () => editSend(), "primary");
+    empty.append(art, element("h3", "Share something securely"), element("p", "Send end-to-end encrypted text or files with a link that expires on its own."), create);
+    $("send-items").append(empty);
+  }
+  message("");
+}
+function setSendType(type) {
+  sendType = type;
+  for (const option of $("send-type").querySelectorAll("button")) option.setAttribute("aria-checked", String(option.dataset.type === type));
+  $("send-text-field").hidden = type !== "text"; $("send-file-field").hidden = type !== "file";
+}
+function setSendDays(days) {
+  $("send-days").value = days;
+  for (const chip of $("send-days-chips").children) chip.setAttribute("aria-checked", String(Number(chip.dataset.days) === days));
+}
+function renderSendFile() {
+  const file = $("send-file").files[0]; const locked = $("send-file").disabled;
+  $("send-file-field").classList.toggle("has-file", !!file); $("send-file-field").classList.toggle("is-locked", locked);
+  $("send-file-name").textContent = file ? file.name : locked ? "File can’t be replaced" : "Choose a file";
+  $("send-file-hint").textContent = file ? `${(file.size / 1048576).toFixed(file.size < 1048576 ? 2 : 1)} MB · encrypted before upload` : locked ? "Create a new Send to share another file" : "or drop it here · encrypted before upload";
 }
 function editSend(item = null) {
   sendId = item?.id || null;
   for (const [id, value] of [["send-name", item?.name], ["send-text", item?.text], ["send-notes", item?.notes], ["send-password", ""], ["send-max", item?.maxAccessCount], ["send-expiration", item?.expirationDate ? new Date(new Date(item.expirationDate).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ""]]) $(id).value = value || "";
   $("send-file").value = ""; $("send-file").disabled = !!item; $("send-text").disabled = item?.type === 1;
-  $("send-days").disabled = !!item; $("send-days").value = 7;
+  $("send-password").type = "password"; $("send-password").placeholder = item ? "Leave blank to keep the current one" : "Optional"; $("send-password-reveal").replaceChildren(icon("eye"));
+  setSendType(item?.type === 1 ? "file" : "text");
+  for (const option of $("send-type").querySelectorAll("button")) option.disabled = !!item;
+  setSendDays(7);
+  for (const chip of $("send-days-chips").children) chip.disabled = !!item;
+  $("send-days").disabled = !!item; $("send-days-chips").closest(".send-card").querySelector(".send-field-label").textContent = item ? `Deletes ${relativeDays(item.deletionDate)}` : "Delete after";
   $("send-hidden").checked = !!item?.hidden; $("send-hide-email").checked = item?.hideEmail !== false; $("send-disabled").checked = !!item?.disabled;
+  renderSendFile();
   show("send-editor");
 }
+for (const days of SEND_DAYS) {
+  const chip = element("button", `${days}d`); chip.type = "button"; chip.setAttribute("aria-label", days === 1 ? "1 day" : `${days} days`); chip.dataset.days = days; chip.setAttribute("role", "radio");
+  chip.onclick = () => setSendDays(days); $("send-days-chips").append(chip);
+}
+$("send-type").onclick = event => { const option = event.target.closest("button"); if (option && !option.disabled) setSendType(option.dataset.type); };
+$("send-file").onchange = renderSendFile;
+for (const [type, dragging] of [["dragenter", true], ["dragover", true], ["dragleave", false], ["drop", false]]) $("send-file-field").addEventListener(type, () => $("send-file-field").classList.toggle("is-dragging", dragging));
+$("send-password-reveal").onclick = () => { const input = $("send-password"); const reveal = input.type === "password"; input.type = reveal ? "text" : "password"; $("send-password-reveal").replaceChildren(icon(reveal ? "eye-off" : "eye")); $("send-password-reveal").title = reveal ? "Hide" : "Show"; $("send-password-reveal").setAttribute("aria-label", $("send-password-reveal").title); };
 $("refresh-sends").onclick = () => attempt(loadSends);
 $("send-form").onsubmit = event => { event.preventDefault(); attempt(async () => {
   let token;
   try {
-    const file = $("send-file").files[0];
+    if (sendType === "file" && !sendId && !$("send-file").files[0]) throw new Error("Choose a file to send.");
+    const file = sendType === "file" ? $("send-file").files[0] : null;
     if (file) {
       token = await request("upload_begin", { item: "", name: file.name, size: file.size });
       for (let offset = 0; offset < file.size; offset += 192 * 1024) {
@@ -1185,7 +1311,7 @@ $("send-form").onsubmit = event => { event.preventDefault(); attempt(async () =>
       }
     }
     const password = $("send-password").value; $("send-password").value = "";
-    await send("save", { id: sendId, name: $("send-name").value, text: $("send-text").value, notes: $("send-notes").value, password, days: Number($("send-days").value), maxAccessCount: $("send-max").value ? Number($("send-max").value) : null, expirationDate: $("send-expiration").value ? new Date($("send-expiration").value).toISOString() : null, hidden: $("send-hidden").checked, hideEmail: $("send-hide-email").checked, disabled: $("send-disabled").checked, file_token: token || null });
+    await send("save", { id: sendId, name: $("send-name").value, text: sendType === "text" ? $("send-text").value : "", notes: $("send-notes").value, password, days: Number($("send-days").value), maxAccessCount: $("send-max").value ? Number($("send-max").value) : null, expirationDate: $("send-expiration").value ? new Date($("send-expiration").value).toISOString() : null, hidden: $("send-hidden").checked, hideEmail: $("send-hide-email").checked, disabled: $("send-disabled").checked, file_token: token || null });
     $("send-text").value = ""; $("send-notes").value = ""; $("send-file").value = ""; await loadSends(); message("Send saved.");
   } finally { if (token) await request("upload_cancel", { token }).catch(() => {}); }
 }); };

@@ -7,6 +7,15 @@
 * Browser passkey popup: dropped the redundant spinner below the progress
   steps, and the toolbar popup now sizes to its content on the passkey
   approval page instead of always being 600px tall.
+* Browser generator redesign: a large colour-coded result card (digits and
+  symbols highlighted) with a strength meter and entropy in bits, a
+  Password / Passphrase / PIN switch, a length slider (default 40
+  characters, 6 words or 8 digits) and switches for symbols and easy-to-read
+  output. It regenerates on every change and remembers its settings.
+* Browser Send redesign: Send cards show type, expiry, view count, password
+  and disabled state as chips; a friendlier empty state; and an editor with
+  a Text / File switch, a file drop zone, one-tap expiry chips, a revealable
+  access password and switch-style options.
 
 ## [2.22.8] - 2026-10-19
 
