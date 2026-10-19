@@ -168,7 +168,7 @@ jobs:
       - name: Sign Firefox package with AMO
         if: steps.package-check.outcome == 'failure'
         run: |
-          npm install --global web-ext@8
+          npm install --global web-ext@10
           web-ext sign \
             --channel=unlisted \
             --source-dir=browser/dist/firefox \
