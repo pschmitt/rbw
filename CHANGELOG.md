@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [2.22.7] - 2026-10-19
+
+### Changed
+
+* Re-release of 2.22.6, whose release run failed before publishing
+  (no macOS runner); AMO signs each version only once.
+
 ## [2.22.6] - 2026-10-19
 
 ### Changed
