@@ -496,13 +496,22 @@ function finish(id, response) {
   if (!operation) return;
   clearTimeout(operation.timer); pending.delete(id); badge(); operation.respond(response);
 }
+function originOf(url) {
+  try { return new URL(url).origin; } catch (_) { return null; }
+}
 async function checkDocument(operation) {
+  // Compare origins, not exact URLs: single-page apps (Authelia, ...) rewrite
+  // their URL in place, and browsers disagree on when sender.url, tab.url and
+  // the frame URL pick that up. A cross-document navigation of the requesting
+  // frame cancels the request (webNavigation.onCommitted), and the document ID
+  // pins the document down where the browser provides one.
   const tab = await api.tabs.get(operation.tabId);
-  if (tab.url !== operation.topUrl) throw new Error("The requesting page changed.");
+  const topOrigin = originOf(operation.topUrl);
+  if (originOf(tab.url) !== topOrigin) throw new Error(`The requesting page changed (${topOrigin} → ${originOf(tab.url) || "unknown"}).`);
   const frame = await api.webNavigation.getFrame({ tabId: operation.tabId, frameId: operation.frameId });
-  if (!frame || frame.url !== operation.url || (operation.documentId && frame.documentId && frame.documentId !== operation.documentId)) throw new Error("The requesting document changed.");
-  // Document identity is checked by the content script as well; navigation events
-  // cancel the pending request even when the replacement has the same URL.
+  if (!frame) throw new Error("The requesting frame is gone.");
+  if (originOf(frame.url) !== operation.origin) throw new Error(`The requesting document changed (${operation.origin} → ${originOf(frame.url) || "unknown"}).`);
+  if (operation.documentId && frame.documentId && frame.documentId !== operation.documentId) throw new Error("The requesting document was replaced.");
   return tab;
 }
 async function pageMessage(message, sender, respond) {

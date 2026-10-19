@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Browser: a browser still running from before a Nix upgrade replaced its
+  store path is accepted as the same enrolled `browser.clients` executable
+  (same package name, same binary path inside the store entry), instead of
+  failing with "Browser access denied" until it is restarted.
+* Browser passkeys: the request's page and frame are matched by origin and
+  document ID rather than exact URL, so single-page login apps (Authelia)
+  that rewrite their URL no longer fail with "The requesting document
+  changed." The error now names the origins that differed.
+
 ## [2.22.7] - 2026-10-19
 
 ### Changed

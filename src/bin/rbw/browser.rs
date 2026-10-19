@@ -201,9 +201,70 @@ fn authorize(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
                     return Ok(());
                 }
             }
+            // A browser still running from before a Nix upgrade replaced
+            // its store path in the config is the same enrolled browser.
+            if client
+                .executable_roots
+                .iter()
+                .any(|root| superseded_by(&executable, root))
+            {
+                return Ok(());
+            }
         }
         Err(denied())
     }
+}
+
+/// True when `executable` lives in a different Nix store entry than `root`,
+/// but at a path that also exists inside `root` (e.g. both have
+/// `lib/firefox/firefox`): the same browser, built from an older store path.
+#[cfg(target_os = "linux")]
+fn superseded_by(
+    executable: &std::path::Path,
+    root: &std::path::Path,
+) -> bool {
+    let store = std::path::Path::new("/nix/store");
+    let Ok(root) = std::fs::canonicalize(root) else {
+        return false;
+    };
+    let (Ok(executable_rel), Ok(root_rel)) =
+        (executable.strip_prefix(store), root.strip_prefix(store))
+    else {
+        return false;
+    };
+    let mut executable_parts = executable_rel.components();
+    let mut root_parts = root_rel.components();
+    let (Some(executable_entry), Some(root_entry)) =
+        (executable_parts.next(), root_parts.next())
+    else {
+        return false;
+    };
+    if executable_entry == root_entry
+        || store_package_name(executable_entry.as_os_str()).is_none_or(
+            |name| store_package_name(root_entry.as_os_str()) != Some(name),
+        )
+    {
+        return false;
+    }
+    let inner = executable_parts.as_path();
+    let root_inner = root_parts.as_path();
+    !inner.as_os_str().is_empty()
+        && inner.starts_with(root_inner)
+        && store.join(root_entry).join(inner).is_file()
+}
+
+/// The package name of a store entry, without its hash and version:
+/// `<hash>-firefox-149.0.1` -> `firefox`.
+#[cfg(target_os = "linux")]
+fn store_package_name(entry: &std::ffi::OsStr) -> Option<&str> {
+    let (_hash, name) = entry.to_str()?.split_once('-')?;
+    let end = name
+        .match_indices('-')
+        .find(|(i, _)| {
+            name[i + 1..].starts_with(|c: char| c.is_ascii_digit())
+        })
+        .map_or(name.len(), |(i, _)| i);
+    Some(&name[..end]).filter(|name| !name.is_empty())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -1264,4 +1325,25 @@ fn detail(entry: &rbw::db::Entry) -> anyhow::Result<Value> {
     Ok(
         json!({"cipher": editable, "revision": entry.revision_date, "passkeys": passkeys, "favorite": entry.favorite, "archived": entry.archived, "attachments": decrypted.attachments, "history": decrypted.history}),
     )
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::store_package_name;
+
+    #[test]
+    fn store_package_names() {
+        fn name(s: &str) -> Option<&str> {
+            store_package_name(std::ffi::OsStr::new(s))
+        }
+        assert_eq!(name("0abc-firefox-149.0.1"), Some("firefox"));
+        assert_eq!(
+            name("0abc-firefox-unwrapped-149.0"),
+            Some("firefox-unwrapped")
+        );
+        assert_eq!(name("0abc-chromium-155.0.8059.79"), Some("chromium"));
+        assert_eq!(name("0abc-firefox"), Some("firefox"));
+        assert_eq!(name("0abc-"), None);
+        assert_eq!(name("nohash"), None);
+    }
 }
