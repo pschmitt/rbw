@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+### Changed
+
+* The toolbar sync indicator sits in the top-right corner of the rbw icon,
+  where the matching-login count is, and replaces that count until the sync
+  finishes instead of overlapping it.
+* The browser fill button shows a filled-in form field instead of an arrow.
+* Passkey sign-in progress spins a refresh icon on the running sync step and
+  marks finished steps with a green checkmark, shown briefly before the popup
+  closes.
+* The popup header no longer shows the settings button on the settings page.
+* The left arrow key goes back from the popup's item, settings and diagnostic
+  pages, like the header's back chevron.
+* An unsaved item edit survives closing the popup: reopening it resumes the
+  edit with a notice and a Restart button that starts over from the current
+  vault state. Only the latest edit is kept, in memory, until it is saved,
+  cancelled or restarted, or the vault locks.
+* Leaving the item editor with unsaved changes (Cancel, back or a tab switch)
+  asks "Discard your unsaved changes?"; Discard or the same exit again
+  confirms.
+* Login save suggestions that were dismissed, expired or lost with their tab
+  show up under "Unsaved logins" in the popup, where they can still be saved
+  (or update the matching login) or dismissed. Up to 10 are kept in memory,
+  never shown with their password, and dropped when the vault locks or once
+  the vault already has them.
+
+### Fixed
+
+* Going back from the settings page of a reopened popup showed an empty
+  vault; the list now loads.
+
 ## [2.22.4] - 2026-10-19
 
 ### Changed

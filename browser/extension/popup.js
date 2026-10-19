@@ -55,7 +55,7 @@ document.querySelector("main").addEventListener("scroll", () => {
   stateTimer = setTimeout(remember, 80);
 }, { passive: true });
 async function request(action, values = {}) {
-  const busy = !["preferences", "pending", "save_offers", "popup_notice", "status", "favicon", "popup_state", "save_popup_state", "totp"].includes(action);
+  const busy = !["preferences", "pending", "save_offers", "popup_notice", "status", "favicon", "popup_state", "save_popup_state", "edit_draft", "save_edit_draft", "totp"].includes(action);
   if (busy) loading(true);
   try {
     const response = await api.runtime.sendMessage({ action, account: $("account").value, ...values });
@@ -68,14 +68,18 @@ async function request(action, values = {}) {
     return response.result;
   } finally { if (busy) loading(false); }
 }
-function message(text, error = false) {
+// An optional action ({ label, run }) adds a button and keeps the notification
+// open until it is used or dismissed.
+function message(text, error = false, action = null) {
   clearTimeout(notificationTimer);
   if (!error && /^(Working|Unlocking|Waiting for rbw|Checking vault locally|Loading Sends|Uploading)/.test(text)) return;
   $("message-text").textContent = text;
+  $("message-action").hidden = !action; $("message-action").textContent = action?.label || "";
+  $("message-action").onclick = action ? () => { message(""); attempt(action.run); } : null;
   $("message").hidden = !text;
   $("message").classList.toggle("is-error", error);
   $("message").setAttribute("role", error ? "alert" : "status");
-  if (text && !error) notificationTimer = setTimeout(() => { $("message").hidden = true; }, 4500);
+  if (text && !error && !action) notificationTimer = setTimeout(() => { $("message").hidden = true; }, 4500);
 }
 $("dismiss-message").onclick = () => message("");
 async function attempt(fn) { try { await fn(); } catch (error) {
@@ -116,11 +120,12 @@ const passkeyProgressLabels = {
   before: "Syncing vault before signing…",
   signing: "Signing with your passkey…",
   after: "Syncing the updated vault…",
+  done: "Signed in.",
 };
 function updatePasskeyProgress(step, retry = false) {
   if (!passkeyProgressLabels[step] || !$("approval-progress-steps")) return;
   const order = ["before", "signing", "after"];
-  const active = order.indexOf(step);
+  const active = step === "done" ? order.length : order.indexOf(step);
   for (const [index, name] of order.entries()) {
     const row = $("approval-progress-steps").querySelector(`[data-step="${name}"]`);
     row.dataset.state = index < active ? "done" : index === active ? "active" : "pending";
@@ -154,6 +159,8 @@ function updateTitleMenuState() {
 function show(page) {
   stopTotp();
   if (page === "vault") requestAnimationFrame(() => { if (currentPage === "vault" && !$("vault").hidden && document.activeElement?.closest?.("#vault") == null) $("query").focus({ preventScroll: true }); });
+  // Resume and discard prompts only make sense inside the editor.
+  if (currentPage === "editor" && page !== "editor") { forgetEditDraft(); if (!$("message-action").hidden) message(""); }
   remember();
   currentPage = page;
   const subpage = ["detail", "editor", "send-editor", "settings", "diagnostic"].includes(page);
@@ -167,8 +174,7 @@ function show(page) {
   $("add").hidden = !["vault", "send"].includes(page) || !unlocked;
   $("add").classList.remove("collapsed");
   $("open-sidebar").hidden = subpage || document.documentElement.dataset.surface === "window";
-  $("open-options").hidden = subpage && page !== "settings";
-  $("open-options").classList.toggle("selected", page === "settings");
+  $("open-options").hidden = subpage;
   $("detail-header-actions").hidden = page !== "detail";
   $("edit-header-actions").hidden = page !== "editor";
   $("send-header-actions").hidden = page !== "send-editor";
@@ -200,7 +206,7 @@ api?.storage?.onChanged?.addListener((changes, area) => {
   applyTheme(preference.theme); applyTabs();
 });
 function clearVault() {
-  stopTotp();
+  vaultListed = false; stopTotp();
   faviconObserver.disconnect();
   ++epoch; currentItem = null; currentDetail = null;
   for (const id of ["items", "suggestions", "detail-content", "edit-fields", "custom-fields", "edit-attachments", "audit-results", "approval-items", "send-items"]) $(id).replaceChildren();
@@ -232,6 +238,9 @@ async function finishApproval(text) {
   if (document.documentElement.dataset.surface !== "window") window.close();
   else await refresh();
 }
+// A popup restored onto another page skips the vault search; leaving that
+// page for the vault must load it then.
+let vaultListed = false;
 async function refresh(knownStatus = null, skipList = false) {
   loading(true);
   try {
@@ -242,6 +251,7 @@ async function refresh(knownStatus = null, skipList = false) {
   $("unlock").disabled = unlocked; $("lock").disabled = !unlocked;
   if (approvalId) { await showApproval(approvalId); return; }
   if (!unlocked) { show("locked"); return; }
+  vaultListed = !skipList;
   show("vault"); if (!skipList) { await search(); await suggestions(); }
   remember();
   } finally { loading(false); }
@@ -530,7 +540,10 @@ async function attachmentOperation(item, operation) {
     if (currentPage !== "editor" || currentItem !== item) return;
     // Accept our attachment-only revision change, but preserve the guard if
     // another client also changed the editable fields while the editor was open.
-    if (JSON.stringify(fresh.cipher) === JSON.stringify(currentDetail.cipher)) currentDetail = fresh;
+    if (JSON.stringify(fresh.cipher) === JSON.stringify(currentDetail.cipher)) {
+      if (editRevision === currentDetail.revision) editRevision = fresh.revision;
+      currentDetail = fresh;
+    }
     else message("This item changed elsewhere. Reload it before saving your edits.", true);
     renderAttachments(fresh, item);
   } finally { attachmentBusy = false; $("header-save-edit").disabled = false; }
@@ -656,9 +669,9 @@ function addCustom(field = {}) {
   card.append(header, body);
   $("custom-fields").append(card);
 }
-function editItem(fresh = false) {
+function editItem(fresh = false, draft = null) {
   if (fresh) { currentItem = null; currentDetail = null; }
-  const cipher = currentDetail?.cipher || { name: "", data: { type: "login" } };
+  const cipher = draft?.cipher || currentDetail?.cipher || { name: "", data: { type: "login" } };
   $("edit-name").value = cipher.name; $("edit-folder").value = cipher.folder || ""; $("edit-notes").value = cipher.notes || "";
   $("edit-type").value = cipher.data.type; $("edit-type").disabled = !!currentDetail?.passkeys.length;
   $("edit-uris").replaceChildren(); for (const uri of cipher.data.uris || []) addUri(uri);
@@ -666,12 +679,64 @@ function editItem(fresh = false) {
   labelUriDefaults().catch(() => {});
   $("custom-fields").replaceChildren(); for (const field of cipher.fields || []) addCustom(field);
   // Autofill exclusion is a browser preference keyed by item ID, so new items get it after saving.
-  $("edit-no-autofill").checked = !!currentItem && Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(currentItem);
+  $("edit-no-autofill").checked = !!currentItem && (draft ? draft.noAutofill : Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(currentItem));
   $("edit-no-autofill").disabled = !currentItem;
   $("edit-no-autofill-hint").textContent = currentItem ? "Inline suggestions, on-load autofill and the fill shortcut skip this item." : "Save the item first to exclude it from autofill.";
   $("edit-passkeys").textContent = currentDetail?.passkeys.length ? "Existing passkeys are preserved by rbw. Their private keys never enter this editor." : "";
   renderAttachments(currentDetail, currentItem);
   renderEditFields(cipher.data); show("editor"); $("edit-name").focus();
+  // A resumed draft keeps the revision it started from, so saving still
+  // refuses to overwrite changes made elsewhere in the meantime.
+  editRevision = draft ? draft.revision : currentDetail?.revision || null;
+  editBase = draft ? "" : JSON.stringify(editorDraft());
+}
+// One unsaved edit survives closing the popup. The background page keeps it
+// in memory until it is saved, cancelled or restarted, or the vault locks.
+let editBase = null, editRevision = null, draftTimer;
+function editorCipher() {
+  const type = $("edit-type").value; const data = { type };
+  for (const name of schema[type]) data[name] = $(`field-${name}`).value || null;
+  if (type === "login") data.uris = [...$("edit-uris").children].map(row => ({ uri: row.querySelector(".uri-input").value.trim(), match_type: row.querySelector(".uri-match").value || undefined })).filter(uri => uri.uri);
+  const fields = [...$("custom-fields").children].map(card => ({
+    name: card.querySelector(".custom-name-input")?.value || "",
+    value: card.querySelector(".custom-value-input")?.value || "",
+    type: card.querySelector(".custom-type-select")?.value || "text"
+  }));
+  return { name: $("edit-name").value, folder: $("edit-folder").value || null, notes: $("edit-notes").value || null, data, fields };
+}
+function editorDraft() { return { item: currentItem, revision: editRevision, cipher: editorCipher(), noAutofill: $("edit-no-autofill").checked }; }
+function rememberEditDraft() {
+  clearTimeout(draftTimer);
+  if (currentPage !== "editor" || editSaving || editBase === null) return;
+  const draft = editorDraft();
+  request("save_edit_draft", { draft: JSON.stringify(draft) === editBase ? null : draft }).catch(() => {});
+}
+// Leaving the editor with changes asks first; the same exit again (or the
+// notification's Discard) confirms.
+const discardText = "Discard your unsaved changes?";
+async function leaveEditor(go) {
+  const asked = !$("message").hidden && $("message-text").textContent === discardText;
+  if (currentPage !== "editor" || editBase === null || asked || JSON.stringify(editorDraft()) === editBase) { if (asked) message(""); await go(); return; }
+  message(discardText, false, { label: "Discard", run: go });
+}
+function forgetEditDraft() {
+  clearTimeout(draftTimer); editBase = null;
+  request("save_edit_draft", { draft: null }).catch(() => {});
+}
+for (const type of ["input", "change", "click"]) $("edit-form").addEventListener(type, () => { clearTimeout(draftTimer); draftTimer = setTimeout(rememberEditDraft, 300); });
+window.addEventListener("pagehide", rememberEditDraft);
+document.addEventListener("visibilitychange", () => { if (document.hidden) rememberEditDraft(); });
+async function resumeEditDraft(draft) {
+  try {
+    if (draft.item) await openDetail(draft.item);
+  } catch (_) {
+    forgetEditDraft(); message("Your unsaved edit could not be resumed: the item is no longer in the vault.", true); return;
+  }
+  const changed = !!draft.item && draft.revision !== currentDetail?.revision;
+  editItem(!draft.item, draft);
+  message(changed ? "Resumed your unsaved edit. The item changed in the vault since; restart to edit the current version." : "Resumed your unsaved edit.", false, {
+    label: "Restart", run: async () => { forgetEditDraft(); if (draft.item) { await openDetail(draft.item); editItem(); } else editItem(true); message("Restarted from the current vault state."); }
+  });
 }
 let editSaving = false;
 // Saving waits for rbw to write and sync, which can take a few seconds, so
@@ -688,15 +753,8 @@ $("edit-form").onsubmit = event => { event.preventDefault(); if (editSaving) ret
   if (attachmentBusy) throw new Error("Wait for the attachment operation to finish before saving.");
   setEditSaving(true);
   try {
-    const type = $("edit-type").value; const data = { type };
-    for (const name of schema[type]) data[name] = $(`field-${name}`).value || null;
-    if (type === "login") data.uris = [...$("edit-uris").children].map(row => ({ uri: row.querySelector(".uri-input").value.trim(), match_type: row.querySelector(".uri-match").value || undefined })).filter(uri => uri.uri);
-    const fields = [...$("custom-fields").children].map(card => ({
-      name: card.querySelector(".custom-name-input")?.value || "",
-      value: card.querySelector(".custom-value-input")?.value || "",
-      type: card.querySelector(".custom-type-select")?.value || "text"
-    }));
-    await request("save", { item: currentItem, revision: currentDetail?.revision, cipher: { name: $("edit-name").value, folder: $("edit-folder").value || null, notes: $("edit-notes").value || null, data, fields } });
+    const cipher = editorCipher(), type = cipher.data.type;
+    await request("save", { item: currentItem, revision: editRevision, cipher });
     if (currentItem && ["login", "card", "identity"].includes(type)) {
       const excluded = new Set(Array.isArray(preference.autofillExcludedItems) ? preference.autofillExcludedItems : []);
       if ($("edit-no-autofill").checked) excluded.add(currentItem); else excluded.delete(currentItem);
@@ -708,6 +766,20 @@ $("edit-form").onsubmit = event => { event.preventDefault(); if (editSaving) ret
 async function suggestions() {
   const area = $("suggestions"); area.replaceChildren();
   for (const pending of await request("pending")) area.append(actionButton(`${pending.method === "create" ? "Save passkey" : "Sign in"} · ${pending.origin}`, "key", () => showApproval(pending.id)));
+  // Save suggestions that were dismissed or expired stay here until saved or
+  // dismissed. Their passwords never leave the background page.
+  const unsaved = await request("unsaved_logins").catch(() => []);
+  if (!unsaved.length) return;
+  area.append(element("h3", `Unsaved logins · ${unsaved.length}`));
+  for (const entry of unsaved) {
+    const row = element("article", null, "unsaved-login"), main = element("div", null, "item-main"), actions = element("div", null, "item-actions");
+    main.append(element("strong", entry.host), element("small", `${entry.username || "No username"} · ${entry.update ? `changed password for ${entry.update.name}` : "new login"}`));
+    const apply = async (item, text) => { await request("unsaved_login_apply", { id: entry.id, item }); message(text); await refresh(); };
+    if (entry.update) actions.append(actionButton(`Update ${entry.update.name}`, "check", () => apply(entry.update.id, `Updated ${entry.update.name}.`), "icon"));
+    actions.append(actionButton(entry.update ? "Save as a new login" : "Save login", entry.update ? "plus" : "check", () => apply(null, `Saved a login for ${entry.host}.`), "icon"));
+    actions.append(actionButton("Dismiss", "close", async () => { await request("unsaved_login_dismiss", { id: entry.id }); await suggestions(); }, "icon"));
+    row.append(icon("key"), main, actions); area.append(row);
+  }
 }
 async function showApproval(id) {
   approvalId = id; show("approval"); $("approval-items").replaceChildren();
@@ -769,7 +841,10 @@ async function showApproval(id) {
   if (!unlocked) { $("unlock-password").focus(); return; }
   const result = await request("passkey_choices", { request: id });
   const complete = async (item, password = null) => {
-    await request("passkey_approve", { request: id, item, password }); await finishApproval("Passkey request completed.");
+    await request("passkey_approve", { request: id, item, password });
+    // Let the completed steps show their checkmarks before the popup closes.
+    if (pending.method === "get") { updatePasskeyProgress("done"); await new Promise(resolve => setTimeout(resolve, 700)); }
+    await finishApproval("Passkey request completed.");
   };
   const actionText = pending.method === "create" ? "Saving passkey to vault…" : "Signing in with passkey…";
   const approve = async (item, choiceEl) => {
@@ -950,21 +1025,21 @@ $("header-delete").onclick = () => attempt(async () => {
   await request("mutate", { item: currentItem, mutation: "delete" });
   await refresh();
 });
-$("header-cancel-edit").onclick = () => attempt(async () => {
+$("header-cancel-edit").onclick = () => attempt(() => leaveEditor(async () => {
   if (currentItem) await openDetail(currentItem);
   else await refresh();
-});
+}));
 $("header-save-edit").onclick = () => $("edit-form").requestSubmit();
 $("header-cancel-send").onclick = () => attempt(loadSends);
 $("header-save-send").onclick = () => $("send-form").requestSubmit();
 
 $("edit-type").onchange = () => renderEditFields();
 $("add-custom").onclick = () => addCustom();
-async function navigateBack() { if (currentPage === "editor" && currentItem) await openDetail(currentItem); else if (currentPage === "send-editor") await loadSends(); else if (currentPage === "settings") show("vault"); else await refresh(); }
+async function navigateBack() { if (currentPage === "editor") await leaveEditor(() => currentItem ? openDetail(currentItem) : refresh()); else if (currentPage === "send-editor") await loadSends(); else if (currentPage === "settings" && vaultListed) show("vault"); else await refresh(); }
 for (const el of document.querySelectorAll("#title-dropdown button")) el.onclick = () => attempt(async () => {
   $("title-menu").open = false;
   const tab = el.dataset.tab;
-  if (tab === "vault") await refresh(); else if (tab === "send") await loadSends(); else show(tab);
+  await leaveEditor(async () => { if (tab === "vault") await refresh(); else if (tab === "send") await loadSends(); else show(tab); });
 });
 $("title-summary").onclick = event => {
   if ($("title-menu").classList.contains("is-disabled")) event.preventDefault();
@@ -976,6 +1051,13 @@ document.addEventListener("click", event => {
   }
 });
 window.addEventListener("keydown", event => {
+  // Left arrow goes back from read-only subpages, like the header chevron.
+  // Text controls keep it for the caret, and editors never discard edits on it.
+  if (event.key === "ArrowLeft" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && !$("back").hidden && !["editor", "send-editor"].includes(currentPage)) {
+    const target = event.target;
+    if (target.isContentEditable || target.closest?.("input,textarea,select,details.menu[open]")) return;
+    event.preventDefault(); attempt(navigateBack); return;
+  }
   if (event.key === "Escape") {
     if ($("title-menu").open) $("title-menu").open = false;
     for (const m of document.querySelectorAll("details.menu[open]")) {
@@ -1002,7 +1084,6 @@ $("open-sidebar").onclick = () => attempt(async () => {
 });
 $("open-options").onclick = event => {
   if (event.ctrlKey || event.metaKey || event.shiftKey) api.runtime.openOptionsPage();
-  else if (currentPage === "settings") attempt(navigateBack);
   else show("settings");
 };
 $("settings-open-options").onclick = () => api.runtime.openOptionsPage();
@@ -1059,8 +1140,10 @@ attempt(async () => {
       updateFab();
     }
     ready = true; remember();
+    const draft = unlocked && !approvalId && !initialSearch ? await request("edit_draft") : null;
+    if (draft) await resumeEditDraft(draft);
     const notice = await request("popup_notice");
-    if (notice && !approvalId) message(notice.text, notice.error);
+    if (notice && !approvalId && !draft) message(notice.text, notice.error);
   } finally { loading(false); }
 });
 

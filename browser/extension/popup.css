@@ -1,5 +1,5 @@
-:root { color-scheme: dark; font: 14px/1.45 system-ui, sans-serif; --bg:#202020; --panel:#282828; --raised:#383838; --line:#494949; --text:#efefef; --muted:#adadad; --accent:#d0d0d0; --danger:#efa9b9; }
-:root[data-theme=light] { color-scheme:light; --bg:#f5f5f5; --panel:#fff; --raised:#e8e8e8; --line:#cacaca; --text:#202020; --muted:#626262; --accent:#454545; --danger:#b42238; }
+:root { color-scheme: dark; font: 14px/1.45 system-ui, sans-serif; --bg:#202020; --panel:#282828; --raised:#383838; --line:#494949; --text:#efefef; --muted:#adadad; --accent:#d0d0d0; --danger:#efa9b9; --ok:#81c995; }
+:root[data-theme=light] { color-scheme:light; --bg:#f5f5f5; --panel:#fff; --raised:#e8e8e8; --line:#cacaca; --text:#202020; --muted:#626262; --accent:#454545; --danger:#b42238; --ok:#1e7e3e; }
 * { box-sizing:border-box; }
 /* Firefox measures the body to size toolbar popups, not the root; Chromium sizes the popup to the document. */
 html, body { width:420px; height:600px; max-height:600px; margin:0; padding:0; overflow:hidden; }
@@ -184,6 +184,7 @@ details.menu button .svg-icon { width:16px; height:16px; }
 #message.popup-notification.is-error { border-color:var(--danger); }
 #message-text { flex:1; overflow-wrap:anywhere; }
 #dismiss-message { border:0; padding:0 3px; background:transparent; font-size:20px; line-height:1; }
+#message-action { flex:none; align-self:center; padding:3px 9px; font-size:12px; font-weight:600; }
 #account-toggle:hover, #account-toggle:focus-visible { background:var(--raised); }
 
 /* On subpages the same brand button becomes Back, with an attached chevron. */
@@ -253,7 +254,10 @@ details.menu button .svg-icon { width:16px; height:16px; }
 .passkey-progress-steps li[data-state="active"] { color:var(--text); font-weight:600; }
 .passkey-progress-steps li[data-state="active"]::before { border-color:var(--accent); background:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
 .passkey-progress-steps li[data-state="done"] { color:var(--text); }
-.passkey-progress-steps li[data-state="done"]::before { content:"✓"; border-color:var(--accent); background:var(--accent); }
+.passkey-progress-steps li[data-state="done"]::before { content:"✓"; border-color:var(--ok); background:var(--ok); }
+/* Sync steps spin a refresh glyph while they run. */
+.passkey-progress-steps li:is([data-step="before"],[data-step="after"])[data-state="active"]::before { border:0; border-radius:0; background:var(--text); box-shadow:none; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 7v5h-5M4 17v-5h5'/%3E%3Cpath d='M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 7v5h-5M4 17v-5h5'/%3E%3Cpath d='M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6'/%3E%3C/svg%3E") center/contain no-repeat; animation:spin 1s linear infinite; }
+@media (prefers-reduced-motion:reduce) { .passkey-progress-steps li::before { animation:none !important; } }
 .passkey-spinner-wrap { display:flex; align-items:center; justify-content:center; }
 .passkey-spinner-wrap .spinner { width:24px; height:24px; border-width:3px; border-color:var(--line); border-top-color:var(--accent); }
 #approval-verification h3 { margin:0 0 8px; color:var(--text); }
@@ -272,7 +276,6 @@ details.menu button .svg-icon { width:16px; height:16px; }
 #diagnostic-actions button { display:inline-flex; align-items:center; gap:7px; }
 #diagnostic-copy-status { min-height:1.4em; text-align:center; }
 
-#open-options.selected { color:var(--accent); background:var(--raised); border-radius:6px; }
 
 /* Extended Floating Action Button (FAB) */
 #add.fab {

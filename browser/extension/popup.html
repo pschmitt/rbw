@@ -44,7 +44,7 @@
 </div>
 </header>
 <section id="account-menu" hidden><label>Account<select id="account"></select></label><p id="state">Connecting…</p><div class="actions"><button id="unlock"><span data-icon="unlock"></span>Unlock</button><button id="lock"><span data-icon="lock"></span>Lock</button><button id="sync"><span data-icon="refresh"></span>Sync now</button></div></section>
-<div id="message" class="popup-notification" role="status" aria-live="polite" hidden><span id="message-text"></span><button id="dismiss-message" aria-label="Dismiss notification" title="Dismiss"><span data-icon="close"></span></button></div>
+<div id="message" class="popup-notification" role="status" aria-live="polite" hidden><span id="message-text"></span><button id="message-action" type="button" hidden></button><button id="dismiss-message" aria-label="Dismiss notification" title="Dismiss"><span data-icon="close"></span></button></div>
 <main>
 <section id="unlock-panel" hidden><form id="unlock-form"><label>Master password<input id="unlock-password" maxlength="4096" type="password" autocomplete="off" spellcheck="false" required autofocus></label><button type="submit" class="primary"><span data-icon="unlock"></span>Unlock</button><button type="button" id="unlock-configured"><span data-icon="settings"></span>Use configured unlock method</button></form><p class="hint">Sent directly to your shared rbw-agent. Never saved by the extension.</p></section>
 <section id="diagnostic" class="diagnostic-page" hidden>

@@ -18,6 +18,18 @@ const listCache = new Map();
 const searchPending = new Map();
 // Navigation only; never save forms or item details. Cleared when the vault locks.
 const popupStates = new Map();
+// The one unsaved item edit, so a closed popup can resume it. Memory only,
+// like popupStates, and dropped when the vault locks.
+let editDraft = null;
+// Save suggestions that were dismissed, expired or lost with their tab, so the
+// popup can still offer them. Memory only, newest first, dropped on lock.
+let unsavedLogins = [];
+function rememberUnsaved(offer) {
+  if (!offer) return;
+  clearTimeout(offer.timer);
+  unsavedLogins = [{ id: crypto.randomUUID(), origin: offer.origin, url: offer.url, username: offer.username, password: offer.password, time: Date.now() },
+    ...unsavedLogins.filter(entry => entry.origin !== offer.origin || entry.username !== offer.username)].slice(0, 10);
+}
 const faviconCache = new Map();
 const faviconPending = new Map();
 let metadataEpoch = 0;
@@ -44,7 +56,7 @@ async function cachedSearch(values) {
     const cached = listCache.get(key);
     if (cached && cached.expires > Date.now()) {
       const state = await native({ action: "status", account: query.account });
-      if (!state.unlocked) { clearMetadata(); popupStates.clear(); throw new Error("Vault locked by rbw-agent."); }
+      if (!state.unlocked) { clearMetadata(); popupStates.clear(); editDraft = null; unsavedLogins = []; throw new Error("Vault locked by rbw-agent."); }
       if (generation !== metadataEpoch) throw new Error("Vault changed. Retry the operation.");
       return cached.value;
     }
@@ -130,7 +142,8 @@ async function settings() {
   return result;
 }
 // Toolbar feedback while the vault syncs: the crab gets a small badge with
-// rotating sync arrows. Writes sync afterwards, so they count as well.
+// rotating sync arrows in the top-right corner, standing in for the match
+// count until the sync ends. Writes sync afterwards, so they count as well.
 const SYNCING_ACTIONS = ["sync", "save", "mutate", "import", "set_collections", "upload_finish", "attachment_delete"];
 const syncAnimation = { active: 0, timer: null, frame: 0, bitmaps: null };
 async function toolbarBitmaps() {
@@ -141,7 +154,7 @@ async function toolbarBitmaps() {
 function syncFrame(bitmap, size, angle) {
   const canvas = new OffscreenCanvas(size, size); const ctx = canvas.getContext("2d");
   ctx.drawImage(bitmap, 0, 0, size, size);
-  const r = size * 0.3, cx = size - r - 0.5, cy = size - r - 0.5;
+  const r = size * 0.3, cx = size - r - 0.5, cy = r + 0.5;
   ctx.fillStyle = "#1e1e1e"; ctx.strokeStyle = "#e8e8e8"; ctx.lineWidth = Math.max(1, size / 20);
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
   ctx.strokeStyle = "#8ab4f8"; ctx.fillStyle = "#8ab4f8"; ctx.lineWidth = Math.max(1.2, size / 14); ctx.lineCap = "round";
@@ -164,12 +177,13 @@ async function drawSyncFrame() {
 }
 function syncStarted() {
   if (syncAnimation.active++) return;
-  drawSyncFrame(); syncAnimation.timer = setInterval(drawSyncFrame, 120);
+  badge(); drawSyncFrame(); syncAnimation.timer = setInterval(drawSyncFrame, 120);
 }
 function syncFinished() {
   if (--syncAnimation.active > 0) return;
   syncAnimation.active = 0; clearInterval(syncAnimation.timer); syncAnimation.timer = null;
   Promise.resolve(api.action.setIcon({ path: api.runtime.getManifest().action?.default_icon })).catch(() => {});
+  badge();
 }
 let nativePort;
 const nativeRequests = new Map();
@@ -190,7 +204,7 @@ function nativeCall(request) {
     }
     nativePort.onMessage.addListener(response => {
       if (response.code === "browser_not_authorized") {
-        clearMetadata(); popupStates.clear();
+        clearMetadata(); popupStates.clear(); editDraft = null; unsavedLogins = [];
         const error = new Error(response.error);
         error.diagnostic = { kind: "native-host-authorization-denied", occurredAt: new Date().toISOString(), host: "org.rbw.browser", browserDetail: response.error };
         for (const entry of nativeRequests.values()) entry.reject(error);
@@ -203,7 +217,7 @@ function nativeCall(request) {
     });
     nativePort.onDisconnect.addListener(() => {
       const browserError = api.runtime.lastError?.message;
-      nativePort = null; clearMetadata(); popupStates.clear();
+      nativePort = null; clearMetadata(); popupStates.clear(); editDraft = null; unsavedLogins = [];
       const detail = browserError ? ` Browser detail: ${browserError}` : "";
       const error = new Error(`The rbw native host disconnected before replying. Check that rbw-browser, rbw, and rbw-agent are installed together, that the native host manifest points to rbw-browser, and that this extension is allowed by browser.clients.${detail}`);
       error.diagnostic = {
@@ -259,7 +273,8 @@ function badge(tabId) {
   const offer = offers.has(tabId);
   const count = suggestionCounts.get(tabId)?.count || 0;
   Promise.resolve(api.action.setBadgeBackgroundColor({ tabId, color: approval || offer ? "#87642a" : "#555555" })).catch(() => {});
-  Promise.resolve(api.action.setBadgeText({ tabId, text: approval || offer ? "!" : count ? (count > 99 ? "99+" : String(count)) : "" })).catch(() => {});
+  const text = syncAnimation.active ? "" : approval || offer ? "!" : count ? (count > 99 ? "99+" : String(count)) : "";
+  Promise.resolve(api.action.setBadgeText({ tabId, text })).catch(() => {});
   Promise.resolve(api.action.setTitle({ tabId, title: approval ? "rbw — Passkey approval waiting. Click to continue." : offer ? "rbw — Login save suggestion is on this page." : count ? `rbw — ${count} matching login${count === 1 ? "" : "s"}` : "rbw" })).catch(() => {});
 }
 async function updateSuggestionsBadge(tabId, knownTab) {
@@ -396,7 +411,7 @@ async function inlineMessage(port, message, state) {
     catch (error) { port.postMessage({ type: "save_result", error: error.message || "Could not save login." }); return; }
     closeInlineSession(session.token, true); settings().then(() => refreshActiveBadge()).catch(() => {});
   } else if (message.type === "dismiss") {
-    clearTimeout(offer.timer); offers.delete(session.tabId); badge();
+    rememberUnsaved(offer); offers.delete(session.tabId); badge();
     closeInlineSession(session.token, true);
   }
 }
@@ -448,6 +463,11 @@ async function notifySaveOffer(tabId, offer) {
 
 async function applySaveOffer(tabId, item, account) {
   const offer = offers.get(tabId); if (!offer) throw new Error("Save suggestion expired.");
+  await saveOfferLogin(offer, item, account);
+  clearTimeout(offer.timer); offers.delete(tabId); badge();
+  return true;
+}
+async function saveOfferLogin(offer, item, account) {
   if (item) {
     const detail = await native({ action: "detail", account, item });
     // Recheck the originating site with the same native matcher used for fill.
@@ -458,8 +478,8 @@ async function applySaveOffer(tabId, item, account) {
   } else {
     await native({ action: "save", account, item: null, revision: null, cipher: { name: new URL(offer.origin).hostname, data: { type: "login", username: offer.username, password: offer.password, uris: [{ uri: offer.origin }] }, fields: [] } });
   }
-  clearTimeout(offer.timer); offers.delete(tabId); badge(); clearMetadata();
-  return true;
+  unsavedLogins = unsavedLogins.filter(entry => entry.origin !== offer.origin || entry.username !== offer.username);
+  clearMetadata();
 }
 
 function finish(id, response) {
@@ -537,8 +557,8 @@ async function pageMessage(message, sender, respond) {
     const tabId = sender.tab.id;
     const known = await classifySaveOffer(prefs.account || null, sender.url, message.username, message.password);
     if (known.saved) return respond({ result: false });
-    const previous = offers.get(tabId); if (previous) clearTimeout(previous.timer);
-    const offer = { origin: url.origin, url: sender.url, username: message.username, password: message.password, update: known.update, timer: setTimeout(() => { offers.delete(tabId); badge(); api.tabs.sendMessage(tabId, { action: "rbw_save_offer_clear" }).catch(() => {}); }, 120000) };
+    const previous = offers.get(tabId); if (previous && (previous.origin !== url.origin || previous.username !== message.username)) rememberUnsaved(previous); else if (previous) clearTimeout(previous.timer);
+    const offer = { origin: url.origin, url: sender.url, username: message.username, password: message.password, update: known.update, timer: setTimeout(() => { rememberUnsaved(offers.get(tabId)); offers.delete(tabId); badge(); api.tabs.sendMessage(tabId, { action: "rbw_save_offer_clear" }).catch(() => {}); }, 120000) };
     offers.set(tabId, offer);
     notifySaveOffer(tabId, offer).catch(() => {});
     badge(); return respond({ result: true });
@@ -620,25 +640,25 @@ async function fill(message, account) {
 }
 async function handle(message) {
   const account = message.account || null;
-  if (["lock", "sync", "save", "mutate", "set_collections", "folders", "import", "save_offer_apply", "passkey_approve"].includes(message.action)) clearMetadata();
+  if (["lock", "sync", "save", "mutate", "set_collections", "folders", "import", "save_offer_apply", "unsaved_login_apply", "passkey_approve"].includes(message.action)) clearMetadata();
   switch (message.action) {
     case "bootstrap": {
       const preferences = await settings();
       const account = preferences.account || null;
       const status = await native({ action: "status", account });
-      if (!status.unlocked) { clearMetadata(); popupStates.clear(); }
+      if (!status.unlocked) { clearMetadata(); popupStates.clear(); editDraft = null; unsavedLogins = []; }
       const selected = preferences.account || status.primary || status.accounts?.[0] || null;
       return { preferences, status, saved: status.unlocked ? popupStates.get(selected) || popupStates.get(account) || null : null };
     }
     case "unlock": return native({ action: "unlock", account, password: typeof message.password === "string" ? message.password : null });
     case "status": {
       const state = await native({ action: "status", account });
-      if (!state.unlocked) { clearMetadata(); popupStates.clear(); } return state;
+      if (!state.unlocked) { clearMetadata(); popupStates.clear(); editDraft = null; unsavedLogins = []; } return state;
     }
     case "sync": case "audit":
       return native({ action: message.action, account });
     case "lock":
-      fillCycles.clear(); popupNotices.clear(); popupStates.clear();
+      fillCycles.clear(); popupNotices.clear(); popupStates.clear(); editDraft = null; unsavedLogins = [];
       for (const id of [...pending.keys()]) finish(id, { error: "Vault locked." });
       for (const offer of offers.values()) clearTimeout(offer.timer); offers.clear(); badge();
       return native({ action: "lock", account });
@@ -659,6 +679,14 @@ async function handle(message) {
       for (const key of ["query", "kind", "folder", "collection", "view"]) state.filters[key] = typeof value.filters?.[key] === "string" ? value.filters[key].slice(0, 1024) : "";
       if (popupStates.size >= 8 && !popupStates.has(account)) popupStates.delete(popupStates.keys().next().value);
       popupStates.set(account, state); return true;
+    }
+    case "edit_draft": return editDraft?.account === account ? editDraft.draft : null;
+    case "save_edit_draft": {
+      const value = message.draft;
+      if (!value || typeof value.cipher !== "object" || JSON.stringify(value.cipher).length > 1000000) { editDraft = null; return true; }
+      editDraft = { account, draft: { item: typeof value.item === "string" ? value.item.slice(0, 128) : null, revision: typeof value.revision === "string" ? value.revision.slice(0, 128) : null,
+        cipher: value.cipher, noAutofill: value.noAutofill === true } };
+      return true;
     }
     case "preferences": return settings();
     case "set_preferences": {
@@ -773,6 +801,22 @@ async function handle(message) {
     case "save_offer_apply": {
       return applySaveOffer(message.tabId, message.item || null, account);
     }
+    case "unsaved_logins": {
+      // Drop entries the vault caught up with (saved elsewhere since), and
+      // recheck which stored login each one would update.
+      const entries = [];
+      for (const entry of unsavedLogins) {
+        const known = await classifySaveOffer(account, entry.url, entry.username, entry.password);
+        if (known.saved) unsavedLogins = unsavedLogins.filter(other => other !== entry);
+        else entries.push({ id: entry.id, host: new URL(entry.origin).host, username: entry.username, update: known.update, time: entry.time });
+      }
+      return entries;
+    }
+    case "unsaved_login_apply": {
+      const entry = unsavedLogins.find(other => other.id === message.id); if (!entry) throw new Error("This unsaved login is no longer available.");
+      await saveOfferLogin(entry, typeof message.item === "string" ? message.item : null, account); return true;
+    }
+    case "unsaved_login_dismiss": unsavedLogins = unsavedLogins.filter(entry => entry.id !== message.id); return true;
     case "save_offer_dismiss": {
       const offer = offers.get(message.tabId); if (offer) clearTimeout(offer.timer);
       offers.delete(message.tabId); badge(); return true;
@@ -786,12 +830,12 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
   // Options and pop-out pages may themselves live in a tab. Authenticate the
   // exact extension document before handling the narrower content-script API.
   if (trustedUI) {
-    const independent = ["preferences", "pending", "save_offers", "popup_notice", "favicon", "popup_state", "save_popup_state"].includes(message.action);
+    const independent = ["preferences", "pending", "save_offers", "popup_notice", "favicon", "popup_state", "save_popup_state", "edit_draft", "save_edit_draft"].includes(message.action);
     const operation = independent ? handle(message) : queue.then(() => handle(message));
     if (!independent) queue = operation.catch(() => {});
     operation.then(result => {
       respond({ result });
-      if (["unlock", "sync", "save", "mutate", "set_preferences", "import", "save_offer_apply", "passkey_approve"].includes(message.action)) settings().then(() => refreshActiveBadge()).catch(() => {});
+      if (["unlock", "sync", "save", "mutate", "set_preferences", "import", "save_offer_apply", "unsaved_login_apply", "passkey_approve"].includes(message.action)) settings().then(() => refreshActiveBadge()).catch(() => {});
     }, error => respond({ error: error.message || "Operation failed.", diagnostic: error.diagnostic || null })); return true;
   }
   if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "inline_open", "keyboard_fill_shortcut", "autofill_load", "undo_fill", "dismiss_fill"].includes(message?.action)) return false;
@@ -803,7 +847,7 @@ api.tabs.onRemoved.addListener(tabId => {
   fillCycles.delete(tabId); popupNotices.delete(tabId);
   for (const [id, p] of pending) if (p.tabId === tabId) finish(id, { error: "Page closed." });
   closeTabInlineSessions(tabId);
-  const offer = offers.get(tabId); if (offer) { clearTimeout(offer.timer); offers.delete(tabId); badge(); }
+  const offer = offers.get(tabId); if (offer) { rememberUnsaved(offer); offers.delete(tabId); badge(); }
   badgeTabs.delete(tabId);
 });
 api.tabs.onActivated.addListener(({ tabId }) => { updateSuggestionsBadge(tabId).catch(() => {}); });
