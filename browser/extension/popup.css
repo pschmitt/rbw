@@ -87,7 +87,7 @@ details.menu button:hover { background:var(--panel); }
 
 .actions { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0; }
 .actions button { margin:0; }
-button + button:not(.header-group button, .title-dropdown button, .field-actions button, .item-actions button, .actions button) { margin-left:8px; }
+button + button:not(.header-group button, .title-dropdown button, .field-actions button, .item-actions button, .actions button, .passkey-alternatives button) { margin-left:8px; }
 .hint { font-size:12px; color:var(--muted); }
 .empty { padding:35px 15px; text-align:center; color:var(--muted); }
 .origin { padding:12px; background:var(--raised); border:1px solid var(--accent); border-radius:8px; overflow-wrap:anywhere; font-weight:600; color:var(--accent); }
@@ -256,7 +256,7 @@ details.menu button .svg-icon { width:16px; height:16px; }
 .passkey-progress-steps li[data-state="done"] { color:var(--text); }
 .passkey-progress-steps li[data-state="done"]::before { content:"✓"; border-color:var(--ok); background:var(--ok); }
 /* Sync steps spin a refresh glyph while they run. */
-.passkey-progress-steps li:is([data-step="before"],[data-step="after"])[data-state="active"]::before { border:0; border-radius:0; background:var(--text); box-shadow:none; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 7v5h-5M4 17v-5h5'/%3E%3Cpath d='M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 7v5h-5M4 17v-5h5'/%3E%3Cpath d='M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6'/%3E%3C/svg%3E") center/contain no-repeat; animation:spin 1s linear infinite; }
+.passkey-progress-steps li[data-step="before"][data-state="active"]::before { border:0; border-radius:0; background:var(--text); box-shadow:none; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 7v5h-5M4 17v-5h5'/%3E%3Cpath d='M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 7v5h-5M4 17v-5h5'/%3E%3Cpath d='M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6'/%3E%3C/svg%3E") center/contain no-repeat; animation:spin 1s linear infinite; }
 @media (prefers-reduced-motion:reduce) { .passkey-progress-steps li::before { animation:none !important; } }
 .passkey-spinner-wrap { display:flex; align-items:center; justify-content:center; }
 .passkey-spinner-wrap .spinner { width:24px; height:24px; border-width:3px; border-color:var(--line); border-top-color:var(--accent); }

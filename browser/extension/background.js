@@ -24,6 +24,13 @@ let editDraft = null;
 // Save suggestions that were dismissed, expired or lost with their tab, so the
 // popup can still offer them. Memory only, newest first, dropped on lock.
 let unsavedLogins = [];
+// Set when the background sync after a passkey sign-in fails; any later
+// successful sync clears it.
+let passkeySyncFailure = null;
+function setPasskeySyncFailure(value) {
+  if (!value && !passkeySyncFailure) return;
+  passkeySyncFailure = value; badge();
+}
 function rememberUnsaved(offer) {
   if (!offer) return;
   clearTimeout(offer.timer);
@@ -192,6 +199,7 @@ function native(request) {
   syncStarted();
   const call = (async () => nativeCall(request))();
   call.then(syncFinished, syncFinished);
+  if (request.action === "sync") call.then(() => setPasskeySyncFailure(null), () => {});
   return call;
 }
 function nativeCall(request) {
@@ -271,11 +279,12 @@ function badge(tabId) {
   badgeTabs.add(tabId);
   const approval = [...pending.values()].some(p => p.tabId === tabId);
   const offer = offers.has(tabId);
+  const syncFailed = !!passkeySyncFailure;
   const count = suggestionCounts.get(tabId)?.count || 0;
-  Promise.resolve(api.action.setBadgeBackgroundColor({ tabId, color: approval || offer ? "#87642a" : "#555555" })).catch(() => {});
-  const text = syncAnimation.active ? "" : approval || offer ? "!" : count ? (count > 99 ? "99+" : String(count)) : "";
+  Promise.resolve(api.action.setBadgeBackgroundColor({ tabId, color: approval || offer ? "#87642a" : syncFailed ? "#b3261e" : "#555555" })).catch(() => {});
+  const text = syncAnimation.active ? "" : approval || offer || syncFailed ? "!" : count ? (count > 99 ? "99+" : String(count)) : "";
   Promise.resolve(api.action.setBadgeText({ tabId, text })).catch(() => {});
-  Promise.resolve(api.action.setTitle({ tabId, title: approval ? "rbw — Passkey approval waiting. Click to continue." : offer ? "rbw — Login save suggestion is on this page." : count ? `rbw — ${count} matching login${count === 1 ? "" : "s"}` : "rbw" })).catch(() => {});
+  Promise.resolve(api.action.setTitle({ tabId, title: approval ? "rbw — Passkey approval waiting. Click to continue." : offer ? "rbw — Login save suggestion is on this page." : syncFailed ? "rbw — Vault sync after passkey sign-in failed. Click to sync." : count ? `rbw — ${count} matching login${count === 1 ? "" : "s"}` : "rbw" })).catch(() => {});
 }
 async function updateSuggestionsBadge(tabId, knownTab) {
   const token = {}; badgeRequests.set(tabId, token);
@@ -670,6 +679,7 @@ async function handle(message) {
       const notice = popupNotices.get(tab?.id); popupNotices.delete(tab?.id);
       return notice && notice.url === tab.url && notice.expires > Date.now() ? notice : null;
     }
+    case "passkey_sync_failure": return passkeySyncFailure;
     case "popup_state": return popupStates.get(account) || null;
     case "save_popup_state": {
       const value = message.state || {};
@@ -779,15 +789,17 @@ async function handle(message) {
         result = await native({ action: "passkey_get", account, item: message.item || null, password: typeof message.password === "string" ? message.password : null, origin: p.origin, options: p.options });
         const counter = result?.counter;
         if (!Number.isSafeInteger(counter) || counter < 0) throw new Error("The passkey counter could not be confirmed.");
-        reportPasskeyProgress(p.id, "after");
-        try {
-          await syncPasskeyStage(account, p.id, "after", "The passkey counter was saved, but the vault could not sync afterward. Sync the vault before trying again.");
-          await native({ action: "passkey_verify", account, item: message.item || null, origin: p.origin, options: p.options, counter });
-        } catch (_) {
-          throw new Error("The passkey counter was saved, but the vault could not sync afterward. Sync the vault before trying again.");
-        }
-        if (!pending.has(p.id)) throw new Error("The request was cancelled.");
-        await checkDocument(p);
+        // The counter is already written to the server before signing; the
+        // follow-up sync only confirms it, so don't hold the login for it.
+        // The next sign-in syncs first anyway.
+        const verify = { action: "passkey_verify", account, item: message.item || null, origin: p.origin, options: p.options, counter };
+        syncPasskeyStage(account, p.id, "after", "Could not sync the vault after passkey sign-in.")
+          .then(() => native(verify))
+          .then(() => setPasskeySyncFailure(null))
+          .catch(error => {
+            console.warn("rbw: passkey counter confirmation failed:", error);
+            setPasskeySyncFailure({ origin: p.origin, time: Date.now() });
+          });
         delete result.counter;
       } else {
         result = await native({ action: "passkey_create", account, item: message.item || null, password: typeof message.password === "string" ? message.password : null, origin: p.origin, options: p.options });

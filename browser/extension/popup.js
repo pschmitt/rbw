@@ -55,7 +55,7 @@ document.querySelector("main").addEventListener("scroll", () => {
   stateTimer = setTimeout(remember, 80);
 }, { passive: true });
 async function request(action, values = {}) {
-  const busy = !["preferences", "pending", "save_offers", "popup_notice", "status", "favicon", "popup_state", "save_popup_state", "edit_draft", "save_edit_draft", "totp"].includes(action);
+  const busy = !["preferences", "pending", "save_offers", "popup_notice", "passkey_sync_failure", "status", "favicon", "popup_state", "save_popup_state", "edit_draft", "save_edit_draft", "totp"].includes(action);
   if (busy) loading(true);
   try {
     const response = await api.runtime.sendMessage({ action, account: $("account").value, ...values });
@@ -119,12 +119,11 @@ $("diagnostic-retry").onclick = () => window.location.reload();
 const passkeyProgressLabels = {
   before: "Syncing vault before signing…",
   signing: "Signing with your passkey…",
-  after: "Syncing the updated vault…",
   done: "Signed in.",
 };
 function updatePasskeyProgress(step, retry = false) {
   if (!passkeyProgressLabels[step] || !$("approval-progress-steps")) return;
-  const order = ["before", "signing", "after"];
+  const order = ["before", "signing"];
   const active = step === "done" ? order.length : order.indexOf(step);
   for (const [index, name] of order.entries()) {
     const row = $("approval-progress-steps").querySelector(`[data-step="${name}"]`);
@@ -1144,6 +1143,8 @@ attempt(async () => {
     if (draft) await resumeEditDraft(draft);
     const notice = await request("popup_notice");
     if (notice && !approvalId && !draft) message(notice.text, notice.error);
+    const syncFailure = !notice && !approvalId && !draft ? await request("passkey_sync_failure").catch(() => null) : null;
+    if (syncFailure) message(`The vault could not sync after signing in to ${new URL(syncFailure.origin).host} with a passkey. Sync before using that passkey again.`, true, { label: "Sync now", run: async () => { message("Working…"); await request("sync"); message(""); await refresh(); } });
   } finally { loading(false); }
 });
 

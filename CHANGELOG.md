@@ -8,6 +8,15 @@
   (AMO and CRX), publishes it and commits the signed packages to `main`, so
   `just release-packages` is gone. Pushes and pull requests build the
   unsigned packages in one `browser` job.
+* Browser passkey sign-in returns the assertion right after signing; the
+  follow-up vault sync and counter confirmation run in the background
+  instead of holding up the login. If that sync fails, the toolbar badge
+  shows a red "!" and the popup offers "Sync now" until a sync succeeds.
+
+### Fixed
+
+* Browser passkey popup: "Cancel request" is now as wide as "Use another
+  authenticator".
 
 ## [2.22.5] - 2026-10-19
 
