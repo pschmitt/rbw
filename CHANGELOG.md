@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.22.6] - 2026-10-19
+
 ### Changed
 
 * CI: the release workflow signs the browser extension on the version tag
