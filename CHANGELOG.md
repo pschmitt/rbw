@@ -10,6 +10,20 @@
   (or any login, via search) and opens it with the new password filled in.
   Both wait for you to review and save.
 
+### Changed
+
+* Browser passkeys are registered with Bitwarden's AAGUID instead of the
+  anonymous all-zero one, so sites label them "Bitwarden" rather than with a
+  generic fallback name. The credential is stored in the Bitwarden vault and
+  works from every Bitwarden client.
+* New items created from a saved login or a new passkey drop a leading
+  `www.` from the site name (`passkeys.io`, not `www.passkeys.io`).
+
+### Fixed
+
+* Browser passkey popup: the second and later account choices are no longer
+  indented relative to the first.
+
 ## [2.22.9] - 2026-10-19
 
 ### Changed

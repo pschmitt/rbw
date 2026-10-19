@@ -485,7 +485,7 @@ async function saveOfferLogin(offer, item, account) {
     if (offer.username) detail.cipher.data.username = offer.username;
     await native({ action: "save", account, item, revision: detail.revision, cipher: detail.cipher });
   } else {
-    await native({ action: "save", account, item: null, revision: null, cipher: { name: new URL(offer.origin).hostname, data: { type: "login", username: offer.username, password: offer.password, uris: [{ uri: offer.origin }] }, fields: [] } });
+    await native({ action: "save", account, item: null, revision: null, cipher: { name: new URL(offer.origin).hostname.replace(/^www\./, ""), data: { type: "login", username: offer.username, password: offer.password, uris: [{ uri: offer.origin }] }, fields: [] } });
   }
   unsavedLogins = unsavedLogins.filter(entry => entry.origin !== offer.origin || entry.username !== offer.username);
   clearMetadata();
