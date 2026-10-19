@@ -8,12 +8,6 @@ use sha2::Digest as _;
 
 use crate::{actions, commands, passkey, FindArgs};
 
-/// `d548826e-79b4-db40-a3d8-11116f7e8349`, the AAGUID Bitwarden clients use.
-const BITWARDEN_AAGUID: [u8; 16] = [
-    0xd5, 0x48, 0x82, 0x6e, 0x79, 0xb4, 0xdb, 0x40, 0xa3, 0xd8, 0x11, 0x11,
-    0x6f, 0x7e, 0x83, 0x49,
-];
-
 pub fn relying_party(
     origin: &str,
     options: &Value,
@@ -288,10 +282,11 @@ pub fn register(
     // UP, UV, backup eligible, backed up, attested credential data.
     auth.push(if verified { 0x5d } else { 0x59 });
     auth.extend_from_slice(&0u32.to_be_bytes());
-    // Bitwarden's AAGUID: the credential lives in the Bitwarden vault and
-    // works from every Bitwarden client, and sites use it to label the
-    // passkey ("Bitwarden") instead of a generic fallback name.
-    auth.extend_from_slice(&BITWARDEN_AAGUID);
+    // Sites label the passkey by AAGUID; the default is Bitwarden's, as
+    // the credential lives in the Bitwarden vault (browser.passkeyAaguid).
+    auth.extend_from_slice(
+        &rbw::config::Config::load()?.browser.passkey_aaguid()?,
+    );
     auth.extend_from_slice(&16u16.to_be_bytes());
     auth.extend_from_slice(id.as_bytes());
     auth.extend(serde_cbor::to_vec(&cose)?);
@@ -384,6 +379,6 @@ mod tests {
         let expected =
             uuid::Uuid::parse_str("d548826e-79b4-db40-a3d8-11116f7e8349")
                 .unwrap();
-        assert_eq!(&super::BITWARDEN_AAGUID, expected.as_bytes());
+        assert_eq!(&rbw::config::BITWARDEN_AAGUID, expected.as_bytes());
     }
 }

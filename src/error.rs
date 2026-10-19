@@ -8,6 +8,9 @@ pub enum Error {
     #[error("email address not set")]
     ConfigMissingEmail,
 
+    #[error("browser.passkeyAaguid {value:?} is not a UUID")]
+    ConfigInvalidPasskeyAaguid { value: String },
+
     #[error("no account named {name:?} is configured")]
     UnknownAccount { name: String },
 

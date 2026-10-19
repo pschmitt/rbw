@@ -15,7 +15,13 @@
 * Browser passkeys are registered with Bitwarden's AAGUID instead of the
   anonymous all-zero one, so sites label them "Bitwarden" rather than with a
   generic fallback name. The credential is stored in the Bitwarden vault and
-  works from every Bitwarden client.
+  works from every Bitwarden client. Configurable with
+  `browser.passkeyAaguid` (and the home-manager option of the same name);
+  all zeros restores the anonymous AAGUID.
+* Browser confirmations (deleting items, attachments, Sends and folders,
+  removing a Send password, exports and imports) use an in-popup sheet
+  instead of the browser's native `confirm()` dialog. Destructive actions
+  start focused on Cancel.
 * New items created from a saved login or a new passkey drop a leading
   `www.` from the site name (`passkeys.io`, not `www.passkeys.io`).
 

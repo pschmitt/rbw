@@ -327,6 +327,18 @@ let
         description = "Explicit native messaging allowlist. Empty denies all browser access; changes apply to every request.";
       };
 
+      browser.passkeyAaguid = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "00000000-0000-0000-0000-000000000000";
+        description = ''
+          AAGUID reported when the browser extension registers a passkey;
+          sites use it to label the passkey. `null` uses Bitwarden's
+          (`d548826e-79b4-db40-a3d8-11116f7e8349`), all zeros reports an
+          anonymous authenticator.
+        '';
+      };
+
       # ---- grouped global preferences ---------------------------------
       agent = mkOption {
         type = types.submodule {

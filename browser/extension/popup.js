@@ -351,7 +351,7 @@ function itemRow(item) {
     }
     entries.append(actionButton(item.favorite ? "Remove favorite" : "Favorite", "star", async () => { await request("mutate", { item: item.id, mutation: "favorite" }); await search(); }),
       actionButton(item.archived ? "Unarchive" : "Archive", "archive", async () => { await request("mutate", { item: item.id, mutation: "archive" }); await search(); }),
-      actionButton("Move to trash", "trash", async () => { if (!confirm("Move this item to trash?")) return; await request("mutate", { item: item.id, mutation: "delete" }); await search(); }, "danger"));
+      actionButton("Move to trash", "trash", async () => { if (!await confirmDialog({ title: `Move “${item.name}” to trash?`, text: "You can restore it from the Trash view.", confirm: "Move to trash", danger: true })) return; await request("mutate", { item: item.id, mutation: "delete" }); await search(); }, "danger"));
     menu.append(entries); actions.append(menu);
   }
   row.append(actions); return row;
@@ -558,7 +558,7 @@ function renderAttachments(detail, item) {
     const row = element("div", null, "field"); row.append(element("p", `${attachment.file_name || "Attachment"} · ${attachment.size_name || attachment.size || ""}`));
     const actions = element("div", null, "actions");
     actions.append(actionButton("Download", "download", async () => { const result = await request("attachment_download", { item, attachment: attachment.id }); message(`Saved to ${result.path}`); }), actionButton("Delete", "trash", async () => {
-      if (!confirm("Delete this attachment permanently?")) return;
+      if (!await confirmDialog({ title: "Delete this attachment?", text: `${attachment.file_name || "The attachment"} is removed permanently.`, confirm: "Delete", danger: true })) return;
       await attachmentOperation(item, () => request("attachment_delete", { item, attachment: attachment.id }));
     }, "danger")); row.append(actions); content.append(row);
   }
@@ -1023,7 +1023,7 @@ $("header-archive").onclick = () => attempt(async () => {
 });
 $("header-delete").onclick = () => attempt(async () => {
   $("detail-menu").removeAttribute("open");
-  if (!confirm("Move this item to trash? You can restore it from the Trash view.")) return;
+  if (!await confirmDialog({ title: "Move this item to trash?", text: "You can restore it from the Trash view.", confirm: "Move to trash", danger: true })) return;
   await request("mutate", { item: currentItem, mutation: "delete" });
   await refresh();
 });
@@ -1302,8 +1302,8 @@ async function loadSends() {
     main.append(element("strong", item.name), meta); row.append(main);
     const actions = element("div", null, "item-actions");
     actions.append(actionButton("Copy link", "copy", async () => { await send("copy", { id: item.id }); message("Send link copied using rbw clipboard settings."); }));
-    if (item.hasPassword) actions.append(actionButton("Remove password", "unlock", async () => { if (!confirm("Remove this Send’s access password?")) return; await send("remove_password", { id: item.id }); await loadSends(); }));
-    actions.append(actionButton("Delete", "trash", async () => { if (!confirm("Permanently delete this Send?")) return; await send("delete", { id: item.id }); await loadSends(); }, "danger"));
+    if (item.hasPassword) actions.append(actionButton("Remove password", "unlock", async () => { if (!await confirmDialog({ title: "Remove the access password?", text: `Anyone with the link to “${item.name}” can open it without a password.`, confirm: "Remove password", icon: "unlock", danger: true })) return; await send("remove_password", { id: item.id }); await loadSends(); }));
+    actions.append(actionButton("Delete", "trash", async () => { if (!await confirmDialog({ title: `Delete “${item.name}”?`, text: "The link stops working immediately. This can’t be undone.", confirm: "Delete Send", danger: true })) return; await send("delete", { id: item.id }); await loadSends(); }, "danger"));
     row.append(actions);
     $("send-items").append(row);
   }

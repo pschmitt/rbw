@@ -41,7 +41,7 @@ async function folders() {
     const row = document.createElement("div"); row.className = "actions";
     const input = document.createElement("input"); input.value = folder.name; input.setAttribute("aria-label", "Folder name");
     const rename = document.createElement("button"); rename.append(icon("edit"), document.createTextNode("Rename")); rename.onclick = () => attempt(async () => { await request("folders", { method: "rename", id: folder.id, name: input.value }); await folders(); });
-    const remove = document.createElement("button"); remove.append(icon("trash"), document.createTextNode("Delete")); remove.className = "danger"; remove.onclick = () => attempt(async () => { if (!confirm("Delete this folder? Its items will remain in your vault.")) return; await request("folders", { method: "delete", id: folder.id }); await folders(); });
+    const remove = document.createElement("button"); remove.append(icon("trash"), document.createTextNode("Delete")); remove.className = "danger"; remove.onclick = () => attempt(async () => { if (!await confirmDialog({ title: `Delete the folder “${folder.name}”?`, text: "Its items stay in your vault.", confirm: "Delete folder", danger: true })) return; await request("folders", { method: "delete", id: folder.id }); await folders(); });
     row.append(input, rename, remove); $("folders").append(row);
   }
 }
@@ -52,13 +52,13 @@ $("export-form").onsubmit = event => { event.preventDefault(); attempt(async () 
   const format = $("export-format").value;
   const password = $("export-password").value; $("export-password").value = "";
   if (format === "bitwarden-encrypted-json" && !password) throw new Error("Enter an export password.");
-  if (format !== "bitwarden-encrypted-json" && !confirm("This export will contain unencrypted vault secrets, including passwords and private keys. Save it to your Downloads directory?")) return;
+  if (format !== "bitwarden-encrypted-json" && !await confirmDialog({ title: "Export unencrypted secrets?", text: "This export contains your passwords and private keys in plain text. It will be saved to your Downloads directory.", confirm: "Export", icon: "download", danger: true })) return;
   $("message").textContent = "Exporting vault…";
   const result = await request("export", { format, password: password || null, attachments: $("export-attachments").checked }); $("message").textContent = `Export saved to ${result.path}`;
 }); };
 $("import-form").onsubmit = event => { event.preventDefault(); attempt(async () => {
   const file = $("import-file").files[0]; if (!file) throw new Error("Choose an export file.");
-  if (!confirm("Import this file into the selected account?")) return;
+  if (!await confirmDialog({ title: "Import this file?", text: `${file.name} is imported into the selected account.`, confirm: "Import", icon: "upload" })) return;
   const password = $("import-password").value; $("import-password").value = "";
   const token = await request("upload_begin", { item: "", name: file.name, size: file.size });
   try {

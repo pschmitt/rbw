@@ -503,3 +503,20 @@ article.send-row:hover .send-badge { background:var(--panel); }
 .send-drop strong { color:var(--text); font-size:14px; overflow-wrap:anywhere; }
 .send-drop small { color:var(--muted); font-size:12px; }
 .send-notes { margin:14px 2px; color:var(--muted); font-size:12px; font-weight:500; }
+
+/* Confirmation sheet (dialog.js) */
+dialog.confirm-dialog { width:calc(100% - 24px); max-width:380px; margin:auto auto 12px; padding:0; border:1px solid var(--line); border-radius:16px; background:var(--panel); color:var(--text); box-shadow:0 18px 50px #0008; }
+dialog.confirm-dialog[open] { animation:confirm-in .18s ease-out; }
+dialog.confirm-dialog::backdrop { background:#0007; backdrop-filter:blur(2px); }
+@keyframes confirm-in { from { opacity:0; transform:translateY(16px); } }
+.confirm-dialog form { display:flex; flex-direction:column; align-items:center; padding:20px 18px 16px; text-align:center; }
+.confirm-dialog-icon { display:grid; place-items:center; width:46px; height:46px; margin-bottom:10px; border-radius:14px; background:var(--raised); color:var(--text); }
+.confirm-dialog.is-danger .confirm-dialog-icon { color:var(--danger); background:color-mix(in srgb, var(--danger) 16%, transparent); }
+.confirm-dialog-icon .svg-icon { width:24px; height:24px; }
+.confirm-dialog h2 { margin:0; font-size:16px; }
+.confirm-dialog p { margin:6px 0 0; color:var(--muted); font-size:13px; }
+.confirm-dialog-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; width:100%; margin-top:18px; }
+.confirm-dialog-actions button { margin:0!important; padding:9px; border-radius:10px; font-weight:600; }
+button.danger-solid { background:var(--danger); border-color:var(--danger); color:var(--bg); }
+button.danger-solid:hover { background:color-mix(in srgb, var(--danger) 85%, var(--text)); }
+@media (prefers-reduced-motion:reduce) { dialog.confirm-dialog[open] { animation:none; } }

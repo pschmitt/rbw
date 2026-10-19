@@ -545,6 +545,31 @@ pub struct Account {
 pub struct BrowserConfig {
     #[serde(default)]
     pub clients: std::collections::BTreeMap<String, BrowserClient>,
+    /// AAGUID reported when the browser extension registers a passkey.
+    /// Sites use it to label the passkey; unset means Bitwarden's, and
+    /// all zeros reports an anonymous authenticator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passkey_aaguid: Option<String>,
+}
+
+/// `d548826e-79b4-db40-a3d8-11116f7e8349`, the AAGUID Bitwarden clients use.
+pub const BITWARDEN_AAGUID: [u8; 16] = [
+    0xd5, 0x48, 0x82, 0x6e, 0x79, 0xb4, 0xdb, 0x40, 0xa3, 0xd8, 0x11, 0x11,
+    0x6f, 0x7e, 0x83, 0x49,
+];
+
+impl BrowserConfig {
+    pub fn passkey_aaguid(&self) -> Result<[u8; 16]> {
+        self.passkey_aaguid
+            .as_deref()
+            .map_or(Ok(BITWARDEN_AAGUID), |value| {
+                uuid::Uuid::parse_str(value)
+                    .map(uuid::Uuid::into_bytes)
+                    .map_err(|_| Error::ConfigInvalidPasskeyAaguid {
+                        value: value.to_owned(),
+                    })
+            })
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
