@@ -673,23 +673,37 @@ function editItem(fresh = false) {
   renderAttachments(currentDetail, currentItem);
   renderEditFields(cipher.data); show("editor"); $("edit-name").focus();
 }
-$("edit-form").onsubmit = event => { event.preventDefault(); attempt(async () => {
+let editSaving = false;
+// Saving waits for rbw to write and sync, which can take a few seconds, so
+// show progress and lock the form instead of leaving the popup looking stuck.
+function setEditSaving(active) {
+  editSaving = active;
+  const save = $("header-save-edit");
+  save.disabled = active || attachmentBusy; $("header-cancel-edit").disabled = active;
+  save.replaceChildren(...(active ? [element("span", null, "spinner"), " Saving…"] : [icon("check"), " Save"]));
+  $("editor").classList.toggle("is-saving", active); $("editor").inert = active;
+  $("editor").setAttribute("aria-busy", String(active));
+}
+$("edit-form").onsubmit = event => { event.preventDefault(); if (editSaving) return; attempt(async () => {
   if (attachmentBusy) throw new Error("Wait for the attachment operation to finish before saving.");
-  const type = $("edit-type").value; const data = { type };
-  for (const name of schema[type]) data[name] = $(`field-${name}`).value || null;
-  if (type === "login") data.uris = [...$("edit-uris").children].map(row => ({ uri: row.querySelector(".uri-input").value.trim(), match_type: row.querySelector(".uri-match").value || undefined })).filter(uri => uri.uri);
-  const fields = [...$("custom-fields").children].map(card => ({
-    name: card.querySelector(".custom-name-input")?.value || "",
-    value: card.querySelector(".custom-value-input")?.value || "",
-    type: card.querySelector(".custom-type-select")?.value || "text"
-  }));
-  await request("save", { item: currentItem, revision: currentDetail?.revision, cipher: { name: $("edit-name").value, folder: $("edit-folder").value || null, notes: $("edit-notes").value || null, data, fields } });
-  if (currentItem && ["login", "card", "identity"].includes(type)) {
-    const excluded = new Set(Array.isArray(preference.autofillExcludedItems) ? preference.autofillExcludedItems : []);
-    if ($("edit-no-autofill").checked) excluded.add(currentItem); else excluded.delete(currentItem);
-    if (excluded.size !== (preference.autofillExcludedItems || []).length) preference = await request("set_preferences", { preferences: { autofillExcludedItems: [...excluded] } });
-  }
-  message("Saved and synchronized."); await refresh();
+  setEditSaving(true);
+  try {
+    const type = $("edit-type").value; const data = { type };
+    for (const name of schema[type]) data[name] = $(`field-${name}`).value || null;
+    if (type === "login") data.uris = [...$("edit-uris").children].map(row => ({ uri: row.querySelector(".uri-input").value.trim(), match_type: row.querySelector(".uri-match").value || undefined })).filter(uri => uri.uri);
+    const fields = [...$("custom-fields").children].map(card => ({
+      name: card.querySelector(".custom-name-input")?.value || "",
+      value: card.querySelector(".custom-value-input")?.value || "",
+      type: card.querySelector(".custom-type-select")?.value || "text"
+    }));
+    await request("save", { item: currentItem, revision: currentDetail?.revision, cipher: { name: $("edit-name").value, folder: $("edit-folder").value || null, notes: $("edit-notes").value || null, data, fields } });
+    if (currentItem && ["login", "card", "identity"].includes(type)) {
+      const excluded = new Set(Array.isArray(preference.autofillExcludedItems) ? preference.autofillExcludedItems : []);
+      if ($("edit-no-autofill").checked) excluded.add(currentItem); else excluded.delete(currentItem);
+      if (excluded.size !== (preference.autofillExcludedItems || []).length) preference = await request("set_preferences", { preferences: { autofillExcludedItems: [...excluded] } });
+    }
+    message("Saved and synchronized."); await refresh();
+  } finally { setEditSaving(false); }
 }); };
 async function suggestions() {
   const area = $("suggestions"); area.replaceChildren();

@@ -157,6 +157,8 @@ details.menu button .svg-icon { width:16px; height:16px; }
 .spinner { width:13px; height:13px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { .spinner { animation:none; } }
+#editor.is-saving { opacity:.6; transition:opacity .15s; }
+#header-save-edit .spinner { border-color:color-mix(in srgb, var(--bg) 40%, transparent); border-top-color:var(--bg); vertical-align:-2px; }
 .note-toolbar { display:flex; align-items:center; gap:6px; margin-bottom:10px; }
 .note-toolbar strong { flex:1; color:var(--muted); font-size:12px; }
 .note-toolbar button { font-size:12px; padding:4px 6px; }

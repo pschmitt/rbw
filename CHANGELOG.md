@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Browser custom fields also match a form field by its label, placeholder,
+  `aria-label` or `autocomplete` value (ignoring case and punctuation), so
+  either `company` or `Company ID` fills the HR WORKS company field.
+* The browser popup shows a "Saving…" spinner and locks the item editor while
+  a save is in progress, instead of appearing to hang.
+
+### Fixed
+
+* Animated browser fills dispatched `change` on every typed character, which
+  broke pages that post each change to their server (HR WORKS: "Invalid nonce
+  while updating forms"). Only the final value now fires `change`.
+
 ## [2.22.3] - 2026-10-19
 
 ### Added

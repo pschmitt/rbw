@@ -34,7 +34,10 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     const normalized = String(value).trim().toLowerCase();
     return brandNames[normalized.replace(/[^a-z]/g, "")] || [normalized];
   };
-  const setter = (el, value, field = null) => {
+  // Intermediate animation frames only fire "input"; "change" marks the final
+  // value, as with real typing. Some pages (HR WORKS) post to the server on
+  // every change and reject overlapping requests.
+  const setter = (el, value, field = null, commit = true) => {
     if (value == null || !el) return;
     if (!previous.has(el)) previous.set(el, { before: read(el) });
     const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -62,7 +65,8 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
       }
       if (option) Object.getOwnPropertyDescriptor(proto, "value").set.call(el, option.value);
     } else Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
-    el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    if (commit) el.dispatchEvent(new Event("change", { bubbles: true }));
   };
   let count = 0;
   let securityCodeFieldPresent = false;
@@ -118,11 +122,25 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
       if (name === "name") put(el, [data.first_name, data.middle_name, data.last_name].filter(Boolean).join(" "));
     }
   }
+  const normalize = text => String(text || "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  const labelText = el => {
+    const ids = el.getAttribute("aria-labelledby");
+    if (ids) return ids.split(/\s+/).map(id => el.getRootNode().getElementById?.(id)?.textContent).filter(Boolean).join(" ");
+    if (el.labels?.length) return [...el.labels].map(label => label.textContent).join(" ");
+    // Floating-label widgets often put an unbound <label> next to the input.
+    for (let n = parentOf(el); n && n !== document.body; n = parentOf(n)) {
+      if (n.querySelectorAll("input,textarea,select").length > 1) break;
+      const label = n.querySelector("label");
+      if (label) return label.textContent;
+    }
+    return "";
+  };
+  const fieldKeys = el => [el.id, el.name, el.getAttribute("autocomplete"), el.getAttribute("aria-label"), el.getAttribute("placeholder"), labelText(el)].map(normalize).filter(Boolean);
   for (const field of data.custom || []) {
     if (field.type === "hidden") continue;
     if (data.type === "card" && field.type === "linked" && field.value === "303" && options.cardSecurityCode !== "fill") continue;
     if (data.type !== "login" && field.type === "linked" && ["414", "416", "417"].includes(String(field.value))) continue;
-    const el = scoped.find(el => el.id === field.name || el.name === field.name);
+    const el = scoped.find(el => el.id === field.name || el.name === field.name) || scoped.find(el => !assignments.some(item => item.el === el) && fieldKeys(el).includes(normalize(field.name)));
     if (el) {
       const linked = { 100: "username", 101: "password", 300: "cardholder_name", 301: "exp_month", 302: "exp_year", 303: "code", 304: "brand", 305: "number", 400: "title", 401: "first_name", 402: "middle_name", 403: "last_name", 404: "address1", 405: "address2", 406: "address3", 407: "city", 408: "state", 409: "postal_code", 410: "country", 412: "email", 413: "phone", 414: "ssn", 415: "username", 416: "passport_number", 417: "license_number" };
       const value = field.type === "linked" ? field.value === "418" ? [data.first_name, data.middle_name, data.last_name].filter(Boolean).join(" ") : data[linked[field.value]] : field.value;
@@ -157,7 +175,7 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
       crab.style.transform = `translate(${curX}px, ${bob}px) rotate(${angle}deg)`;
 
       const curLen = Math.min(finalVal.length, Math.max(1, Math.floor(p * finalVal.length)));
-      setter(el, finalVal.slice(0, curLen), field);
+      setter(el, finalVal.slice(0, curLen), field, false);
 
       if (p < 1) {
         requestAnimationFrame(frame);
@@ -189,7 +207,7 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     let length = 0;
     const typeNext = () => {
       length++;
-      setter(el, finalVal.slice(0, length), field);
+      setter(el, finalVal.slice(0, length), field, length === finalVal.length);
       if (length < finalVal.length) setTimeout(typeNext, delay);
       else resolve();
     };
