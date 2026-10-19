@@ -15,5 +15,28 @@
       "enabled": false,
       "description": "reqwest 0.13's rustls backend unconditionally pulls in aws-lc-rs, which fails to link against musl (undefined reference to __isoc23_sscanf/__isoc23_strtol). Re-enable once aws-lc-rs's musl support improves or reqwest offers a non-aws-lc-rs rustls backend again."
     }
+  ],
+  "nix": {
+    "enabled": true
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "on monday"
+    ]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "web-ext CLI that signs the Firefox package in the release workflow",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/release\\.yaml$/"
+      ],
+      "matchStrings": [
+        "npm install --global web-ext@(?<currentValue>[0-9.]+)"
+      ],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "web-ext"
+    }
   ]
 }
