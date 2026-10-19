@@ -28,9 +28,10 @@ or missing checks do not count as green. A version-bump commit may be pushed
 to trigger CI; fix failures and wait for green checks before releasing it.
 
 The browser extension shares rbw's version (from `Cargo.toml`). Release with
-`just release-prepare X.Y.Z`, then `just release-packages`, then
-`just release-tag` (see `tools/release.sh`); the tag must be GPG-signed, so
-unlock GPG first. Any extension source change needs a new version, because
+`just release-prepare X.Y.Z`, then `just release-tag` (see
+`tools/release.sh`); the tag must be GPG-signed, so unlock GPG first. The
+tag's release workflow signs the extension (AMO, CRX), publishes it and
+commits the signed packages to `main`; pin consumers to that commit. Any extension source change needs a new version, because
 AMO signs each version only once.
 
 This repo is consumed by `nixos-config` (flake input `rbw`). After pushing

@@ -45,8 +45,8 @@ python3 browser/build.py                   # unpacked builds and ZIPs in browser
 browser/tests/e2e/run.sh firefox|chromium   # end-to-end tests (run on a scratch host)
 ```
 
-Releases go through `tools/release.sh` (`just release-prepare X.Y.Z`,
-`release-packages`, `release-tag`); CI signs the packages.
+Releases go through `tools/release.sh` (`just release-prepare X.Y.Z`, then
+`just release-tag`); the tag's release workflow signs the packages.
 
 ## More
 

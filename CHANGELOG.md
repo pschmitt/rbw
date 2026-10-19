@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+* CI: the release workflow signs the browser extension on the version tag
+  (AMO and CRX), publishes it and commits the signed packages to `main`, so
+  `just release-packages` is gone. Pushes and pull requests build the
+  unsigned packages in one `browser` job.
+
 ## [2.22.5] - 2026-10-19
 
 ### Changed

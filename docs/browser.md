@@ -95,21 +95,23 @@ package with the existing signing identity.
 `browser/packages/` holds signed distribution artifacts and the public Chromium
 identity. Never put private signing keys or AMO credentials in the repository.
 The extension shares rbw's version: `build.py` and `nix/browser.nix` read it
-from `Cargo.toml`, so there is nothing to bump separately. The main-branch build
-workflow signs the packages through AMO and with the existing Chromium key when
-the source version has no signed package yet, i.e. on release commits; other
-extension changes wait for the next release. It reads
+from `Cargo.toml`, so there is nothing to bump separately. The release workflow
+signs the tagged source through AMO and with the existing Chromium key,
+publishes the packages with the release and commits them back to `main` (the
+Nix package installs the checked-in ones). Pushes and pull requests only build
+unsigned ZIPs. Signing reads
 `RBW_AMO_API_KEY`, `RBW_AMO_API_SECRET` and `RBW_CHROMIUM_SIGNING_KEY` from
 GitHub Actions secrets. AMO signs each version once, so every release that
-changes extension sources needs a new rbw version. Release with
+changes extension sources needs a new rbw version, and a failed release run
+should be retried with "Re-run failed jobs" to reuse the signed files. Release
+with
 `tools/release.sh` (or the `just release-*` recipes):
 
 1. `prepare X.Y.Z` bumps `Cargo.toml`/`Cargo.lock`, dates the changelog,
    commits and pushes.
-2. `packages` waits for that commit's build, verifies the signed packages
-   against the committed source and commits and pushes them.
-3. `tag` waits for green build, test and docker runs on that commit and pushes
-   a GPG-signed `vX.Y.Z` tag; the release workflow publishes everything.
+2. `tag` waits for green build, test and docker runs on that commit and pushes
+   a GPG-signed `vX.Y.Z` tag; the release workflow signs and publishes
+   everything, then commits the signed packages to `main`.
 The generated icon source is `browser/icon-source.png`; prompt provenance is
 recorded in `browser/icon-prompt.txt`, with sized toolbar assets in
 `browser/extension/icons/`.

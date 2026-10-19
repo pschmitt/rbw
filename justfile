@@ -169,11 +169,8 @@ check: format-check cargo-check clippy deny test doc nix-check
 release-prepare version:
     tools/release.sh prepare '{{ version }}'
 
-# Commit and push the signed browser packages built for HEAD by CI.
-release-packages:
-    tools/release.sh packages
-
-# Push a GPG-signed vVERSION tag once build, test and docker are green for HEAD.
+# Push a GPG-signed vVERSION tag once build, test and docker are green for HEAD;
+# the release workflow signs and publishes the browser extension.
 release-tag:
     tools/release.sh tag
 
