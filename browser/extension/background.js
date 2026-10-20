@@ -110,7 +110,7 @@ async function fetchFavicon(origin) {
   const value = await iconDataUrl(origin + "/favicon.ico");
   if (generation === metadataEpoch) cacheFor(faviconCache, origin, value, 5 * 60 * 1000, 128); return value;
 }
-const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: false, uriMatchDefault: "" };
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, allowHttpFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: false, uriMatchDefault: "" };
 // Empty means "use rbw's defaultUriMatch"; otherwise an override for this browser.
 const URI_MATCH_TYPES = ["domain", "base_domain", "host", "starts_with", "exact", "regular_expression", "never"];
 let uriMatchOverride = null;
@@ -140,7 +140,10 @@ function isItemAutofillExcluded(item, excludedItems) {
 }
 async function settings() {
   const stored = (await api.storage.local.get("preferences")).preferences || {};
-  const result = { ...defaults, ...stored };
+  let managed = {};
+  try { managed = await api.storage.managed.get(null); } catch (_) { /* Managed storage is optional. */ }
+  const result = { ...defaults, ...stored, ...managed };
+  result.allowHttpFill = result.allowHttpFill === true;
   result.animations = ["off", "on", "plaid"].includes(stored.animations) ? stored.animations : stored.crabify === true ? "plaid" : "on";
   result.animationSpeed = ["slow", "normal", "fast"].includes(stored.animationSpeed) ? stored.animationSpeed : "normal";
   delete result.crabify;
@@ -266,8 +269,8 @@ async function activeTab() {
   if (!tab?.url || !/^https?:\/\//.test(tab.url)) throw new Error("Open an HTTP or HTTPS page first.");
   return tab;
 }
-function isSecureFillUrl(url) {
-  try { const u = new URL(url); return u.protocol === "https:" || (u.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname)); } catch (_) { return false; }
+function isSecureFillUrl(url, allowHttpFill = false) {
+  try { const u = new URL(url); return u.protocol === "https:" || (u.protocol === "http:" && (["localhost", "127.0.0.1", "[::1]"].includes(u.hostname) || allowHttpFill)); } catch (_) { return false; }
 }
 function badge(tabId) {
   if (tabId === undefined) {
@@ -518,7 +521,11 @@ async function pageMessage(message, sender, respond) {
   if (sender.id !== api.runtime.id || !sender.tab || !sender.url) return respond({ error: "Invalid sender." });
   const url = new URL(sender.url);
   if (!sender.tab.url || new URL(sender.tab.url).origin !== url.origin) return respond({ fallback: true });
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && url.hostname === "localhost")) return respond({ fallback: true });
+  if (message.action === "open_settings") {
+    return api.windows.create({ url: api.runtime.getURL("popup.html?surface=window&settings=1"), type: "popup", width: 460, height: 680 }).then(() => respond({ result: true }), () => respond({ result: false }));
+  }
+  const prefs = await settings();
+  if (!isSecureFillUrl(sender.url, prefs.allowHttpFill)) return respond({ fallback: true });
   if (message.action === "passkey_cancel") {
     for (const [id, p] of pending) if (p.tabId === sender.tab.id && p.pageRequest === message.request) finish(id, { error: "Cancelled." });
     return respond({ result: true });
@@ -536,7 +543,6 @@ async function pageMessage(message, sender, respond) {
     }
     return respond({ result: restored });
   }
-  const prefs = await settings();
   const autofillBlocked = isAutofillBlocked(sender.url, prefs.autofillBlocklist);
   if (message.action === "passkey_available") return respond({ result: prefs.passkeys });
   if (message.action === "autofill_load") {
@@ -601,9 +607,9 @@ async function pageMessage(message, sender, respond) {
 }
 async function fill(message, account) {
   const tab = await activeTab();
-  if (!isSecureFillUrl(tab.url)) throw new Error("rbw does not fill passwords into insecure HTTP pages.");
-  if (message.expectedTab !== undefined && (tab.id !== message.expectedTab || tab.url !== message.expectedUrl)) throw new Error("The active page changed.");
   const prefs = await settings();
+  if (!isSecureFillUrl(tab.url, prefs.allowHttpFill)) throw new Error("rbw does not fill passwords into insecure HTTP pages.");
+  if (message.expectedTab !== undefined && (tab.id !== message.expectedTab || tab.url !== message.expectedUrl)) throw new Error("The active page changed.");
   if (isAutofillBlocked(tab.url, prefs.autofillBlocklist)) throw new Error("Autofill is blocked for this site in rbw settings.");
   if (isItemAutofillExcluded(message.item, prefs.autofillExcludedItems)) throw new Error("This item is marked Do not autofill.");
   const token = crypto.randomUUID();
@@ -708,6 +714,9 @@ async function handle(message) {
       return true;
     }
     case "preferences": return settings();
+    case "managed_preferences": {
+      try { return await api.storage.managed.get(null); } catch (_) { return {}; }
+    }
     case "set_preferences": {
       const old = await settings();
       const next = { ...old, ...Object.fromEntries(Object.entries(message.preferences || {}).filter(([k, v]) => (k in defaults) && typeof v === typeof defaults[k])) };
@@ -851,7 +860,7 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
   // Options and pop-out pages may themselves live in a tab. Authenticate the
   // exact extension document before handling the narrower content-script API.
   if (trustedUI) {
-    const independent = ["preferences", "pending", "save_offers", "popup_notice", "favicon", "popup_state", "save_popup_state", "edit_draft", "save_edit_draft"].includes(message.action);
+    const independent = ["preferences", "managed_preferences", "pending", "save_offers", "popup_notice", "favicon", "popup_state", "save_popup_state", "edit_draft", "save_edit_draft"].includes(message.action);
     const operation = independent ? handle(message) : queue.then(() => handle(message));
     if (!independent) queue = operation.catch(() => {});
     operation.then(result => {
@@ -859,7 +868,7 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
       if (["unlock", "sync", "save", "mutate", "set_preferences", "import", "save_offer_apply", "unsaved_login_apply", "passkey_approve"].includes(message.action)) settings().then(() => refreshActiveBadge()).catch(() => {});
     }, error => respond({ error: error.message || "Operation failed.", diagnostic: error.diagnostic || null })); return true;
   }
-  if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "inline_open", "keyboard_fill_shortcut", "autofill_load", "undo_fill", "dismiss_fill"].includes(message?.action)) return false;
+  if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "inline_open", "keyboard_fill_shortcut", "autofill_load", "undo_fill", "dismiss_fill", "open_settings"].includes(message?.action)) return false;
   pageMessage(message, sender, respond).catch(() => respond({ error: "Request failed." })); return true;
 });
 
@@ -898,8 +907,12 @@ async function fillShortcut(tabId) {
   try {
     tab = tabId === undefined ? await activeTab() : await api.tabs.get(tabId);
     if (!tab?.url || !/^https?:\/\//.test(tab.url)) throw new Error("Open an HTTP or HTTPS page first.");
-    if (!isSecureFillUrl(tab.url)) throw new Error("rbw does not fill passwords into insecure HTTP pages.");
-    const prefs = await settings(); const account = prefs.account || null;
+    const prefs = await settings();
+    if (!isSecureFillUrl(tab.url, prefs.allowHttpFill)) {
+      await notifyFill(tab, { title: "Autofill blocked", error: true, message: "HTTP is unencrypted. Change this in rbw settings.", settingsAction: true }).catch(() => {});
+      return;
+    }
+    const account = prefs.account || null;
     if (isAutofillBlocked(tab.url, prefs.autofillBlocklist)) throw new Error("Autofill is blocked for this site in rbw settings.");
     const status = await native({ action: "status", account });
     if (!status.unlocked) {

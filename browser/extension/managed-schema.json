@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "allowHttpFill": {
+      "type": "boolean",
+      "title": "Allow autofill on HTTP sites",
+      "description": "Allow filling passwords on unencrypted HTTP pages."
+    }
+  }
+}

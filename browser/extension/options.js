@@ -18,8 +18,8 @@ async function status() {
   const state = await request("status"); $("connection").textContent = "Connected to rbw native messaging"; $("lock-state").textContent = state.unlocked ? "Unlocked" : "Locked";
   return state;
 }
-for (const id of ["account", "passkeys", "inline", "autofill", "autofill-blocklist", "animations", "animation-speed", "card-security-code", "save-prompts", "theme", "show-generator", "show-send", "show-health", "favicons", "uri-match"]) $(id).onchange = () => attempt(async () => {
-  const preferences = { account: $("account").value, passkeys: $("passkeys").checked, savePrompts: $("save-prompts").checked, inlineSuggestions: $("inline").checked, autoFill: $("autofill").checked, autofillBlocklist: $("autofill-blocklist").value, animations: $("animations").value, animationSpeed: $("animation-speed").value, cardSecurityCode: $("card-security-code").value, theme: $("theme").value, showGenerator: $("show-generator").checked, showSend: $("show-send").checked, showHealth: $("show-health").checked, favicons: $("favicons").checked, uriMatchDefault: $("uri-match").value };
+for (const id of ["account", "passkeys", "inline", "autofill", "allow-http-fill", "autofill-blocklist", "animations", "animation-speed", "card-security-code", "save-prompts", "theme", "show-generator", "show-send", "show-health", "favicons", "uri-match"]) $(id).onchange = () => attempt(async () => {
+  const preferences = { account: $("account").value, passkeys: $("passkeys").checked, savePrompts: $("save-prompts").checked, inlineSuggestions: $("inline").checked, autoFill: $("autofill").checked, allowHttpFill: $("allow-http-fill").checked, autofillBlocklist: $("autofill-blocklist").value, animations: $("animations").value, animationSpeed: $("animation-speed").value, cardSecurityCode: $("card-security-code").value, theme: $("theme").value, showGenerator: $("show-generator").checked, showSend: $("show-send").checked, showHealth: $("show-health").checked, favicons: $("favicons").checked, uriMatchDefault: $("uri-match").value };
   await request("set_preferences", { preferences }); $("animation-speed").disabled = preferences.animations === "off"; theme(preferences.theme); $("message").textContent = "Settings saved."; await status();
   showPolicy(await request("agent_settings"));
 });
@@ -27,11 +27,12 @@ for (const action of ["sync", "lock"]) $(action).onclick = () => attempt(async (
 $("shortcuts").onclick = () => { const firefox = !!globalThis.browser; api.tabs.create({ url: firefox ? "about:addons" : "chrome://extensions/shortcuts" }).catch(() => { $("message").textContent = "Open your browser’s extension manager to change shortcuts."; }); };
 attempt(async () => {
   const prefs = await request("preferences"); theme(prefs.theme);
+  const managedPreferences = await request("managed_preferences");
   $("favicons").checked = prefs.favicons; $("show-generator").checked = prefs.showGenerator; $("show-send").checked = prefs.showSend; $("show-health").checked = prefs.showHealth;
   const state = await status();
   $("account").replaceChildren(...(state.accounts || []).map(a => new Option(a === state.primary ? `${a} *` : a, a)));
   $("account").value = prefs.account || state.primary || "";
-  $("autofill").checked = prefs.autoFill; $("autofill-blocklist").value = prefs.autofillBlocklist || ""; $("animations").value = prefs.animations; $("animation-speed").value = prefs.animationSpeed; $("animation-speed").disabled = prefs.animations === "off"; $("card-security-code").value = ["fill", "clipboard"].includes(prefs.cardSecurityCode) ? prefs.cardSecurityCode : "off"; $("inline").checked = prefs.inlineSuggestions; $("passkeys").checked = prefs.passkeys; $("save-prompts").checked = prefs.savePrompts; $("theme").value = prefs.theme; $("uri-match").value = prefs.uriMatchDefault || ""; await status();
+  $("autofill").checked = prefs.autoFill; $("allow-http-fill").checked = prefs.allowHttpFill === true; $("allow-http-fill").disabled = Object.hasOwn(managedPreferences, "allowHttpFill"); $("allow-http-fill-managed").hidden = !Object.hasOwn(managedPreferences, "allowHttpFill"); $("autofill-blocklist").value = prefs.autofillBlocklist || ""; $("animations").value = prefs.animations; $("animation-speed").value = prefs.animationSpeed; $("animation-speed").disabled = prefs.animations === "off"; $("card-security-code").value = ["fill", "clipboard"].includes(prefs.cardSecurityCode) ? prefs.cardSecurityCode : "off"; $("inline").checked = prefs.inlineSuggestions; $("passkeys").checked = prefs.passkeys; $("save-prompts").checked = prefs.savePrompts; $("theme").value = prefs.theme; $("uri-match").value = prefs.uriMatchDefault || ""; await status();
   showPolicy(await request("agent_settings"));
 });
 

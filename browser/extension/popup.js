@@ -26,6 +26,7 @@ let sendId = null;
 let totpTimer;
 function stopTotp() { clearTimeout(totpTimer); }
 const initialSearch = new URLSearchParams(location.search).get("search");
+const initialSettings = new URLSearchParams(location.search).get("settings") === "1";
 let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
 let loadingRequests = 0, loadingTimer, notificationTimer, stateTimer, ready = false;
 const filterIds = ["query", "kind", "folder", "collection", "view"];
@@ -87,6 +88,10 @@ async function attempt(fn) { try { await fn(); } catch (error) {
   if (error.message.startsWith("Browser access denied.")) {
     unlocked = false; clearVault(); show("locked");
     $("unlock-panel").hidden = true; $("locked").hidden = true;
+  }
+  if (error.message === "rbw does not fill passwords into insecure HTTP pages.") {
+    message("HTTP is unencrypted. Change this in rbw settings.", true, { label: "Open settings", run: async () => show("settings") });
+    return;
   }
   message(error.message, true);
 } }
@@ -1213,9 +1218,9 @@ $("open-options").onclick = event => {
 };
 $("settings-open-options").onclick = () => api.runtime.openOptionsPage();
 function applyTheme(theme) { document.documentElement.dataset.theme = theme === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme; }
-for (const id of ["setting-autofill", "setting-animations", "setting-animation-speed", "setting-card-code", "setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
+for (const id of ["setting-autofill", "setting-http-fill", "setting-animations", "setting-animation-speed", "setting-card-code", "setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
   $("setting-animation-speed").disabled = $("setting-animations").value === "off";
-  preference = await request("set_preferences", { preferences: { autoFill: $("setting-autofill").checked, animations: $("setting-animations").value, animationSpeed: $("setting-animation-speed").value, cardSecurityCode: $("setting-card-code").value, passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
+  preference = await request("set_preferences", { preferences: { autoFill: $("setting-autofill").checked, allowHttpFill: $("setting-http-fill").checked, animations: $("setting-animations").value, animationSpeed: $("setting-animation-speed").value, cardSecurityCode: $("setting-card-code").value, passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
 });
 setInterval(() => attempt(async () => {
   if (!approvalId) {
@@ -1232,6 +1237,12 @@ attempt(async () => {
     const initial = await request("bootstrap");
     preference = initial.preferences; applyTheme(preference.theme); applyTabs();
     $("setting-autofill").checked = preference.autoFill === true;
+    $("setting-http-fill").checked = preference.allowHttpFill === true;
+    const managedPreferences = await request("managed_preferences");
+    if (Object.hasOwn(managedPreferences, "allowHttpFill")) {
+      $("setting-http-fill").disabled = true;
+      $("setting-http-fill-managed").hidden = false;
+    }
     $("setting-animations").value = preference.animations;
     $("setting-animation-speed").value = preference.animationSpeed; $("setting-animation-speed").disabled = preference.animations === "off";
     $("setting-card-code").value = ["fill", "clipboard"].includes(preference.cardSecurityCode) ? preference.cardSecurityCode : "off";
@@ -1255,7 +1266,8 @@ attempt(async () => {
       $("filters").hidden = !saved.expanded; $("filter-toggle").setAttribute("aria-expanded", String(saved.expanded));
     }
     await refresh(status, !!saved && saved.page !== "vault");
-    if (saved && unlocked && !approvalId) {
+    if (initialSettings) show("settings");
+    else if (saved && unlocked && !approvalId) {
       if (saved.page === "detail" && saved.item) await openDetail(saved.item);
       else if (saved.page === "send" && preference.showSend) await loadSends();
       else if (["settings", "generator", "health"].includes(saved.page)) {

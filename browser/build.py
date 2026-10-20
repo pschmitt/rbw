@@ -36,10 +36,10 @@ for target in ("firefox", "chromium"):
         "permissions": ["nativeMessaging", "activeTab", "scripting", "storage", "contextMenus", "webNavigation"],
         "host_permissions": ["https://*/*", "http://*/*"],
         "content_scripts": [
-            {"matches": ["https://*/*", "http://localhost/*"], "js": ["webauthn.js"], "run_at": "document_start", "all_frames": True, "world": "MAIN"},
-            {"matches": ["https://*/*", "http://localhost/*"], "js": ["icons.js", "content.js"], "run_at": "document_start", "all_frames": True},
+            {"matches": ["https://*/*", "http://*/*"], "js": ["webauthn.js"], "run_at": "document_start", "all_frames": True, "world": "MAIN"},
+            {"matches": ["https://*/*", "http://*/*"], "js": ["icons.js", "content.js"], "run_at": "document_start", "all_frames": True},
         ],
-        "web_accessible_resources": [{"resources": ["inline.html"], "matches": ["https://*/*", "http://localhost/*"]}],
+        "web_accessible_resources": [{"resources": ["inline.html"], "matches": ["https://*/*", "http://*/*"]}],
         "options_ui": {"page": "options.html", "open_in_tab": True},
         "commands": {
             "open-vault": {"suggested_key": {"default": "Ctrl+Shift+Y"}, "description": "Open rbw vault"},
@@ -59,6 +59,7 @@ for target in ("firefox", "chromium"):
         }}
     else:
         manifest["background"] = {"service_worker": "background.js"}
+        manifest["storage"] = {"managed_schema": "managed-schema.json"}
         manifest["permissions"].append("sidePanel")
         manifest["side_panel"] = {"default_path": "popup.html?surface=window"}
         metadata = ROOT / "packages" / "metadata.json"
