@@ -14,6 +14,10 @@ browser-side key storage and no HTTP listener: unlock once, use it everywhere.
 - Inline login and card suggestions, autofill on demand (on-load autofill is
   opt-in), save and update prompts after sign-in.
 - Passkey sign-in and registration; private keys stay in rbw.
+  If another extension replaces the WebAuthn handlers during startup, rbw
+  retries at most five times per method within ten seconds. Browser-daemon
+  keeps its live-view wrapper, with rbw as its fallback; recovery stops when
+  the page is left.
 - TOTP, password generator, Sends, attachments, folders, import and export.
 - Clickjacking-resistant inline UI rendered in extension frames, with
   per-browser and per-URI match detection.
