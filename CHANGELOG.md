@@ -4,6 +4,12 @@
 
 ## [2.22.12] - 2026-10-20
 
+### Added
+
+* Browser autofill can be enabled on plain HTTP sites in extension settings;
+  it remains disabled by default. The warning shown when autofill is blocked
+  links directly to settings.
+
 ## [2.22.11] - 2026-10-20
 
 ### Fixed
