@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [2.22.11] - 2026-10-20
+
+### Fixed
+
+* Browser passkeys recover when another extension replaces a WebAuthn handler
+  during startup, with at most five reinstalls per method in ten seconds. rbw
+  cooperates with browser-daemon’s live-view wrapper and keeps captured older
+  rbw handlers from prompting a second time during fallback.
+
 ## [2.22.10] - 2026-10-20
 
 ### Added
