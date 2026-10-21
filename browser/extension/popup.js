@@ -82,13 +82,24 @@ async function request(action, values = {}) {
 function message(text, error = false, action = null) {
   clearTimeout(notificationTimer);
   if (!error && /^(Working|Unlocking|Waiting for rbw|Checking vault locally|Loading Sends|Uploading)/.test(text)) return;
+  const kind = error ? "error"
+    : /^(Vault unlocked|Copied\b|Filled \d+ fields|Saved\b|Updated\b|Collections updated|Attachment uploaded|Generated password (added|filled)|New password filled|Send link copied|Resumed your unsaved edit|Restarted from the current vault state)/i.test(text) ? "success"
+      : /^(Vault locked|This item changed|Your unsaved edit|Passkey request expired)/i.test(text) ? "warning" : "info";
+  const notification = $("message");
+  notification.dataset.kind = kind;
+  $("message-icon").replaceChildren(icon(kind === "success" ? "check" : kind === "info" ? "info" : "warning"));
   $("message-text").textContent = text;
   $("message-action").hidden = !action; $("message-action").textContent = action?.label || "";
   $("message-action").onclick = action ? () => { message(""); attempt(action.run); } : null;
-  $("message").hidden = !text;
-  $("message").classList.toggle("is-error", error);
-  $("message").setAttribute("role", error ? "alert" : "status");
-  if (text && !error && !action) notificationTimer = setTimeout(() => { $("message").hidden = true; }, 4500);
+  notification.classList.toggle("is-error", error);
+  notification.setAttribute("role", error ? "alert" : "status");
+  notification.hidden = !text;
+  if (text) {
+    notification.classList.remove("is-entering");
+    void notification.offsetWidth;
+    notification.classList.add("is-entering");
+  }
+  if (text && !error && !action) notificationTimer = setTimeout(() => { notification.hidden = true; }, 4500);
 }
 $("dismiss-message").onclick = () => message("");
 async function attempt(fn) { try { await fn(); } catch (error) {
@@ -982,13 +993,12 @@ $("cancel-passkey").onclick = () => attempt(async () => {
     throw err;
   }
 });
-for (const action of ["unlock", "lock", "sync"]) $(action).onclick = () => attempt(async () => { message("Working…"); await request(action); message(""); await refresh(); });
+for (const action of ["lock", "sync"]) $(action).onclick = () => attempt(async () => { message("Working…"); await request(action); message(""); await refresh(); });
 $("unlock-form").onsubmit = event => {
   event.preventDefault();
   const password = $("unlock-password").value; $("unlock-password").value = "";
-  attempt(async () => { message("Unlocking…"); await request("unlock", { password }); message(""); await refresh(); });
+  attempt(async () => { message("Unlocking…"); await request("unlock", { password }); await refresh(); message("Vault unlocked."); });
 };
-$("unlock-configured").onclick = $("unlock").onclick;
 $("unlock").onclick = () => { show(approvalId ? "approval" : "locked"); $("account-menu").hidden = true; $("unlock-password").focus(); };
 $("settings-sync").onclick = $("sync").onclick; $("settings-lock").onclick = $("lock").onclick;
 let accountMenuTimer;
@@ -1251,7 +1261,7 @@ setInterval(() => attempt(async () => {
     if (id) { approvalId = id; await refresh(); return; }
   }
   const status = await request("status");
-  if (!unlocked && status.unlocked) { await refresh(); return; }
+  if (!unlocked && status.unlocked) { await refresh(); message("Vault unlocked."); return; }
   if (unlocked && !status.unlocked) { unlocked = false; clearVault(); show("locked"); message("Vault locked by rbw-agent."); }
 }), 3000);
 attempt(async () => {

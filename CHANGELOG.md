@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [2.22.15] - 2026-10-21
+
+### Changed
+
+* Browser popup: compact the locked view, put Unlock beside the master
+  password field, and show a toolbar badge while locked. Popup notifications
+  now use color and leading icons, with a right-side entrance animation.
+
 ## [2.22.14] - 2026-10-21
 
 ## [2.22.13] - 2026-10-21

@@ -27,6 +27,12 @@ let unsavedLogins = [];
 // Set when the background sync after a passkey sign-in fails; any later
 // successful sync clears it.
 let passkeySyncFailure = null;
+let vaultUnlocked = null;
+function setVaultUnlocked(unlocked) {
+  if (vaultUnlocked === unlocked) return;
+  vaultUnlocked = unlocked;
+  badge();
+}
 function setPasskeySyncFailure(value) {
   if (!value && !passkeySyncFailure) return;
   passkeySyncFailure = value; badge();
@@ -63,12 +69,14 @@ async function cachedSearch(values) {
     const cached = listCache.get(key);
     if (cached && cached.expires > Date.now()) {
       const state = await native({ action: "status", account: query.account });
+      setVaultUnlocked(state.unlocked);
       if (!state.unlocked) { clearMetadata(); popupStates.clear(); editDraft = null; unsavedLogins = []; throw new Error("Vault locked by rbw-agent."); }
       if (generation !== metadataEpoch) throw new Error("Vault changed. Retry the operation.");
       return cached.value;
     }
     const result = await native(query);
     if (generation !== metadataEpoch) throw new Error("Vault changed. Retry the operation.");
+    setVaultUnlocked(true);
     cacheFor(listCache, key, result, 300000, 32);
     return result;
   })();
@@ -150,6 +158,13 @@ async function settings() {
   if (!URI_MATCH_TYPES.includes(result.uriMatchDefault)) result.uriMatchDefault = "";
   uriMatchOverride = result.uriMatchDefault || null;
   return result;
+}
+async function refreshVaultLockState(preferences = null) {
+  try {
+    const prefs = preferences || await settings();
+    const status = await native({ action: "status", account: prefs.account || null });
+    setVaultUnlocked(status.unlocked);
+  } catch (_) { /* The toolbar badge is cosmetic; the popup reports connection errors. */ }
 }
 // Toolbar feedback while the vault syncs: the crab gets a small badge with
 // rotating sync arrows in the top-right corner, standing in for the match
@@ -273,9 +288,11 @@ function isSecureFillUrl(url, allowHttpFill = false) {
   try { const u = new URL(url); return u.protocol === "https:" || (u.protocol === "http:" && (["localhost", "127.0.0.1", "[::1]"].includes(u.hostname) || allowHttpFill)); } catch (_) { return false; }
 }
 function badge(tabId) {
+  const locked = vaultUnlocked === false;
   if (tabId === undefined) {
-    Promise.resolve(api.action.setBadgeText({ text: "" })).catch(() => {});
-    Promise.resolve(api.action.setTitle({ title: "rbw" })).catch(() => {});
+    Promise.resolve(api.action.setBadgeBackgroundColor({ color: locked ? "#b3261e" : "#555555" })).catch(() => {});
+    Promise.resolve(api.action.setBadgeText({ text: locked ? "L" : "" })).catch(() => {});
+    Promise.resolve(api.action.setTitle({ title: locked ? "rbw — Vault is locked. Click to unlock." : "rbw" })).catch(() => {});
     for (const id of new Set([...badgeTabs, ...suggestionCounts.keys(), ...[...pending.values()].map(p => p.tabId), ...offers.keys()])) badge(id);
     return;
   }
@@ -284,10 +301,10 @@ function badge(tabId) {
   const offer = offers.has(tabId);
   const syncFailed = !!passkeySyncFailure;
   const count = suggestionCounts.get(tabId)?.count || 0;
-  Promise.resolve(api.action.setBadgeBackgroundColor({ tabId, color: approval || offer ? "#87642a" : syncFailed ? "#b3261e" : "#555555" })).catch(() => {});
-  const text = syncAnimation.active ? "" : approval || offer || syncFailed ? "!" : count ? (count > 99 ? "99+" : String(count)) : "";
+  Promise.resolve(api.action.setBadgeBackgroundColor({ tabId, color: locked || syncFailed ? "#b3261e" : approval || offer ? "#87642a" : "#555555" })).catch(() => {});
+  const text = locked ? "L" : syncAnimation.active ? "" : approval || offer || syncFailed ? "!" : count ? (count > 99 ? "99+" : String(count)) : "";
   Promise.resolve(api.action.setBadgeText({ tabId, text })).catch(() => {});
-  Promise.resolve(api.action.setTitle({ tabId, title: approval ? "rbw — Passkey approval waiting. Click to continue." : offer ? "rbw — Login save suggestion is on this page." : syncFailed ? "rbw — Vault sync after passkey sign-in failed. Click to sync." : count ? `rbw — ${count} matching login${count === 1 ? "" : "s"}` : "rbw" })).catch(() => {});
+  Promise.resolve(api.action.setTitle({ tabId, title: locked ? "rbw — Vault is locked. Click to unlock." : approval ? "rbw — Passkey approval waiting. Click to continue." : offer ? "rbw — Login save suggestion is on this page." : syncFailed ? "rbw — Vault sync after passkey sign-in failed. Click to sync." : count ? `rbw — ${count} matching login${count === 1 ? "" : "s"}` : "rbw" })).catch(() => {});
 }
 async function updateSuggestionsBadge(tabId, knownTab) {
   const token = {}; badgeRequests.set(tabId, token);
@@ -670,13 +687,19 @@ async function handle(message) {
       const preferences = await settings();
       const account = preferences.account || null;
       const status = await native({ action: "status", account });
+      setVaultUnlocked(status.unlocked);
       if (!status.unlocked) { clearMetadata(); popupStates.clear(); editDraft = null; unsavedLogins = []; }
       const selected = preferences.account || status.primary || status.accounts?.[0] || null;
       return { preferences, status, saved: status.unlocked ? popupStates.get(selected) || popupStates.get(account) || null : null };
     }
-    case "unlock": return native({ action: "unlock", account, password: typeof message.password === "string" ? message.password : null });
+    case "unlock": {
+      const result = await native({ action: "unlock", account, password: typeof message.password === "string" ? message.password : null });
+      setVaultUnlocked(true);
+      return result;
+    }
     case "status": {
       const state = await native({ action: "status", account });
+      setVaultUnlocked(state.unlocked);
       if (!state.unlocked) { clearMetadata(); popupStates.clear(); editDraft = null; unsavedLogins = []; } return state;
     }
     case "sync": case "audit":
@@ -684,8 +707,10 @@ async function handle(message) {
     case "lock":
       fillCycles.clear(); popupNotices.clear(); popupStates.clear(); editDraft = null; unsavedLogins = [];
       for (const id of [...pending.keys()]) finish(id, { error: "Vault locked." });
-      for (const offer of offers.values()) clearTimeout(offer.timer); offers.clear(); badge();
-      return native({ action: "lock", account });
+      for (const offer of offers.values()) clearTimeout(offer.timer); offers.clear();
+      const result = await native({ action: "lock", account });
+      setVaultUnlocked(false);
+      return result;
     case "export": return native({ action: "export", account, format: message.format, password: message.password || null, attachments: !!message.attachments });
     case "import": return native({ action: "import", account, token: message.token, password: message.password || null, overwrite: !!message.overwrite });
     case "agent_settings": return native({ action: "agent_settings", account });
@@ -894,9 +919,17 @@ api.tabs.onUpdated.addListener((tabId, change, tab) => {
   }
   if (change.status === "complete" && tab?.active) updateSuggestionsBadge(tabId, tab).catch(() => {});
 });
-api.windows?.onFocusChanged?.addListener(windowId => { if (windowId >= 0) refreshActiveBadge().catch(() => {}); });
+api.windows?.onFocusChanged?.addListener(windowId => {
+  if (windowId >= 0) { refreshVaultLockState(); refreshActiveBadge().catch(() => {}); }
+});
 api.runtime.onInstalled.addListener(() => {
   api.contextMenus.removeAll().then(() => api.contextMenus.create({ id: "rbw-open", title: "Fill with rbw…", contexts: ["editable"] }));
+  api.alarms.create("rbw-vault-lock-state", { periodInMinutes: 1 });
+  refreshVaultLockState();
+});
+api.runtime.onStartup.addListener(() => refreshVaultLockState());
+api.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name === "rbw-vault-lock-state") refreshVaultLockState();
 });
 api.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== "rbw-open" || !tab?.id) return;
@@ -915,6 +948,7 @@ async function fillShortcut(tabId) {
     const account = prefs.account || null;
     if (isAutofillBlocked(tab.url, prefs.autofillBlocklist)) throw new Error("Autofill is blocked for this site in rbw settings.");
     const status = await native({ action: "status", account });
+    setVaultUnlocked(status.unlocked);
     if (!status.unlocked) {
       fillCycles.delete(tab.id);
       await notifyFill(tab, { title: "rbw is locked", error: true, message: "Unlock your vault to autofill this page." }).catch(() => {});
@@ -966,4 +1000,8 @@ api.webNavigation.onCommitted.addListener(details => {
   for (const [id, p] of pending) if (p.tabId === details.tabId && p.frameId === details.frameId) finish(id, { error: "Document navigated." });
 });
 
-settings().then(() => refreshActiveBadge()).catch(() => {});
+api.alarms.create("rbw-vault-lock-state", { periodInMinutes: 1 });
+settings().then(async preferences => {
+  await refreshVaultLockState(preferences);
+  await refreshActiveBadge();
+}).catch(() => {});
