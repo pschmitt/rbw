@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+* `rbw get --raw` includes `linked_id` (the Bitwarden number, for example 100
+  for the login username and 101 for the password) on linked custom fields.
+
 ## [2.22.12] - 2026-10-20
 
 ### Added
