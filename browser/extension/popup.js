@@ -7,6 +7,14 @@ for (const label of document.querySelectorAll("[data-extension-version]")) {
 }
 const labels = { login: "Login", card: "Card", identity: "Identity", secure_note: "Secure note", ssh_key: "SSH key" };
 const icons = { login: "key", card: "card", identity: "identity", secure_note: "note", ssh_key: "terminal" };
+const cardFieldOrder = ["cardholder_name", "brand", "number", "exp_month", "exp_year", "code"];
+const cardFieldLabels = {
+  cardholder_name: "Cardholder",
+  number: "Card number",
+  exp_month: "Expiry month",
+  exp_year: "Expiry year",
+  code: "CVV",
+};
 function getCardBrandIcon(brand, name = "") {
   const str = `${brand || ""} ${name || ""}`.toLowerCase();
   if (str.includes("visa")) return "visa";
@@ -17,7 +25,7 @@ function getCardBrandIcon(brand, name = "") {
 for (const el of document.querySelectorAll("[data-icon]")) el.replaceChildren(icon(el.dataset.icon));
 const schema = {
   login: ["username", "password", "totp"],
-  card: ["cardholder_name", "number", "brand", "exp_month", "exp_year", "code"],
+  card: cardFieldOrder,
   identity: ["title", "first_name", "middle_name", "last_name", "address1", "address2", "address3", "city", "state", "postal_code", "country", "phone", "email", "username", "ssn", "license_number", "passport_number"],
   secure_note: [], ssh_key: ["public_key", "fingerprint", "private_key"],
 };
@@ -509,10 +517,14 @@ async function openDetail(item) {
   const orderedEntries = data.type === "login"
     ? ["username", "password"].map(name => entries.find(([field]) => field === name)).filter(Boolean)
       .concat(entries.filter(([field]) => !["username", "password"].includes(field)))
-    : entries;
+    : data.type === "card"
+      ? cardFieldOrder.map(name => entries.find(([field]) => field === name)).filter(Boolean)
+        .concat(entries.filter(([field]) => !cardFieldOrder.includes(field)))
+      : entries;
   for (const [field, value] of orderedEntries) {
     if (["type", "uris", "fido2_credentials", "totp"].includes(field) || value == null || value === "") continue;
-    content.append(detailField(field === "totp" ? "Authenticator key" : pretty(field), String(value), item, field, secret(field)));
+    const label = data.type === "card" ? cardFieldLabels[field] || pretty(field) : field === "totp" ? "Authenticator key" : pretty(field);
+    content.append(detailField(label, String(value), item, field, secret(field)));
   }
   if (data.totp) content.append(totpField(item));
   if (data.uris?.length) {
@@ -520,7 +532,18 @@ async function openDetail(item) {
     for (const uri of data.uris) content.append(detailField(uri.match_type in uriMatchNames ? `URI · ${uriMatchNames[uri.match_type]}` : "URI", uri.uri, item, null, false, true));
   }
   if (detail.cipher.notes) content.append(noteField(detail.cipher.notes, item));
-  for (const [i, field] of (detail.cipher.fields || []).entries()) content.append(detailField(field.name || "Custom field", field.value || "", item, `custom/${i}`, field.type === "hidden"));
+  const customFields = detail.cipher.fields || [];
+  const orderedCustomFields = data.type === "card"
+    ? customFields.map((field, index) => ({ field, index })).sort((left, right) => {
+        const leftIsPin = left.field.name?.trim().toLowerCase() === "pin";
+        const rightIsPin = right.field.name?.trim().toLowerCase() === "pin";
+        return Number(leftIsPin) - Number(rightIsPin);
+      }).map(({ field, index }) => ({ ...field, originalIndex: index }))
+    : customFields;
+  for (const [i, field] of orderedCustomFields.entries()) {
+    const sourceIndex = data.type === "card" ? field.originalIndex : i;
+    content.append(detailField(field.name || "Custom field", field.value || "", item, `custom/${sourceIndex}`, field.type === "hidden"));
+  }
   for (const passkey of detail.passkeys) { content.append(element("h3", "Passkey"), element("p", `${passkey.rp} · ${passkey.user || ""}`), element("p", `Created ${passkey.created || "unknown"}`, "hint")); }
   if (detail.history.length) { const history = element("details"); history.append(element("summary", `Password history · ${detail.history.length}`)); for (const [index, entry] of detail.history.entries()) history.append(detailField(entry.last_used_date, entry.password, item, `history/${index}`, true)); content.append(history); }
   if (detail.collection_options?.length) {
@@ -587,7 +610,7 @@ function renderAttachments(detail, item) {
 function renderEditFields(data = {}) {
   const type = $("edit-type").value; $("edit-fields").replaceChildren();
   for (const name of schema[type]) {
-    const label = element("label", name === "totp" ? "Authenticator key" : pretty(name)); const input = element(name === "private_key" || name === "public_key" ? "textarea" : "input");
+    const label = element("label", type === "card" ? cardFieldLabels[name] || pretty(name) : name === "totp" ? "Authenticator key" : pretty(name)); const input = element(name === "private_key" || name === "public_key" ? "textarea" : "input");
     input.id = `field-${name}`; input.value = data[name] || ""; input.autocomplete = "off"; input.spellcheck = false;
     if (input.tagName === "INPUT") input.type = secret(name) ? "password" : "text";
     if (input.type === "password") {
