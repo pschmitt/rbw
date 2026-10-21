@@ -2318,6 +2318,10 @@ pub struct DecryptedField {
     pub value: Option<String>,
     #[serde(serialize_with = "serialize_field_type", rename = "type")]
     pub ty: Option<rbw::api::FieldType>,
+    /// The item field a linked field stands for (100 login username, 101 login
+    /// password, ...), as the number Bitwarden uses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linked_id: Option<rbw::api::LinkedIdType>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref, clippy::ref_option)]
@@ -9019,6 +9023,7 @@ fn apply_field_updates_decrypted(
                 name: Some(name.clone()),
                 value: Some(value.clone()),
                 ty: Some(rbw::api::FieldType::Hidden),
+                linked_id: None,
             });
         }
     }
@@ -11721,6 +11726,7 @@ fn file_vault_from_imported(
                                 })
                                 .ok()
                         }),
+                        linked_id: None,
                     })
                     .collect(),
                 notes: imported.notes.clone(),
@@ -17617,6 +17623,7 @@ pub fn decrypt_cipher(
                     })
                     .transpose()?,
                 ty: field.ty,
+                linked_id: field.linked_id,
             })
         })
         .collect::<anyhow::Result<_>>()?;
@@ -18511,6 +18518,7 @@ fn editable_to_decrypted(
             name: unset_if_empty(&f.name),
             value: unset_if_empty(&f.value),
             ty: f.ty.as_deref().and_then(|ty| parse_field_type(ty).ok()),
+            linked_id: None,
         })
         .collect();
 
@@ -21644,6 +21652,7 @@ mod test {
             } else {
                 rbw::api::FieldType::Text
             }),
+            linked_id: None,
         };
         let cipher =
             |data: DecryptedData,
@@ -22817,7 +22826,23 @@ mod test {
             name: Some(name.to_string()),
             value: value.map(str::to_string),
             ty: Some(ty),
+            linked_id: None,
         }
+    }
+
+    #[test]
+    fn test_raw_field_linked_id() {
+        let mut f = DecryptedField {
+            name: Some("n".to_string()),
+            value: None,
+            ty: Some(rbw::api::FieldType::Linked),
+            linked_id: Some(rbw::api::LinkedIdType::LoginPassword),
+        };
+        let v = serde_json::to_value(&f).unwrap();
+        assert_eq!(v["type"], "linked");
+        assert_eq!(v["linked_id"], 101);
+        f.linked_id = None;
+        assert!(serde_json::to_value(&f).unwrap().get("linked_id").is_none());
     }
 
     #[test]
@@ -23592,6 +23617,7 @@ mod test {
                         name: Some((*n).to_string()),
                         value: Some((*v).to_string()),
                         ty: Some(rbw::api::FieldType::Text),
+                        linked_id: None,
                     })
                     .collect(),
                 notes: Some("some notes".to_string()),
@@ -24425,6 +24451,7 @@ mod test {
                         name: Some((*name).to_string()),
                         value: Some((*value).to_string()),
                         ty: None,
+                        linked_id: None,
                     })
                     .collect(),
                 notes: None,
@@ -25225,6 +25252,7 @@ mod test {
                         name: Some("custom".to_string()),
                         value: Some("val".to_string()),
                         ty: Some(rbw::api::FieldType::Text),
+                        linked_id: None,
                     }],
                     notes: Some("some notes".to_string()),
                     history: vec![DecryptedHistoryEntry {
