@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [2.22.16] - 2026-10-21
+
+### Changed
+
+* Browser popup: remove the Open sidebar button from the header.
+
 ## [2.22.15] - 2026-10-21
 
 ### Changed
