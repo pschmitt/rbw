@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.22.13] - 2026-10-21
+
 ### Added
 
 * `rbw get --raw` includes `linked_id` (the Bitwarden number, for example 100
