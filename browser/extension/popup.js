@@ -198,7 +198,6 @@ function show(page) {
   $("title").textContent = ({ vault: "Vault", generator: "Generator", health: "Vault health", settings: "Settings", send: "Send", "send-editor": "Edit Send", detail: "Item", editor: currentItem ? "Edit item" : "New item", approval: "Passkey request", locked: "Vault", diagnostic: "Connection problem" })[page];
   $("add").hidden = !["vault", "send"].includes(page) || !unlocked;
   $("add").classList.remove("collapsed");
-  $("open-sidebar").hidden = subpage || document.documentElement.dataset.surface === "window";
   $("open-options").hidden = subpage;
   $("detail-header-actions").hidden = page !== "detail";
   $("edit-header-actions").hidden = page !== "editor";
@@ -1240,10 +1239,6 @@ $("audit").onclick = () => attempt(async () => {
   $("audit-results").append(element("h3", `Passwords shorter than 12 characters · ${result.short.length}`));
   for (const name of result.short) $("audit-results").append(element("p", name));
   $("audit-results").append(element("p", `${result.without_totp} password logins have no TOTP saved. This does not indicate whether the site has other 2FA enabled.`, "hint")); message("");
-});
-$("open-sidebar").onclick = () => attempt(async () => {
-  if (api.sidebarAction) await api.sidebarAction.open();
-  else { const window = await api.windows.getCurrent(); await api.sidePanel.open({ windowId: window.id }); }
 });
 $("open-options").onclick = event => {
   if (event.ctrlKey || event.metaKey || event.shiftKey) api.runtime.openOptionsPage();
