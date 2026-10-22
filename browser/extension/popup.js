@@ -38,7 +38,7 @@ const initialSettings = new URLSearchParams(location.search).get("settings") ===
 let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
 let accountNames = [], accountStates = [];
 const needsPassword = new Set(); // locked accounts whose row shows a password field
-let loadingRequests = 0, loadingTimer, notificationTimer, stateTimer, ready = false;
+let loadingRequests = 0, loadingTimer, notificationTimer, notificationLeaving, stateTimer, ready = false;
 const filterIds = ["query", "kind", "folder", "collection", "view"];
 function remember() {
   if (!ready || !unlocked || approvalId || initialSearch || ["approval", "locked", "diagnostic"].includes(currentPage)) return;
@@ -95,13 +95,21 @@ function message(text, error = false, action = null) {
   $("message-action").onclick = action ? () => { message(""); attempt(action.run); } : null;
   notification.classList.toggle("is-error", error);
   notification.setAttribute("role", error ? "alert" : "status");
-  notification.hidden = !text;
-  if (text) {
-    notification.classList.remove("is-entering");
-    void notification.offsetWidth;
-    notification.classList.add("is-entering");
-  }
-  if (text && !error && !action) notificationTimer = setTimeout(() => { notification.hidden = true; }, 4500);
+  clearTimeout(notificationLeaving); notification.classList.remove("is-leaving");
+  if (!text) { hideNotification(); return; }
+  const appearing = notification.hidden;
+  notification.hidden = false;
+  notification.classList.remove("is-entering", "is-swapping");
+  if (bannerAnimated()) { void notification.offsetWidth; notification.classList.add(appearing ? "is-entering" : "is-swapping"); }
+  if (!error && !action) notificationTimer = setTimeout(hideNotification, 4500);
+}
+// Notices are banners (like the locked-accounts one): they slide out when done.
+function hideNotification() {
+  const notification = $("message");
+  if (notification.hidden) return;
+  if (!bannerAnimated()) { notification.hidden = true; return; }
+  notification.classList.add("is-leaving");
+  clearTimeout(notificationLeaving); notificationLeaving = setTimeout(() => { notification.hidden = true; notification.classList.remove("is-leaving"); }, 330);
 }
 $("dismiss-message").onclick = () => message("");
 async function attempt(fn) { try { await fn(); } catch (error) {
@@ -308,7 +316,7 @@ function renderAccountStates(primary) {
 // an account gets unlocked, and goes away (or back to the warning for the
 // accounts still locked) after a moment.
 let lockedSeen = null, bannerHoldUntil = 0, bannerTimer, bannerLeaving;
-const bannerAnimated = () => preference.animations !== "off" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+function bannerAnimated() { return preference.animations !== "off" && !matchMedia("(prefers-reduced-motion: reduce)").matches; }
 // Shows the banner (sliding in when it wasn't visible; a swap pop when it only changes).
 function showBanner(kind, ...children) {
   const banner = $("locked-accounts");

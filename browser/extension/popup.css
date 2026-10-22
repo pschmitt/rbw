@@ -733,7 +733,7 @@ details.history-section[open] > summary svg { transform:rotate(180deg); }
 @keyframes banner-out { to { opacity:0; transform:translateY(-10px); max-height:0; min-height:0; margin-bottom:0; padding-top:0; padding-bottom:0; border-width:0; } }
 @keyframes banner-content-in { from { opacity:0; transform:translateY(10px); } }
 @keyframes icon-pop { 0% { transform:scale(.3) rotate(-30deg); } 55% { transform:scale(1.5) rotate(8deg); } 100% { transform:none; } }
-@keyframes banner-pulse { from { box-shadow:0 0 0 0 color-mix(in srgb, var(--ok) 70%, transparent); } to { box-shadow:0 0 0 10px transparent; } }
+@keyframes banner-pulse { from { box-shadow:0 0 0 0 color-mix(in srgb, var(--pulse-color, var(--ok)) 70%, transparent); } to { box-shadow:0 0 0 10px transparent; } }
 .locked-banner.is-entering { animation:banner-in 280ms cubic-bezier(.2,.8,.2,1) both; }
 .locked-banner.is-swapping { animation:banner-pulse 600ms ease-out both; }
 .locked-banner.is-swapping > span { animation:banner-content-in 320ms cubic-bezier(.2,.8,.2,1) both; }
@@ -744,3 +744,12 @@ details.history-section[open] > summary svg { transform:rotate(180deg); }
 .attachment-info svg { width:16px; height:16px; flex:none; color:var(--muted); }
 .attachment-info strong { font-weight:500; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .attachment-info small { color:var(--muted); flex:none; }
+/* Notices share the locked-accounts banner's look: in the layout under the
+   header (pushing the content down, never covering it), kind-colored, animated. */
+#message.popup-notification, #message.popup-notification.is-error { position:static; top:auto; left:auto; right:auto; box-sizing:border-box; min-height:46px; align-items:center; margin:8px 10px 0; padding:6px 10px; border-radius:10px; font-size:13px; font-weight:400; box-shadow:none; overflow:hidden; max-height:260px; transition:background-color .4s ease, border-color .4s ease; }
+#message.popup-notification[data-kind] { border-color:color-mix(in srgb, var(--notice-color) 60%, var(--line)); background:color-mix(in srgb, var(--notice-color) 18%, var(--panel)); }
+#message.popup-notification.is-entering { animation:banner-in 280ms cubic-bezier(.2,.8,.2,1) both; }
+#message.popup-notification.is-swapping { animation:banner-pulse 600ms ease-out both; }
+#message.popup-notification.is-swapping > svg, #message.popup-notification.is-swapping > .svg-icon { animation:icon-pop 520ms cubic-bezier(.2,.8,.2,1) both; }
+#message.popup-notification.is-leaving { animation:banner-out 320ms ease-in both; }
+#message.popup-notification { --pulse-color:var(--notice-color); }

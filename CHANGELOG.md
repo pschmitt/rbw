@@ -8,6 +8,9 @@
   button; before they only showed in the editor.
 * Browser extension: unlocking an account turns the locked-accounts banner, in
   place and animated, into a short "unlocked" notice, then it goes away.
+* Browser extension: all popup notices use that banner style: in the layout
+  under the header (so they push the content down instead of covering it),
+  colored by kind, and animated in and out.
 
 ## [2.27.1] - 2026-10-23
 
