@@ -3321,19 +3321,9 @@ pub fn secret_service_status() -> anyhow::Result<()> {
         }
     );
     if provider.broker {
-        let tokio = tokio::runtime::Runtime::new()?;
-        match tokio.block_on(rbw::unlockd::call(
-            &rbw::unlockd::Request::Status {
-                id: provider.id.clone(),
-            },
-            None,
-            std::future::pending(),
-        )) {
-            Ok(rbw::unlockd::Event::Done {
-                enrolled: Some(true),
-                ..
-            }) => println!("rbw-unlockd holds the credential."),
-            Ok(_) => println!(
+        match rbw::desktop::broker_enrolled(&provider.id) {
+            Ok(true) => println!("rbw-unlockd holds the credential."),
+            Ok(false) => println!(
                 "rbw-unlockd has no credential for this enrollment; enroll \
                  again."
             ),
@@ -3390,14 +3380,7 @@ pub fn secret_service_enroll(
     };
     if desktop.broker {
         // Fail before asking for the password if the service is missing.
-        tokio::runtime::Runtime::new()?
-            .block_on(rbw::unlockd::call(
-                &rbw::unlockd::Request::Status {
-                    id: provider.id.clone(),
-                },
-                None,
-                std::future::pending(),
-            ))
+        rbw::desktop::broker_enrolled(&provider.id)
             .context("--broker needs the rbw-unlockd service")?;
     }
     let c = stderr_supports_color();

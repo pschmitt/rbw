@@ -3,10 +3,14 @@
 
 #[cfg(target_os = "linux")]
 pub use native::{
-    credential_string, fingerprint, fingerprint_for_user, remove, store,
-    unlock, unlock_with_dialog, unlock_with_pinentry,
+    broker_enrolled, credential_string, fingerprint, fingerprint_for_user,
+    remove, store, unlock, unlock_with_dialog, unlock_with_pinentry,
 };
 
+#[cfg(not(target_os = "linux"))]
+pub fn broker_enrolled(_id: &str) -> anyhow::Result<bool> {
+    anyhow::bail!("rbw-unlockd is only supported on Linux");
+}
 #[cfg(not(target_os = "linux"))]
 pub fn fingerprint() -> anyhow::Result<()> {
     anyhow::bail!("desktop unlock is only supported on Linux");
@@ -85,6 +89,26 @@ mod native {
                 "secret"
             },
         )
+    }
+
+    /// Whether rbw-unlockd holds a credential under `id` (an error if the
+    /// service can't be reached).
+    pub fn broker_enrolled(id: &str) -> anyhow::Result<bool> {
+        run(async {
+            let event = crate::unlockd::call(
+                &crate::unlockd::Request::Status { id: id.to_string() },
+                None,
+                std::future::pending(),
+            )
+            .await?;
+            Ok(matches!(
+                event,
+                crate::unlockd::Event::Done {
+                    enrolled: Some(true),
+                    ..
+                }
+            ))
+        })
     }
 
     /// The name a `tpm2` credential is sealed under; decryption checks it.
