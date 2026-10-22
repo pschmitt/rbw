@@ -2,17 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+* The item view lists the item's attachments (name and size) with a download
+  button; before they only showed in the editor.
+* Browser extension: unlocking an account turns the locked-accounts banner, in
+  place and animated, into a short "unlocked" notice, then it goes away.
+
 ## [2.27.1] - 2026-10-23
 
 ### Changed
 
-* The item view lists the item's attachments (name and size) with a download
-  button; before they only showed in the editor.
 * Browser extension: with several accounts, a locked account is flagged: a
   banner above the list (with Unlock), an amber "L" on the toolbar icon
   while some accounts are locked (red when all are), and the account menu
-  opens by itself when everything is locked. Unlocking an account turns the
-  banner, in place, into a short "unlocked" notice.
+  opens by itself when everything is locked.
 * Browser extension: a locked account with an enrolled fingerprint gets a
   fingerprint button in the popup's account menu (before, the scan was only
   offered on the all-locked screen, for the primary account).
