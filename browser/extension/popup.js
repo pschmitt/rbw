@@ -326,7 +326,7 @@ function hideBanner() {
   if (banner.hidden) return;
   if (!bannerAnimated()) { banner.hidden = true; return; }
   banner.classList.add("is-leaving");
-  clearTimeout(bannerLeaving); bannerLeaving = setTimeout(() => { banner.hidden = true; banner.classList.remove("is-leaving"); }, 240);
+  clearTimeout(bannerLeaving); bannerLeaving = setTimeout(() => { banner.hidden = true; banner.classList.remove("is-leaving"); }, 330);
 }
 function renderLockedBanner(locked) {
   const unlockedNow = lockedSeen ? lockedSeen.filter(name => !locked.includes(name)) : [];
