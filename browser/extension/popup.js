@@ -344,7 +344,11 @@ function renderSearch(result) {
   $("count").textContent = result.total > result.limit ? `${result.limit} of ${result.total} items. Narrow your search to see more.` : `${result.total} items`;
   // Items of locked accounts can't be listed (nothing prompts for them here).
   const locked = $("account").value === "" ? accountStates.filter(account => !account.unlocked && !account.excluded).map(account => account.name) : [];
-  if (locked.length) $("count").textContent += ` · ${locked.join(", ")} locked: unlock from the account menu`;
+  if (locked.length) {
+    $("count").textContent += ` · ${locked.join(", ")} locked `;
+    const open = button("Unlock…", async () => { $("account-menu").hidden = false; $("account-menu").scrollIntoView?.({ block: "nearest" }); }, "link");
+    $("count").append(open);
+  }
 }
 const faviconObserver = new IntersectionObserver(entries => {
   for (const entry of entries) if (entry.isIntersecting) {
