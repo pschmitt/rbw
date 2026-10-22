@@ -201,6 +201,32 @@
         }
         // (import ./nix/browser.nix { inherit pkgs rbw; })
         // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          rbw-gtk = craneLib.buildPackage (
+            craneArgs
+            // {
+              pname = "rbw-gtk";
+              cargoExtraArgs = "--locked --features fido2,gtk-ui";
+              nativeBuildInputs = craneArgs.nativeBuildInputs ++ [ pkgs.wrapGAppsHook4 ];
+              buildInputs = craneArgs.buildInputs ++ [ pkgs.gtk4 ];
+              doCheck = true;
+              postInstall = rbw.postInstall + ''
+                install -Dm644 src/unlock_ui/assets/rbw.png "$out/share/icons/hicolor/128x128/apps/rbw.png"
+                install -Dm644 ${
+                  pkgs.makeDesktopItem {
+                    name = "org.rbw.Unlock";
+                    desktopName = "Unlock rbw";
+                    exec = "rbw unlock --ui gtk";
+                    icon = "rbw";
+                    categories = [
+                      "Utility"
+                      "Security"
+                    ];
+                    terminal = false;
+                  }
+                }/share/applications/org.rbw.Unlock.desktop "$out/share/applications/org.rbw.Unlock.desktop"
+              '';
+            }
+          );
           rbw-termux = rbwTermux;
         }
       );
@@ -241,6 +267,8 @@
                   settings = {
                     pinentry.command = "pinentry-gtk2";
                     agent.lockTimeout = 120;
+                    unlockUi = "auto";
+                    unlockNoEcho = false;
                     primaryAccount = "personal";
                     accounts.personal = {
                       email = "me@example.com";
@@ -262,6 +290,8 @@
                 command = "pinentry-gtk2";
                 timeout = 300;
               };
+              unlockUi = "auto";
+              unlockNoEcho = false;
               primaryAccount = "personal";
               accounts = [
                 {
@@ -309,14 +339,31 @@
         in
         {
           default = pkgs.mkShell {
-            packages = with pkgs; [
-              just
-              cargo
-              rustc
-              clippy
-              rustfmt
-              cargo-deny
-              nixfmt-rfc-style
+            packages = [
+              pkgs.just
+              pkgs.cargo
+              pkgs.rustc
+              pkgs.clippy
+              pkgs.rustfmt
+              pkgs.cargo-deny
+              pkgs.nixfmt
+              pkgs.statix
+              pkgs.deadnix
+            ];
+          };
+          gtk = pkgs.mkShell {
+            nativeBuildInputs = [ pkgs.pkg-config ];
+            buildInputs = [
+              pkgs.gtk4
+              pkgs.openssl
+              pkgs.udev
+            ];
+            packages = [
+              pkgs.cargo
+              pkgs.rustc
+              pkgs.clippy
+              pkgs.rustfmt
+              pkgs.binutils
             ];
           };
         }

@@ -15,10 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev libgtk-4-dev dbus
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-features
+      - name: Check native fingerprint protocol and cancellation
+        run: dbus-run-session -- env RBW_TEST_PRIVATE_DBUS=1 cargo test --lib --all-features desktop::protocol_tests::fingerprint_protocol_and_cleanup -- --ignored
   test-musl:
     runs-on: ubuntu-latest
     steps:
@@ -40,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev libgtk-4-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -56,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev libgtk-4-dev
       - id: msrv
         run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
       # @master + an explicit toolchain input (rather than the @stable tag)
@@ -70,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev libgtk-4-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Only our own crates: documenting every dependency took minutes and

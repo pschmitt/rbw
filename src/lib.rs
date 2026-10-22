@@ -4,6 +4,7 @@ pub mod base64;
 pub mod cipherstring;
 pub mod config;
 pub mod db;
+pub mod desktop;
 pub mod dirs;
 pub mod edit;
 pub mod error;
@@ -16,3 +17,6 @@ pub mod protocol;
 pub mod pwgen;
 pub mod termux;
 pub mod wordlist;
+
+#[cfg(target_os = "linux")]
+pub mod unlock_ui;

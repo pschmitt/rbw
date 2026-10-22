@@ -10,6 +10,12 @@ targets = [
 version = 2
 yanked = "deny"
 ignore = [
+    # secret-service 5.2 still requires zbus 5. These standalone crates
+    # were merged into zbus 6; the notices report maintenance status, not
+    # known vulnerabilities. Remove when secret-service adopts zbus 6.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
     # Existing serde_yaml configuration and editor serialization uses
     # unsafe-libyaml. This advisory reports that upstream is unmaintained,
     # not a known vulnerability; no patched release exists. Remove this
@@ -159,6 +165,9 @@ allow = [
     "Zlib",
 ]
 exceptions = [
+    # GTK's system-deps build tooling uses this permissively licensed
+    # target metadata crate (Apache 2.0 with the LLVM exception).
+    { name = "target-lexicon", allow = ["Apache-2.0 WITH LLVM-exception"] },
     { name = "ring", allow = ["OpenSSL", "MIT", "ISC"] },
     # EPL-2.0 is OSI-approved weak copyleft; colored_json is consumed
     # unmodified as a regular dependency of the rbw binaries, which EPL-2.0

@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Added
+
+* Native Linux fingerprint unlock and encrypted Secret Service enrollment for
+  individual accounts, with password and fingerprint unlock available together.
+* Integrated terminal unlock dialog and optional GTK4 window (`gtk-ui` feature,
+  Nix `rbw-gtk` package), with live fingerprint status, verification animations,
+  disabled submit while checking, and success feedback.
+* `unlock --ui`, optional `--no-echo`, persistent `unlockUi` / `unlockNoEcho`
+  settings, and matching Home Manager options. `unlock --pinentry` remains an
+  explicit password-only recovery path.
+
+### Security
+
+* Require Tokio 1.54.1 or newer, fixing the timer race in RUSTSEC-2026-0384.
+* Integrated unlock input uses isolated, locked memory with wiping on edit and
+  exit; Linux dialogs disable process dumps and suppress background logging.
+* D-Bus wire diagnostics are disabled to keep credential traffic out of logs.
+* Enrollment verifies the master password against the cached encrypted vault.
+  Fingerprint approval is an application policy over the keyring, rather than
+  hardware enforcement; see `docs/desktop-unlock.md` for the security model.
+
 ## [2.22.16] - 2026-10-21
 
 ### Changed

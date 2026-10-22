@@ -50,6 +50,9 @@ pub struct UnlockConfig {
     // See `TermuxKeystoreUnlock`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub termux: Option<TermuxKeystoreUnlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "secretService")]
+    pub secret_service: Option<SecretServiceUnlock>,
 }
 
 // Unlock an account with a master-password bundle protected by an
@@ -65,6 +68,17 @@ pub struct TermuxKeystoreUnlock {
     pub key_alias: String,
     #[serde(default = "default_termux_algorithm")]
     pub algorithm: String,
+}
+
+/// An opaque keyring item identifier, independent of account names and URLs.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretServiceUnlock {
+    pub id: String,
+    #[serde(default)]
+    pub fingerprint: bool,
 }
 
 fn default_termux_algorithm() -> String {
@@ -150,6 +164,40 @@ impl Default for AgentConfig {
         Self {
             sync_interval: default_sync_interval(),
             lock_timeout: default_lock_timeout(),
+        }
+    }
+}
+
+#[derive(
+    serde::Serialize,
+    serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    clap::ValueEnum,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum UnlockUi {
+    #[default]
+    Auto,
+    Terminal,
+    Gtk,
+    Pinentry,
+}
+
+impl UnlockUi {
+    pub const fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Terminal => "terminal",
+            Self::Gtk => "gtk",
+            Self::Pinentry => "pinentry",
         }
     }
 }
@@ -622,6 +670,10 @@ pub struct Config {
     pub agent: AgentConfig,
     #[serde(default)]
     pub pinentry: PinentryConfig,
+    #[serde(default, skip_serializing_if = "UnlockUi::is_auto")]
+    pub unlock_ui: UnlockUi,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unlock_no_echo: bool,
     #[serde(default)]
     pub tui: TuiConfig,
     #[serde(default)]

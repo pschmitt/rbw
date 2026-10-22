@@ -98,7 +98,7 @@ tokio-tungstenite = { version = "0.30", features = [
     "rustls-tls-native-roots",
     "url",
 ] }
-tokio = { version = "1.48.0", features = ["full"] }
+tokio = { version = "1.54.1", features = ["full"] }
 totp-rs = { version = "6", features = ["steam"] }
 url = "2.5.7"
 urlencoding = "2.1.3"
@@ -114,10 +114,16 @@ arboard = { version = "3.6.1", default-features = false, features = [
 ], optional = true }
 dotenvy = "0.15.7"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk4 = { version = "0.10.3", optional = true }
+secret-service = { version = "5.2.0", default-features = false, features = ["rt-tokio-crypto-rust"] }
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+
 [features]
 default = ["clipboard"]
 fido2 = ["dep:authenticator"]
 clipboard = ["arboard"]
+gtk-ui = ["dep:gtk4"]
 
 [lints.clippy]
 cargo = { level = "warn", priority = -1 }

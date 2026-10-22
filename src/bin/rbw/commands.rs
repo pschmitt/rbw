@@ -2731,6 +2731,8 @@ pub const CONFIG_KEYS: &[&str] = &[
     "primaryAccount",
     "agent.syncInterval",
     "agent.lockTimeout",
+    "unlockUi",
+    "unlockNoEcho",
     "pinentry.command",
     "pinentry.timeout",
     "termux.keyAlias",
@@ -2781,6 +2783,8 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
         "primaryAccount" => config.primary_account,
         "agent.lockTimeout" => Some(config.agent.lock_timeout.to_string()),
         "agent.syncInterval" => Some(config.agent.sync_interval.to_string()),
+        "unlockNoEcho" => Some(config.unlock_no_echo.to_string()),
+        "unlockUi" => Some(config.unlock_ui.as_str().to_string()),
         "pinentry.command" => Some(config.pinentry.command),
         "pinentry.timeout" => Some(config.pinentry.timeout.to_string()),
         "termux.keyAlias" => config.termux.key_alias,
@@ -2906,6 +2910,22 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
                 .context("failed to parse value for agent.syncInterval")?;
             config.agent.sync_interval = interval;
         }
+        "unlockNoEcho" => {
+            config.unlock_no_echo = value
+                .parse()
+                .context("unlockNoEcho must be true or false")?;
+        }
+        "unlockUi" => {
+            config.unlock_ui = match value {
+                "auto" => rbw::config::UnlockUi::Auto,
+                "terminal" => rbw::config::UnlockUi::Terminal,
+                "gtk" => rbw::config::UnlockUi::Gtk,
+                "pinentry" => rbw::config::UnlockUi::Pinentry,
+                _ => anyhow::bail!(
+                    "unlockUi must be auto, terminal, gtk, or pinentry"
+                ),
+            }
+        }
         "pinentry.command" => config.pinentry.command = value.to_string(),
         "termux.keyAlias" => {
             config.termux.key_alias = Some(value.to_string());
@@ -2995,6 +3015,8 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
         "agent.syncInterval" => {
             config.agent.sync_interval = rbw::config::default_sync_interval();
         }
+        "unlockNoEcho" => config.unlock_no_echo = false,
+        "unlockUi" => config.unlock_ui = rbw::config::UnlockUi::Auto,
         "pinentry.command" => {
             config.pinentry.command = rbw::config::default_pinentry();
         }
@@ -3047,6 +3069,138 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn verify_cached_password(
+    account: &rbw::config::Account,
+    db: &rbw::db::Db,
+    password: &rbw::locked::Password,
+) -> anyhow::Result<()> {
+    rbw::actions::unlock(
+        &account_email(account)?,
+        password,
+        db.kdf.context("missing vault KDF")?,
+        db.iterations.context("missing vault KDF iterations")?,
+        db.memory,
+        db.parallelism,
+        db.protected_key
+            .as_deref()
+            .context("missing protected vault key")?,
+        db.protected_private_key
+            .as_deref()
+            .context("missing protected private key")?,
+        &db.protected_org_keys,
+    )
+    .map(|_| ())
+    .map_err(anyhow::Error::new)
+}
+
+pub fn secret_service_status() -> anyhow::Result<()> {
+    let account = active_account()?;
+    match account.unlock.secret_service {
+        Some(provider) => println!("Secret Service configured; fingerprint: {}. Credential availability is checked during unlock.", provider.fingerprint),
+        None => println!("Secret Service unlock is not configured."),
+    }
+    Ok(())
+}
+
+pub fn secret_service_enroll(fingerprint: bool) -> anyhow::Result<()> {
+    use zeroize::Zeroizing;
+    let mut config = rbw::config::Config::load()?;
+    config.migrate_legacy();
+    let name = crate::actions::current_account()
+        .unwrap_or_else(|| config.primary_account_name());
+    let account = config.account(Some(&name))?;
+    if account.unlock.termux.is_some()
+        || account.unlock.secret_service.is_some()
+    {
+        anyhow::bail!(
+            "remove the existing native unlock provider before enrolling"
+        );
+    }
+    let runtime = tokio::runtime::Runtime::new()?;
+    let environment = crate::actions::get_environment();
+    let response = runtime.block_on(rbw::pinentry::getpin(
+        &config.pinentry.command,
+        "Master password",
+        "Enroll rbw desktop keyring unlock",
+        None,
+        &environment,
+        false,
+        None,
+        config.pinentry.timeout,
+    ))?;
+    let password = Zeroizing::new(
+        String::from_utf8(response.password().to_vec())
+            .map_err(|_| anyhow::anyhow!("master password is not UTF-8"))?,
+    );
+    crate::actions::set_active_account(Some(name.clone()))?;
+    unlock_impl(Some(password.to_string()), None, &mut Vec::new()).context(
+        "password did not unlock the account; enrollment cancelled",
+    )?;
+    // An already-unlocked agent acknowledges unlock without checking the
+    // supplied password. Verify against the encrypted DB independently.
+    let db = load_db()?;
+    let mut locked_bytes = rbw::locked::Vec::new();
+    locked_bytes.extend(password.as_bytes().iter().copied());
+    let locked_password = rbw::locked::Password::new(locked_bytes);
+    verify_cached_password(&account, &db, &locked_password).context(
+        "password did not decrypt the vault; enrollment cancelled",
+    )?;
+    if fingerprint {
+        rbw::desktop::fingerprint()?;
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    if let Err(error) = rbw::desktop::store(&id, password.as_bytes()) {
+        let _ = rbw::desktop::remove(&id);
+        return Err(error);
+    }
+    config
+        .accounts
+        .iter_mut()
+        .find(|a| a.name == name)
+        .context("account vanished")?
+        .unlock
+        .secret_service = Some(rbw::config::SecretServiceUnlock {
+        id: id.clone(),
+        fingerprint,
+    });
+    if let Err(error) = config.save() {
+        if rbw::desktop::remove(&id).is_err() {
+            eprintln!("Could not remove the newly stored keyring item after config save failed; remove the rbw account unlock item in your keyring manager.");
+        }
+        return Err(error.into());
+    }
+    println!("Secret Service unlock enrolled. Fingerprint confirmation: {fingerprint}.");
+    Ok(())
+}
+
+pub fn secret_service_remove(yes: bool) -> anyhow::Result<()> {
+    let mut config = rbw::config::Config::load()?;
+    config.migrate_legacy();
+    let name = crate::actions::current_account()
+        .unwrap_or_else(|| config.primary_account_name());
+    let Some(provider) = config.account(Some(&name))?.unlock.secret_service
+    else {
+        return Ok(());
+    };
+    if !yes && !std::io::stdin().is_terminal() {
+        anyhow::bail!("refusing non-interactive removal; pass --yes");
+    }
+    if !yes && !confirm("Delete this account's saved keyring credential?")? {
+        return Ok(());
+    }
+    rbw::desktop::remove(&provider.id)?;
+    config
+        .accounts
+        .iter_mut()
+        .find(|a| a.name == name)
+        .context("account vanished")?
+        .unlock
+        .secret_service = None;
+    config.save()?;
+    println!("Secret Service unlock removed.");
+    Ok(())
+}
+
 pub fn termux_enroll(validity: u32) -> anyhow::Result<()> {
     use zeroize::Zeroize as _;
 
@@ -3055,7 +3209,9 @@ pub fn termux_enroll(validity: u32) -> anyhow::Result<()> {
     let account_name = crate::actions::current_account()
         .unwrap_or_else(|| config.primary_account_name());
     let account = config.account(Some(&account_name))?;
-    if account.unlock.termux.is_some() {
+    if account.unlock.termux.is_some()
+        || account.unlock.secret_service.is_some()
+    {
         anyhow::bail!(
             "account {account_name:?} already has Termux unlock configured"
         );
@@ -3353,6 +3509,11 @@ pub fn account_remove(name: &str) -> anyhow::Result<()> {
         .unwrap_or_else(|_| rbw::config::Config::new());
     config.migrate_legacy();
     let old_primary = config.primary_account_name();
+    if config.accounts.iter().any(|account| {
+        account.name == name && account.unlock.secret_service.is_some()
+    }) {
+        anyhow::bail!("remove this account's Secret Service credential first with rbw --account <name> secret-service remove");
+    }
     let before = config.accounts.len();
     config.accounts.retain(|a| a.name != name);
     if config.accounts.len() == before {
@@ -3501,6 +3662,12 @@ pub fn login(
     )
 }
 
+pub fn unlock_pinentry() -> anyhow::Result<()> {
+    ensure_agent()?;
+    crate::actions::login(None, None)?;
+    crate::actions::unlock(None)
+}
+
 pub fn unlock(
     password: Option<String>,
     totp: Option<String>,
@@ -3536,22 +3703,96 @@ fn unlock_impl(
     visited: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     ensure_agent()?;
+    if password.is_none() && crate::actions::unlocked().is_ok() {
+        return Ok(());
+    }
     let (password, totp) = password.map_or_else(
         || resolve_unlock_credentials(visited),
         |password| Ok((Some(password), totp)),
     )?;
+    #[cfg(target_os = "linux")]
+    let password = match password {
+        Some(password) => Some(password),
+        None => resolve_password_dialog()?,
+    };
     crate::actions::login(password.clone(), totp)?;
     crate::actions::unlock(password)?;
+    eprintln!("✓ Vault unlocked.");
 
     Ok(())
 }
 
 // Explicit Termux configuration is fail-closed: a configured provider must
 // work, rather than silently falling back to a weaker pinentry path.
+thread_local! {
+    static UNLOCK_NO_ECHO: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static UNLOCK_UI_OVERRIDE: std::cell::Cell<Option<rbw::config::UnlockUi>> = const { std::cell::Cell::new(None) };
+}
+
+pub fn set_unlock_ui(mode: Option<rbw::config::UnlockUi>, no_echo: bool) {
+    UNLOCK_NO_ECHO.with(|value| value.set(no_echo));
+    UNLOCK_UI_OVERRIDE.with(|value| value.set(mode));
+}
+
 fn resolve_unlock_credentials(
     visited: &mut Vec<String>,
 ) -> anyhow::Result<(Option<String>, Option<String>)> {
     let account = active_account()?;
+    if account.unlock.termux.is_some()
+        && account.unlock.secret_service.is_some()
+    {
+        anyhow::bail!(
+            "configure only one native unlock provider per account"
+        );
+    }
+    if let Some(ref desktop) = account.unlock.secret_service {
+        if desktop.fingerprint {
+            let config = rbw::config::Config::load()?;
+            let Ok(db) = load_db() else {
+                // Initial login has no local verifier yet. Let the agent
+                // authenticate the password through its normal pinentry flow.
+                return Ok((None, None));
+            };
+            #[cfg(target_os = "linux")]
+            let mode = rbw::unlock_ui::resolve(
+                UNLOCK_UI_OVERRIDE
+                    .with(std::cell::Cell::get)
+                    .unwrap_or(config.unlock_ui),
+            )?;
+            #[cfg(not(target_os = "linux"))]
+            let mode = rbw::config::UnlockUi::Pinentry;
+            let password = if mode == rbw::config::UnlockUi::Pinentry {
+                rbw::desktop::unlock_with_pinentry(
+                    desktop, &config.pinentry, &crate::actions::get_environment(),
+                    &format!("Unlock rbw account {}: enter the master password or scan a finger", account.name),
+                    |password| verify_cached_password(&account, &db, password),
+                )?
+            } else {
+                #[cfg(target_os = "linux")]
+                {
+                    let title = format!("Unlock account {}", account.name);
+                    let desktop = desktop.clone();
+                    rbw::desktop::unlock_with_dialog(
+                        Some(&desktop),
+                        rbw::unlock_ui::Options {
+                            mode,
+                            no_echo: config.unlock_no_echo
+                                || UNLOCK_NO_ECHO.with(std::cell::Cell::get),
+                        },
+                        &title,
+                        config.pinentry.timeout,
+                        std::sync::Arc::new(move |password| {
+                            verify_cached_password(&account, &db, password)
+                        }),
+                    )?
+                }
+                #[cfg(not(target_os = "linux"))]
+                unreachable!()
+            };
+            return Ok((Some(password), None));
+        }
+        return Ok((Some(rbw::desktop::unlock(desktop)?), None));
+    }
     if let Some(termux) = account.unlock.termux {
         let config = rbw::config::Config::load()?;
         let mut termux = termux;
@@ -3562,8 +3803,41 @@ fn resolve_unlock_credentials(
         );
         return Ok((Some(rbw::termux::unlock(&termux)?), None));
     }
-    Ok(resolve_credential_source(visited)
-        .map_or((None, None), |(password, totp)| (Some(password), totp)))
+    if let Some((password, totp)) = resolve_credential_source(visited) {
+        return Ok((Some(password), totp));
+    }
+    Ok((None, None))
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_password_dialog() -> anyhow::Result<Option<String>> {
+    let account = active_account()?;
+    if let Ok(db) = load_db() {
+        let config = rbw::config::Config::load()?;
+        let mode = rbw::unlock_ui::resolve(
+            UNLOCK_UI_OVERRIDE
+                .with(std::cell::Cell::get)
+                .unwrap_or(config.unlock_ui),
+        )?;
+        if mode != rbw::config::UnlockUi::Pinentry {
+            let title = format!("Unlock account {}", account.name);
+            let password = rbw::desktop::unlock_with_dialog(
+                None,
+                rbw::unlock_ui::Options {
+                    mode,
+                    no_echo: config.unlock_no_echo
+                        || UNLOCK_NO_ECHO.with(std::cell::Cell::get),
+                },
+                &title,
+                config.pinentry.timeout,
+                std::sync::Arc::new(move |password| {
+                    verify_cached_password(&account, &db, password)
+                }),
+            )?;
+            return Ok(Some(password));
+        }
+    }
+    Ok(None)
 }
 
 // If the currently-active account has a `credential_source` configured,
@@ -16185,9 +16459,10 @@ pub fn lock(all: bool) -> anyhow::Result<()> {
 
 pub fn purge(yes: bool) -> anyhow::Result<()> {
     let account = active_account()?;
-    let termux_configured = account.unlock.termux.is_some();
-    let what = if termux_configured {
-        "the local database and its Termux key/bundle"
+    let native_configured = account.unlock.termux.is_some()
+        || account.unlock.secret_service.is_some();
+    let what = if native_configured {
+        "the local database and its configured native unlock credentials"
     } else {
         "the local copy of the password database"
     };
@@ -16204,6 +16479,7 @@ pub fn purge(yes: bool) -> anyhow::Result<()> {
 
     remove_db()?;
     termux_remove(true)?;
+    secret_service_remove(true)?;
 
     Ok(())
 }

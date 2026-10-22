@@ -274,8 +274,16 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
     (
         "Account and server",
         &[
-            "config", "account", "register", "login", "unlock", "unlocked",
-            "sync", "lock", "termux",
+            "config",
+            "account",
+            "register",
+            "login",
+            "unlock",
+            "unlocked",
+            "sync",
+            "lock",
+            "termux",
+            "secret-service",
         ],
     ),
     (
@@ -458,6 +466,14 @@ enum Opt {
         agent: AgentCmd,
     },
 
+    #[command(
+        about = "Manage desktop keyring unlock and fingerprint confirmation"
+    )]
+    SecretService {
+        #[command(subcommand)]
+        secret_service: SecretServiceCmd,
+    },
+
     #[command(about = "Use Termux Android Keystore for native unlocks")]
     Termux {
         #[command(subcommand)]
@@ -500,6 +516,12 @@ enum Opt {
 
     #[command(about = "Unlock the local Bitwarden database")]
     Unlock {
+        #[arg(long, value_enum, help = "Choose the unlock interface", conflicts_with_all = ["stdin", "pinentry"])]
+        ui: Option<rbw::config::UnlockUi>,
+        #[arg(long, help = "Hide all password input feedback in integrated dialogs", conflicts_with_all = ["stdin", "pinentry"])]
+        no_echo: bool,
+        #[arg(long, help = "Use only pinentry, bypassing configured automatic unlock providers", conflicts_with_all = ["stdin", "all"])]
+        pinentry: bool,
         #[arg(
             long,
             help = "Read the password from standard input",
@@ -2103,6 +2125,7 @@ impl Opt {
             Self::Agent { agent } => {
                 format!("agent {}", agent.subcommand_name())
             }
+            Self::SecretService { .. } => "secret-service".to_string(),
             Self::Termux { .. } => "termux".to_string(),
             Self::Register { .. } => "register".to_string(),
             Self::Login { .. } => "login".to_string(),
@@ -2221,6 +2244,23 @@ enum Config {
             content changed and still parses as valid config."
     )]
     Edit,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum SecretServiceCmd {
+    /// Save a verified master password in the desktop keyring.
+    Enroll {
+        /// Require fingerprint confirmation before retrieving the password.
+        #[arg(long)]
+        fingerprint: bool,
+    },
+    /// Remove the saved credential and unlock configuration.
+    Remove {
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Show configuration without retrieving the saved credential.
+    Status,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -3456,6 +3496,10 @@ fn main() {
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info"),
     )
+    // D-Bus wire diagnostics may include credential message bodies. Never
+    // forward them to the terminal, including under an inherited RUST_LOG.
+    .filter_module("zbus", log::LevelFilter::Off)
+    .filter_module("secret_service", log::LevelFilter::Off)
     .format(|buf, record| {
         if let Some((terminal_size::Width(w), _)) =
             terminal_size::terminal_size()
@@ -3511,6 +3555,15 @@ fn main() {
                 clear_credential_source,
             ),
         },
+        Opt::SecretService { secret_service } => match secret_service {
+            SecretServiceCmd::Enroll { fingerprint } => {
+                commands::secret_service_enroll(fingerprint)
+            }
+            SecretServiceCmd::Remove { yes } => {
+                commands::secret_service_remove(yes)
+            }
+            SecretServiceCmd::Status => commands::secret_service_status(),
+        },
         Opt::Termux { termux } => match termux {
             TermuxCmd::Generate {
                 key_alias,
@@ -3563,8 +3616,18 @@ fn main() {
             println!("rbw {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        Opt::Unlock { stdin, totp, all } => {
-            if all {
+        Opt::Unlock {
+            stdin,
+            totp,
+            all,
+            pinentry,
+            ui,
+            no_echo,
+        } => {
+            commands::set_unlock_ui(ui, no_echo);
+            if pinentry {
+                commands::unlock_pinentry()
+            } else if all {
                 commands::unlock_all()
             } else {
                 let password = stdin.then(read_stdin_password);
@@ -5114,6 +5177,49 @@ mod test {
         );
         parse(&["rbw", "mirror", "--from", "a", "--to", "b"]);
         parse(&["rbw", "mirror", "--config", "mirrors.yaml"]);
+    }
+
+    #[test]
+    fn unlock_ui_selection_is_explicit_and_rejects_conflicts() {
+        let cli = parse(&["rbw", "unlock", "--ui", "gtk"]);
+        assert!(matches!(
+            cli.command,
+            Opt::Unlock {
+                ui: Some(rbw::config::UnlockUi::Gtk),
+                ..
+            }
+        ));
+        let cli = parse(&["rbw", "unlock", "--ui", "terminal", "--no-echo"]);
+        assert!(matches!(cli.command, Opt::Unlock { no_echo: true, .. }));
+        let cli = parse(&["rbw", "unlock"]);
+        assert!(matches!(cli.command, Opt::Unlock { no_echo: false, .. }));
+        for arguments in [
+            vec!["rbw", "unlock", "--ui", "gtk", "--pinentry"],
+            vec!["rbw", "unlock", "--ui", "terminal", "--stdin"],
+            vec!["rbw", "unlock", "--ui", "unknown"],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_err());
+        }
+    }
+
+    #[test]
+    fn unlock_pinentry_is_an_explicit_override() {
+        let cli = parse(&["rbw", "unlock", "--pinentry"]);
+        assert!(matches!(cli.command, Opt::Unlock { pinentry: true, .. }));
+        assert!(Cli::try_parse_from([
+            "rbw",
+            "unlock",
+            "--pinentry",
+            "--stdin"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "rbw",
+            "unlock",
+            "--pinentry",
+            "--all"
+        ])
+        .is_err());
     }
 
     #[test]

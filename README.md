@@ -73,6 +73,7 @@ rest. On bitwarden.com, run `rbw register` first
 | [Injection](docs/inject.md) | `rbw inject` and `rbw run` |
 | [SSH agent](docs/ssh-agent.md) | Using vault SSH keys |
 | [Termux](docs/termux.md) | Android Keystore unlock |
+| [Desktop unlock](docs/desktop-unlock.md) | Secret Service and fingerprint confirmation |
 | [Browser extension](browser/README.md) | Firefox and Chromium |
 | [Changelog](CHANGELOG.md) | |
 

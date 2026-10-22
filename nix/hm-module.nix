@@ -203,6 +203,25 @@ let
                   the equivalent TUI accounts-panel action.
                 '';
               };
+              secretService = mkOption {
+                type = types.nullOr (
+                  types.submodule {
+                    options = {
+                      id = mkOption {
+                        type = types.str;
+                        description = "Opaque keyring item ID created by rbw secret-service enroll.";
+                      };
+                      fingerprint = mkOption {
+                        type = types.bool;
+                        default = false;
+                        description = "Require fprintd confirmation before keyring retrieval; this is not hardware enforced.";
+                      };
+                    };
+                  }
+                );
+                default = null;
+                description = "Native desktop Secret Service unlock over D-Bus; requires a Secret Service provider and optionally the fprintd service.";
+              };
               termux = mkOption {
                 type = types.nullOr (
                   types.submodule {
@@ -364,6 +383,23 @@ let
         default = { };
         description = "Agent synchronization and key-retention settings.";
       };
+      unlockNoEcho = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Hide all password input feedback in integrated unlock dialogs.";
+      };
+
+      unlockUi = mkOption {
+        type = types.enum [
+          "auto"
+          "terminal"
+          "gtk"
+          "pinentry"
+        ];
+        default = "auto";
+        description = "Unlock interface. GTK requires an rbw build with the gtk-ui feature.";
+      };
+
       pinentry = mkOption {
         type = types.submodule {
           options = {
