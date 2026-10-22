@@ -213,8 +213,7 @@ div.switch-row { cursor:default; }
 .collection-picker summary { cursor:pointer; }
 .collection-picker label { margin:8px 0; }
 .lock-art .svg-icon { width:55px; height:55px; }
-/* In the layout, under the header: it pushes the content down instead of covering it. */
-#message.popup-notification, #message.popup-notification.is-error { position:static; display:flex; align-items:flex-start; gap:8px; margin:8px 10px 0; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--raised); color:var(--text); font-size:13px; box-shadow:0 5px 18px #0005; }
+#message.popup-notification, #message.popup-notification.is-error { position:absolute; top:56px; left:10px; right:10px; z-index:40; display:flex; align-items:flex-start; gap:8px; margin:0; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--raised); color:var(--text); font-size:13px; box-shadow:0 5px 18px #0005; }
 #message.popup-notification[data-kind=success] { --notice-color:var(--ok); }
 #message.popup-notification[data-kind=info] { --notice-color:#78a9ff; }
 #message.popup-notification[data-kind=warning] { --notice-color:var(--warn); }
@@ -727,3 +726,7 @@ details.history-section[open] > summary svg { transform:rotate(180deg); }
 .account-states li { flex-wrap:wrap; }
 .account-unlock { display:flex; gap:6px; flex-basis:100%; margin:2px 0 4px; }
 .account-unlock input { flex:1; min-width:0; }
+/* Experiment: notices (except errors, which need room) show in the header in
+   place of the title. Delete this block to get the old dropdown back. */
+#message.popup-notification:not(.is-error) { top:7px; left:54px; right:auto; width:calc(100% - 54px - var(--header-actions-width, 120px) - 18px); height:34px; box-sizing:border-box; align-items:center; padding:0 12px; border-radius:999px; box-shadow:none; }
+#message.popup-notification:not(.is-error) #message-text { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }

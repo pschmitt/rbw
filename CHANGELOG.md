@@ -4,34 +4,15 @@
 
 ## [2.27.1] - 2026-10-23
 
-## [2.27.0] - 2026-10-22
-
-### Added
-
-* `rbw move ENTRY --to ACCOUNT` (alias `mv`) moves an entry, attachments
-  included, to another configured account; the original goes to the trash
-  (`--trash`, default), is deleted (`--delete`) or kept (`--keep`).
-  `rbw copy` (alias `cp`) is `move --keep`.
-* Browser extension: an "All accounts" view (the default with several
-  accounts) merges search results with an account badge per item, shows
-  which accounts are locked with an Unlock button each, offers "Save to
-  account" for new items and unsaved logins, and "Move to account..." in the
-  item menu.
-
 ### Changed
 
-* Browser extension: "Autofill TOTP codes" (off by default, settable by
-  browser policy) fills the current code into authenticator-code fields
-  (`autocomplete=one-time-code`, or an id/name such as `otp`, `mfa`, `2fa`),
-  on 2FA pages with "Auto-fill on page load" and whenever a login is filled.
-  The "Copy TOTP after filling" copy is now done by the extension (new
-  `clipboardWrite` permission) instead of the agent.
 * Browser extension: with several accounts, a locked account is flagged: a
   banner above the list (with Unlock), an amber "L" on the toolbar icon
   while some accounts are locked (red when all are), and the account menu
   opens by itself when everything is locked.
-* Browser extension: the popup's notices no longer float over the content;
-  they sit under the header and push the content down while shown.
+* Browser extension (experiment): the popup's notices ("unlocked", "copied", ...)
+  appear in the header in place of the title instead of floating below it;
+  errors keep the dropdown.
 * Browser extension: a locked account with an enrolled fingerprint gets a
   fingerprint button in the popup's account menu (before, the scan was only
   offered on the all-locked screen, for the primary account).
@@ -54,6 +35,29 @@
 * The in-page autofill notice is larger, names the item whose TOTP or card
   code was copied, and shows a clipboard icon when something was put on the
   clipboard; its messages are shorter.
+
+## [2.27.0] - 2026-10-22
+
+### Added
+
+* `rbw move ENTRY --to ACCOUNT` (alias `mv`) moves an entry, attachments
+  included, to another configured account; the original goes to the trash
+  (`--trash`, default), is deleted (`--delete`) or kept (`--keep`).
+  `rbw copy` (alias `cp`) is `move --keep`.
+* Browser extension: an "All accounts" view (the default with several
+  accounts) merges search results with an account badge per item, shows
+  which accounts are locked with an Unlock button each, offers "Save to
+  account" for new items and unsaved logins, and "Move to account..." in the
+  item menu.
+
+### Changed
+
+* Browser extension: "Autofill TOTP codes" (off by default, settable by
+  browser policy) fills the current code into authenticator-code fields
+  (`autocomplete=one-time-code`, or an id/name such as `otp`, `mfa`, `2fa`),
+  on 2FA pages with "Auto-fill on page load" and whenever a login is filled.
+  The "Copy TOTP after filling" copy is now done by the extension (new
+  `clipboardWrite` permission) instead of the agent.
 * With "Auto-fill on page load" on, the inline login suggestions no longer
   pop up on focus (they raced the autofill); the inline icon still opens them.
 * The item view shows the item's folder, collections and (with several
