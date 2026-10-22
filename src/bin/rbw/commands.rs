@@ -1738,6 +1738,14 @@ fn stderr_supports_color() -> bool {
     std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none()
 }
 
+// Prints a line to stderr above `pb`. Unlike `ProgressBar::println`, which is
+// a no-op on a hidden bar, this still prints when `item_progress_bar` hid
+// the bar because stderr isn't a terminal -- per-item results and errors
+// must reach scripts and logs too.
+fn pb_println(pb: &indicatif::ProgressBar, msg: impl AsRef<str>) {
+    pb.suspend(|| eprintln!("{}", msg.as_ref()));
+}
+
 // A `{position}/{len} items` progress bar on stderr for long per-item loops
 // (bulk import/mirror creates, collection purges). Renders nothing (every
 // method becomes a no-op) when stderr isn't a terminal, so piped/logged
@@ -3091,6 +3099,91 @@ fn verify_cached_password(
     )
     .map(|_| ())
     .map_err(anyhow::Error::new)
+}
+
+// `rbw security unlock`: one front end for the native unlock providers.
+// Only one can be configured per account, so `remove` and `status` act on
+// whichever one is, and `enroll` picks one from the environment unless
+// told which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeUnlock {
+    Keyring,
+    Termux,
+}
+
+// Termux exports TERMUX_VERSION to every shell it starts; its PREFIX lives
+// in the app's data directory, as a fallback for stripped environments.
+fn running_on_termux() -> bool {
+    std::env::var_os("TERMUX_VERSION").is_some()
+        || std::env::var("PREFIX")
+            .is_ok_and(|prefix| prefix.contains("/com.termux/"))
+}
+
+pub fn native_unlock_enroll(
+    provider: Option<NativeUnlock>,
+    fingerprint: bool,
+    validity: Option<u32>,
+) -> anyhow::Result<()> {
+    let provider = provider.unwrap_or_else(|| {
+        if running_on_termux() {
+            NativeUnlock::Termux
+        } else {
+            NativeUnlock::Keyring
+        }
+    });
+    match provider {
+        NativeUnlock::Keyring => {
+            if validity.is_some() {
+                anyhow::bail!("--validity only applies to Termux unlock");
+            }
+            secret_service_enroll(fingerprint)
+        }
+        NativeUnlock::Termux => {
+            if fingerprint {
+                anyhow::bail!(
+                    "--fingerprint only applies to keyring unlock; Termux \
+                     unlock always asks for device authentication"
+                );
+            }
+            termux_enroll(validity.unwrap_or(300))
+        }
+    }
+}
+
+pub fn native_unlock_remove(yes: bool) -> anyhow::Result<()> {
+    let account = active_account()?;
+    if account.unlock.secret_service.is_some() {
+        secret_service_remove(yes)
+    } else if account.unlock.termux.is_some() || running_on_termux() {
+        // Also cleans up a leftover key or bundle that isn't configured.
+        termux_remove(yes)
+    } else {
+        println!(
+            "No native unlock is configured for account {}.",
+            account.name
+        );
+        Ok(())
+    }
+}
+
+pub fn native_unlock_status() -> anyhow::Result<()> {
+    let account = active_account()?;
+    if account.unlock.secret_service.is_some() {
+        secret_service_status()
+    } else if let Some(termux) = &account.unlock.termux {
+        println!(
+            "Termux Keystore unlock configured (key {}, bundle {}).",
+            termux.key_alias,
+            termux.file.display()
+        );
+        rbw::termux::status(Some(&termux.key_alias))
+    } else {
+        println!(
+            "No native unlock is configured for account {}.",
+            account.name
+        );
+        Ok(())
+    }
 }
 
 pub fn secret_service_status() -> anyhow::Result<()> {
@@ -7525,16 +7618,16 @@ pub fn security_change_password(
             }
             Err(e) => warn(&format!(
                 "could not update the Secret Service unlock credential \
-                 ({e:#}); re-enroll with `rbw security secret-service \
-                 remove` and `rbw security secret-service enroll`"
+                 ({e:#}); re-enroll with `rbw security unlock remove` and \
+                 `rbw security unlock enroll`"
             )),
         }
     }
     if account.unlock.termux.is_some() {
         warn(
             "the Termux Keystore unlock bundle still holds the old \
-             password; re-enroll with `rbw security termux remove` and \
-             `rbw security termux enroll`",
+             password; re-enroll with `rbw security unlock remove` and \
+             `rbw security unlock enroll`",
         );
     }
     if let Some(source) = &account.unlock.credentials {
@@ -13089,18 +13182,24 @@ fn create_entries_individually(
                 created += 1;
                 attachments_restored += restored;
                 attachments_failed += failed;
-                pb.println(format!(
-                    "{} '{}'{note}",
-                    style::success("Created", c),
-                    imported.name,
-                ));
+                pb_println(
+                    &pb,
+                    format!(
+                        "{} '{}'{note}",
+                        style::success("Created", c),
+                        imported.name,
+                    ),
+                );
             }
             Err(e) => {
-                pb.println(format!(
-                    "{} failed to import '{}': {e:#}",
-                    style_error("Error:", c),
-                    imported.name,
-                ));
+                pb_println(
+                    &pb,
+                    format!(
+                        "{} failed to import '{}': {e:#}",
+                        style_error("Error:", c),
+                        imported.name,
+                    ),
+                );
                 failed_names.push((imported.name.clone(), format!("{e:#}")));
             }
         }
@@ -13284,11 +13383,14 @@ fn bulk_create_batch(
         match result {
             Ok(cipher_entry) => cipher_entries.push(cipher_entry),
             Err(e) => {
-                pb.println(format!(
-                    "{} failed to prepare '{}': {e:#}",
-                    style_error("Error:", c),
-                    imported.name,
-                ));
+                pb_println(
+                    &pb,
+                    format!(
+                        "{} failed to prepare '{}': {e:#}",
+                        style_error("Error:", c),
+                        imported.name,
+                    ),
+                );
                 failed_names.push((imported.name.clone(), format!("{e:#}")));
                 encrypt_failed.insert(index);
             }
@@ -13461,11 +13563,14 @@ fn bulk_create_batch(
                     attachments_failed += failed;
                 }
                 Err(e) => {
-                    pb.println(format!(
+                    pb_println(
+                        &pb,
+                        format!(
                         "{} failed to restore attachments for '{}': {e:#}",
                         style_error("Error:", c),
                         imported.name,
-                    ));
+                    ),
+                    );
                     attachments_failed += imported.attachments.len();
                 }
             }
@@ -13483,18 +13588,24 @@ fn bulk_create_batch(
         ) {
             Ok(()) => {
                 created += 1;
-                pb.println(format!(
-                    "{} '{}'",
-                    style::success("Created", c),
-                    imported.name,
-                ));
+                pb_println(
+                    &pb,
+                    format!(
+                        "{} '{}'",
+                        style::success("Created", c),
+                        imported.name,
+                    ),
+                );
             }
             Err(e) => {
-                pb.println(format!(
-                    "{} failed to restore status for '{}': {e:#}",
-                    style_error("Error:", c),
-                    imported.name,
-                ));
+                pb_println(
+                    &pb,
+                    format!(
+                        "{} failed to restore status for '{}': {e:#}",
+                        style_error("Error:", c),
+                        imported.name,
+                    ),
+                );
                 failed_names.push((imported.name.clone(), format!("{e:#}")));
             }
         }
@@ -13880,18 +13991,24 @@ fn import_vault(
                     attachments_restored += restored;
                     attachments_failed += failed;
                     entries_updated += 1;
-                    pb.println(format!(
-                        "{} '{}'",
-                        style::success("Updated", c),
-                        imported.name,
-                    ));
+                    pb_println(
+                        &pb,
+                        format!(
+                            "{} '{}'",
+                            style::success("Updated", c),
+                            imported.name,
+                        ),
+                    );
                 }
                 Err(e) => {
-                    pb.println(format!(
-                        "{} failed to import '{}': {e:#}",
-                        style_error("Error:", c),
-                        imported.name,
-                    ));
+                    pb_println(
+                        &pb,
+                        format!(
+                            "{} failed to import '{}': {e:#}",
+                            style_error("Error:", c),
+                            imported.name,
+                        ),
+                    );
                     entries_failed += 1;
                     failed_names
                         .push((imported.name.clone(), format!("{e:#}")));
@@ -14084,11 +14201,14 @@ fn purge_collection_entries(
             }
             Ok((None, ())) => {}
             Err(e) => {
-                pb.println(format!(
+                pb_println(
+                    &pb,
+                    format!(
                     "{} failed to delete an entry in '{collection_name}': \
                      {e:#}",
                     style_error("Error:", c)
-                ));
+                ),
+                );
                 failed += 1;
             }
         }
@@ -14947,17 +15067,20 @@ pub fn assign_collections(
         pb.set_message(fit_to_width(&decrypted.name, PROGRESS_MSG_WIDTH));
 
         if entry.org_id.is_none() {
-            pb.println(format!(
-                "{} '{}' is {}",
-                style_error("Error:", c),
-                decrypted.name,
-                if personal {
-                    "already in your personal vault"
-                } else {
-                    "not owned by an organization, so it cannot be \
+            pb_println(
+                &pb,
+                format!(
+                    "{} '{}' is {}",
+                    style_error("Error:", c),
+                    decrypted.name,
+                    if personal {
+                        "already in your personal vault"
+                    } else {
+                        "not owned by an organization, so it cannot be \
                      assigned to collections"
-                },
-            ));
+                    },
+                ),
+            );
             failed += 1;
             pb.inc(1);
             continue;
@@ -14965,13 +15088,16 @@ pub fn assign_collections(
 
         if personal {
             if !entry.attachments.is_empty() {
-                pb.println(format!(
-                    "{} '{}' has attachments, which aren't re-keyed by \
+                pb_println(
+                    &pb,
+                    format!(
+                        "{} '{}' has attachments, which aren't re-keyed by \
                      this move yet -- refusing to move it to the personal \
                      vault",
-                    style_error("Error:", c),
-                    decrypted.name,
-                ));
+                        style_error("Error:", c),
+                        decrypted.name,
+                    ),
+                );
                 failed += 1;
                 pb.inc(1);
                 continue;
@@ -14985,18 +15111,24 @@ pub fn assign_collections(
                 &mut db,
             ) {
                 Ok(()) => {
-                    pb.println(format!(
-                        "{} {} to your personal vault",
-                        style::success("Moved", c),
-                        style::name(&decrypted.name, c),
-                    ));
+                    pb_println(
+                        &pb,
+                        format!(
+                            "{} {} to your personal vault",
+                            style::success("Moved", c),
+                            style::name(&decrypted.name, c),
+                        ),
+                    );
                 }
                 Err(e) => {
-                    pb.println(format!(
-                        "{} failed to move '{}': {e:#}",
-                        style_error("Error:", c),
-                        decrypted.name,
-                    ));
+                    pb_println(
+                        &pb,
+                        format!(
+                            "{} failed to move '{}': {e:#}",
+                            style_error("Error:", c),
+                            decrypted.name,
+                        ),
+                    );
                     failed += 1;
                 }
             }
@@ -15017,11 +15149,14 @@ pub fn assign_collections(
                     }
                 }
                 Err(e) => {
-                    pb.println(format!(
-                        "{} '{}': {e:#}",
-                        style_error("Error:", c),
-                        decrypted.name,
-                    ));
+                    pb_println(
+                        &pb,
+                        format!(
+                            "{} '{}': {e:#}",
+                            style_error("Error:", c),
+                            decrypted.name,
+                        ),
+                    );
                     resolve_failed = true;
                     break;
                 }
@@ -15049,23 +15184,29 @@ pub fn assign_collections(
                     }
                     save_db(&db)?;
                 }
-                pb.println(format!(
-                    "{} {} to {}",
-                    style::success("Assigned", c),
-                    style::name(&decrypted.name, c),
-                    collection_names
-                        .iter()
-                        .map(|name| style::name(name, c))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                ));
+                pb_println(
+                    &pb,
+                    format!(
+                        "{} {} to {}",
+                        style::success("Assigned", c),
+                        style::name(&decrypted.name, c),
+                        collection_names
+                            .iter()
+                            .map(|name| style::name(name, c))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                );
             }
             Err(e) => {
-                pb.println(format!(
-                    "{} failed to assign '{}': {e:#}",
-                    style_error("Error:", c),
-                    decrypted.name,
-                ));
+                pb_println(
+                    &pb,
+                    format!(
+                        "{} failed to assign '{}': {e:#}",
+                        style_error("Error:", c),
+                        decrypted.name,
+                    ),
+                );
                 failed += 1;
             }
         }
@@ -15199,12 +15340,15 @@ pub fn unassign_collections(
         pb.set_message(fit_to_width(&decrypted.name, PROGRESS_MSG_WIDTH));
 
         let Some(org_id) = entry.org_id.as_deref() else {
-            pb.println(format!(
-                "{} '{}' is not owned by an organization, so it has no \
+            pb_println(
+                &pb,
+                format!(
+                    "{} '{}' is not owned by an organization, so it has no \
                  collections to remove",
-                style_error("Error:", c),
-                decrypted.name,
-            ));
+                    style_error("Error:", c),
+                    decrypted.name,
+                ),
+            );
             failed += 1;
             pb.inc(1);
             continue;
@@ -15223,11 +15367,14 @@ pub fn unassign_collections(
                 ) {
                     Ok(collection) => remove_ids.push(collection.id.clone()),
                     Err(e) => {
-                        pb.println(format!(
-                            "{} '{}': {e:#}",
-                            style_error("Error:", c),
-                            decrypted.name,
-                        ));
+                        pb_println(
+                            &pb,
+                            format!(
+                                "{} '{}': {e:#}",
+                                style_error("Error:", c),
+                                decrypted.name,
+                            ),
+                        );
                         resolve_failed = true;
                         break;
                     }
@@ -15262,23 +15409,29 @@ pub fn unassign_collections(
                     }
                     save_db(&db)?;
                 }
-                pb.println(format!(
-                    "{} {} from {}",
-                    style::success("Removed", c),
-                    style::name(&decrypted.name, c),
-                    if collections.is_empty() {
-                        "all collections".to_string()
-                    } else {
-                        collections.join(", ")
-                    },
-                ));
+                pb_println(
+                    &pb,
+                    format!(
+                        "{} {} from {}",
+                        style::success("Removed", c),
+                        style::name(&decrypted.name, c),
+                        if collections.is_empty() {
+                            "all collections".to_string()
+                        } else {
+                            collections.join(", ")
+                        },
+                    ),
+                );
             }
             Err(e) => {
-                pb.println(format!(
-                    "{} failed to unassign '{}': {e:#}",
-                    style_error("Error:", c),
-                    decrypted.name,
-                ));
+                pb_println(
+                    &pb,
+                    format!(
+                        "{} failed to unassign '{}': {e:#}",
+                        style_error("Error:", c),
+                        decrypted.name,
+                    ),
+                );
                 failed += 1;
             }
         }

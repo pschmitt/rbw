@@ -28,7 +28,10 @@ timeout.
 - **`rbw inject` and `rbw run`** to render templates and environment files
   with secrets.
 - **Organizations and collections** management.
-- **Home Manager module** and native Termux (Android Keystore) unlock.
+- **Account security**: change the master password, KDF settings or account
+  key (`rbw security`), and native unlock via the desktop keyring with
+  fingerprint confirmation or the Termux Android Keystore.
+- **Home Manager module**.
 
 ## Install
 
@@ -65,7 +68,7 @@ rest. On bitwarden.com, run `rbw register` first
 | [Installation](docs/install.md) | Cargo and release verification |
 | [Nix](docs/nix.md) | Flake, overlay, Home Manager module, browser setup |
 | [Configuration](docs/configuration.md) | `config.yaml`, accounts, aliases, profiles |
-| [Usage](docs/usage.md) | Everyday commands, search, attachments, 2FA |
+| [Usage](docs/usage.md) | Everyday commands, search, attachments, 2FA, `rbw security` |
 | [Passkeys](docs/passkeys.md) | Counters and browser injection |
 | [Organizations](docs/organizations.md) | `rbw org` and `rbw collection` |
 | [Backup and restore](docs/backup.md) | `export`, `import`, file-backed vaults |

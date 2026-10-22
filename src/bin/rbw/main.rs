@@ -458,8 +458,8 @@ enum Opt {
         agent: AgentCmd,
     },
 
-    // Kept for compatibility; `rbw security secret-service` is the
-    // documented spelling.
+    // Kept for compatibility; `rbw security unlock` is the documented
+    // front end.
     #[command(
         hide = true,
         about = "Manage desktop keyring unlock and fingerprint confirmation"
@@ -469,8 +469,8 @@ enum Opt {
         secret_service: SecretServiceCmd,
     },
 
-    // Kept for compatibility; `rbw security termux` is the documented
-    // spelling.
+    // Kept for compatibility (and for `generate`); `rbw security unlock`
+    // is the documented front end.
     #[command(
         hide = true,
         about = "Use Termux Android Keystore for native unlocks"
@@ -2353,24 +2353,68 @@ enum SecurityCmd {
         stdin: bool,
     },
     #[command(
-        about = "Manage desktop keyring unlock and fingerprint confirmation"
+        about = "Set up native unlock (desktop keyring/fingerprint or \
+            Termux Keystore)"
     )]
-    SecretService {
+    Unlock {
         #[command(subcommand)]
-        secret_service: SecretServiceCmd,
+        unlock: NativeUnlockCmd,
     },
-    #[command(about = "Use Termux Android Keystore for native unlocks")]
-    Termux {
-        #[command(subcommand)]
-        termux: TermuxCmd,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum NativeUnlockCmd {
+    #[command(
+        about = "Save the master password for native unlock",
+        long_about = "Verify the master password and save it for native \
+            unlock of the active account: in the desktop keyring (Secret \
+            Service), optionally gated by a fingerprint, or in an \
+            authentication-gated Termux Android Keystore bundle. Uses \
+            Termux when running inside it and the keyring otherwise; \
+            --termux/--keyring choose explicitly."
+    )]
+    Enroll {
+        #[arg(
+            long,
+            conflicts_with = "keyring",
+            help = "Use the Termux Android Keystore"
+        )]
+        termux: bool,
+        #[arg(
+            long,
+            visible_alias = "secret-service",
+            help = "Use the desktop keyring (Secret Service)"
+        )]
+        keyring: bool,
+        #[arg(
+            long,
+            conflicts_with = "termux",
+            help = "Keyring: require fingerprint confirmation before retrieving the password"
+        )]
+        fingerprint: bool,
+        #[arg(
+            long,
+            conflicts_with = "keyring",
+            help = "Termux: seconds after device authentication during which signing is allowed [default: 300]"
+        )]
+        validity: Option<u32>,
     },
+    #[command(
+        visible_alias = "unenroll",
+        about = "Delete the saved credential and its unlock configuration"
+    )]
+    Remove {
+        #[arg(short, long, help = "Do not ask for confirmation")]
+        yes: bool,
+    },
+    #[command(about = "Show the configured native unlock")]
+    Status,
 }
 
 impl SecurityCmd {
     fn subcommand_name(&self) -> &'static str {
         match self {
-            Self::SecretService { .. } => "secret-service",
-            Self::Termux { .. } => "termux",
+            Self::Unlock { .. } => "unlock",
             Self::ChangePassword { .. } => "change-password",
             Self::RotateKey { .. } => "rotate-key",
             Self::Kdf { .. } => "kdf",
@@ -4739,10 +4783,28 @@ fn main() {
             commands::purge_vault(yes, password)
         }
         Opt::Security { security } => match security {
-            SecurityCmd::SecretService { secret_service } => {
-                run_secret_service(secret_service)
-            }
-            SecurityCmd::Termux { termux } => run_termux(termux),
+            SecurityCmd::Unlock { unlock } => match unlock {
+                NativeUnlockCmd::Enroll {
+                    termux,
+                    keyring,
+                    fingerprint,
+                    validity,
+                } => commands::native_unlock_enroll(
+                    if termux {
+                        Some(commands::NativeUnlock::Termux)
+                    } else if keyring {
+                        Some(commands::NativeUnlock::Keyring)
+                    } else {
+                        None
+                    },
+                    fingerprint,
+                    validity,
+                ),
+                NativeUnlockCmd::Remove { yes } => {
+                    commands::native_unlock_remove(yes)
+                }
+                NativeUnlockCmd::Status => commands::native_unlock_status(),
+            },
             SecurityCmd::ChangePassword {
                 yes,
                 stdin,

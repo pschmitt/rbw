@@ -9,15 +9,25 @@
   personal vault) and show or change the KDF settings. `change-password
   --rotate-key` does both in one request. A Secret Service unlock credential
   is updated with a new password.
+* `rbw security unlock enroll|remove|status` sets up native unlock with one
+  command: the desktop keyring (`--fingerprint` optional) or, detected inside
+  Termux, the Android Keystore; `--keyring`/`--termux` choose explicitly.
 
 ### Changed
 
-* `rbw secret-service` and `rbw termux` moved to `rbw security secret-service`
-  and `rbw security termux`; the old spellings remain as hidden aliases.
+* `rbw secret-service` and `rbw termux` are superseded by `rbw security
+  unlock` and hidden from the help; they keep working.
 
 ### Fixed
 
 * `rbw purge` no longer fails on systems without `termux-keystore`.
+* `rbw org delete` uses `DELETE /organizations/{id}`; Vaultwarden 1.37 dropped
+  the `POST .../delete` route it used.
+* `rbw send create --file` uploads work against Vaultwarden again (the file
+  part lacked a content type and had its encrypted name percent-encoded).
+* Send API errors include the server's message.
+* Per-item results and errors of bulk commands (`collection assign`, import,
+  mirror, ...) are printed when stderr is not a terminal instead of dropped.
 
 ## [2.23.0] - 2026-10-22
 

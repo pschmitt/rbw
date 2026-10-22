@@ -127,6 +127,8 @@ jobs:
       - run: |
           git clone --depth 1 --branch v1.14.0 https://github.com/bats-core/bats-core.git /tmp/bats-core
           sudo /tmp/bats-core/install.sh /usr/local
-      - run: bats .github/e2e/e2e.bats
+      - run: bats .github/e2e/e2e.bats </dev/null
         env:
+          # Fail a hung test (e.g. one waiting on stdin) instead of the job.
+          BATS_TEST_TIMEOUT: "300"
           VAULTWARDEN_URL: http://localhost:8000

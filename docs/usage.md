@@ -46,13 +46,17 @@ rbw security rotate-key                 # new account key, same password
 rbw security kdf                        # show the KDF settings
 rbw security kdf --kdf argon2id         # Bitwarden's argon2id defaults
 rbw security kdf --iterations 800000    # tune the current algorithm
-rbw security secret-service enroll      # desktop keyring/fingerprint unlock
-rbw security termux enroll              # Termux Android Keystore unlock
+rbw security unlock enroll              # keyring, or Termux Keystore in Termux
+rbw security unlock enroll --fingerprint
+rbw security unlock status
+rbw security unlock remove
 ```
 
-`secret-service` and `termux` are described in
-[desktop-unlock.md](desktop-unlock.md) and [termux.md](termux.md); the old
-top-level `rbw secret-service`/`rbw termux` spellings still work.
+`rbw security unlock` sets up native unlock: the desktop keyring (optionally
+fingerprint-gated, see [desktop-unlock.md](desktop-unlock.md)) or, inside
+Termux, the Android Keystore (see [termux.md](termux.md)). `--keyring` and
+`--termux` override the detection. The old top-level `rbw secret-service` and
+`rbw termux` commands still work.
 
 Each asks for confirmation (`-y`/`--yes` to skip) and prompts for the
 current master password via pinentry; `--stdin` reads it from stdin instead
@@ -77,7 +81,7 @@ Vaultwarden; bitwarden.com may require additional data for accounts that use
 trusted devices or passkey login.
 
 `rbw purge` also removes the active account's configured Termux Keystore key
-and encrypted unlock bundle. Use `rbw security termux remove` when you want to remove
+and encrypted unlock bundle. Use `rbw security unlock remove` when you want to remove
 only that native unlock. Both destructive paths are irreversible for the key
 and bundle.
 

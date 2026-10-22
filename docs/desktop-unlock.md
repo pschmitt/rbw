@@ -1,19 +1,23 @@
 # Desktop keyring unlock
 
-`rbw security secret-service enroll` verifies your master password and saves it in the
+`rbw security unlock enroll` verifies your master password and saves it in the
 session's Secret Service (for example GNOME Keyring). Each account receives
 an independent random item ID; account names and server URLs are not keyring
 lookup attributes. The password is transferred through an encrypted Secret Service D-Bus session.
 
 ```shell
-rbw --account personal secret-service enroll --fingerprint
-rbw --account personal secret-service status
+rbw --account personal security unlock enroll --fingerprint
+rbw --account personal security unlock status
 rbw --account personal lock
 rbw --account personal unlock
 # Password-only override:
 rbw --account personal unlock --pinentry
-rbw --account personal secret-service remove
+rbw --account personal security unlock remove
 ```
+
+`rbw security unlock enroll` uses the keyring everywhere except inside Termux
+(see [termux.md](termux.md)); `--keyring` forces it. The older
+`rbw secret-service enroll|status|remove` spelling still works.
 
 Omit `--fingerprint` to use the unlocked keyring without a scan. Enrollment
 and removal update the selected account's YAML configuration; for declarative
@@ -123,8 +127,9 @@ circular dependency where keyring unlock itself retrieves its password from
 rbw. Remote SSH sessions may be denied fingerprint access by PolicyKit;
 run interactive enrollment and unlock from the local desktop session.
 
-This stores the master password, not a derived vault key. After changing the
-master password, remove the enrollment and enroll again. `rbw lock` clears
+This stores the master password, not a derived vault key. `rbw security
+change-password` updates the stored credential itself; after changing the
+password anywhere else, remove the enrollment and enroll again. `rbw lock` clears
 agent keys but leaves the persistent enrollment in place. `rbw purge`
 removes enrollment too. Remove enrollment before removing its account.
 Status reports configuration only and never reads a credential. Use the

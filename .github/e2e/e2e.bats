@@ -485,6 +485,203 @@ assert d['data']['password'], 'no password after auto-unlock via fake pinentry'
     "$RBW" unlocked # must succeed now -- the fake pinentry unlock above should have left the vault unlocked
 }
 
+@test "get must pick fields and disambiguate entries by user, uri and exact name" {
+    echo '{"name":"e2e-get","notes":"get notes","data":{"type":"login","username":"get-user","password":"get-pass","totp":"otpauth://totp/x?secret=JBSWY3DPEHPK3PXP","uris":[{"uri":"https://login.e2e-get-domain.org/","match_type":null}]},"fields":[{"name":"get-field","value":"get-field-value","type":"text"}]}' | "$RBW" add --json
+    echo '{"name":"e2e-get-dup","data":{"type":"login","username":"dup-1","password":"dup-pass-1"}}' | "$RBW" add --json
+    echo '{"name":"e2e-get-dup","data":{"type":"login","username":"dup-2","password":"dup-pass-2"}}' | "$RBW" add --json
+    echo '{"name":"e2e-get-dup-longer","data":{"type":"login","username":"dup-3","password":"dup-pass-3"}}' | "$RBW" add --json
+    "$RBW" sync
+
+    [ "$("$RBW" get e2e-get)" = "get-pass" ]
+    [ "$("$RBW" get --field username e2e-get)" = "get-user" ]
+    [ "$("$RBW" get --field notes e2e-get)" = "get notes" ]
+    [ "$("$RBW" get --field get-field e2e-get)" = "get-field-value" ]
+    "$RBW" get --list-fields e2e-get | grep -q get-field
+    [[ "$("$RBW" code e2e-get)" =~ ^[0-9]{6}$ ]]
+
+    [ "$("$RBW" get https://login.e2e-get-domain.org/)" = "get-pass" ]
+    [ "$("$RBW" get e2e-get-dup --user dup-2)" = "dup-pass-2" ]
+    run "$RBW" get e2e-get-dup
+    [ "$status" -ne 0 ]
+    [ "$("$RBW" get -e e2e-get-dup-longer)" = "dup-pass-3" ]
+    [ "$("$RBW" get -i E2E-GET-DUP-LONGER)" = "dup-pass-3" ]
+}
+
+@test "search must find entries by name, username and uri" {
+    "$RBW" search e2e-get-dup --fields name | grep -qx e2e-get-dup-longer
+    "$RBW" search dup-3 --fields name | grep -qx e2e-get-dup-longer
+    "$RBW" search e2e-get-domain.org --fields name | grep -qx e2e-get
+    [ "$("$RBW" search e2e-get-dup --fields name | sort -u | wc -l)" -eq 2 ]
+    [ -z "$("$RBW" search no-such-entry-anywhere)" ]
+}
+
+@test "edit must save a piped entry and keep the rest" {
+    echo '{"name":"e2e-edit","notes":"edit notes","data":{"type":"login","username":"edit-user","password":"edit-pass"}}' | "$RBW" add --json
+    "$RBW" sync
+    # With stdin not a terminal, edit reads the new entry from it instead
+    # of opening $EDITOR.
+    echo '{"name":"e2e-edit","notes":"edit notes","data":{"type":"login","username":"edit-user","password":"edited-pass"}}' |
+        "$RBW" edit --json e2e-edit
+    "$RBW" sync
+    [ "$("$RBW" get e2e-edit)" = "edited-pass" ]
+    [ "$("$RBW" get --field username e2e-edit)" = "edit-user" ]
+    [ "$("$RBW" get --field notes e2e-edit)" = "edit notes" ]
+}
+
+@test "inject and run must substitute bw:// references" {
+    echo '{"name":"e2e-inject","data":{"type":"login","username":"inject-user","password":"inject-pass"}}' | "$RBW" add --json
+    "$RBW" sync
+    [ "$(echo 'u={{ bw://e2e-inject?field=username }} p=bw://e2e-inject' | "$RBW" inject)" = "u=inject-user p=inject-pass" ]
+
+    TEMPLATE="$(mktemp)"
+    RENDERED="$(mktemp)"
+    echo 'pw={{ bw://e2e-inject }}' >"$TEMPLATE"
+    "$RBW" inject --in-file "$TEMPLATE" --out-file "$RENDERED"
+    [ "$(cat "$RENDERED")" = "pw=inject-pass" ]
+
+    ENV_FILE="$(mktemp)"
+    printf 'E2E_USER=bw://e2e-inject?field=username\nE2E_URL=https://u:bw://e2e-inject@host/\n' >"$ENV_FILE"
+    [ "$("$RBW" run --env-file "$ENV_FILE" -- sh -c 'printf "%s %s" "$E2E_USER" "$E2E_URL"')" = "inject-user https://u:inject-pass@host/" ]
+}
+
+@test "send must support the full text and file lifecycle" {
+    # The "Created Send" line goes to stderr, the link to stdout.
+    OUT="$("$RBW" send create e2e-send-text --text 'send text one' --password send-pw --max-access-count 3 2>&1)"
+    ID="$(echo "$OUT" | sed -n "s/^Created Send 'e2e-send-text' (\(.*\))$/\1/p")"
+    [ -n "$ID" ]
+    "$RBW" send list | grep -q "$ID"
+    "$RBW" send view "$ID" | grep -q 'send text one'
+
+    "$RBW" send edit "$ID" --name e2e-send-renamed --text 'send text two' --remove-password
+    "$RBW" send view "$ID" | grep -q 'send text two'
+    "$RBW" send list | grep "$ID" | grep -q e2e-send-renamed
+    "$RBW" send link "$ID" | grep -q "^$BASE_URL/#/send/"
+
+    SEND_FILE="$(mktemp)"
+    head -c 1024 /dev/urandom >"$SEND_FILE"
+    OUT="$("$RBW" send create --file "$SEND_FILE" 2>&1)"
+    FILE_ID="$(echo "$OUT" | sed -n "s/^Created Send '.*' (\(.*\))$/\1/p")"
+    [ -n "$FILE_ID" ]
+    "$RBW" send list | grep -q "$FILE_ID"
+    "$RBW" send view "$FILE_ID" >/dev/null
+
+    "$RBW" send remove "$ID"
+    "$RBW" send remove "$FILE_ID"
+    ! "$RBW" send list | grep -q "$ID"
+    ! "$RBW" send list | grep -q "$FILE_ID"
+}
+
+@test "org and collection lifecycle must work end to end" {
+    "$RBW" org create e2e-org
+    "$RBW" sync
+    ORG_ID="$("$RBW" org list --json | python3 -c "import json,sys; print(next(o['id'] for o in json.load(sys.stdin) if o['name'] == 'e2e-org'))")"
+
+    "$RBW" collection create e2e-collection --org-id "$ORG_ID"
+    "$RBW" collection create e2e-collection-2 --org-id "$ORG_ID"
+    "$RBW" sync
+    "$RBW" collection list | grep -q e2e-collection-2
+
+    # Entries enter an organization through import (add has no org option).
+    echo '{"name":"e2e-org-entry","data":{"type":"login","username":"org-user","password":"org-pass"}}' | "$RBW" add --json
+    "$RBW" sync
+    ORG_IMPORT="$(mktemp)"
+    "$RBW" export | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+d['entries'] = [dict(e, name='e2e-org-imported') for e in d['entries'] if e['name'] == 'e2e-org-entry']
+d['collections'] = []
+print(json.dumps(d))
+" >"$ORG_IMPORT"
+    "$RBW" import "$ORG_IMPORT" --collection e2e-collection
+    "$RBW" sync
+    [ "$("$RBW" get --collection e2e-collection e2e-org-imported)" = "org-pass" ]
+    [ "$("$RBW" get --org "$ORG_ID" e2e-org-imported)" = "org-pass" ]
+
+    "$RBW" collection assign e2e-org-imported --collection e2e-collection-2 -y
+    "$RBW" sync
+    [ "$("$RBW" get --collection e2e-collection-2 e2e-org-imported)" = "org-pass" ]
+    run "$RBW" get --collection e2e-collection e2e-org-imported
+    [ "$status" -ne 0 ]
+
+    "$RBW" collection assign e2e-org-imported --personal -y
+    "$RBW" sync
+    run "$RBW" get --org "$ORG_ID" e2e-org-imported
+    [ "$status" -ne 0 ]
+    [ "$("$RBW" get e2e-org-imported)" = "org-pass" ]
+
+    "$RBW" collection delete e2e-collection --org-id "$ORG_ID" -y
+    "$RBW" sync
+    ! "$RBW" collection list | grep -qx e2e-collection
+
+    echo "$PASSWORD" | "$RBW" org delete --org-id "$ORG_ID" -y --stdin
+    "$RBW" sync
+    ! "$RBW" org list | grep -q e2e-org
+}
+
+@test "mirror must copy one account's vault into another" {
+    "$REPO_ROOT/target/debug/examples/e2e_register_account" \
+        --base-url "$BASE_URL" --email e2e-mirror@example.com \
+        --password "$PASSWORD" --name "rbw e2e mirror"
+    "$RBW" account add e2e-mirror --email e2e-mirror@example.com --base-url "$BASE_URL"
+    echo "$PASSWORD" | "$RBW" -a e2e-mirror login --stdin
+    echo "$PASSWORD" | "$RBW" -a e2e-mirror unlock --stdin
+
+    "$RBW" mirror --from e2e --to e2e-mirror --dry-run
+    [ -z "$("$RBW" -a e2e-mirror list)" ]
+
+    "$RBW" mirror --from e2e --to e2e-mirror -y
+    "$RBW" -a e2e-mirror sync
+    [ "$("$RBW" -a e2e-mirror get e2e-inject)" = "inject-pass" ]
+    [ "$("$RBW" -a e2e-mirror get --field username e2e-get)" = "get-user" ]
+    # mirror skips trashed entries by design.
+    diff <("$RBW" -a e2e list --include-archived --fields name | cut -f1 | sort) \
+        <("$RBW" -a e2e-mirror list --include-archived --fields name | cut -f1 | sort)
+}
+
+@test "config and account commands must read and write settings" {
+    [ "$("$RBW" config get baseUrl)" = "$BASE_URL" ]
+    [ "$("$RBW" config get email)" = "$EMAIL" ]
+    "$RBW" account list | grep -q '^e2e\*'
+    "$RBW" account list | grep -q '^e2e-mirror'
+
+    "$RBW" -a e2e-mirror config set uiUrl https://ui.example.com
+    [ "$("$RBW" -a e2e-mirror config get uiUrl)" = "https://ui.example.com" ]
+    "$RBW" -a e2e-mirror config unset uiUrl
+    run "$RBW" -a e2e-mirror config get uiUrl
+    [[ "$output" == *"not set"* ]]
+
+    "$RBW" account remove e2e-mirror
+    ! "$RBW" account list | grep -q '^e2e-mirror'
+}
+
+@test "export-info, version and completions must work" {
+    EXPORT_FILE="$(mktemp)"
+    "$RBW" export --output "$EXPORT_FILE"
+    COUNT="$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))['entries']))" "$EXPORT_FILE")"
+    "$RBW" export-info --json "$EXPORT_FILE" | python3 -c "
+import json, sys
+info = json.load(sys.stdin)
+assert $COUNT in [v for v in info.values() if isinstance(v, int)], info
+"
+    "$RBW" version | grep -q "rbw"
+    for shell in bash zsh fish; do
+        [ -n "$("$RBW" completions "$shell")" ]
+    done
+}
+
+@test "security unlock must report and validate native unlock setup" {
+    # Neither a keyring nor Termux exists on CI, so only what doesn't need
+    # one is covered here.
+    "$RBW" security unlock status | grep -q "No native unlock is configured"
+    run "$RBW" security unlock enroll --termux --fingerprint
+    [ "$status" -ne 0 ]
+    run "$RBW" security unlock enroll --keyring --validity 60
+    [ "$status" -ne 0 ]
+    run "$RBW" security unlock enroll --termux --keyring
+    [ "$status" -ne 0 ]
+    "$RBW" security unlock remove -y | grep -q "No native unlock is configured"
+}
+
 # `rbw security` changes the account's master password, so these tests run
 # last and pass the current password on to each other via save().
 NEW_PASSWORD_1="E2eNewPassword456!"
