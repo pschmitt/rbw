@@ -59,6 +59,8 @@ function icon(name) {
     key: ['circle:8,15,5', 'm11.5 11.5 8-8L22 6l-2 2-2-2-2 2 2 2-3 3'],
     note: ['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z', 'M14 2v6h6M8 13h8M8 17h8'],
     card: ['rect:2,4,20,16,2', 'M2 10h20M6 15h3'],
+    // Android robot: head with antennae and eyes over its body.
+    android: ['M5 12a7 7 0 0 1 14 0Z', 'm7.5 6.2-1.5-2.2m10.5 2.2 1.5-2.2', 'circle:9.3,9.3,.6', 'circle:14.7,9.3,.6', 'M5 14h14v4.5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2Z'],
     identity: ['circle:12,8,4', 'M4 21v-2a8 8 0 0 1 16 0v2'],
     terminal: ['rect:3,3,18,18,2', 'm7 8 4 4-4 4m6 0h4'],
     generator: ['M20 7v5h-5M4 17v-5h5', 'M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6'],

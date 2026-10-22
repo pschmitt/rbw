@@ -411,6 +411,23 @@ async function copyField(item, field, allowFallback = false) {
     throw err;
   }
 }
+// With "Show favicons" on, a URI row starts with the site's favicon, or an
+// Android logo for androidapp:// URIs (drawn locally; Play Store icons would
+// mean asking Google about every app in the vault).
+function uriIcon(uri, row, stillCurrent) {
+  let url;
+  try { url = new URL(uri); } catch (_) { return; }
+  if (url.protocol === "androidapp:") {
+    const badge = element("span", null, "uri-icon uri-icon-android"); badge.title = "Android app";
+    badge.append(icon("android")); row.prepend(badge); return;
+  }
+  if (!["http:", "https:"].includes(url.protocol)) return;
+  request("favicon", { origin: url.origin }).then(favicon => {
+    if (!favicon || !stillCurrent()) return;
+    const image = element("img", null, "uri-icon"); image.src = favicon; image.alt = "";
+    image.onerror = () => image.remove(); row.prepend(image);
+  }).catch(() => {});
+}
 function detailField(label, value, item, field, hidden = false, isUrl = false) {
   const section = element("div", null, "field"); section.append(element("span", label));
   const row = element("div", null, "field-value");
@@ -546,7 +563,11 @@ async function openDetail(item) {
   if (data.totp) content.append(totpField(item));
   if (data.uris?.length) {
     content.append(element("h3", "URIs"));
-    for (const uri of data.uris) content.append(detailField(uri.match_type in uriMatchNames ? `URI · ${uriMatchNames[uri.match_type]}` : "URI", uri.uri, item, null, false, true));
+    for (const uri of data.uris) {
+      const field = detailField(uri.match_type in uriMatchNames ? `URI · ${uriMatchNames[uri.match_type]}` : "URI", uri.uri, item, null, false, true);
+      if (preference.favicons) uriIcon(uri.uri, field.querySelector(".field-value"), () => current === epoch && currentItem === item);
+      content.append(field);
+    }
   }
   if (detail.cipher.notes) content.append(noteField(detail.cipher.notes, item));
   const customFields = detail.cipher.fields || [];

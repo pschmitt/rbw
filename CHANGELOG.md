@@ -12,6 +12,8 @@
   warning that fetching them lets the saved sites (and the network) see
   which ones are in the vault. A browser that already stored its settings
   keeps its current choice.
+* The item view shows each URI's favicon again (with "Show favicons" on),
+  and an Android logo for `androidapp://` URIs.
 * Releases commit the signed browser packages on top of the tag and point a
   new `release` branch at that commit (then merge it into `main`), so commits
   landing on `main` during a release no longer break it. Nix consumers
