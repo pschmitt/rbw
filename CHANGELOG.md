@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.25.0] - 2026-10-22
+
 ### Added
 
 * The browser extension unlocks with the fingerprint reader for accounts
