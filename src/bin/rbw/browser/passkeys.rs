@@ -161,6 +161,7 @@ pub fn authenticate(
         org: None,
         ignorecase: false,
         exact: false,
+        fzf: false,
     };
     passkey::browser_assert(
         &args,

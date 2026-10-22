@@ -573,6 +573,7 @@ pub fn browser_confirm_counter(
         org: None,
         ignorecase: false,
         exact: false,
+        fzf: false,
     };
     let fresh = select_cached(&args, Some(rp_id))?;
     let stored = stored_counter(&fresh.credential)?;

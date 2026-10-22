@@ -19,6 +19,9 @@ The main sections are:
 * `hide`: `archived` and `trashed` control default list/search visibility.
 * `termux.keyAlias`: the default Android Keystore alias; the
   `RBW_TERMUX_KEY_ALIAS` environment variable overrides it.
+* `fzf`: `enabled` picks ambiguous matches with fzf even without `--fzf`
+  (on a terminal only), and `options` adds fzf options after rbw's defaults;
+  the `RBW_FZF_OPTS` environment variable overrides `options`.
 * `passwordGen`: the default generation policy, with `noSymbols`,
   `onlyNumbers`, `nonconfusables`, and `diceware` options.
 * `clipboard`: one of `auto`, `system`, or `osc52`.

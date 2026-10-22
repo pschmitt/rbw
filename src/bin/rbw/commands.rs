@@ -1727,7 +1727,16 @@ fn is_false(value: &bool) -> bool {
 }
 
 fn stdout_supports_color() -> bool {
-    stdout_is_terminal() && std::env::var_os("NO_COLOR").is_none()
+    std::env::var_os("NO_COLOR").is_none()
+        && (stdout_is_terminal() || color_forced())
+}
+
+// `CLICOLOR_FORCE` (any value but "0") colours output that isn't going to a
+// terminal, e.g. `rbw show` rendered into the `--fzf` preview pane.
+// `NO_COLOR` still wins.
+fn color_forced() -> bool {
+    std::env::var_os("CLICOLOR_FORCE")
+        .is_some_and(|v| !v.is_empty() && v != "0")
 }
 
 fn stdout_is_terminal() -> bool {
@@ -1735,7 +1744,8 @@ fn stdout_is_terminal() -> bool {
 }
 
 fn stderr_supports_color() -> bool {
-    std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+    std::env::var_os("NO_COLOR").is_none()
+        && (std::io::stderr().is_terminal() || color_forced())
 }
 
 // Prints a line to stderr above `pb`. Unlike `ProgressBar::println`, which is
@@ -2744,6 +2754,8 @@ pub const CONFIG_KEYS: &[&str] = &[
     "pinentry.command",
     "pinentry.timeout",
     "termux.keyAlias",
+    "fzf.enabled",
+    "fzf.options",
     "tui.lockTimeout",
     "hide.archived",
     "hide.trashed",
@@ -2799,6 +2811,8 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
         "tui.lockTimeout" => Some(config.tui.lock_timeout.to_string()),
         "hide.archived" => Some(config.hide.archived.to_string()),
         "hide.trashed" => Some(config.hide.trashed.to_string()),
+        "fzf.enabled" => Some(config.fzf.enabled.to_string()),
+        "fzf.options" => config.fzf.options,
         "passwordGen.length" => {
             config.password_gen.length.map(|length| length.to_string())
         }
@@ -2958,6 +2972,11 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
                 .parse()
                 .context("failed to parse value for hide.trashed")?;
         }
+        "fzf.enabled" => {
+            config.fzf.enabled =
+                value.parse().context("fzf.enabled must be true or false")?;
+        }
+        "fzf.options" => config.fzf.options = Some(value.to_string()),
         "passwordGen.length" => {
             config.password_gen.length =
                 Some(value.parse().context(
@@ -3029,6 +3048,8 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
             config.pinentry.command = rbw::config::default_pinentry();
         }
         "termux.keyAlias" => config.termux.key_alias = None,
+        "fzf.enabled" => config.fzf.enabled = false,
+        "fzf.options" => config.fzf.options = None,
         "pinentry.timeout" => {
             config.pinentry.timeout = rbw::config::default_pinentry_timeout();
         }
@@ -17556,6 +17577,18 @@ fn find_entry_raw(
         }
     }
 
+    if FZF_SELECT.load(std::sync::atomic::Ordering::Relaxed) {
+        let candidates: Vec<&DecryptedSearchCipher> =
+            scored.iter().map(|(entry, _)| &entry.1).collect();
+        let id = fzf_select(&candidates)?;
+        if let Some((entry, _)) =
+            scored.iter().find(|(entry, _)| entry.1.id == id)
+        {
+            return Ok((*entry).clone());
+        }
+        anyhow::bail!("fzf returned an unknown entry {id:?}");
+    }
+
     // This error is printed to stderr (wrapped in red by `style_error`), so
     // colour based on stderr. The leading reset stops the outer red from
     // bleeding into the per-field styling of the entry list.
@@ -17573,6 +17606,120 @@ fn find_entry_raw(
         entries_str.join("\n"),
         style::dim(&hint, c),
     ))
+}
+
+// `--fzf` on the find-family commands (or `fzf.enabled`): when a lookup is
+// ambiguous, pick the entry with fzf instead of failing. Set once from the
+// parsed command line, see `set_fzf_select`.
+static FZF_SELECT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_fzf_select(enabled: bool) {
+    FZF_SELECT.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+// One tab-separated fzf line per candidate: the id (hidden, used for the
+// preview and to read the selection back), then what's shown.
+fn fzf_candidate_line(entry: &DecryptedSearchCipher) -> String {
+    let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
+    [
+        clean(&entry.id),
+        clean(&entry.name),
+        clean(entry.user.as_deref().unwrap_or("")),
+        clean(entry.folder.as_deref().unwrap_or("")),
+    ]
+    .join("\t")
+}
+
+// Single-quotes `s` for a POSIX shell (fzf runs the preview through one,
+// and parses FZF_DEFAULT_OPTS with the same quoting rules).
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+// FZF_DEFAULT_OPTS for the picker: the user's own defaults, then rbw's
+// (overridable) ones, then RBW_FZF_OPTS or `fzf.options`. fzf applies them
+// in order, so later options win.
+fn fzf_default_opts(existing: Option<&str>, custom: Option<&str>) -> String {
+    [
+        existing.unwrap_or(""),
+        "--select-1 --header='Multiple entries match; pick one'",
+        custom.unwrap_or(""),
+    ]
+    .iter()
+    .filter(|part| !part.trim().is_empty())
+    .copied()
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
+fn fzf_custom_opts() -> Option<String> {
+    std::env::var("RBW_FZF_OPTS").ok().or_else(|| {
+        rbw::config::Config::load()
+            .ok()
+            .and_then(|config| config.fzf.options)
+    })
+}
+
+fn fzf_select(
+    candidates: &[&DecryptedSearchCipher],
+) -> anyhow::Result<String> {
+    use std::io::Write as _;
+
+    let exe = std::env::current_exe()
+        .context("failed to find the rbw executable for the fzf preview")?;
+    let mut preview = format!(
+        "CLICOLOR_FORCE=1 {}",
+        shell_quote(&exe.display().to_string())
+    );
+    if let Some(account) = crate::actions::current_account() {
+        preview.push_str(" -a ");
+        preview.push_str(&shell_quote(&account));
+    }
+    preview.push_str(" show {1}");
+
+    let default_opts = fzf_default_opts(
+        std::env::var("FZF_DEFAULT_OPTS").ok().as_deref(),
+        fzf_custom_opts().as_deref(),
+    );
+    let mut child = std::process::Command::new("fzf")
+        .args(["--delimiter=\t", "--with-nth=2..", "--preview", &preview])
+        .env("FZF_DEFAULT_OPTS", default_opts)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                anyhow::anyhow!("--fzf needs fzf, which isn't in PATH")
+            } else {
+                anyhow::Error::from(e).context("failed to start fzf")
+            }
+        })?;
+    {
+        let mut stdin = child.stdin.take().context("fzf has no stdin")?;
+        for entry in candidates {
+            writeln!(stdin, "{}", fzf_candidate_line(entry))
+                .context("failed to write to fzf")?;
+        }
+    }
+    let output =
+        child.wait_with_output().context("failed to wait for fzf")?;
+    match output.status.code() {
+        Some(0) => {}
+        Some(1) => anyhow::bail!("no entry selected in fzf"),
+        Some(130) => anyhow::bail!("fzf selection cancelled"),
+        _ => anyhow::bail!(
+            "fzf failed ({}); --fzf needs a terminal",
+            output.status
+        ),
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .and_then(|line| line.split('\t').next())
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .context("fzf returned no selection")
 }
 
 // `find_entry`'s `--from-file` counterpart: same matching
@@ -24372,6 +24519,40 @@ mod test {
             },
         )
     }
+    #[test]
+    fn fzf_candidate_line_hides_id_first_and_flattens_tabs() {
+        let (_, mut entry) =
+            make_entry("a\tname", Some("user"), Some("folder"), &[]);
+        entry.id = "id-1".to_string();
+        assert_eq!(fzf_candidate_line(&entry), "id-1\ta name\tuser\tfolder");
+        let (_, mut bare) = make_entry("bare", None, None, &[]);
+        bare.id = "id-2".to_string();
+        assert_eq!(fzf_candidate_line(&bare), "id-2\tbare\t\t");
+    }
+
+    #[test]
+    fn fzf_default_opts_puts_custom_options_last() {
+        assert_eq!(
+            fzf_default_opts(None, None),
+            "--select-1 --header='Multiple entries match; pick one'"
+        );
+        assert_eq!(
+            fzf_default_opts(Some("--height 40%"), Some("--no-select-1")),
+            "--height 40% --select-1 --header='Multiple entries match; \
+             pick one' --no-select-1"
+        );
+        assert_eq!(
+            fzf_default_opts(Some("  "), Some("")),
+            fzf_default_opts(None, None)
+        );
+    }
+
+    #[test]
+    fn shell_quote_escapes_single_quotes() {
+        assert_eq!(shell_quote("/usr/bin/rbw"), "'/usr/bin/rbw'");
+        assert_eq!(shell_quote("it's"), r"'it'\''s'");
+    }
+
     mod edit_field_tests {
         use super::*;
 

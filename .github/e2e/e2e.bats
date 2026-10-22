@@ -682,6 +682,60 @@ assert $COUNT in [v for v in info.values() if isinstance(v, int)], info
     "$RBW" security unlock remove -y | grep -q "No native unlock is configured"
 }
 
+@test "--fzf must pick among ambiguous matches with fzf" {
+    echo '{"name":"e2e-fzf","data":{"type":"login","username":"fzf-1","password":"fzf-pass-1"}}' | "$RBW" add --json
+    echo '{"name":"e2e-fzf","data":{"type":"login","username":"fzf-2","password":"fzf-pass-2"}}' | "$RBW" add --json
+    "$RBW" sync
+    run "$RBW" get e2e-fzf
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"multiple entries found"* ]]
+
+    # Stand-in fzf: records how it was called and picks the candidate whose
+    # username (third column) is $FAKE_FZF_USER, or exits like a cancel.
+    FAKE_BIN="$(mktemp -d)"
+    cat >"$FAKE_BIN/fzf" <<'SCRIPT'
+#!/bin/sh
+printf '%s\n' "$*" "$FZF_DEFAULT_OPTS" >"$FAKE_FZF_LOG"
+[ -n "$FAKE_FZF_USER" ] || exit 130
+awk -F '\t' -v user="$FAKE_FZF_USER" '$3 == user'
+SCRIPT
+    chmod +x "$FAKE_BIN/fzf"
+    export FAKE_FZF_LOG="$(mktemp)"
+
+    [ "$(PATH="$FAKE_BIN:$PATH" FAKE_FZF_USER=fzf-2 RBW_FZF_OPTS='--height=40%' "$RBW" get --fzf e2e-fzf)" = "fzf-pass-2" ]
+    grep -q -- '--select-1' "$FAKE_FZF_LOG"
+    grep -q -- '--height=40%' "$FAKE_FZF_LOG"
+    grep -q -- '--with-nth=2..' "$FAKE_FZF_LOG"
+    grep -q 'CLICOLOR_FORCE=1 .* show {1}' "$FAKE_FZF_LOG"
+
+    # `config set`/`unset` stop the agent, hence the unlocks.
+    "$RBW" config set fzf.options -- '--layout=reverse'
+    [ "$("$RBW" config get fzf.options)" = "--layout=reverse" ]
+    echo "$PASSWORD" | "$RBW" unlock --stdin
+    [ "$(PATH="$FAKE_BIN:$PATH" FAKE_FZF_USER=fzf-1 "$RBW" get --fzf --field username e2e-fzf)" = "fzf-1" ]
+    grep -q -- '--layout=reverse' "$FAKE_FZF_LOG"
+    "$RBW" config unset fzf.options
+    echo "$PASSWORD" | "$RBW" unlock --stdin
+
+    run env PATH="$FAKE_BIN:$PATH" FAKE_FZF_USER= "$RBW" get --fzf e2e-fzf
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cancelled"* ]]
+
+    EMPTY_BIN="$(mktemp -d)"
+    run env PATH="$EMPTY_BIN" "$RBW" get --fzf e2e-fzf
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"isn't in PATH"* ]]
+
+    # fzf.enabled only applies on a terminal; scripts keep the error.
+    "$RBW" config set fzf.enabled true
+    echo "$PASSWORD" | "$RBW" unlock --stdin
+    run env PATH="$FAKE_BIN:$PATH" FAKE_FZF_USER=fzf-1 "$RBW" get e2e-fzf
+    "$RBW" config unset fzf.enabled
+    echo "$PASSWORD" | "$RBW" unlock --stdin
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"multiple entries found"* ]]
+}
+
 # `rbw security` changes the account's master password, so these tests run
 # last and pass the current password on to each other via save().
 NEW_PASSWORD_1="E2eNewPassword456!"

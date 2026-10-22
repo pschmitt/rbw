@@ -421,6 +421,26 @@ let
         default = { };
         description = "Pinentry command and timeout settings.";
       };
+      fzf = mkOption {
+        type = types.submodule {
+          options = {
+            enabled = mkOption {
+              type = types.nullOr types.bool;
+              default = null;
+              description = ''
+                Pick among several matching entries with fzf even without
+                `--fzf`, when rbw runs on a terminal.
+              '';
+            };
+            options = mkNullOrStr ''
+              Extra fzf options for the `--fzf` picker, applied after rbw's
+              defaults. `RBW_FZF_OPTS` overrides this value at runtime.
+            '';
+          };
+        };
+        default = { };
+        description = "Settings for the `--fzf` entry picker.";
+      };
       termux = mkOption {
         type = types.submodule {
           options.keyAlias = mkNullOrStr ''

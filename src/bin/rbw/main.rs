@@ -56,6 +56,15 @@ struct FindArgs {
         help = "Only match if needle is an exact entry name (no substring fallback)"
     )]
     exact: bool,
+    // Read back through `ArgMatches` in `parse_cli`, so the many commands
+    // sharing these args don't each have to pass it along.
+    #[allow(dead_code)]
+    #[arg(
+        long,
+        help = "Pick the entry with fzf when several match, instead of \
+            failing (options: RBW_FZF_OPTS or fzf.options)"
+    )]
+    fzf: bool,
 }
 
 // Password-generation flags shared between `rbw gen` and `rbw create
@@ -430,7 +439,29 @@ fn styled_help_value(
 
 fn parse_cli() -> Cli {
     let matches = configure_cli_command(Cli::command()).get_matches();
-    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+    let cli =
+        Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    if let Some(fzf) = fzf_flag(&matches) {
+        // `fzf.enabled` only applies with a terminal to show fzf on, so
+        // scripts keep getting the "multiple entries found" error.
+        commands::set_fzf_select(
+            fzf || (std::io::stderr().is_terminal()
+                && rbw::config::Config::load()
+                    .is_ok_and(|config| config.fzf.enabled)),
+        );
+    }
+    cli
+}
+
+// The `--fzf` flag of the (sub)command being run, or `None` if it has none.
+fn fzf_flag(matches: &clap::ArgMatches) -> Option<bool> {
+    let mut matches = matches;
+    loop {
+        if let Ok(Some(fzf)) = matches.try_get_one::<bool>("fzf") {
+            return Some(*fzf);
+        }
+        matches = matches.subcommand()?.1;
+    }
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -4977,6 +5008,20 @@ mod test {
     #[test]
     fn test_cli_definition_is_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn test_fzf_flag_is_found_on_find_commands_only() {
+        let flag = |args: &[&str]| {
+            fzf_flag(&Cli::command().try_get_matches_from(args).unwrap())
+        };
+        assert_eq!(flag(&["rbw", "get", "--fzf", "x"]), Some(true));
+        assert_eq!(flag(&["rbw", "get", "x"]), Some(false));
+        assert_eq!(
+            flag(&["rbw", "attachment", "get", "--fzf", "x"]),
+            Some(true)
+        );
+        assert_eq!(flag(&["rbw", "list"]), None);
     }
 
     #[test]

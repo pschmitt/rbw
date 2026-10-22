@@ -4,6 +4,12 @@
 
 ### Added
 
+* `--fzf` on `get`, `show`, `code`, `edit`, `set`, `remove`, `archive`,
+  `unarchive`, `restore`, `history`, `attachment` and `passkey` lookups picks
+  among several matching entries with fzf (`--select-1`, colored `rbw show`
+  preview) instead of failing. Extra fzf options come from `RBW_FZF_OPTS` or
+  the `fzf.options` setting; `fzf.enabled` turns the picker on without the
+  flag when rbw runs on a terminal. `CLICOLOR_FORCE` forces colored output.
 * `rbw security change-password`, `rbw security rotate-key` and `rbw security
   kdf` change the master password, rotate the account key (re-encrypting the
   personal vault) and show or change the KDF settings. `change-password

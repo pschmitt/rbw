@@ -115,6 +115,25 @@ org. With `--all` (searching across multiple accounts), an account that
 doesn't have a matching collection/org just contributes nothing rather than
 failing the whole lookup.
 
+When a lookup matches several entries, these commands fail with the list of
+candidates. Pass `--fzf` to pick one with [fzf](https://github.com/junegunn/fzf)
+instead: the matches are listed by name, user and folder, with a colored
+`rbw show` preview of the highlighted entry.
+
+```sh
+rbw get --fzf github
+rbw code --fzf aws
+```
+
+rbw starts fzf with `--select-1` and a header. Extra options come from
+`RBW_FZF_OPTS`, or the `fzf.options` config setting when that variable is
+unset; they are applied after rbw's defaults and your own
+`FZF_DEFAULT_OPTS`, so they can override both. `rbw config set fzf.enabled
+true` uses the picker without `--fzf`, but only when rbw runs on a terminal,
+so scripts still get the error. The preview runs
+`CLICOLOR_FORCE=1 rbw show <id>`; `CLICOLOR_FORCE` forces colors in any rbw
+command whose output isn't a terminal, and `NO_COLOR` still disables them.
+
 `rbw list` also accepts an optional search term (`rbw list google`) to show only
 matching entries, and `rbw list --with-attachments` restricts the results to
 items that have attachments. Interactive table-style output uses uppercase

@@ -280,6 +280,28 @@ impl TermuxConfig {
     }
 }
 
+// The `--fzf` entry picker for ambiguous lookups (`rbw get --fzf` and the
+// other find-family commands).
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq, Default,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct FzfConfig {
+    // Use the picker even without `--fzf`, whenever there's a terminal.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub enabled: bool,
+    // Extra fzf options, applied after rbw's defaults so they can override
+    // them. `RBW_FZF_OPTS` takes precedence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<String>,
+}
+
+impl FzfConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 // Which mechanism(s) `-c`/`--clipboard` and the TUI's copy actions use to
 // set the clipboard. The system clipboard (`arboard`, via the agent, in
 // `rbw-agent`'s `state::clipboard`) needs direct X11/Wayland/pasteboard
@@ -682,6 +704,8 @@ pub struct Config {
     // RBW_TERMUX_KEY_ALIAS environment variable takes precedence.
     #[serde(default, skip_serializing_if = "TermuxConfig::is_default")]
     pub termux: TermuxConfig,
+    #[serde(default, skip_serializing_if = "FzfConfig::is_default")]
+    pub fzf: FzfConfig,
     // Default password-generation policy for `rbw gen` and `rbw create
     // --generate`; see `PasswordGenPolicy`. Editable from the TUI's settings
     // view.
