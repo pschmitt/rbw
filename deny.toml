@@ -67,6 +67,11 @@ skip = [
     { name = "thiserror", version = "2.0.17" },
     { name = "thiserror-impl", version = "1.0.69" },
     { name = "thiserror-impl", version = "2.0.17" },
+    # secret-service 5.2 is holding back zbus 5
+    { name = "zbus", version = "5.19.0" },
+    { name = "zbus", version = "6.0.0" },
+    { name = "zbus_macros", version = "5.19.0" },
+    { name = "zbus_macros", version = "6.0.0" },
     # p256 0.14 uses the newer elliptic-curve stack; authenticator and
     # ssh-key still depend on p256 0.13 and its older transitive versions.
     { name = "base16ct", version = "0.2.0" },
