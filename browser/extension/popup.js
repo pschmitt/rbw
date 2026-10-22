@@ -85,14 +85,15 @@ function message(text, error = false, action = null) {
   clearTimeout(notificationTimer);
   if (!error && /^(Working|Unlocking|Waiting for rbw|Checking vault locally|Loading Sends|Uploading)/.test(text)) return;
   const kind = error ? "error"
-    : /^(Vault unlocked|Vault synced|Copied\b|Filled \d+ fields|Saved\b|Updated\b|Collections updated|Attachment uploaded|Generated password (added|filled)|New password filled|Send link copied|Resumed your unsaved edit|Restarted from the current vault state)/i.test(text) ? "success"
-      : /^(Vault locked|This item changed|Your unsaved edit|Passkey request expired)/i.test(text) ? "warning" : "info";
+    : /^(Unlocked|[^\s]+ unlocked|Synced|Copied\b|Filled \d+ fields|Saved\b|Updated\b|Collections saved|Uploaded|Restored|Deleted|Moved to|Password (added|filled)|Send (link copied|saved)|Resumed|Restarted)/i.test(text) ? "success"
+      : /^(Locked|Item changed|Your unsaved edit|Passkey request|[^\s:]+: password needed)/i.test(text) ? "warning" : "info";
   const notification = $("message");
   notification.dataset.kind = kind;
   $("message-icon").replaceChildren(icon(kind === "success" ? "check" : kind === "info" ? "info" : "warning"));
   $("message-text").textContent = text; $("message-text").title = text;
   // Experiment: non-error notices sit in the header, between the avatar and the buttons.
   notification.style.setProperty("--header-actions-width", `${$("header-actions").offsetWidth}px`);
+  notification.style.setProperty("--header-height", `${document.querySelector("header").offsetHeight}px`);
   $("message-action").hidden = !action; $("message-action").textContent = action?.label || "";
   $("message-action").onclick = action ? () => { message(""); attempt(action.run); } : null;
   notification.classList.toggle("is-error", error);
@@ -103,7 +104,7 @@ function message(text, error = false, action = null) {
     void notification.offsetWidth;
     notification.classList.add("is-entering");
   }
-  if (text && !error && !action) notificationTimer = setTimeout(() => { notification.hidden = true; }, 4500);
+  if (text && !error && !action) notificationTimer = setTimeout(() => { notification.hidden = true; }, 3000);
 }
 $("dismiss-message").onclick = () => message("");
 async function attempt(fn) { try { await fn(); } catch (error) {
@@ -278,11 +279,11 @@ function renderAccountStates(primary) {
       submit.type = "submit"; form.append(input, submit); form.hidden = !needsPassword.has(account.name);
       form.onsubmit = event => {
         event.preventDefault(); const password = input.value; input.value = "";
-        attempt(async () => { message("Unlocking…"); await request("unlock", { account: account.name, password }); needsPassword.delete(account.name); await refresh(); message(`${account.name} unlocked.`); });
+        attempt(async () => { message("Unlocking…"); await request("unlock", { account: account.name, password }); needsPassword.delete(account.name); await refresh(); message(`${account.name} unlocked`); });
       };
       const unlock = actionButton("Unlock", "unlock", async () => {
-        try { await request("unlock", { account: account.name }); needsPassword.delete(account.name); await refresh(); message(`${account.name} unlocked.`); }
-        catch (_) { needsPassword.add(account.name); form.hidden = false; input.focus(); message(`${account.name} needs its master password.`); }
+        try { await request("unlock", { account: account.name }); needsPassword.delete(account.name); await refresh(); message(`${account.name} unlocked`); }
+        catch (_) { needsPassword.add(account.name); form.hidden = false; input.focus(); message(`${account.name}: password needed`); }
       });
       unlock.title = `Unlock ${account.name} with its configured unlock method`;
       const key = actionButton("Use password", "key", () => { form.hidden = !form.hidden; if (!form.hidden) input.focus(); }, "icon");
@@ -428,7 +429,7 @@ function itemRow(item) {
     actionButton("Restore", "undo", async () => { await restoreItem(item.id); await search(); }),
     actionButton("Delete permanently", "trash", async () => { if (await purgeItem(item.id, item.name)) await search(); }, "danger"));
   else {
-    if (!autofillExcluded && (item.matched || ["card", "identity"].includes(item.type))) { const fill = actionButton("Fill", "fill", async () => { const n = await request("fill", { item: item.id, type: item.type }); message(`Filled ${n} fields. Submit the form when ready.`); }); fill.title = "Fill"; fill.classList.add("item-fill"); fill.setAttribute("aria-label", `Fill ${item.name}`); actions.append(fill); }
+    if (!autofillExcluded && (item.matched || ["card", "identity"].includes(item.type))) { const fill = actionButton("Fill", "fill", async () => { const n = await request("fill", { item: item.id, type: item.type }); message(`Filled ${n} fields`); }); fill.title = "Fill"; fill.classList.add("item-fill"); fill.setAttribute("aria-label", `Fill ${item.name}`); actions.append(fill); }
     const field = item.type === "login" ? "password" : item.type === "card" ? "number" : item.type === "identity" ? "email" : item.type === "ssh_key" ? "public_key" : "notes";
     const copy = actionButton("Copy", "copy", () => copyField(item.id, field, true)); copy.title = "Copy"; copy.setAttribute("aria-label", `Copy ${field}`); actions.append(copy);
     const menu = element("details", null, "menu"); const summary = element("summary"); summary.append(icon("more")); summary.setAttribute("aria-label", `Actions for ${item.name}`); menu.append(summary);
@@ -473,20 +474,20 @@ if (typeof window !== "undefined") window.itemRow = itemRow;
 async function copyField(item, field, allowFallback = false) {
   try {
     await request("copy", { item, field });
-    message("Copied to clipboard.");
+    message("Copied");
   } catch (err) {
     if (!allowFallback) throw err;
     if (field === "notes") {
       try {
         await request("copy", { item, field: "custom/0" });
-        message("Copied to clipboard.");
+        message("Copied");
         return;
       } catch (_) {}
     } else if (field === "password") {
       for (const alt of ["totp", "username", "custom/0"]) {
         try {
           await request("copy", { item, field: alt });
-          message(`Copied ${alt === "totp" ? "TOTP" : alt === "username" ? "username" : "field"} to clipboard.`);
+          message(`Copied ${alt === "totp" ? "TOTP" : alt === "username" ? "username" : "field"}`);
           return;
         } catch (_) {}
       }
@@ -615,11 +616,11 @@ function revealButton(input) {
 }
 // Trash actions: restore, or delete for good after confirming.
 async function restoreItem(item) {
-  await request("mutate", { item, mutation: "restore" }); message("Restored from the trash.");
+  await request("mutate", { item, mutation: "restore" }); message("Restored");
 }
 async function purgeItem(item, name) {
   if (!await confirmDialog({ title: `Delete “${name}” permanently?`, text: "This cannot be undone.", confirm: "Delete permanently", danger: true })) return false;
-  await request("mutate", { item, mutation: "purge" }); message("Deleted permanently."); return true;
+  await request("mutate", { item, mutation: "purge" }); message("Deleted"); return true;
 }
 // `trashed` opens an item from the trash: read-only, without copy actions
 // (the native host only serves those for items outside the trash).
@@ -708,7 +709,7 @@ async function openDetail(item, trashed = false) {
     for (const collection of detail.collection_options) {
       const label = element("label"); const input = element("input"); input.type = "checkbox"; input.value = collection.id; input.checked = detail.collection_ids.includes(collection.id); input.onchange = updateSummary; label.append(input, document.createTextNode(" " + collection.name)); dropdown.append(label);
     }
-    updateSummary(); content.append(dropdown, actionButton("Save collections", "collections", async () => { await request("set_collections", { item, collections: Array.from(dropdown.querySelectorAll("input:checked"), input => input.value) }); message("Collections updated."); await openDetail(item); }));
+    updateSummary(); content.append(dropdown, actionButton("Save collections", "collections", async () => { await request("set_collections", { item, collections: Array.from(dropdown.querySelectorAll("input:checked"), input => input.value) }); message("Collections saved"); await openDetail(item); }));
   }
   $("header-favorite-label").textContent = detail.favorite ? "Unfavorite" : "Favorite";
   $("header-favorite").classList.toggle("is-favorite", detail.favorite);
@@ -728,7 +729,7 @@ async function attachmentOperation(item, operation) {
       if (editRevision === currentDetail.revision) editRevision = fresh.revision;
       currentDetail = fresh;
     }
-    else message("This item changed elsewhere. Reload it before saving your edits.", true);
+    else message("Item changed elsewhere. Reload first", true);
     renderAttachments(fresh, item);
   } finally { attachmentBusy = false; $("header-save-edit").disabled = false; }
 }
@@ -755,7 +756,7 @@ function renderAttachments(detail, item) {
           let text = ""; for (const byte of bytes) text += String.fromCharCode(byte);
           await request("upload_chunk", { token, offset, data: btoa(text) });
         }
-        await request("upload_finish", { token }); message("Attachment uploaded.");
+        await request("upload_finish", { token }); message("Uploaded");
       } finally { await request("upload_cancel", { token }).catch(() => {}); }
     });
   });
@@ -772,7 +773,7 @@ function renderEditFields(data = {}) {
       if (name === "password") {
         const generate = actionButton("Generate password", "generator", async () => {
           input.value = await request("generate");
-          message("Generated password added to this form. Save to keep it.");
+          message("Password added. Save to keep it");
         }, "icon");
         generate.classList.add("generate-password"); row.append(generate);
       }
@@ -953,7 +954,7 @@ async function resumeEditDraft(draft) {
   const changed = !!draft.item && draft.revision !== currentDetail?.revision;
   editItem(!draft.item, draft);
   message(changed ? "Resumed your unsaved edit. The item changed in the vault since; restart to edit the current version." : "Resumed your unsaved edit.", false, {
-    label: "Restart", run: async () => { forgetEditDraft(); if (draft.item) { await openDetail(draft.item); editItem(); } else editItem(true); message("Restarted from the current vault state."); }
+    label: "Restart", run: async () => { forgetEditDraft(); if (draft.item) { await openDetail(draft.item); editItem(); } else editItem(true); message("Restarted from the vault"); }
   });
 }
 let editSaving = false;
@@ -978,7 +979,7 @@ $("edit-form").onsubmit = event => { event.preventDefault(); if (editSaving) ret
       if ($("edit-no-autofill").checked) excluded.add(currentItem); else excluded.delete(currentItem);
       if (excluded.size !== (preference.autofillExcludedItems || []).length) preference = await request("set_preferences", { preferences: { autofillExcludedItems: [...excluded] } });
     }
-    message("Saved and synchronized."); await refresh();
+    message("Saved"); await refresh();
   } finally { setEditSaving(false); }
 }); };
 async function suggestions() {
@@ -1004,7 +1005,7 @@ async function suggestions() {
 async function showApproval(id) {
   approvalId = id; show("approval"); $("approval-items").replaceChildren();
   const pending = (await request("pending")).find(p => p.id === id);
-  if (!pending) { approvalId = null; message("Passkey request expired or completed."); show(unlocked ? "vault" : "locked"); return; }
+  if (!pending) { approvalId = null; message("Passkey request ended"); show(unlocked ? "vault" : "locked"); return; }
   const title = pending.method === "create" ? "Save a passkey" : "Sign in with a passkey";
   $("title").textContent = pending.method === "create" ? "Passkey registration requested" : "Passkey login requested";
   $("approval-title").textContent = title;
@@ -1176,7 +1177,7 @@ for (const action of ["lock", "sync"]) $(action).onclick = () => attempt(async (
 $("unlock-form").onsubmit = event => {
   event.preventDefault();
   const password = $("unlock-password").value; $("unlock-password").value = "";
-  attempt(async () => { await cancelFingerprint(); message("Unlocking…"); await request("unlock", { password }); await refresh(); message("Vault unlocked."); });
+  attempt(async () => { await cancelFingerprint(); message("Unlocking…"); await request("unlock", { password }); await refresh(); message("Unlocked"); });
 };
 // Fingerprint unlock runs in rbw-browser (fprintd, then the enrolled keyring
 // password); the popup only sees the outcome. The "rbw-fingerprint" port lets
@@ -1196,12 +1197,12 @@ async function cancelFingerprint() {
 async function fingerprintUnlock(account = null) {
   if (fingerprintPort) return;
   fingerprintPort = api.runtime.connect({ name: "rbw-fingerprint" }); fingerprintCancelled = false;
-  if (account) message(`Touch the fingerprint sensor to unlock ${account}…`); else fingerprintScanning(true);
+  if (account) message(`Touch the sensor to unlock ${account}`); else fingerprintScanning(true);
   try {
     await attempt(async () => {
       try { await request("unlock", account ? { fingerprint: true, account } : { fingerprint: true }); }
       catch (error) { if (fingerprintCancelled) return; throw error; }
-      await refresh(); message("Vault unlocked.");
+      await refresh(); message("Unlocked");
     });
   } finally { fingerprintPort.disconnect(); fingerprintPort = null; if (!account) fingerprintScanning(false); }
 }
@@ -1212,7 +1213,7 @@ $("header-lock").onclick = $("lock").onclick;
 $("header-sync").onclick = () => attempt(async () => {
   const button = $("header-sync");
   button.classList.add("is-syncing"); button.disabled = true;
-  try { await request("sync"); message("Vault synced."); }
+  try { await request("sync"); message("Synced"); }
   finally { button.classList.remove("is-syncing"); button.disabled = !unlocked; }
 });
 let accountMenuTimer;
@@ -1281,7 +1282,7 @@ $("header-move").onclick = () => attempt(async () => {
   const to = await confirmDialog({ title: `Move “${name}” to another account?`, text: `It is copied from ${from} to the account below; the original goes to ${from}'s trash.`, confirm: "Move", icon: "upload", choices, choiceLabel: "Move to " });
   if (!to) return;
   await request("move", { item: currentItem, to });
-  message(`Moved to ${to}. The original is in ${from}'s trash.`); await refresh();
+  message(`Moved to ${to}`); await refresh();
 });
 $("header-delete").onclick = () => attempt(async () => {
   $("detail-menu").removeAttribute("open");
@@ -1419,7 +1420,7 @@ $("gen-save-new").onclick = () => attempt(async () => {
   const cipher = { name: site ? site.hostname.replace(/^www\./, "") : "", folder: null, notes: null, data: { type: "login", username: "", password, uris: site ? [{ uri: site.origin }] : [] }, fields: [] };
   closeGeneratorPicker(); editItem(true, { item: null, revision: null, cipher, noAutofill: false });
   $("field-username")?.focus();
-  message("Generated password filled in. Add a username and save.");
+  message("Password filled. Add a username, save");
 });
 let pickerEpoch = 0; let pickerTimer = null;
 async function loadGeneratorPicker() {
@@ -1442,7 +1443,7 @@ async function updateWithGenerated(id) {
   const cipher = structuredClone(currentDetail.cipher); cipher.data = { ...cipher.data, password };
   const noAutofill = Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(id);
   closeGeneratorPicker(); editItem(false, { item: id, revision: currentDetail.revision, cipher, noAutofill });
-  message("New password filled in. Review and save to update this login.");
+  message("Password filled. Save to update");
 }
 $("gen-save-existing").onclick = () => attempt(async () => {
   requireGenerated();
@@ -1482,8 +1483,8 @@ setInterval(() => attempt(async () => {
     if (id) { approvalId = id; await refresh(); return; }
   }
   const status = await request("status");
-  if (!unlocked && status.unlocked) { await refresh(); message("Vault unlocked."); return; }
-  if (unlocked && !status.unlocked) { unlocked = false; clearVault(); show("locked"); message("Vault locked by rbw-agent."); }
+  if (!unlocked && status.unlocked) { await refresh(); message("Unlocked"); return; }
+  if (unlocked && !status.unlocked) { unlocked = false; clearVault(); show("locked"); message("Locked"); }
 }), 3000);
 attempt(async () => {
   loading(true);
@@ -1568,7 +1569,7 @@ async function loadSends() {
     if (item.hasPassword) chip("Password", "", "lock");
     main.append(element("strong", item.name), meta); row.append(main);
     const actions = element("div", null, "item-actions");
-    actions.append(actionButton("Copy link", "copy", async () => { await send("copy", { id: item.id }); message("Send link copied using rbw clipboard settings."); }));
+    actions.append(actionButton("Copy link", "copy", async () => { await send("copy", { id: item.id }); message("Send link copied"); }));
     if (item.hasPassword) actions.append(actionButton("Remove password", "unlock", async () => { if (!await confirmDialog({ title: "Remove the access password?", text: `Anyone with the link to “${item.name}” can open it without a password.`, confirm: "Remove password", icon: "unlock", danger: true })) return; await send("remove_password", { id: item.id }); await loadSends(); }));
     actions.append(actionButton("Delete", "trash", async () => { if (!await confirmDialog({ title: `Delete “${item.name}”?`, text: "The link stops working immediately. This can’t be undone.", confirm: "Delete Send", danger: true })) return; await send("delete", { id: item.id }); await loadSends(); }, "danger"));
     row.append(actions);

@@ -10,9 +10,9 @@
   banner above the list (with Unlock), an amber "L" on the toolbar icon
   while some accounts are locked (red when all are), and the account menu
   opens by itself when everything is locked.
-* Browser extension (experiment): the popup's notices ("unlocked", "copied", ...)
-  appear in the header in place of the title instead of floating below it;
-  errors keep the dropdown.
+* Browser extension: the popup's notices ("Unlocked", "Copied", ...) are one
+  short line that replaces the header title for a moment, instead of a box
+  floating over the content; errors keep the dropdown.
 * Browser extension: a locked account with an enrolled fingerprint gets a
   fingerprint button in the popup's account menu (before, the scan was only
   offered on the all-locked screen, for the primary account).
