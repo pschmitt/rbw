@@ -2329,6 +2329,8 @@ impl Client {
 
     // Permanently deletes an entire organization (`rbw org delete`),
     // re-proving the master password the same way `purge_vault` does.
+    // `DELETE /organizations/{id}`: Vaultwarden 1.37 dropped the older
+    // `POST .../delete` alias, and Bitwarden's server accepts both.
     pub async fn delete_org(
         &self,
         access_token: &str,
@@ -2340,7 +2342,7 @@ impl Client {
         };
         let client = self.reqwest_client().await?;
         let res = client
-            .post(self.api_url(&format!("/organizations/{org_id}/delete")))
+            .delete(self.api_url(&format!("/organizations/{org_id}")))
             .header("Authorization", format!("Bearer {access_token}"))
             .json(&req)
             .send()
@@ -3895,12 +3897,19 @@ impl Client {
             request = request.json(body);
         }
         if let Some((bytes, name)) = file {
+            // Vaultwarden only treats a part with a content type as a file
+            // and compares its file name byte for byte with the Send's
+            // encrypted name, so the name (base64 plus `|`, nothing that
+            // needs escaping) must not be percent-encoded either.
+            let part =
+                reqwest::blocking::multipart::Part::bytes(bytes.to_vec())
+                    .file_name(name.to_owned())
+                    .mime_str("application/octet-stream")
+                    .map_err(|source| Error::Reqwest { source })?;
             request = request.multipart(
-                reqwest::blocking::multipart::Form::new().part(
-                    "data",
-                    reqwest::blocking::multipart::Part::bytes(bytes.to_vec())
-                        .file_name(name.to_owned()),
-                ),
+                reqwest::blocking::multipart::Form::new()
+                    .percent_encode_noop()
+                    .part("data", part),
             );
         }
         let response =
@@ -3909,8 +3918,12 @@ impl Client {
             return Err(Error::RequestUnauthorized);
         }
         if !response.status().is_success() {
-            return Err(Error::RequestFailed {
-                status: response.status().as_u16(),
+            let status = response.status().as_u16();
+            let body = response.text().unwrap_or_default();
+            return Err(if body.is_empty() {
+                Error::RequestFailed { status }
+            } else {
+                Error::RequestFailedWithBody { status, body }
             });
         }
         let bytes = response
