@@ -451,10 +451,12 @@ function uriIcon(uri, row, stillCurrent) {
     badge.append(icon("android")); row.prepend(badge); return;
   }
   if (!["http:", "https:"].includes(url.protocol)) return;
+  // A globe stands in until (or unless) the favicon loads.
+  const placeholder = element("span", null, "uri-icon uri-icon-placeholder"); placeholder.append(icon("globe")); row.prepend(placeholder);
   request("favicon", { origin: url.origin }).then(favicon => {
     if (!favicon || !stillCurrent()) return;
     const image = element("img", null, "uri-icon"); image.src = favicon; image.alt = "";
-    image.onerror = () => image.remove(); row.prepend(image);
+    image.onload = () => placeholder.replaceWith(image); // a broken image keeps the globe
   }).catch(() => {});
 }
 function detailField(label, value, item, field, hidden = false, isUrl = false) {

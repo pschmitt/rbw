@@ -1917,10 +1917,38 @@ pub async fn clipboard_store(
     text: &str,
 ) -> anyhow::Result<()> {
     let mut state = state.lock().await;
-    if let Some(clipboard) = &mut state.clipboard {
-        clipboard.set_text(text).map_err(|e| {
-            anyhow::anyhow!("couldn't store value to clipboard: {e}")
-        })?;
+    if state.clipboard.is_none() {
+        // The agent may have started without a display (a service, or a
+        // browser's native host); adopt the one of the client asking, then
+        // retry. Silently doing nothing here used to ack a copy that never
+        // happened.
+        for (name, value) in state.last_environment.env_vars() {
+            if matches!(
+                name.to_str(),
+                Some(
+                    "DISPLAY"
+                        | "WAYLAND_DISPLAY"
+                        | "XAUTHORITY"
+                        | "XDG_SESSION_TYPE"
+                )
+            ) {
+                std::env::set_var(name, value);
+            }
+        }
+        state.clipboard = arboard::Clipboard::new()
+            .inspect_err(|e| {
+                log::warn!("couldn't create clipboard context: {e}");
+            })
+            .ok();
+    }
+    let Some(clipboard) = &mut state.clipboard else {
+        anyhow::bail!("no clipboard available (no display?)");
+    };
+    if let Err(e) = clipboard.set_text(text) {
+        // A stale connection (e.g. the compositor restarted): start over
+        // on the next copy.
+        state.clipboard = None;
+        anyhow::bail!("couldn't store value to clipboard: {e}");
     }
 
     respond_ack(sock).await?;

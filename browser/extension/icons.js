@@ -63,6 +63,8 @@ function icon(name) {
     palette: ['M12 22a10 10 0 1 1 10-10c0 2.8-2.2 3-4 3h-2a2 2 0 0 0-1.5 3.3A2 2 0 0 1 12 22Z', 'circle:13.5,6.5,.6', 'circle:17.5,10.5,.6', 'circle:8.5,7.5,.6', 'circle:6.5,12.5,.6'],
     keyboard: ['rect:2,5,20,14,2', 'M6 9h.01M10 9h.01M14 9h.01M18 9h.01M8 13h.01M12 13h.01M16 13h.01M7 16h10'],
     shield: ['M20 13c0 5-3.5 7.5-7.7 8.9a1 1 0 0 1-.6 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.2-2.7a1.2 1.2 0 0 1 1.6 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1Z'],
+    // Globe: placeholder for a website without a favicon.
+    globe: ['circle:12,12,9', 'M3 12h18', 'M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18Z'],
     // Android robot: head with antennae and eyes over its body.
     android: ['M5 12a7 7 0 0 1 14 0Z', 'm7.5 6.2-1.5-2.2m10.5 2.2 1.5-2.2', 'circle:9.3,9.3,.6', 'circle:14.7,9.3,.6', 'M5 14h14v4.5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2Z'],
     identity: ['circle:12,8,4', 'M4 21v-2a8 8 0 0 1 16 0v2'],

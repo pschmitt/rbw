@@ -698,3 +698,5 @@ button.danger-solid:hover { background:color-mix(in srgb, var(--danger) 85%, var
 select.save-account { max-width:110px; font-size:11px; }
 .confirm-dialog-choice { display:flex; align-items:center; gap:8px; margin:10px 0 0; }
 .confirm-dialog-choice select { flex:1; min-width:0; }
+.uri-icon-placeholder { color:var(--muted); }
+.uri-icon-placeholder svg { width:16px; height:16px; }

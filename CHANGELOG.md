@@ -18,6 +18,8 @@
 
 ### Changed
 
+* The item view shows a globe placeholder for a URI whose favicon can't be
+  fetched.
 * Browser extension settings: an Accounts section chooses which accounts
   the extension covers: the rbw command line's (default) or any number you
   tick, whose items are all listed and autofilled together.
@@ -64,6 +66,10 @@
 
 ### Fixed
 
+* `rbw-agent` no longer reports a clipboard copy as done when it has no
+  clipboard (e.g. it started without a display): it adopts the asking
+  client's display and retries, or returns an error. This is what made the
+  browser's TOTP copy silently do nothing.
 * `rbw unlock` names the account in "✓ Vault unlocked (NAME).", which
   matters when one run unlocks several accounts.
 * "Manage keyboard shortcuts" did nothing in Firefox (extensions can't open
