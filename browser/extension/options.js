@@ -26,12 +26,16 @@ function renderAccountChoices(state, prefs) {
   list.replaceChildren(...names.map(name => {
     const label = document.createElement("label"); label.className = "switch-row";
     const text = document.createElement("span"); text.textContent = state.primary === name ? `${name} (primary)` : name;
+    // Locked accounts can't be searched or autofilled until unlocked.
+    const lock = (state.accountStates || []).find(s => s.name === name);
+    if (lock && !lock.unlocked) { const hint = document.createElement("small"); hint.textContent = `Locked: run rbw -a ${name} unlock, or unlock it in the popup`; text.append(hint); }
+    else if (lock) { const hint = document.createElement("small"); hint.textContent = "Unlocked"; text.append(hint); }
     const input = document.createElement("input"); input.type = "checkbox"; input.className = "switch"; input.value = name; input.checked = chosen.includes(name); input.disabled = $("accounts-cli").checked;
     label.append(text, input); return label;
   }));
   const picked = chosen.length ? chosen : names;
   $("account-target-row").hidden = names.length < 2;
-  $("account").replaceChildren(...picked.map(name => new Option(name === state.primary ? `${name} *` : name, name)));
+  $("account").replaceChildren(...picked.map(name => new Option((name === state.primary ? `${name} *` : name) + ((state.accountStates || []).find(s => s.name === name)?.unlocked === false ? " (locked)" : ""), name)));
   $("account").value = picked.includes($("account").value) ? $("account").value : picked.includes(state.primary) ? state.primary : picked[0];
 }
 async function saveAccountChoice() {
@@ -47,7 +51,9 @@ $("accounts-cli").onchange = () => attempt(async () => {
 });
 $("accounts-list").onchange = () => attempt(saveAccountChoice);
 async function status() {
-  const state = await request("status"); $("connection").textContent = "Connected to rbw native messaging"; $("lock-state").textContent = state.unlocked ? "Unlocked" : "Locked";
+  const state = await request("status_all"); $("connection").textContent = "Connected to rbw native messaging";
+  const states = state.accountStates || [], open = states.filter(s => s.unlocked).length;
+  $("lock-state").textContent = states.length > 1 ? `${open} of ${states.length} accounts unlocked` : state.unlocked ? "Unlocked" : "Locked";
   return state;
 }
 for (const id of ["passkeys", "inline", "autofill", "allow-http-fill", "autofill-blocklist", "animations", "animation-speed", "card-security-code", "copy-totp", "autofill-totp", "save-prompts", "theme", "show-generator", "show-send", "show-health", "favicons", "uri-match"]) $(id).onchange = () => attempt(async () => {

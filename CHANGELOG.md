@@ -24,6 +24,9 @@
   on 2FA pages with "Auto-fill on page load" and whenever a login is filled.
   The "Copy TOTP after filling" copy is now done by the extension (new
   `clipboardWrite` permission) instead of the agent.
+* Browser extension settings: the Accounts section shows each account's lock
+  state (and how to unlock a locked one), and "Vault state" counts unlocked
+  accounts.
 * Browser extension: the item list says which accounts are locked and so
   missing from it.
 * The in-page autofill notice is larger, names the item whose TOTP or card

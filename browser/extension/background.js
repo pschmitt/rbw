@@ -221,7 +221,7 @@ function syncFinished() {
 let nativePort;
 const nativeRequests = new Map();
 function native(request) {
-  if (!request.account) request = { ...request, ...accountScope };
+  if (!request.account && !request.accounts) request = { ...request, ...accountScope };
   if (!SYNCING_ACTIONS.includes(request.action) && !(request.action === "folders" && request.method !== "list")) return nativeCall(request);
   syncStarted();
   const call = (async () => nativeCall(request))();
@@ -897,6 +897,8 @@ async function handle(message) {
     case "upload_finish": return native({ action: "upload_finish", account, token: message.token });
     case "upload_cancel": return native({ action: "upload_cancel", account, token: message.token });
     case "totp": return native({ action: "totp", account, item: message.item });
+    // Every configured account with its lock state, whatever the selection (settings page).
+    case "status_all": return native({ action: "status", account: null, accounts: [] });
     case "detail": return native({ action: "detail", account, item: message.item });
     case "move": return native({ action: "move", account, item: message.item, to: message.to });
     case "save": return native({ action: "save", account, item: message.item || null, revision: message.revision || null, cipher: message.cipher });
