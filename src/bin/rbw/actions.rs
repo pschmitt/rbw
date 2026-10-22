@@ -56,6 +56,37 @@ pub fn purge_vault(password: Option<String>) -> anyhow::Result<()> {
     simple_action(rbw::protocol::Action::PurgeVault { password })
 }
 
+pub fn change_password(
+    current_password: String,
+    new_password: String,
+    hint: Option<String>,
+    rotate_key: bool,
+) -> anyhow::Result<()> {
+    simple_action(rbw::protocol::Action::ChangePassword {
+        current_password,
+        new_password,
+        hint,
+        rotate_key,
+    })
+}
+
+pub fn change_kdf(
+    password: String,
+    kdf: rbw::actions::KdfSettings,
+) -> anyhow::Result<()> {
+    simple_action(rbw::protocol::Action::ChangeKdf {
+        password,
+        kdf: kdf.kdf.number(),
+        iterations: kdf.iterations,
+        memory: kdf.memory,
+        parallelism: kdf.parallelism,
+    })
+}
+
+pub fn rotate_key(password: String) -> anyhow::Result<()> {
+    simple_action(rbw::protocol::Action::RotateKey { password })
+}
+
 pub fn create_org(name: &str) -> anyhow::Result<String> {
     let mut sock = connect()?;
     sock.send(&rbw::protocol::Request::with_account(

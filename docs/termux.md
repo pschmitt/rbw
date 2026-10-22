@@ -11,9 +11,9 @@ window). The encrypted bundle contains no private key or reusable signature.
 Enroll the active account in one step:
 
 ```shell
-rbw termux enroll
+rbw security termux enroll
 # Or choose a ten-minute authorization window during enrollment:
-# rbw termux enroll --validity 600
+# rbw security termux enroll --validity 600
 ```
 
 rbw asks for the master password using the configured pinentry, generates an
@@ -25,15 +25,15 @@ key and bundle are named after the account, so multiple accounts can be
 enrolled independently. To use an existing alias, set `termux.keyAlias` in
 config.yaml or export `RBW_TERMUX_KEY_ALIAS`; the environment variable wins,
 and enrollment reuses the selected key instead of generating another one. Use
-`rbw termux status` to inspect a readable report of the
+`rbw security termux status` to inspect a readable report of the
 Android Keystore properties; each enrolled key must report hardware backing,
 authentication, and hardware enforcement as `yes`.
 
 To permanently remove the active account's native unlock key and bundle:
 
 ```shell
-rbw termux remove       # asks for confirmation
-rbw termux remove --yes # non-interactive form
+rbw security termux remove       # asks for confirmation
+rbw security termux remove --yes # non-interactive form
 ```
 
 For declarative Home Manager setups, the equivalent account option is:

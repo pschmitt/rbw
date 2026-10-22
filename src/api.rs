@@ -169,6 +169,16 @@ pub enum KdfType {
     Argon2id = 1,
 }
 
+impl KdfType {
+    // The number Bitwarden's API uses for it.
+    pub fn number(self) -> u8 {
+        match self {
+            Self::Pbkdf2 => 0,
+            Self::Argon2id => 1,
+        }
+    }
+}
+
 impl<'de> serde::Deserialize<'de> for KdfType {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -2338,6 +2348,76 @@ impl Client {
             .map_err(|source| Error::Reqwest { source })?;
         match res.status() {
             reqwest::StatusCode::OK => Ok(()),
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => {
+                let code = res.status().as_u16();
+                let body = res.text().await.unwrap_or_default();
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
+            }
+        }
+    }
+
+    // POSTs a master key change (`rbw security`: password, KDF or key
+    // rotation) to `path`. The bodies are built in `crate::actions`, as
+    // JSON rather than typed structs, since key rotation has to round-trip
+    // ciphers as the server sent them.
+    pub async fn post_master_key_change(
+        &self,
+        access_token: &str,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<()> {
+        let client = self.reqwest_client().await?;
+        let res = client
+            .post(self.api_url(path))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .json(body)
+            .send()
+            .await
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK | reqwest::StatusCode::NO_CONTENT => {
+                Ok(())
+            }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(Error::RequestUnauthorized)
+            }
+            _ => {
+                let code = res.status().as_u16();
+                let body = res.text().await.unwrap_or_default();
+                if body.is_empty() {
+                    Err(Error::RequestFailed { status: code })
+                } else {
+                    Err(Error::RequestFailedWithBody { status: code, body })
+                }
+            }
+        }
+    }
+
+    // GETs `path` as untyped JSON, for key rotation (see
+    // `post_master_key_change`). Sends the same client version as `sync`,
+    // so Vaultwarden includes SSH keys in `/sync`.
+    pub async fn get_json(
+        &self,
+        access_token: &str,
+        path: &str,
+    ) -> Result<serde_json::Value> {
+        let client = self.reqwest_client().await?;
+        let res = client
+            .get(self.api_url(path))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("Bitwarden-Client-Version", "2024.12.0")
+            .send()
+            .await
+            .map_err(|source| Error::Reqwest { source })?;
+        match res.status() {
+            reqwest::StatusCode::OK => res.json_with_path().await,
             reqwest::StatusCode::UNAUTHORIZED => {
                 Err(Error::RequestUnauthorized)
             }

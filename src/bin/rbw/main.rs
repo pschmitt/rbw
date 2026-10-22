@@ -274,16 +274,8 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
     (
         "Account and server",
         &[
-            "config",
-            "account",
-            "register",
-            "login",
-            "unlock",
-            "unlocked",
-            "sync",
-            "lock",
-            "termux",
-            "secret-service",
+            "config", "account", "register", "login", "unlock", "unlocked",
+            "sync", "lock", "security",
         ],
     ),
     (
@@ -466,7 +458,10 @@ enum Opt {
         agent: AgentCmd,
     },
 
+    // Kept for compatibility; `rbw security secret-service` is the
+    // documented spelling.
     #[command(
+        hide = true,
         about = "Manage desktop keyring unlock and fingerprint confirmation"
     )]
     SecretService {
@@ -474,7 +469,12 @@ enum Opt {
         secret_service: SecretServiceCmd,
     },
 
-    #[command(about = "Use Termux Android Keystore for native unlocks")]
+    // Kept for compatibility; `rbw security termux` is the documented
+    // spelling.
+    #[command(
+        hide = true,
+        about = "Use Termux Android Keystore for native unlocks"
+    )]
     Termux {
         #[command(subcommand)]
         termux: TermuxCmd,
@@ -1876,6 +1876,19 @@ enum Opt {
     },
 
     #[command(
+        about = "Change the master password, KDF settings or account key",
+        long_about = "Change the current account's master password, KDF \
+            settings or account encryption key on the server. Each asks \
+            for confirmation unless --yes is given and prompts for the \
+            current master password via pinentry unless --stdin is given. \
+            Other sessions of the account may be logged out."
+    )]
+    Security {
+        #[command(subcommand)]
+        security: SecurityCmd,
+    },
+
+    #[command(
         about = "Copy vault contents from one configured account to another",
         long_about = "Copy vault contents from one configured account to \
             another\n\n\
@@ -2168,6 +2181,9 @@ impl Opt {
             Self::Lock { .. } => "lock".to_string(),
             Self::Purge { .. } => "purge".to_string(),
             Self::PurgeVault { .. } => "purge-vault".to_string(),
+            Self::Security { security } => {
+                format!("security {}", security.subcommand_name())
+            }
             Self::Mirror { .. } => "mirror".to_string(),
             Self::StopAgent { .. } => "stop-agent".to_string(),
             Self::Completions { .. } => "completions".to_string(),
@@ -2247,6 +2263,122 @@ enum Config {
 }
 
 #[derive(Debug, clap::Subcommand)]
+enum SecurityCmd {
+    #[command(
+        name = "change-password",
+        about = "Change the master password",
+        long_about = "Change the master password. Prompts via pinentry for \
+            the current password and twice for the new one (at least 12 \
+            characters); --stdin reads the current and the new password \
+            from the first two lines of stdin instead. The account key \
+            and KDF settings stay the same, so the vault is not \
+            re-encrypted unless --rotate-key is given. The server replaces \
+            the password hint: --hint sets a new one, leaving it out \
+            clears any existing hint (except with --rotate-key, which \
+            keeps it). A Secret Service unlock credential is updated \
+            automatically; Termux Keystore and credential_source unlocks \
+            need updating by hand."
+    )]
+    ChangePassword {
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
+        #[arg(
+            long,
+            help = "Read the current and the new master password from the \
+                first two lines of stdin instead of prompting via pinentry"
+        )]
+        stdin: bool,
+        #[arg(
+            long,
+            conflicts_with = "rotate_key",
+            help = "New master password hint"
+        )]
+        hint: Option<String>,
+        #[arg(
+            long,
+            help = "Also rotate the account key and re-encrypt the vault \
+                (see `rbw security rotate-key`)"
+        )]
+        rotate_key: bool,
+    },
+    #[command(
+        name = "rotate-key",
+        about = "Replace the account key and re-encrypt the vault",
+        long_about = "Replace the account encryption key with a new random \
+            one and re-encrypt everything in the personal vault that was \
+            encrypted with the old one (items, folders, attachment and \
+            send keys, the account's private key), in a single request \
+            the server rejects unless it covers the whole vault. \
+            Organization items are not affected. Refused while emergency \
+            access is granted or the account is enrolled in an \
+            organization's account recovery, and for items whose \
+            attachments have no key of their own. Keeps the master \
+            password; --stdin reads it from stdin."
+    )]
+    RotateKey {
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
+        #[arg(
+            long,
+            help = "Read the master password from stdin instead of \
+                prompting via pinentry"
+        )]
+        stdin: bool,
+    },
+    #[command(
+        about = "Show or change the KDF settings",
+        long_about = "Show the KDF settings the master key is derived with, \
+            or change them when any option is given. Switching --kdf \
+            starts from Bitwarden's defaults for that algorithm (pbkdf2: \
+            600000 iterations; argon2id: 3 iterations, 64 MiB, \
+            parallelism 4). Keeps the master password and account key; \
+            --stdin reads the password from stdin."
+    )]
+    Kdf {
+        #[arg(long, value_parser = ["pbkdf2", "argon2id"])]
+        kdf: Option<String>,
+        #[arg(long)]
+        iterations: Option<u32>,
+        #[arg(long, help = "Argon2id memory in MiB")]
+        memory: Option<u32>,
+        #[arg(long, help = "Argon2id parallelism")]
+        parallelism: Option<u32>,
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
+        #[arg(
+            long,
+            help = "Read the master password from stdin instead of \
+                prompting via pinentry"
+        )]
+        stdin: bool,
+    },
+    #[command(
+        about = "Manage desktop keyring unlock and fingerprint confirmation"
+    )]
+    SecretService {
+        #[command(subcommand)]
+        secret_service: SecretServiceCmd,
+    },
+    #[command(about = "Use Termux Android Keystore for native unlocks")]
+    Termux {
+        #[command(subcommand)]
+        termux: TermuxCmd,
+    },
+}
+
+impl SecurityCmd {
+    fn subcommand_name(&self) -> &'static str {
+        match self {
+            Self::SecretService { .. } => "secret-service",
+            Self::Termux { .. } => "termux",
+            Self::ChangePassword { .. } => "change-password",
+            Self::RotateKey { .. } => "rotate-key",
+            Self::Kdf { .. } => "kdf",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, clap::Subcommand)]
 enum SecretServiceCmd {
     /// Save a verified master password in the desktop keyring.
     Enroll {
@@ -3462,6 +3594,44 @@ fn write_secret_output(
         .with_context(|| format!("failed to write {}", path.display()))
 }
 
+fn run_secret_service(
+    secret_service: SecretServiceCmd,
+) -> anyhow::Result<()> {
+    match secret_service {
+        SecretServiceCmd::Enroll { fingerprint } => {
+            commands::secret_service_enroll(fingerprint)
+        }
+        SecretServiceCmd::Remove { yes } => {
+            commands::secret_service_remove(yes)
+        }
+        SecretServiceCmd::Status => commands::secret_service_status(),
+    }
+}
+
+fn run_termux(termux: TermuxCmd) -> anyhow::Result<()> {
+    match termux {
+        TermuxCmd::Generate {
+            key_alias,
+            algorithm,
+            size,
+            validity,
+        } => (|| -> anyhow::Result<()> {
+            let config = rbw::config::Config::load()?;
+            let account_name = crate::actions::current_account()
+                .unwrap_or_else(|| config.primary_account_name());
+            let key_alias = key_alias.unwrap_or_else(|| {
+                rbw::termux::resolve_key_alias(&config, &account_name, None)
+            });
+            rbw::termux::generate(&key_alias, &algorithm, size, validity)
+        })(),
+        TermuxCmd::Enroll { validity } => commands::termux_enroll(validity),
+        TermuxCmd::Remove { yes } => commands::termux_remove(yes),
+        TermuxCmd::Status { key_alias } => {
+            rbw::termux::status(key_alias.as_deref())
+        }
+    }
+}
+
 fn main() {
     let cli = parse_cli();
     let opt = cli.command;
@@ -3555,42 +3725,10 @@ fn main() {
                 clear_credential_source,
             ),
         },
-        Opt::SecretService { secret_service } => match secret_service {
-            SecretServiceCmd::Enroll { fingerprint } => {
-                commands::secret_service_enroll(fingerprint)
-            }
-            SecretServiceCmd::Remove { yes } => {
-                commands::secret_service_remove(yes)
-            }
-            SecretServiceCmd::Status => commands::secret_service_status(),
-        },
-        Opt::Termux { termux } => match termux {
-            TermuxCmd::Generate {
-                key_alias,
-                algorithm,
-                size,
-                validity,
-            } => (|| -> anyhow::Result<()> {
-                let config = rbw::config::Config::load()?;
-                let account_name = crate::actions::current_account()
-                    .unwrap_or_else(|| config.primary_account_name());
-                let key_alias = key_alias.unwrap_or_else(|| {
-                    rbw::termux::resolve_key_alias(
-                        &config,
-                        &account_name,
-                        None,
-                    )
-                });
-                rbw::termux::generate(&key_alias, &algorithm, size, validity)
-            })(),
-            TermuxCmd::Enroll { validity } => {
-                commands::termux_enroll(validity)
-            }
-            TermuxCmd::Remove { yes } => commands::termux_remove(yes),
-            TermuxCmd::Status { key_alias } => {
-                rbw::termux::status(key_alias.as_deref())
-            }
-        },
+        Opt::SecretService { secret_service } => {
+            run_secret_service(secret_service)
+        }
+        Opt::Termux { termux } => run_termux(termux),
         Opt::Agent { agent } => match agent {
             AgentCmd::Stop { kill } => {
                 if kill {
@@ -4600,6 +4738,50 @@ fn main() {
             let password = stdin.then(read_stdin_password);
             commands::purge_vault(yes, password)
         }
+        Opt::Security { security } => match security {
+            SecurityCmd::SecretService { secret_service } => {
+                run_secret_service(secret_service)
+            }
+            SecurityCmd::Termux { termux } => run_termux(termux),
+            SecurityCmd::ChangePassword {
+                yes,
+                stdin,
+                hint,
+                rotate_key,
+            } => {
+                let passwords = stdin
+                    .then(|| (read_stdin_password(), read_stdin_password()));
+                commands::security_change_password(
+                    yes, passwords, hint, rotate_key,
+                )
+            }
+            SecurityCmd::RotateKey { yes, stdin } => {
+                commands::security_rotate_key(
+                    yes,
+                    stdin.then(read_stdin_password),
+                )
+            }
+            SecurityCmd::Kdf {
+                kdf,
+                iterations,
+                memory,
+                parallelism,
+                yes,
+                stdin,
+            } => commands::security_kdf(
+                commands::KdfArgs {
+                    kdf: kdf.map(|kdf| match kdf.as_str() {
+                        "argon2id" => rbw::api::KdfType::Argon2id,
+                        _ => rbw::api::KdfType::Pbkdf2,
+                    }),
+                    iterations,
+                    memory,
+                    parallelism,
+                },
+                yes,
+                stdin.then(read_stdin_password),
+            ),
+        },
         Opt::Mirror {
             config,
             from,
@@ -4744,6 +4926,7 @@ mod test {
             .collect::<std::collections::HashSet<_>>();
         let command_names = command
             .get_subcommands()
+            .filter(|command| !command.is_hide_set())
             .map(clap::Command::get_name)
             .filter(|name| *name != "help")
             .collect::<std::collections::HashSet<_>>();

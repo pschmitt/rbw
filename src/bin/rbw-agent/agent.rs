@@ -283,6 +283,70 @@ async fn dispatch(
             .await?;
             true
         }
+        rbw::protocol::Action::ChangePassword {
+            current_password,
+            new_password,
+            hint,
+            rotate_key,
+        } => {
+            let current_password = locked_password(current_password);
+            let new_password = locked_password(new_password);
+            crate::actions::change_master_key(
+                sock,
+                state.clone(),
+                &current_password,
+                crate::actions::MasterKeyChange::Password {
+                    new_password: &new_password,
+                    hint: hint.as_deref(),
+                    rotate_key,
+                },
+                account,
+            )
+            .await?;
+            true
+        }
+        rbw::protocol::Action::ChangeKdf {
+            password,
+            kdf,
+            iterations,
+            memory,
+            parallelism,
+        } => {
+            let password = locked_password(password);
+            let kdf = match kdf {
+                0 => rbw::api::KdfType::Pbkdf2,
+                1 => rbw::api::KdfType::Argon2id,
+                _ => anyhow::bail!("unknown kdf type {kdf}"),
+            };
+            crate::actions::change_master_key(
+                sock,
+                state.clone(),
+                &password,
+                crate::actions::MasterKeyChange::Kdf(
+                    rbw::actions::KdfSettings {
+                        kdf,
+                        iterations,
+                        memory,
+                        parallelism,
+                    },
+                ),
+                account,
+            )
+            .await?;
+            true
+        }
+        rbw::protocol::Action::RotateKey { password } => {
+            let password = locked_password(password);
+            crate::actions::change_master_key(
+                sock,
+                state.clone(),
+                &password,
+                crate::actions::MasterKeyChange::RotateKey,
+                account,
+            )
+            .await?;
+            true
+        }
         rbw::protocol::Action::CreateOrg { name } => {
             crate::actions::create_org(sock, state.clone(), account, &name)
                 .await?;
@@ -448,4 +512,13 @@ async fn dispatch(
     };
 
     Ok(set_timeout)
+}
+
+// Moves a password received over the socket into locked memory and zeroizes
+// the original, like `PurgeVault`/`Unlock` do inline.
+fn locked_password(mut password: String) -> rbw::locked::Password {
+    let mut v = rbw::locked::Vec::new();
+    v.extend(password.as_bytes().iter().copied());
+    zeroize::Zeroize::zeroize(&mut password);
+    rbw::locked::Password::new(v)
 }

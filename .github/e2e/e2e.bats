@@ -484,3 +484,115 @@ assert d['data']['password'], 'no password after auto-unlock via fake pinentry'
 "
     "$RBW" unlocked # must succeed now -- the fake pinentry unlock above should have left the vault unlocked
 }
+
+# `rbw security` changes the account's master password, so these tests run
+# last and pass the current password on to each other via save().
+NEW_PASSWORD_1="E2eNewPassword456!"
+NEW_PASSWORD_2="E2eRotatedPassword789!"
+
+# Hash of the whole decrypted vault (entries incl. archived/trashed ones,
+# attachment contents and send contents), minus the dates that a
+# re-encryption legitimately bumps.
+vault_digest() {
+    "$RBW" sync >/dev/null
+    {
+        "$RBW" export | python3 -c "
+import json, sys
+def strip(v):
+    if isinstance(v, dict):
+        return {k: strip(x) for k, x in v.items() if k not in ('revision_date', 'exported_at')}
+    if isinstance(v, list):
+        return [strip(x) for x in v]
+    return v
+print(json.dumps(strip(json.load(sys.stdin)), sort_keys=True))
+"
+        "$RBW" attachment get e2e-security-note -o - | sha256sum
+        "$RBW" send list | awk '{print $1}' | while read -r id; do
+            "$RBW" send view "$id"
+        done
+    } | sha256sum | cut -d' ' -f1
+}
+
+# Logs in from scratch, with no local state left over.
+fresh_login() {
+    "$RBW" stop-agent --kill >/dev/null 2>&1 || true
+    "$RBW" purge -y >/dev/null 2>&1
+    echo "$1" | "$RBW" login --stdin && echo "$1" | "$RBW" unlock --stdin
+}
+
+@test "security change-password must keep the vault and only accept the new password" {
+    echo '{"name":"e2e-security-login","folder":"e2e-security-folder","notes":"n","data":{"type":"login","username":"u","password":"p1","totp":"otpauth://totp/x?secret=JBSWY3DPEHPK3PXP","uris":[{"uri":"https://security.example.com","match_type":null}]},"fields":[{"name":"f","value":"v","type":"hidden"}]}' | "$RBW" add --json
+    echo p2 | "$RBW" set e2e-security-login --password-stdin -y
+    printf 'note body\n' | "$RBW" add --secure-note e2e-security-note
+    ATTACH_SRC="$(mktemp)"
+    head -c 2048 /dev/urandom >"$ATTACH_SRC"
+    "$RBW" attachment create e2e-security-note "$ATTACH_SRC"
+    echo '{"name":"e2e-security-archived","data":{"type":"login","username":"a","password":"a"}}' | "$RBW" add --json
+    "$RBW" archive -y e2e-security-archived
+    echo 'send body' | "$RBW" send create e2e-security-send --stdin
+    BEFORE="$(vault_digest)"
+    save DIGEST "$BEFORE"
+
+    run "$RBW" security change-password -y --stdin <<<"wrong-password
+$NEW_PASSWORD_1"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"incorrect"* ]]
+
+    printf '%s\n%s\n' "$PASSWORD" "$NEW_PASSWORD_1" |
+        "$RBW" security change-password -y --stdin --hint "e2e hint"
+    save PASSWORD "$NEW_PASSWORD_1"
+    "$RBW" unlocked
+    [ "$(vault_digest)" = "$BEFORE" ]
+
+    # Not `! fresh_login`: bats still fails the test on an error inside a
+    # negated function call.
+    run fresh_login "$PASSWORD"
+    [ "$status" -ne 0 ]
+    fresh_login "$NEW_PASSWORD_1"
+    [ "$(vault_digest)" = "$BEFORE" ]
+}
+
+@test "security kdf must switch to argon2id and keep the vault" {
+    "$RBW" security kdf | grep -q '^kdf: pbkdf2$'
+    run "$RBW" security kdf --kdf argon2id --memory 8
+    [ "$status" -ne 0 ]
+
+    "$RBW" security kdf --kdf argon2id -y --stdin <<<"$PASSWORD"
+    "$RBW" security kdf | grep -q '^kdf: argon2id$'
+    [ "$(vault_digest)" = "$DIGEST" ]
+
+    fresh_login "$PASSWORD"
+    "$RBW" security kdf | grep -q '^memory: 64 MiB$'
+    [ "$(vault_digest)" = "$DIGEST" ]
+}
+
+@test "security rotate-key must re-encrypt the vault without changing its contents" {
+    DB="$(ls "$HOME"/.cache/rbw/*.json | head -1)"
+    ENCRYPTED_BEFORE="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['protected_private_key'])" "$DB")"
+
+    "$RBW" security rotate-key -y --stdin <<<"$PASSWORD"
+    "$RBW" unlocked
+    [ "$(vault_digest)" = "$DIGEST" ]
+    ENCRYPTED_AFTER="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['protected_private_key'])" "$DB")"
+    [ "$ENCRYPTED_AFTER" != "$ENCRYPTED_BEFORE" ]
+
+    fresh_login "$PASSWORD"
+    [ "$(vault_digest)" = "$DIGEST" ]
+}
+
+@test "security change-password --rotate-key must do both in one go" {
+    run "$RBW" security change-password --rotate-key --hint x -y --stdin </dev/null
+    [ "$status" -ne 0 ]
+
+    printf '%s\n%s\n' "$PASSWORD" "$NEW_PASSWORD_2" |
+        "$RBW" security change-password --rotate-key -y --stdin
+    [ "$(vault_digest)" = "$DIGEST" ]
+
+    # Not `! fresh_login`: bats still fails the test on an error inside a
+    # negated function call.
+    run fresh_login "$PASSWORD"
+    [ "$status" -ne 0 ]
+    fresh_login "$NEW_PASSWORD_2"
+    save PASSWORD "$NEW_PASSWORD_2"
+    [ "$(vault_digest)" = "$DIGEST" ]
+}

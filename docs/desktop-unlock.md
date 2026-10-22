@@ -1,6 +1,6 @@
 # Desktop keyring unlock
 
-`rbw secret-service enroll` verifies your master password and saves it in the
+`rbw security secret-service enroll` verifies your master password and saves it in the
 session's Secret Service (for example GNOME Keyring). Each account receives
 an independent random item ID; account names and server URLs are not keyring
 lookup attributes. The password is transferred through an encrypted Secret Service D-Bus session.

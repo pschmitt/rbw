@@ -236,6 +236,26 @@ pub enum Action {
     PurgeVault {
         password: Option<String>,
     },
+    // `rbw security` master key changes. The passwords come from the
+    // client, which prompts for them itself so it can also update a Secret
+    // Service unlock credential afterwards.
+    ChangePassword {
+        current_password: String,
+        new_password: String,
+        hint: Option<String>,
+        rotate_key: bool,
+    },
+    ChangeKdf {
+        password: String,
+        // `rbw::api::KdfType` as a number.
+        kdf: u8,
+        iterations: u32,
+        memory: Option<u32>,
+        parallelism: Option<u32>,
+    },
+    RotateKey {
+        password: String,
+    },
     // Creates a new organization owned by the current account (`rbw org
     // create`). Needs the account's own RSA key pair (to encrypt the
     // freshly generated org key to itself as the initial owner), so this

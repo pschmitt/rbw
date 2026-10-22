@@ -209,7 +209,7 @@ let
                     options = {
                       id = mkOption {
                         type = types.str;
-                        description = "Opaque keyring item ID created by rbw secret-service enroll.";
+                        description = "Opaque keyring item ID created by rbw security secret-service enroll.";
                       };
                       fingerprint = mkOption {
                         type = types.bool;
@@ -230,7 +230,7 @@ let
                         type = types.path;
                         description = ''
                           Path to the encrypted master-password bundle
-                          produced by `rbw termux enroll`.
+                          produced by `rbw security termux enroll`.
                         '';
                       };
                       keyAlias = mkOption {
@@ -424,7 +424,7 @@ let
       termux = mkOption {
         type = types.submodule {
           options.keyAlias = mkNullOrStr ''
-            Default Android Keystore alias for `rbw termux enroll` and other
+            Default Android Keystore alias for `rbw security termux enroll` and other
             native Termux unlock operations. `RBW_TERMUX_KEY_ALIAS` overrides
             this value at runtime.
           '';

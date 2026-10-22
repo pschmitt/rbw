@@ -37,8 +37,47 @@ skip) *and* re-prompt for the master password to prove intent, the same way
 non-interactively instead of via pinentry; `--yes --stdin` together makes
 either command fully scriptable.
 
+`rbw security` changes the master key of the current account on the server:
+
+```sh
+rbw security change-password            # prompts for current + new password
+rbw security change-password --rotate-key
+rbw security rotate-key                 # new account key, same password
+rbw security kdf                        # show the KDF settings
+rbw security kdf --kdf argon2id         # Bitwarden's argon2id defaults
+rbw security kdf --iterations 800000    # tune the current algorithm
+rbw security secret-service enroll      # desktop keyring/fingerprint unlock
+rbw security termux enroll              # Termux Android Keystore unlock
+```
+
+`secret-service` and `termux` are described in
+[desktop-unlock.md](desktop-unlock.md) and [termux.md](termux.md); the old
+top-level `rbw secret-service`/`rbw termux` spellings still work.
+
+Each asks for confirmation (`-y`/`--yes` to skip) and prompts for the
+current master password via pinentry; `--stdin` reads it from stdin instead
+(for `change-password`: the current password on the first line, the new one
+on the second). Other sessions of the account may be logged out; rbw logs
+itself back in with the new password.
+
+`change-password` and `kdf` only re-wrap the account key, so the vault itself
+is not re-encrypted. The server replaces the password hint on a password
+change: `--hint` sets a new one, leaving it out clears it. A Secret Service
+unlock credential is updated with the new password; Termux Keystore and
+`credential_source` unlocks still hold the old one and need updating by hand.
+
+`rotate-key` (or `change-password --rotate-key`) replaces the account key and
+re-encrypts everything in the personal vault that used it -- items, folders,
+attachment and send keys and the account's private key -- in one request
+the server rejects unless it covers the whole vault. Organization items are
+not affected. It is refused while emergency access is granted, while the
+account is enrolled in an organization's account recovery, and for items
+whose attachments have no key of their own. It has been tested against
+Vaultwarden; bitwarden.com may require additional data for accounts that use
+trusted devices or passkey login.
+
 `rbw purge` also removes the active account's configured Termux Keystore key
-and encrypted unlock bundle. Use `rbw termux remove` when you want to remove
+and encrypted unlock bundle. Use `rbw security termux remove` when you want to remove
 only that native unlock. Both destructive paths are irreversible for the key
 and bundle.
 

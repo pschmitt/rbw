@@ -220,6 +220,192 @@ async fn purge_vault_once(
     client.purge_vault(access_token, master_password_hash).await
 }
 
+// KDF settings as sent by `rbw security` (Argon2id memory is in MiB).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KdfSettings {
+    pub kdf: crate::api::KdfType,
+    pub iterations: u32,
+    pub memory: Option<u32>,
+    pub parallelism: Option<u32>,
+}
+
+impl KdfSettings {
+    fn to_json(self) -> serde_json::Value {
+        serde_json::json!({
+            "kdfType": self.kdf.number(),
+            "iterations": self.iterations,
+            "memory": self.memory,
+            "parallelism": self.parallelism,
+        })
+    }
+}
+
+// The new master password's authentication hash and user key wrapped with
+// its master key, in both the current (`authenticationData`/`unlockData`)
+// and the legacy (`newMasterPasswordHash`/`key`) request shapes, so
+// older servers that only know the latter keep working.
+fn new_master_password_fields(
+    email: &str,
+    kdf: KdfSettings,
+    new_master_password_hash: &crate::locked::PasswordHash,
+    key: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    let new_hash = crate::base64::encode(new_master_password_hash.hash());
+    let serde_json::Value::Object(map) = serde_json::json!({
+        "authenticationData": {
+            "salt": email,
+            "kdf": kdf.to_json(),
+            "masterPasswordAuthenticationHash": new_hash,
+        },
+        "unlockData": {
+            "salt": email,
+            "kdf": kdf.to_json(),
+            "masterKeyWrappedUserKey": key,
+        },
+        "newMasterPasswordHash": new_hash,
+        "key": key,
+    }) else {
+        unreachable!()
+    };
+    map
+}
+
+// `POST /accounts/password`. `email` is the KDF salt, i.e. trimmed and
+// lowercased (`Identity::email`). The server replaces the hint wholesale,
+// so `None` clears an existing one.
+pub fn change_password_body(
+    master_password_hash: &crate::locked::PasswordHash,
+    email: &str,
+    kdf: KdfSettings,
+    new_master_password_hash: &crate::locked::PasswordHash,
+    key: &str,
+    hint: Option<&str>,
+) -> serde_json::Value {
+    let mut body =
+        new_master_password_fields(email, kdf, new_master_password_hash, key);
+    body.insert(
+        "masterPasswordHash".to_string(),
+        crate::base64::encode(master_password_hash.hash()).into(),
+    );
+    body.insert("masterPasswordHint".to_string(), hint.into());
+    body.into()
+}
+
+// `POST /accounts/kdf`: the same password, re-derived with new `kdf`
+// settings (also sent in the legacy top-level shape).
+pub fn change_kdf_body(
+    master_password_hash: &crate::locked::PasswordHash,
+    email: &str,
+    kdf: KdfSettings,
+    new_master_password_hash: &crate::locked::PasswordHash,
+    key: &str,
+) -> serde_json::Value {
+    let mut body =
+        new_master_password_fields(email, kdf, new_master_password_hash, key);
+    body.insert(
+        "masterPasswordHash".to_string(),
+        crate::base64::encode(master_password_hash.hash()).into(),
+    );
+    body.insert("kdf".to_string(), kdf.kdf.number().into());
+    body.insert("kdfIterations".to_string(), kdf.iterations.into());
+    body.insert("kdfMemory".to_string(), kdf.memory.into());
+    body.insert("kdfParallelism".to_string(), kdf.parallelism.into());
+    body.into()
+}
+
+// `POST /accounts/key-management/rotate-user-account-keys`. The server
+// requires every personal cipher, folder and send (and every emergency
+// access grant and account recovery enrollment, which `rbw` refuses to
+// rotate past) to be included, so an incomplete rotation is rejected
+// rather than half-applied. The KDF settings and email can't change here,
+// but the password can: `new_master_password_hash`/`key` may come from a
+// new password.
+#[allow(clippy::too_many_arguments)]
+pub fn rotate_user_key_body(
+    master_password_hash: &crate::locked::PasswordHash,
+    email: &str,
+    kdf: KdfSettings,
+    new_master_password_hash: &crate::locked::PasswordHash,
+    key: &str,
+    public_key: &str,
+    vault: &crate::rotate::RotatedVault,
+) -> serde_json::Value {
+    serde_json::json!({
+        "oldMasterKeyAuthenticationHash":
+            crate::base64::encode(master_password_hash.hash()),
+        "accountUnlockData": {
+            "masterPasswordUnlockData": {
+                "kdfType": kdf.kdf.number(),
+                "kdfIterations": kdf.iterations,
+                "kdfMemory": kdf.memory,
+                "kdfParallelism": kdf.parallelism,
+                "email": email,
+                "masterKeyAuthenticationHash":
+                    crate::base64::encode(new_master_password_hash.hash()),
+                "masterKeyEncryptedUserKey": key,
+            },
+            "emergencyAccessUnlockData": [],
+            "organizationAccountRecoveryUnlockData": [],
+            "passkeyUnlockData": [],
+            "deviceKeyUnlockData": [],
+        },
+        "accountKeys": {
+            "userKeyEncryptedAccountPrivateKey": vault.private_key,
+            "accountPublicKey": public_key,
+        },
+        "accountData": {
+            "ciphers": vault.ciphers,
+            "folders": vault.folders,
+            "sends": vault.sends,
+        },
+    })
+}
+
+pub async fn post_master_key_change(
+    access_token: &str,
+    refresh_token: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> Result<Option<RefreshedTokens>> {
+    let (tokens, ()) = with_exchange_refresh_token_async(
+        access_token,
+        refresh_token,
+        move |access_token| {
+            let access_token = access_token.to_string();
+            let path = path.to_string();
+            let body = body.clone();
+            Box::pin(async move {
+                let (client, _) = api_client_async().await?;
+                client
+                    .post_master_key_change(&access_token, &path, &body)
+                    .await
+            })
+        },
+    )
+    .await?;
+    Ok(tokens)
+}
+
+pub async fn get_json(
+    access_token: &str,
+    refresh_token: &str,
+    path: &str,
+) -> Result<(Option<RefreshedTokens>, serde_json::Value)> {
+    with_exchange_refresh_token_async(
+        access_token,
+        refresh_token,
+        move |access_token| {
+            let access_token = access_token.to_string();
+            let path = path.to_string();
+            Box::pin(async move {
+                let (client, _) = api_client_async().await?;
+                client.get_json(&access_token, &path).await
+            })
+        },
+    )
+    .await
+}
+
 pub async fn delete_org(
     access_token: &str,
     refresh_token: &str,

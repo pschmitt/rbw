@@ -890,6 +890,254 @@ pub async fn purge_vault(
     Ok(())
 }
 
+// What `rbw security` changes about the master key: the password (and,
+// with `rotate_key`, the user key along with it), the KDF settings, or just
+// the user key.
+#[derive(Clone, Copy)]
+pub enum MasterKeyChange<'a> {
+    Password {
+        new_password: &'a rbw::locked::Password,
+        hint: Option<&'a str>,
+        rotate_key: bool,
+    },
+    Kdf(rbw::actions::KdfSettings),
+    RotateKey,
+}
+
+fn update_tokens(
+    tokens: Option<rbw::actions::RefreshedTokens>,
+    access_token: &mut String,
+    refresh_token: &mut String,
+) {
+    if let Some(tokens) = tokens {
+        *access_token = tokens.access_token;
+        if let Some(token) = tokens.refresh_token {
+            *refresh_token = token;
+        }
+    }
+}
+
+// The raw 64 byte user key, for re-wrapping it with a new master key.
+fn key_bytes(keys: &rbw::locked::Keys) -> rbw::locked::Vec {
+    let mut bytes = rbw::locked::Vec::new();
+    bytes.extend(keys.enc_key().iter().copied());
+    bytes.extend(keys.mac_key().iter().copied());
+    bytes
+}
+
+// Changes the account's master key (`rbw security`). The current password
+// is verified locally first, by decrypting the user key with it. Without
+// key rotation the user key stays the same and is only re-wrapped with the
+// new master key, so nothing else in the vault changes. With it, a fresh
+// user key replaces it and everything encrypted with the old one is
+// re-encrypted (see `rbw::rotate`) in the same request.
+pub async fn change_master_key(
+    sock: &mut crate::sock::Sock,
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    current_password: &rbw::locked::Password,
+    change: MasterKeyChange<'_>,
+    account: &rbw::config::Account,
+) -> anyhow::Result<()> {
+    let mut db = load_db(account).await?;
+
+    let current_kdf = rbw::actions::KdfSettings {
+        kdf: db.kdf.context("failed to find kdf type in db")?,
+        iterations: db
+            .iterations
+            .context("failed to find number of iterations in db")?,
+        memory: db.memory,
+        parallelism: db.parallelism,
+    };
+    let email = account_email(account)?;
+    let protected_key = db
+        .protected_key
+        .clone()
+        .context("failed to find protected key in db")?;
+
+    let current = rbw::identity::Identity::new(
+        &email,
+        current_password,
+        current_kdf.kdf,
+        current_kdf.iterations,
+        current_kdf.memory,
+        current_kdf.parallelism,
+    )?;
+    let user_key = match rbw::cipherstring::CipherString::new(&protected_key)?
+        .decrypt_locked_symmetric(&current.keys)
+    {
+        Ok(key) => rbw::locked::Keys::new(key),
+        Err(rbw::error::Error::InvalidMac) => {
+            anyhow::bail!("current master password is incorrect")
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    let (new_password, new_kdf, rotate_key) = match change {
+        MasterKeyChange::Password {
+            new_password,
+            rotate_key,
+            ..
+        } => (new_password, current_kdf, rotate_key),
+        MasterKeyChange::Kdf(kdf) => (current_password, kdf, false),
+        MasterKeyChange::RotateKey => (current_password, current_kdf, true),
+    };
+    let new = rbw::identity::Identity::new(
+        &email,
+        new_password,
+        new_kdf.kdf,
+        new_kdf.iterations,
+        new_kdf.memory,
+        new_kdf.parallelism,
+    )?;
+    let new_user_key = if rotate_key {
+        // Same 64 random bytes as any other symmetric key.
+        rbw::cipherstring::generate_attachment_keys()
+    } else {
+        rbw::locked::Keys::new(key_bytes(&user_key))
+    };
+    let new_protected_key =
+        rbw::cipherstring::CipherString::encrypt_symmetric(
+            &new.keys,
+            key_bytes(&new_user_key).data(),
+        )?
+        .to_string();
+
+    let mut access_token = db
+        .access_token
+        .clone()
+        .context("failed to find access token in db")?;
+    let mut refresh_token = db
+        .refresh_token
+        .clone()
+        .context("failed to find refresh token in db")?;
+
+    let mut protected_private_key = None;
+    let (path, body) = if rotate_key {
+        let (tokens, sync) =
+            rbw::actions::get_json(&access_token, &refresh_token, "/sync")
+                .await?;
+        update_tokens(tokens, &mut access_token, &mut refresh_token);
+        let enrolled = sync["profile"]["organizations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|org| org["resetPasswordEnrolled"].as_bool() == Some(true));
+        if enrolled {
+            anyhow::bail!(
+                "rotating the account key isn't supported while the account \
+                 is enrolled in an organization's account recovery"
+            );
+        }
+        let (tokens, grants) = rbw::actions::get_json(
+            &access_token,
+            &refresh_token,
+            "/emergency-access/trusted",
+        )
+        .await?;
+        update_tokens(tokens, &mut access_token, &mut refresh_token);
+        // Confirmed (2) or further along: the grantee holds a copy of the
+        // user key.
+        let confirmed = grants["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|grant| grant["status"].as_u64().is_some_and(|s| s >= 2));
+        if confirmed {
+            anyhow::bail!(
+                "rotating the account key isn't supported while emergency \
+                 access is granted to someone"
+            );
+        }
+        let (tokens, keys) = rbw::actions::get_json(
+            &access_token,
+            &refresh_token,
+            "/accounts/keys",
+        )
+        .await?;
+        update_tokens(tokens, &mut access_token, &mut refresh_token);
+        let public_key = keys["publicKey"]
+            .as_str()
+            .context("server returned no public key")?;
+
+        let vault =
+            rbw::rotate::rotate_vault(&sync, &user_key, &new_user_key)?;
+        protected_private_key = Some(vault.private_key.clone());
+        (
+            "/accounts/key-management/rotate-user-account-keys",
+            rbw::actions::rotate_user_key_body(
+                &current.master_password_hash,
+                &new.email,
+                new_kdf,
+                &new.master_password_hash,
+                &new_protected_key,
+                public_key,
+                &vault,
+            ),
+        )
+    } else if let MasterKeyChange::Password { hint, .. } = change {
+        (
+            "/accounts/password",
+            rbw::actions::change_password_body(
+                &current.master_password_hash,
+                &new.email,
+                new_kdf,
+                &new.master_password_hash,
+                &new_protected_key,
+                hint,
+            ),
+        )
+    } else {
+        (
+            "/accounts/kdf",
+            rbw::actions::change_kdf_body(
+                &current.master_password_hash,
+                &new.email,
+                new_kdf,
+                &new.master_password_hash,
+                &new_protected_key,
+            ),
+        )
+    };
+
+    let tokens = rbw::actions::post_master_key_change(
+        &access_token,
+        &refresh_token,
+        path,
+        body,
+    )
+    .await
+    .context("server rejected the master key change")?;
+    update_tokens(tokens, &mut access_token, &mut refresh_token);
+
+    db.access_token = Some(access_token);
+    db.refresh_token = Some(refresh_token);
+    db.protected_key = Some(new_protected_key);
+    db.kdf = Some(new_kdf.kdf);
+    db.iterations = Some(new_kdf.iterations);
+    db.memory = new_kdf.memory;
+    db.parallelism = new_kdf.parallelism;
+    if let Some(protected_private_key) = protected_private_key {
+        db.protected_private_key = Some(protected_private_key);
+    }
+    save_db(account, &db).await?;
+
+    if rotate_key {
+        // The unlocked state still holds the old user key.
+        state.lock().await.clear_account(&account.name);
+    }
+
+    // The server rotates the account's security stamp, which may end the
+    // current session. `sync` clears the tokens when it has, so the
+    // client's follow-up login with the new password re-authenticates.
+    if let Err(e) = sync(None, state.clone(), account).await {
+        eprintln!("sync after master key change failed: {e:#}");
+    }
+
+    respond_ack(sock).await?;
+
+    Ok(())
+}
+
 // Creates a new organization owned by the current account (`rbw org
 // create`). Needs the account's own RSA key pair to encrypt a freshly
 // generated org key to itself as the initial (and, at creation time,

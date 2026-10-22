@@ -99,6 +99,12 @@ jobs:
           SIGNUPS_ALLOWED: "true"
           SHOW_PASSWORD_HINT: "false"
           I_REALLY_WANT_VOLATILE_STORAGE: "true"
+          # The suite logs in far more often than a person would; the
+          # default (10 logins per minute) makes it flaky.
+          LOGIN_RATELIMIT_SECONDS: "1"
+          LOGIN_RATELIMIT_MAX_BURST: "1000"
+          ADMIN_RATELIMIT_SECONDS: "1"
+          ADMIN_RATELIMIT_MAX_BURST: "1000"
         ports:
           - 8000:80
         options: >-

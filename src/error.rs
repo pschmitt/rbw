@@ -231,6 +231,9 @@ pub enum Error {
     #[error("session has expired; please log in again")]
     SessionExpired,
 
+    #[error("can't rotate the account key: {reason}")]
+    KeyRotation { reason: String },
+
     #[error("error making api request")]
     Reqwest { source: reqwest::Error },
 

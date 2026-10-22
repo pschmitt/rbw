@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+* `rbw security change-password`, `rbw security rotate-key` and `rbw security
+  kdf` change the master password, rotate the account key (re-encrypting the
+  personal vault) and show or change the KDF settings. `change-password
+  --rotate-key` does both in one request. A Secret Service unlock credential
+  is updated with a new password.
+
+### Changed
+
+* `rbw secret-service` and `rbw termux` moved to `rbw security secret-service`
+  and `rbw security termux`; the old spellings remain as hidden aliases.
+
+### Fixed
+
+* `rbw purge` no longer fails on systems without `termux-keystore`.
+
 ## [2.23.0] - 2026-10-22
 
 ### Added

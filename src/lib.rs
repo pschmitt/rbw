@@ -15,6 +15,7 @@ pub mod pinentry;
 mod prelude;
 pub mod protocol;
 pub mod pwgen;
+pub mod rotate;
 pub mod termux;
 pub mod wordlist;
 
