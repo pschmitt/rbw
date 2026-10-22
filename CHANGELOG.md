@@ -30,6 +30,8 @@
   banner above the list (with Unlock), an amber "L" on the toolbar icon
   while some accounts are locked (red when all are), and the account menu
   opens by itself when everything is locked.
+* Browser extension: the popup's notices no longer float over the content;
+  they sit under the header and push the content down while shown.
 * Browser extension: a locked account with an enrolled fingerprint gets a
   fingerprint button in the popup's account menu (before, the scan was only
   offered on the all-locked screen, for the primary account).
