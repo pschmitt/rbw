@@ -3,8 +3,8 @@
 
 #[cfg(target_os = "linux")]
 pub use native::{
-    fingerprint, remove, store, unlock, unlock_with_dialog,
-    unlock_with_pinentry,
+    credential_string, fingerprint, fingerprint_for_user, remove, store,
+    unlock, unlock_with_dialog, unlock_with_pinentry,
 };
 
 #[cfg(not(target_os = "linux"))]
@@ -12,11 +12,16 @@ pub fn fingerprint() -> anyhow::Result<()> {
     anyhow::bail!("desktop unlock is only supported on Linux");
 }
 #[cfg(not(target_os = "linux"))]
-pub fn store(_id: &str, _password: &[u8]) -> anyhow::Result<()> {
+pub fn store(
+    _config: &crate::config::SecretServiceUnlock,
+    _password: &[u8],
+) -> anyhow::Result<()> {
     fingerprint()
 }
 #[cfg(not(target_os = "linux"))]
-pub fn remove(_id: &str) -> anyhow::Result<()> {
+pub fn remove(
+    _config: &crate::config::SecretServiceUnlock,
+) -> anyhow::Result<()> {
     fingerprint()
 }
 #[cfg(not(target_os = "linux"))]
@@ -68,10 +73,188 @@ mod native {
         HashMap::from([("application", "rbw"), ("unlock-id", id)])
     }
 
-    pub fn store(id: &str, password: &[u8]) -> anyhow::Result<()> {
+    // A user-held `tpm2`/`file` credential: rbw's data directory.
+    fn credential_file(
+        config: &crate::config::SecretServiceUnlock,
+    ) -> std::path::PathBuf {
+        crate::dirs::unlock_credential_file(
+            &config.id,
+            if config.store == crate::config::UnlockStore::Tpm2 {
+                "cred"
+            } else {
+                "secret"
+            },
+        )
+    }
+
+    /// The name a `tpm2` credential is sealed under; decryption checks it.
+    pub fn credential_name(id: &str) -> String {
+        format!("rbw-unlock-{id}")
+    }
+
+    /// Saves `password` in the enrollment's store. A broker enrollment hands
+    /// it to rbw-unlockd, which first asks for a finger.
+    pub fn store(
+        config: &crate::config::SecretServiceUnlock,
+        password: &[u8],
+    ) -> anyhow::Result<()> {
+        use crate::config::UnlockStore;
         if password.is_empty() {
             anyhow::bail!("cannot enroll an empty credential");
         }
+        if config.broker {
+            let password = std::str::from_utf8(password)
+                .context("master password is not UTF-8")?;
+            eprintln!("Touch the fingerprint reader to let rbw-unlockd save the credential...");
+            return run(async {
+                crate::unlockd::call(
+                    &crate::unlockd::Request::Enroll {
+                        id: config.id.clone(),
+                        store: config.store,
+                        secure_boot: config.secure_boot,
+                        password: password.to_string(),
+                    },
+                    None,
+                    async {
+                        let _ = tokio::signal::ctrl_c().await;
+                    },
+                )
+                .await
+                .map(drop)
+            });
+        }
+        match config.store {
+            UnlockStore::Keyring => keyring_store(&config.id, password),
+            UnlockStore::Tpm2 => run(async {
+                let path = credential_file(config);
+                if let Some(dir) = path.parent() {
+                    std::fs::create_dir_all(dir)?;
+                    std::fs::set_permissions(
+                        dir,
+                        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+                    )?;
+                }
+                crate::creds::encrypt(
+                    crate::creds::Scope::User,
+                    &credential_name(&config.id),
+                    password,
+                    config.secure_boot,
+                    &path,
+                )
+                .await
+            }),
+            UnlockStore::File => crate::creds::write_private(
+                &credential_file(config),
+                password,
+            ),
+        }
+    }
+
+    /// Deletes the enrollment's saved credential; missing is not an error.
+    pub fn remove(
+        config: &crate::config::SecretServiceUnlock,
+    ) -> anyhow::Result<()> {
+        use crate::config::UnlockStore;
+        if config.broker {
+            return run(async {
+                crate::unlockd::call(
+                    &crate::unlockd::Request::Remove {
+                        id: config.id.clone(),
+                    },
+                    None,
+                    std::future::pending(),
+                )
+                .await
+                .map(drop)
+            });
+        }
+        match config.store {
+            UnlockStore::Keyring => keyring_remove(&config.id),
+            UnlockStore::Tpm2 | UnlockStore::File => {
+                match std::fs::remove_file(credential_file(config)) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                        Err(e)
+                            .context("could not delete the unlock credential")
+                    }
+                    _ => Ok(()),
+                }
+            }
+        }
+    }
+
+    // Reads a user-held credential (no fingerprint scan here).
+    async fn fetch(
+        config: &crate::config::SecretServiceUnlock,
+    ) -> anyhow::Result<String> {
+        use crate::config::UnlockStore;
+        let bytes = match config.store {
+            UnlockStore::Keyring => return lookup(&config.id).await,
+            UnlockStore::Tpm2 => {
+                crate::creds::decrypt(
+                    crate::creds::Scope::User,
+                    &credential_name(&config.id),
+                    &credential_file(config),
+                )
+                .await?
+            }
+            UnlockStore::File => {
+                crate::creds::read_private(&credential_file(config))?
+            }
+        };
+        credential_string(&bytes)
+    }
+
+    pub fn credential_string(bytes: &[u8]) -> anyhow::Result<String> {
+        if bytes.is_empty() {
+            anyhow::bail!("unlock credential is empty");
+        }
+        if bytes.len() > crate::locked::CAPACITY {
+            anyhow::bail!(
+                "unlock credential exceeds the password size limit"
+            );
+        }
+        std::str::from_utf8(bytes)
+            .map(str::to_owned)
+            .map_err(|_| anyhow::anyhow!("unlock credential is not UTF-8"))
+    }
+
+    // The fingerprint-gated half of an unlock: a broker enrollment asks
+    // rbw-unlockd (which scans), otherwise rbw scans and then reads the
+    // credential itself.
+    async fn scan_and_fetch(
+        config: &crate::config::SecretServiceUnlock,
+        feedback: Option<
+            &tokio::sync::watch::Sender<crate::unlock_ui::FingerprintStatus>,
+        >,
+        cancel: impl Future<Output = ()>,
+        notifications: bool,
+    ) -> anyhow::Result<String> {
+        tokio::pin!(cancel);
+        if config.broker {
+            let password =
+                crate::unlockd::unlock(&config.id, feedback, cancel).await?;
+            return Ok(password.to_string());
+        }
+        let connection = timeout(CLEANUP_TIMEOUT, Connection::system())
+            .await
+            .context("connecting to the system bus timed out")??;
+        fingerprint_with_feedback(
+            connection,
+            OPERATION_TIMEOUT,
+            notifications,
+            &mut cancel,
+            false,
+            feedback,
+            "",
+        )
+        .await?;
+        tokio::select! {
+            result = fetch(config) => result,
+            () = &mut cancel => anyhow::bail!("fingerprint unlock cancelled"),
+        }
+    }
+
+    fn keyring_store(id: &str, password: &[u8]) -> anyhow::Result<()> {
         run(async {
             timeout(OPERATION_TIMEOUT, async {
                 let service =
@@ -96,7 +279,7 @@ mod native {
         })
     }
 
-    pub fn remove(id: &str) -> anyhow::Result<()> {
+    fn keyring_remove(id: &str) -> anyhow::Result<()> {
         run(async {
             timeout(OPERATION_TIMEOUT, async {
                 let service =
@@ -118,10 +301,16 @@ mod native {
         config: &crate::config::SecretServiceUnlock,
     ) -> anyhow::Result<String> {
         run(async {
+            let ctrl_c = async {
+                let _ = tokio::signal::ctrl_c().await;
+            };
+            if config.broker {
+                return scan_and_fetch(config, None, ctrl_c, true).await;
+            }
             if config.fingerprint {
                 fingerprint_async().await?;
             }
-            lookup(&config.id).await
+            fetch(config).await
         })
     }
 
@@ -179,22 +368,29 @@ mod native {
             );
             let bio = async {
                 let result = async {
-                    let config = config.filter(|_| enabled)
+                    let config = config
+                        .filter(|_| enabled)
                         .context("fingerprint unlock is not configured")?;
-                    let connection = timeout(CLEANUP_TIMEOUT, Connection::system()).await??;
-                    fingerprint_with_feedback(connection, OPERATION_TIMEOUT, false,
-                        async { let _ = (&mut bio_cancelled).await; }, false, Some(&status)).await?;
-                    let password = Zeroizing::new(tokio::select! {
-                        result = lookup(&config.id) => result?,
-                        _ = &mut bio_cancelled => anyhow::bail!("fingerprint unlock cancelled"),
-                    });
+                    let password = Zeroizing::new(
+                        scan_and_fetch(
+                            config,
+                            Some(&status),
+                            async {
+                                let _ = (&mut bio_cancelled).await;
+                            },
+                            false,
+                        )
+                        .await?,
+                    );
                     let mut bytes = crate::locked::Vec::try_new()?;
                     bytes.extend(password.as_bytes().iter().copied());
                     let candidate = crate::locked::Password::new(bytes);
-                    tokio::task::spawn_blocking(move || validate(&candidate)).await??;
+                    tokio::task::spawn_blocking(move || validate(&candidate))
+                        .await??;
                     status.send_replace(FingerprintStatus::Accepted);
                     Ok(password.to_string())
-                }.await;
+                }
+                .await;
                 if enabled && result.is_err() {
                     status.send_replace(FingerprintStatus::Unavailable);
                 }
@@ -229,17 +425,17 @@ mod native {
                 pin_cancelled,
             );
             let bio = async {
-                fingerprint_cancelable(
-                    async {
-                        let _ = (&mut bio_cancelled).await;
-                    },
-                    false,
-                )
-                .await?;
-                let password = Zeroizing::new(tokio::select! {
-                    result = lookup(&config.id) => result?,
-                    _ = &mut bio_cancelled => anyhow::bail!("fingerprint unlock cancelled"),
-                });
+                let password = Zeroizing::new(
+                    scan_and_fetch(
+                        config,
+                        None,
+                        async {
+                            let _ = (&mut bio_cancelled).await;
+                        },
+                        true,
+                    )
+                    .await?,
+                );
                 let mut bytes = crate::locked::Vec::new();
                 bytes.extend(password.as_bytes().iter().copied());
                 validate(&crate::locked::Password::new(bytes))?;
@@ -372,6 +568,32 @@ mod native {
         run(fingerprint_async())
     }
 
+    /// Verifies one of `user`'s enrolled fingers (three tries, 60 seconds),
+    /// reporting progress to `feedback`. For rbw-unlockd, which runs as root
+    /// and may claim the reader on another user's behalf.
+    pub async fn fingerprint_for_user(
+        user: &str,
+        feedback: &tokio::sync::watch::Sender<
+            crate::unlock_ui::FingerprintStatus,
+        >,
+        cancel: impl Future<Output = ()>,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(!user.is_empty(), "no user to verify");
+        let connection = timeout(CLEANUP_TIMEOUT, Connection::system())
+            .await
+            .context("connecting to the system bus timed out")??;
+        fingerprint_with_feedback(
+            connection,
+            OPERATION_TIMEOUT,
+            false,
+            cancel,
+            false,
+            Some(feedback),
+            user,
+        )
+        .await
+    }
+
     #[derive(Debug, PartialEq, Eq)]
     pub(super) enum ScanOutcome {
         Match,
@@ -489,10 +711,13 @@ mod native {
             cancel,
             terminal_status,
             None,
+            "",
         )
         .await
     }
 
+    // `user` is whose fingers to verify; empty means the calling user (a
+    // root caller such as rbw-unlockd names the requesting user).
     async fn fingerprint_with_feedback(
         connection: Connection,
         duration: Duration,
@@ -502,6 +727,7 @@ mod native {
         feedback: Option<
             &tokio::sync::watch::Sender<crate::unlock_ui::FingerprintStatus>,
         >,
+        user: &str,
     ) -> anyhow::Result<()> {
         let manager = Proxy::new(
             &connection,
@@ -531,7 +757,7 @@ mod native {
         let mut started = false;
         let deadline = Instant::now() + duration;
         let result = tokio::select! {
-            result = timeout_at(deadline, verify(&device, &mut claimed, &mut started, notifications.as_ref(), &mut notification_id, terminal_status, feedback)) => {
+            result = timeout_at(deadline, verify(&device, &mut claimed, &mut started, notifications.as_ref(), &mut notification_id, terminal_status, feedback, user)) => {
                 result.unwrap_or_else(|_| Err(anyhow::anyhow!("fingerprint verification timed out")))
             }
             () = cancel => Err(anyhow::anyhow!("fingerprint verification cancelled")),
@@ -579,10 +805,11 @@ mod native {
         feedback: Option<
             &tokio::sync::watch::Sender<crate::unlock_ui::FingerprintStatus>,
         >,
+        user: &str,
     ) -> anyhow::Result<()> {
         use crate::unlock_ui::FingerprintStatus;
         device
-            .call::<_, _, ()>("Claim", &("",))
+            .call::<_, _, ()>("Claim", &(user,))
             .await
             .context("could not claim fingerprint reader")?;
         *claimed = true;
@@ -664,14 +891,18 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let mut config = crate::config::SecretServiceUnlock {
-            id: id.clone(),
+            id,
             fingerprint,
+            store: crate::config::UnlockStore::Keyring,
+            secure_boot: false,
+            broker: false,
         };
-        store(&id, password.as_bytes()).expect("store disposable credential");
+        store(&config, password.as_bytes())
+            .expect("store disposable credential");
         let result = unlock(&config).map(Zeroizing::new);
-        let removed = remove(&id);
+        let removed = remove(&config);
         assert!(removed.is_ok(), "remove disposable credential");
-        assert!(remove(&id).is_ok(), "removal is idempotent");
+        assert!(remove(&config).is_ok(), "removal is idempotent");
         assert!(result.is_ok(), "lookup disposable credential");
         assert!(
             result.unwrap().as_bytes() == password.as_bytes(),

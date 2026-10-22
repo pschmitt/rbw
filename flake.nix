@@ -78,10 +78,10 @@
           # Built only from the normalized manifests (eval-time files) and stub
           # targets, unlike crane's mkDummySrc, which also copies the raw ones.
           depsSrc = pkgs.runCommand "rbw-deps-src" { } ''
-            mkdir -p $out/src/bin/rbw $out/src/bin/rbw-agent $out/src/bin/rbw-browser
+            mkdir -p $out/src/bin/rbw $out/src/bin/rbw-agent $out/src/bin/rbw-browser $out/src/bin/rbw-unlockd
             cp ${depsToml} $out/Cargo.toml
             cp ${depsLock} $out/Cargo.lock
-            for bin in rbw rbw-agent rbw-browser; do
+            for bin in rbw rbw-agent rbw-browser rbw-unlockd; do
               echo 'fn main() {}' > $out/src/bin/$bin/main.rs
             done
             touch $out/src/lib.rs
@@ -237,6 +237,8 @@
 
       homeManagerModules.default = import ./nix/hm-module.nix { inherit self; };
 
+      nixosModules.default = import ./nix/nixos-module.nix { inherit self; };
+
       # Smoke test: build a minimal home-manager configuration exercising
       # `programs.rbw.declarative`, and assert the rendered `config.yaml`
       # matches what we expect (field naming, kebab-case `unlock` enum,
@@ -329,6 +331,37 @@
                 diff -u expected.json actual.json
                 touch "$out"
               '';
+        }
+        // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          # Evaluates (without building rbw) a NixOS system enabling
+          # `services.rbw-unlockd` and checks the units it renders.
+          nixos-module-unlockd =
+            let
+              nixos = nixpkgs.lib.nixosSystem {
+                inherit system;
+                modules = [
+                  self.nixosModules.default
+                  {
+                    services.rbw-unlockd.enable = true;
+                    boot.loader.grub.enable = false;
+                    fileSystems."/" = {
+                      device = "none";
+                      fsType = "tmpfs";
+                    };
+                    system.stateVersion = "24.05";
+                  }
+                ];
+              };
+              inherit (nixos.config.systemd) services sockets;
+              execStart = builtins.unsafeDiscardStringContext services.rbw-unlockd.serviceConfig.ExecStart;
+              listen = builtins.concatStringsSep " " sockets.rbw-unlockd.listenStreams;
+            in
+            pkgs.runCommand "rbw-nixos-module-check" { } ''
+              [[ ${nixpkgs.lib.escapeShellArg execStart} == */bin/rbw-unlockd ]]
+              [[ ${nixpkgs.lib.escapeShellArg listen} == /run/rbw-unlockd.sock ]]
+              [[ ${nixpkgs.lib.boolToString nixos.config.services.fprintd.enable} == true ]]
+              touch "$out"
+            '';
         }
       );
 

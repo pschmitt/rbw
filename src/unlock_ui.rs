@@ -48,39 +48,83 @@ pub enum FingerprintStatus {
     Unavailable,
 }
 
+const FINGERS: [(&str, &str); 10] = [
+    ("left-thumb", "Touch the reader with your left thumb"),
+    ("right-thumb", "Touch the reader with your right thumb"),
+    (
+        "left-index-finger",
+        "Touch the reader with your left index finger",
+    ),
+    (
+        "right-index-finger",
+        "Touch the reader with your right index finger",
+    ),
+    (
+        "left-middle-finger",
+        "Touch the reader with your left middle finger",
+    ),
+    (
+        "right-middle-finger",
+        "Touch the reader with your right middle finger",
+    ),
+    (
+        "left-ring-finger",
+        "Touch the reader with your left ring finger",
+    ),
+    (
+        "right-ring-finger",
+        "Touch the reader with your right ring finger",
+    ),
+    (
+        "left-little-finger",
+        "Touch the reader with your left little finger",
+    ),
+    (
+        "right-little-finger",
+        "Touch the reader with your right little finger",
+    ),
+];
+
 impl FingerprintStatus {
     pub fn selected(finger: &str) -> Self {
-        match finger {
-            "left-thumb" => {
-                Self::Selected("Touch the reader with your left thumb")
-            }
-            "right-thumb" => {
-                Self::Selected("Touch the reader with your right thumb")
-            }
-            "left-index-finger" => {
-                Self::Selected("Touch the reader with your left index finger")
-            }
-            "right-index-finger" => Self::Selected(
-                "Touch the reader with your right index finger",
+        FINGERS
+            .iter()
+            .find(|(name, _)| *name == finger)
+            .map_or(Self::Ready, |(_, text)| Self::Selected(text))
+    }
+
+    /// The status as rbw-unlockd sends it: a kind, plus the fprintd finger
+    /// name for `selected`.
+    pub fn to_wire(self) -> (&'static str, Option<&'static str>) {
+        match self {
+            Self::Disabled => ("disabled", None),
+            Self::Starting => ("starting", None),
+            Self::Ready => ("ready", None),
+            Self::Selected(text) => (
+                "selected",
+                FINGERS
+                    .iter()
+                    .find(|(_, t)| *t == text)
+                    .map(|(name, _)| *name),
             ),
-            "left-middle-finger" => Self::Selected(
-                "Touch the reader with your left middle finger",
-            ),
-            "right-middle-finger" => Self::Selected(
-                "Touch the reader with your right middle finger",
-            ),
-            "left-ring-finger" => {
-                Self::Selected("Touch the reader with your left ring finger")
-            }
-            "right-ring-finger" => {
-                Self::Selected("Touch the reader with your right ring finger")
-            }
-            "left-little-finger" => Self::Selected(
-                "Touch the reader with your left little finger",
-            ),
-            "right-little-finger" => Self::Selected(
-                "Touch the reader with your right little finger",
-            ),
+            Self::Retry => ("retry", None),
+            Self::NoMatch => ("no_match", None),
+            Self::Checking => ("checking", None),
+            Self::Accepted => ("accepted", None),
+            Self::Unavailable => ("unavailable", None),
+        }
+    }
+
+    pub fn from_wire(kind: &str, finger: Option<&str>) -> Self {
+        match kind {
+            "disabled" => Self::Disabled,
+            "starting" => Self::Starting,
+            "selected" => Self::selected(finger.unwrap_or("")),
+            "retry" => Self::Retry,
+            "no_match" => Self::NoMatch,
+            "checking" => Self::Checking,
+            "accepted" => Self::Accepted,
+            "unavailable" => Self::Unavailable,
             _ => Self::Ready,
         }
     }

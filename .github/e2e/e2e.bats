@@ -679,6 +679,18 @@ assert $COUNT in [v for v in info.values() if isinstance(v, int)], info
     [ "$status" -ne 0 ]
     run "$RBW" security unlock enroll --termux --keyring
     [ "$status" -ne 0 ]
+    # Store/broker combinations are rejected before any password prompt.
+    run "$RBW" security unlock enroll --secure-boot
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--secure-boot needs --store tpm2"* ]]
+    run "$RBW" security unlock enroll --broker --store keyring
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not the keyring"* ]]
+    run "$RBW" security unlock enroll --termux --broker
+    [ "$status" -ne 0 ]
+    run env RBW_UNLOCKD_SOCKET=/nonexistent/rbw-unlockd.sock "$RBW" security unlock enroll --broker
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"needs the rbw-unlockd service"* ]]
     "$RBW" security unlock remove -y | grep -q "No native unlock is configured"
 }
 

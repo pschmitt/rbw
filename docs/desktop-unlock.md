@@ -29,7 +29,54 @@ unlock:
   secretService:
     id: <opaque ID from enrollment>
     fingerprint: true
+    # Only when not the defaults:
+    store: tpm2
+    secureBoot: true
+    broker: true
 ```
+
+## Where the password is stored, and who enforces the fingerprint
+
+Two independent choices decide how strong the fingerprint check is:
+
+* **Storage** (`--store`): `keyring` (Secret Service, the default), `tpm2` (a
+  [`systemd-creds`](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html)
+  credential sealed to this machine's TPM and host key; `--secure-boot` also
+  binds it to the Secure Boot state, PCR 7) or `file` (unencrypted, readable
+  only by its owner). `tpm2` keeps a copied disk or home directory from
+  revealing the password; `file` protects it only with file permissions.
+* **Holder** (`--broker`): without it, the credential belongs to your user,
+  so any program running as you can read it directly, skipping the scan: the
+  fingerprint is a convenience check, not a security boundary, and enrollment
+  warns about it. With `--broker`, the root-owned `rbw-unlockd` service keeps
+  the credential (`tpm2` by default) and only hands it out after fprintd
+  verifies one of your fingers. It identifies callers by their socket peer
+  credentials, logs every request with the calling program, and locks a user
+  out for a growing period (30 seconds, up to 5 minutes) after three failed
+  scans.
+
+```shell
+# Fingerprint enforced by rbw-unlockd, password sealed to the TPM and Secure Boot:
+rbw security unlock enroll --broker --secure-boot
+# User-held TPM credential (fingerprint checked by rbw only):
+rbw security unlock enroll --fingerprint --store tpm2
+```
+
+On NixOS, enable the broker with the flake's module (it also enables
+fprintd and the TPM):
+
+```nix
+{
+  imports = [ rbw.nixosModules.default ];
+  services.rbw-unlockd.enable = true;
+}
+```
+
+Even with the broker, a program running as you can still ask for an unlock
+and hope you touch the reader at that moment, and once the vault is unlocked
+it can talk to rbw-agent like any other client. Built-in laptop readers only
+report "matched" to software, so no setup can make the TPM itself require a
+finger; a FIDO2 key with its own fingerprint reader would.
 
 The Linux implementation uses Rust `zbus` and `secret-service` clients for
 fingerprint verification, notifications, and encrypted keyring sessions.

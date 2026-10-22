@@ -3165,13 +3165,31 @@ fn running_on_termux() -> bool {
             .is_ok_and(|prefix| prefix.contains("/com.termux/"))
 }
 
+// How a desktop (non-Termux) enrollment stores its credential: see
+// `rbw::config::SecretServiceUnlock`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DesktopStore {
+    pub store: Option<rbw::config::UnlockStore>,
+    pub secure_boot: bool,
+    pub broker: bool,
+}
+
+impl DesktopStore {
+    fn is_set(self) -> bool {
+        self.store.is_some() || self.secure_boot || self.broker
+    }
+}
+
 pub fn native_unlock_enroll(
     provider: Option<NativeUnlock>,
     fingerprint: bool,
     validity: Option<u32>,
+    desktop: DesktopStore,
 ) -> anyhow::Result<()> {
     let provider = provider.unwrap_or_else(|| {
-        if running_on_termux() {
+        if desktop.is_set() {
+            NativeUnlock::Keyring
+        } else if running_on_termux() {
             NativeUnlock::Termux
         } else {
             NativeUnlock::Keyring
@@ -3182,9 +3200,15 @@ pub fn native_unlock_enroll(
             if validity.is_some() {
                 anyhow::bail!("--validity only applies to Termux unlock");
             }
-            secret_service_enroll(fingerprint)
+            secret_service_enroll(fingerprint, desktop)
         }
         NativeUnlock::Termux => {
+            if desktop.is_set() {
+                anyhow::bail!(
+                    "--store, --secure-boot and --broker only apply to \
+                     desktop unlock"
+                );
+            }
             if fingerprint {
                 anyhow::bail!(
                     "--fingerprint only applies to keyring unlock; Termux \
@@ -3232,16 +3256,104 @@ pub fn native_unlock_status() -> anyhow::Result<()> {
     }
 }
 
+// Where a desktop enrollment keeps its credential, for messages.
+fn desktop_store_description(
+    provider: &rbw::config::SecretServiceUnlock,
+) -> String {
+    use rbw::config::UnlockStore;
+    let store = match provider.store {
+        UnlockStore::Keyring => "the desktop keyring (Secret Service)",
+        UnlockStore::Tpm2 if provider.secure_boot => {
+            "a TPM-sealed credential bound to Secure Boot (PCR 7)"
+        }
+        UnlockStore::Tpm2 => "a TPM-sealed credential",
+        UnlockStore::File => "an unencrypted file",
+    };
+    if provider.broker {
+        format!("{store}, held by rbw-unlockd")
+    } else {
+        store.to_string()
+    }
+}
+
+// Enrollment warnings for credentials the user's own programs can read.
+fn desktop_store_warnings(
+    provider: &rbw::config::SecretServiceUnlock,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if provider.broker {
+        return warnings;
+    }
+    if provider.fingerprint {
+        warnings.push(format!(
+            "the fingerprint is only a convenience check, not a security \
+             boundary: any program running as you can read the master \
+             password from {} without a scan. Enroll with --broker (needs \
+             the rbw-unlockd service) to have the fingerprint enforced.",
+            desktop_store_description(provider)
+        ));
+    }
+    if provider.store == rbw::config::UnlockStore::File {
+        warnings.push(
+            "the master password is saved unencrypted in rbw's data \
+             directory, protected only by file permissions; prefer tpm2."
+                .to_string(),
+        );
+    }
+    warnings
+}
+
 pub fn secret_service_status() -> anyhow::Result<()> {
     let account = active_account()?;
-    match account.unlock.secret_service {
-        Some(provider) => println!("Secret Service configured; fingerprint: {}. Credential availability is checked during unlock.", provider.fingerprint),
-        None => println!("Secret Service unlock is not configured."),
+    let Some(provider) = account.unlock.secret_service else {
+        println!("Desktop unlock is not configured.");
+        return Ok(());
+    };
+    println!(
+        "Desktop unlock configured: {}; fingerprint: {}.",
+        desktop_store_description(&provider),
+        if provider.broker {
+            "required (enforced by rbw-unlockd)"
+        } else if provider.fingerprint {
+            "required (checked by rbw only)"
+        } else {
+            "off"
+        }
+    );
+    if provider.broker {
+        let tokio = tokio::runtime::Runtime::new()?;
+        match tokio.block_on(rbw::unlockd::call(
+            &rbw::unlockd::Request::Status {
+                id: provider.id.clone(),
+            },
+            None,
+            std::future::pending(),
+        )) {
+            Ok(rbw::unlockd::Event::Done {
+                enrolled: Some(true),
+                ..
+            }) => println!("rbw-unlockd holds the credential."),
+            Ok(_) => println!(
+                "rbw-unlockd has no credential for this enrollment; enroll \
+                 again."
+            ),
+            Err(error) => println!("rbw-unlockd is unreachable: {error:#}"),
+        }
+    } else {
+        println!("Credential availability is checked during unlock.");
+    }
+    let c = stdout_supports_color();
+    for warning in desktop_store_warnings(&provider) {
+        println!("{} {warning}", style::warning("warning:", c));
     }
     Ok(())
 }
 
-pub fn secret_service_enroll(fingerprint: bool) -> anyhow::Result<()> {
+pub fn secret_service_enroll(
+    fingerprint: bool,
+    desktop: DesktopStore,
+) -> anyhow::Result<()> {
+    use rbw::config::UnlockStore;
     use zeroize::Zeroizing;
     let mut config = rbw::config::Config::load()?;
     config.migrate_legacy();
@@ -3254,6 +3366,43 @@ pub fn secret_service_enroll(fingerprint: bool) -> anyhow::Result<()> {
         anyhow::bail!(
             "remove the existing native unlock provider before enrolling"
         );
+    }
+    // The broker exists to enforce the fingerprint, and keeps credentials in
+    // its own (root-owned) storage rather than the user's keyring.
+    let fingerprint = fingerprint || desktop.broker;
+    let store = desktop.store.unwrap_or(if desktop.broker {
+        UnlockStore::Tpm2
+    } else {
+        UnlockStore::Keyring
+    });
+    if desktop.broker && store == UnlockStore::Keyring {
+        anyhow::bail!("--broker stores the credential with tpm2 or file, not the keyring");
+    }
+    if desktop.secure_boot && store != UnlockStore::Tpm2 {
+        anyhow::bail!("--secure-boot needs --store tpm2");
+    }
+    let provider = rbw::config::SecretServiceUnlock {
+        id: uuid::Uuid::new_v4().to_string(),
+        fingerprint,
+        store,
+        secure_boot: desktop.secure_boot,
+        broker: desktop.broker,
+    };
+    if desktop.broker {
+        // Fail before asking for the password if the service is missing.
+        tokio::runtime::Runtime::new()?
+            .block_on(rbw::unlockd::call(
+                &rbw::unlockd::Request::Status {
+                    id: provider.id.clone(),
+                },
+                None,
+                std::future::pending(),
+            ))
+            .context("--broker needs the rbw-unlockd service")?;
+    }
+    let c = stderr_supports_color();
+    for warning in desktop_store_warnings(&provider) {
+        eprintln!("{} {warning}", style::warning("warning:", c));
     }
     let runtime = tokio::runtime::Runtime::new()?;
     let environment = crate::actions::get_environment();
@@ -3284,12 +3433,12 @@ pub fn secret_service_enroll(fingerprint: bool) -> anyhow::Result<()> {
     verify_cached_password(&account, &db, &locked_password).context(
         "password did not decrypt the vault; enrollment cancelled",
     )?;
-    if fingerprint {
+    // rbw-unlockd runs its own scan while saving.
+    if fingerprint && !provider.broker {
         rbw::desktop::fingerprint()?;
     }
-    let id = uuid::Uuid::new_v4().to_string();
-    if let Err(error) = rbw::desktop::store(&id, password.as_bytes()) {
-        let _ = rbw::desktop::remove(&id);
+    if let Err(error) = rbw::desktop::store(&provider, password.as_bytes()) {
+        let _ = rbw::desktop::remove(&provider);
         return Err(error);
     }
     config
@@ -3298,17 +3447,28 @@ pub fn secret_service_enroll(fingerprint: bool) -> anyhow::Result<()> {
         .find(|a| a.name == name)
         .context("account vanished")?
         .unlock
-        .secret_service = Some(rbw::config::SecretServiceUnlock {
-        id: id.clone(),
-        fingerprint,
-    });
+        .secret_service = Some(provider.clone());
     if let Err(error) = config.save() {
-        if rbw::desktop::remove(&id).is_err() {
-            eprintln!("Could not remove the newly stored keyring item after config save failed; remove the rbw account unlock item in your keyring manager.");
+        if rbw::desktop::remove(&provider).is_err() {
+            eprintln!(
+                "Could not remove the newly saved credential ({}) after the \
+                 config save failed; delete it by hand.",
+                desktop_store_description(&provider)
+            );
         }
         return Err(error.into());
     }
-    println!("Secret Service unlock enrolled. Fingerprint confirmation: {fingerprint}.");
+    println!(
+        "Desktop unlock enrolled in {}. Fingerprint: {}.",
+        desktop_store_description(&provider),
+        if provider.broker {
+            "required (enforced by rbw-unlockd)"
+        } else if fingerprint {
+            "required (checked by rbw only)"
+        } else {
+            "off"
+        }
+    );
     Ok(())
 }
 
@@ -3324,10 +3484,15 @@ pub fn secret_service_remove(yes: bool) -> anyhow::Result<()> {
     if !yes && !std::io::stdin().is_terminal() {
         anyhow::bail!("refusing non-interactive removal; pass --yes");
     }
-    if !yes && !confirm("Delete this account's saved keyring credential?")? {
+    if !yes
+        && !confirm(&format!(
+            "Delete this account's saved unlock credential ({})?",
+            desktop_store_description(&provider)
+        ))?
+    {
         return Ok(());
     }
-    rbw::desktop::remove(&provider.id)?;
+    rbw::desktop::remove(&provider)?;
     config
         .accounts
         .iter_mut()
@@ -3336,7 +3501,7 @@ pub fn secret_service_remove(yes: bool) -> anyhow::Result<()> {
         .unlock
         .secret_service = None;
     config.save()?;
-    println!("Secret Service unlock removed.");
+    println!("Desktop unlock removed.");
     Ok(())
 }
 
@@ -7665,12 +7830,12 @@ pub fn security_change_password(
         eprintln!("{} {msg}", style::warning("warning:", c));
     };
     if let Some(provider) = &account.unlock.secret_service {
-        match rbw::desktop::store(&provider.id, new.as_bytes()) {
+        match rbw::desktop::store(provider, new.as_bytes()) {
             Ok(()) => {
-                eprintln!("Updated the Secret Service unlock credential.");
+                eprintln!("Updated the desktop unlock credential.");
             }
             Err(e) => warn(&format!(
-                "could not update the Secret Service unlock credential \
+                "could not update the desktop unlock credential \
                  ({e:#}); re-enroll with `rbw security unlock remove` and \
                  `rbw security unlock enroll`"
             )),

@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Added
+
+* Desktop unlock can store the master password outside the keyring:
+  `rbw security unlock enroll --store tpm2` seals it with `systemd-creds` to
+  the machine's TPM (and host key), `--secure-boot` also binds it to the
+  Secure Boot state (PCR 7), and `--store file` keeps it in an owner-only
+  file.
+* `rbw-unlockd`, a root-owned unlock broker with a NixOS module
+  (`nixosModules.default`, `services.rbw-unlockd.enable`). With `rbw
+  security unlock enroll --broker` it holds the credential and only releases
+  it after fprintd verifies a finger of the requesting user, so the
+  fingerprint is enforced rather than checked by rbw alone. Requests are
+  logged with the calling program, and repeated failed scans lock the user
+  out for a growing period.
+* Enrollment and `rbw security unlock status` warn that the fingerprint is
+  only a convenience check when the user's own programs can read the saved
+  password (any store without `--broker`), and when it is stored
+  unencrypted.
+
 ## [2.25.1] - 2026-10-22
 
 ### Added

@@ -79,6 +79,72 @@ pub struct SecretServiceUnlock {
     pub id: String,
     #[serde(default)]
     pub fingerprint: bool,
+    // Where the saved master password lives (see `UnlockStore`).
+    #[serde(default, skip_serializing_if = "UnlockStore::is_keyring")]
+    pub store: UnlockStore,
+    // `tpm2` only: also seal against PCR 7 (Secure Boot state), so the
+    // credential stops decrypting if Secure Boot is turned off or its keys
+    // change.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub secure_boot: bool,
+    // Hand the credential to the rbw-unlockd system service, which runs the
+    // fingerprint scan itself and only then releases it. Without it, any
+    // program running as this user can read the credential directly, so the
+    // fingerprint is a convenience check rather than a security boundary.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub broker: bool,
+}
+
+/// Where a native desktop unlock credential is stored.
+#[derive(
+    serde::Serialize,
+    serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum UnlockStore {
+    /// The desktop keyring (Secret Service).
+    #[default]
+    Keyring,
+    /// A `systemd-creds` credential sealed to this machine's TPM.
+    Tpm2,
+    /// An unencrypted file, protected only by its permissions.
+    File,
+}
+
+impl UnlockStore {
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn is_keyring(&self) -> bool {
+        *self == Self::Keyring
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Keyring => "keyring",
+            Self::Tpm2 => "tpm2",
+            Self::File => "file",
+        }
+    }
+}
+
+impl std::str::FromStr for UnlockStore {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "keyring" | "secret-service" => Ok(Self::Keyring),
+            "tpm2" | "tpm" => Ok(Self::Tpm2),
+            "file" => Ok(Self::File),
+            _ => Err(format!(
+                "unknown unlock store {s:?} (expected keyring, tpm2 or file)"
+            )),
+        }
+    }
 }
 
 fn default_termux_algorithm() -> String {

@@ -11,13 +11,14 @@ inputs.rbw.url = "github:pschmitt/rbw";
 
 | Output | Contents |
 |---|---|
-| `packages.<system>.default` (`rbw`) | `rbw`, `rbw-agent`, `rbw-browser`, `git-credential-rbw` and shell completions |
+| `packages.<system>.default` (`rbw`) | `rbw`, `rbw-agent`, `rbw-browser`, `rbw-unlockd`, `git-credential-rbw` and shell completions |
 | `packages.<system>.firefox-addon` | The AMO-signed Firefox add-on (`passthru.addonId`) |
 | `packages.<system>.chromium-addon` | The signed Chromium CRX (`passthru.extensionId`, `passthru.version`) |
 | `packages.<system>.browser-native-host` | Native messaging manifests for Firefox and Chromium, pointing at `rbw-browser` |
 | `packages.<system>.rbw-termux` | A native Android (Termux) build |
 | `overlays.default` | Sets `pkgs.rbw` to this flake's package |
 | `homeManagerModules.default` | `programs.rbw.declarative` |
+| `nixosModules.default` | `services.rbw-unlockd`, the fingerprint-enforcing unlock broker (see [desktop-unlock.md](desktop-unlock.md)) |
 
 The package builds with [crane](https://github.com/ipetkov/crane): rbw's
 dependencies are a separate derivation that only changes with `Cargo.lock` or

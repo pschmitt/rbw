@@ -2409,7 +2409,10 @@ enum NativeUnlockCmd {
             Service), optionally gated by a fingerprint, or in an \
             authentication-gated Termux Android Keystore bundle. Uses \
             Termux when running inside it and the keyring otherwise; \
-            --termux/--keyring choose explicitly."
+            --termux/--keyring choose explicitly. On the desktop the \
+            fingerprint is only enforced with --broker: otherwise any \
+            program running as you can read the saved password without a \
+            scan."
     )]
     Enroll {
         #[arg(
@@ -2427,9 +2430,33 @@ enum NativeUnlockCmd {
         #[arg(
             long,
             conflicts_with = "termux",
-            help = "Keyring: require fingerprint confirmation before retrieving the password"
+            help = "Desktop: require fingerprint confirmation before retrieving the password"
         )]
         fingerprint: bool,
+        #[arg(
+            long,
+            value_name = "STORE",
+            conflicts_with = "termux",
+            help = "Desktop: where to save the password: keyring (Secret \
+                Service, the default), tpm2 (sealed with systemd-creds to \
+                this machine's TPM) or file (unencrypted, owner-only)"
+        )]
+        store: Option<rbw::config::UnlockStore>,
+        #[arg(
+            long,
+            conflicts_with = "termux",
+            help = "Desktop, --store tpm2: also bind the credential to the \
+                Secure Boot state (PCR 7)"
+        )]
+        secure_boot: bool,
+        #[arg(
+            long,
+            conflicts_with = "termux",
+            help = "Desktop: let the rbw-unlockd system service hold the \
+                credential and enforce the fingerprint (implies \
+                --fingerprint; --store tpm2 by default)"
+        )]
+        broker: bool,
         #[arg(
             long,
             conflicts_with = "keyring",
@@ -3681,7 +3708,10 @@ fn run_secret_service(
 ) -> anyhow::Result<()> {
     match secret_service {
         SecretServiceCmd::Enroll { fingerprint } => {
-            commands::secret_service_enroll(fingerprint)
+            commands::secret_service_enroll(
+                fingerprint,
+                commands::DesktopStore::default(),
+            )
         }
         SecretServiceCmd::Remove { yes } => {
             commands::secret_service_remove(yes)
@@ -4828,6 +4858,9 @@ fn main() {
                     termux,
                     keyring,
                     fingerprint,
+                    store,
+                    secure_boot,
+                    broker,
                     validity,
                 } => commands::native_unlock_enroll(
                     if termux {
@@ -4839,6 +4872,11 @@ fn main() {
                     },
                     fingerprint,
                     validity,
+                    commands::DesktopStore {
+                        store,
+                        secure_boot,
+                        broker,
+                    },
                 ),
                 NativeUnlockCmd::Remove { yes } => {
                     commands::native_unlock_remove(yes)

@@ -127,6 +127,14 @@ pub fn profile() -> String {
     }
 }
 
+// A user-held native unlock credential (`tpm2` or `file` store).
+pub fn unlock_credential_file(
+    id: &str,
+    extension: &str,
+) -> std::path::PathBuf {
+    data_dir().join("unlock").join(format!("{id}.{extension}"))
+}
+
 pub fn unsaved_edit_dir() -> std::path::PathBuf {
     data_dir().join("unsaved-edits")
 }

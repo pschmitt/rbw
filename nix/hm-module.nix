@@ -214,7 +214,28 @@ let
                       fingerprint = mkOption {
                         type = types.bool;
                         default = false;
-                        description = "Require fprintd confirmation before keyring retrieval; this is not hardware enforced.";
+                        description = "Require fprintd confirmation before retrieving the credential. Only enforced with `broker`; otherwise any program running as the user can read the credential without a scan.";
+                      };
+                      store = mkOption {
+                        type = types.nullOr (
+                          types.enum [
+                            "keyring"
+                            "tpm2"
+                            "file"
+                          ]
+                        );
+                        default = null;
+                        description = "Where the credential is saved: `keyring` (Secret Service; the default when `null`), `tpm2` (sealed with systemd-creds to the TPM) or `file` (unencrypted, owner-only).";
+                      };
+                      secureBoot = mkOption {
+                        type = types.nullOr types.bool;
+                        default = null;
+                        description = "`tpm2` only: the credential is also bound to the Secure Boot state (PCR 7).";
+                      };
+                      broker = mkOption {
+                        type = types.nullOr types.bool;
+                        default = null;
+                        description = "The rbw-unlockd system service (`services.rbw-unlockd` NixOS module) holds the credential and enforces the fingerprint.";
                       };
                     };
                   }
