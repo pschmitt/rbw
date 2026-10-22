@@ -594,6 +594,14 @@ async function openDetail(item, trashed = false) {
     try { return ["http:", "https:"].includes(new URL(uri.uri).protocol); } catch (_) { return false; }
   });
   content.replaceChildren(title, ...(trashBanner ? [trashBanner] : []));
+  // Where the item lives: folder, account (with several) and collections.
+  const collectionNames = (detail.collection_options || []).filter(c => detail.collection_ids?.includes(c.id)).map(c => c.name);
+  const meta = [["folder", "Folder", detail.cipher.folder], ["vault", "Account", accountNames.length > 1 ? detail.account : null], ["collections", collectionNames.length === 1 ? "Collection" : "Collections", collectionNames.join(", ")]].filter(([, , value]) => value);
+  if (meta.length) {
+    const row = element("div", null, "detail-meta");
+    for (const [name, label, value] of meta) { const chip = element("span", null, "meta-chip"); chip.title = `${label}: ${value}`; chip.append(icon(name), element("small", label), element("strong", value)); row.append(chip); }
+    content.append(row);
+  }
   if (preference.favicons && firstUri) {
     request("favicon", { origin: new URL(firstUri.uri).origin }).then(favicon => {
       if (!favicon || current !== epoch || currentItem !== item) return;

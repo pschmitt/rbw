@@ -707,3 +707,13 @@ details.history-section > summary h3 { margin:18px 0 8px; }
 details.history-section > summary svg { width:16px; height:16px; color:var(--muted); transition:transform .15s; }
 details.history-section[open] > summary svg { transform:rotate(180deg); }
 @media (prefers-reduced-motion:reduce) { details.history-section > summary svg { transition:none; } }
+.detail-meta { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 12px; }
+.meta-chip { display:inline-flex; align-items:center; gap:5px; max-width:100%; padding:3px 8px; border:1px solid var(--line); border-radius:999px; background:var(--panel); font-size:12px; }
+.meta-chip svg { width:14px; height:14px; flex:none; color:var(--muted); }
+.meta-chip small { color:var(--muted); }
+.meta-chip strong { font-weight:500; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.detail-meta { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 12px; }
+.meta-chip { display:inline-flex; align-items:center; gap:5px; max-width:100%; padding:3px 8px; border:1px solid var(--line); border-radius:999px; background:var(--panel); font-size:12px; }
+.meta-chip svg { width:14px; height:14px; flex:none; color:var(--muted); }
+.meta-chip small { color:var(--muted); }
+.meta-chip strong { font-weight:500; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
