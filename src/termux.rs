@@ -376,7 +376,21 @@ pub fn delete(key_alias: &str) -> anyhow::Result<()> {
 }
 
 pub fn key_present(key_alias: &str) -> anyhow::Result<bool> {
-    Ok(key_infos()?.iter().any(|key| key.alias == key_alias))
+    match key_infos() {
+        Ok(keys) => Ok(keys.iter().any(|key| key.alias == key_alias)),
+        // No termux-keystore (not on Termux, or Termux:API missing): there
+        // can't be a key, which `rbw purge` must not treat as an error.
+        Err(e) if keystore_missing(&e) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+fn keystore_missing(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+    })
 }
 
 pub fn delete_if_present(key_alias: &str) -> anyhow::Result<bool> {
@@ -473,6 +487,16 @@ fn paint(value: &str, code: &str, color: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_program_counts_as_missing_keystore() {
+        let e = command_output("rbw-test-no-such-program", &[], None)
+            .unwrap_err();
+        assert!(keystore_missing(&e));
+        assert!(!keystore_missing(&anyhow::anyhow!(
+            "termux-keystore failed"
+        )));
+    }
 
     #[test]
     fn bundle_round_trip() {
