@@ -83,7 +83,7 @@ function message(text, error = false, action = null) {
   clearTimeout(notificationTimer);
   if (!error && /^(Working|Unlocking|Waiting for rbw|Checking vault locally|Loading Sends|Uploading)/.test(text)) return;
   const kind = error ? "error"
-    : /^(Vault unlocked|Copied\b|Filled \d+ fields|Saved\b|Updated\b|Collections updated|Attachment uploaded|Generated password (added|filled)|New password filled|Send link copied|Resumed your unsaved edit|Restarted from the current vault state)/i.test(text) ? "success"
+    : /^(Vault unlocked|Vault synced|Copied\b|Filled \d+ fields|Saved\b|Updated\b|Collections updated|Attachment uploaded|Generated password (added|filled)|New password filled|Send link copied|Resumed your unsaved edit|Restarted from the current vault state)/i.test(text) ? "success"
       : /^(Vault locked|This item changed|Your unsaved edit|Passkey request expired)/i.test(text) ? "warning" : "info";
   const notification = $("message");
   notification.dataset.kind = kind;
@@ -202,6 +202,7 @@ function show(page) {
   $("detail-header-actions").hidden = page !== "detail";
   $("edit-header-actions").hidden = page !== "editor";
   $("send-header-actions").hidden = page !== "send-editor";
+  $("settings-header-actions").hidden = page !== "settings";
   if ($("title-menu").open) $("title-menu").open = false;
   const tab = ["detail", "editor", "approval", "locked", "diagnostic"].includes(page) ? "vault" : page === "send-editor" ? "send" : page;
   document.querySelectorAll("#title-dropdown button").forEach(el => {
@@ -274,6 +275,8 @@ async function refresh(knownStatus = null, skipList = false) {
   renderAccounts(status.accounts || [], status.primary, preference.account);
   $("state").textContent = unlocked ? "Unlocked · shared rbw-agent" : "Locked";
   $("unlock").disabled = unlocked; $("lock").disabled = !unlocked;
+  $("header-lock").disabled = !unlocked;
+  if (!$("header-sync").classList.contains("is-syncing")) $("header-sync").disabled = !unlocked;
   $("unlock-fingerprint").hidden = unlocked || !status.fingerprint;
   if (!unlocked && status.fingerprint_auto_start && !fingerprintAutoStarted.has($("account").value)) {
     fingerprintAutoStarted.add($("account").value); fingerprintUnlock();
@@ -1031,7 +1034,14 @@ async function fingerprintUnlock() {
 }
 $("unlock-fingerprint").onclick = () => fingerprintUnlock();
 $("unlock").onclick = () => { show(approvalId ? "approval" : "locked"); $("account-menu").hidden = true; $("unlock-password").focus(); };
-$("settings-sync").onclick = $("sync").onclick; $("settings-lock").onclick = $("lock").onclick;
+$("header-lock").onclick = $("lock").onclick;
+// Syncs in place (the settings page stays open), spinning the icon meanwhile.
+$("header-sync").onclick = () => attempt(async () => {
+  const button = $("header-sync");
+  button.classList.add("is-syncing"); button.disabled = true;
+  try { await request("sync"); message("Vault synced."); }
+  finally { button.classList.remove("is-syncing"); button.disabled = !unlocked; }
+});
 let accountMenuTimer;
 $("account-toggle").onclick = event => {
   clearTimeout(accountMenuTimer);

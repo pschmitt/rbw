@@ -4,6 +4,10 @@
 
 ### Changed
 
+* Browser extension settings: Sync and Lock moved into the header as icon
+  buttons (the sync icon spins while syncing), settings are grouped into
+  cards of switch rows, switches have a white knob, and "Detailed settings"
+  is now a full-width "More settings" button.
 * Releases commit the signed browser packages on top of the tag and point a
   new `release` branch at that commit (then merge it into `main`), so commits
   landing on `main` during a release no longer break it. Nix consumers

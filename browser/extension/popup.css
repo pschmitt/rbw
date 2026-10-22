@@ -169,7 +169,18 @@ details.menu button .svg-icon { width:16px; height:16px; }
 .is-favorite .svg-icon { fill:currentColor; }
 .spinner { width:13px; height:13px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
-@media (prefers-reduced-motion:reduce) { .spinner { animation:none; } }
+#header-sync.is-syncing [data-icon] { display:inline-flex; animation:spin .9s linear infinite; }
+#header-sync.is-syncing:disabled { opacity:1; color:var(--accent); }
+/* Settings: grouped cards of switch rows; selects and shortcuts sit where a switch would. */
+.settings-card { margin:0 0 6px; border:1px solid var(--line); border-radius:12px; background:var(--panel); }
+.switch-row > select { display:inline-block; width:auto; max-width:46%; margin:0; flex:none; padding:4px 8px; }
+.switch-row > kbd { flex:none; }
+div.switch-row { cursor:default; }
+.switch-row small[hidden] { display:none; }
+.switch-row:has(> select:disabled) { opacity:.45; cursor:default; }
+.settings-version { margin-top:4px; text-align:center; }
+.more-settings { display:flex; width:100%; justify-content:center; align-items:center; gap:8px; margin:10px 0; }
+@media (prefers-reduced-motion:reduce) { .spinner, #header-sync.is-syncing [data-icon] { animation:none; } }
 #editor.is-saving { opacity:.6; transition:opacity .15s; }
 #header-save-edit .spinner { border-color:color-mix(in srgb, var(--bg) 40%, transparent); border-top-color:var(--bg); vertical-align:-2px; }
 .note-toolbar { display:flex; align-items:center; gap:6px; margin-bottom:10px; }
@@ -531,11 +542,12 @@ input:not([type=checkbox]):focus,select:focus,textarea:focus {
 .switch-row strong { display:block; font-weight:500; }
 .switch-row small { display:block; color:var(--muted); font-size:12px; }
 .switch-row.is-disabled { opacity:.45; cursor:default; }
-input.switch { appearance:none; flex:none; position:relative; width:36px; height:20px; margin:0; border-radius:10px; background:var(--line); cursor:inherit; transition:background .15s; }
-input.switch::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:var(--text); transition:transform .15s; }
+input.switch { appearance:none; flex:none; position:relative; width:38px; height:22px; margin:0; border-radius:999px; background:var(--line); cursor:inherit; transition:background .15s; }
+input.switch::after { content:""; position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:#fff; box-shadow:0 1px 2px #0004; transition:transform .15s; }
 input.switch:checked { background:var(--ok); }
-input.switch:checked::after { transform:translateX(16px); background:var(--bg); }
-input.switch:disabled { cursor:default; }
+input.switch:checked::after { transform:translateX(16px); }
+input.switch:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+input.switch:disabled { opacity:.5; cursor:default; }
 .chips { display:grid; grid-template-columns:repeat(6,1fr); gap:6px; margin:6px 0 4px; }
 .chips button { margin:0!important; padding:5px 11px; border-radius:999px; font-size:12px; font-weight:500; color:var(--muted); background:var(--bg); }
 .chips button:hover:not(:disabled) { color:var(--text); }
