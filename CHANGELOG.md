@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.24.0] - 2026-10-22
+
 ### Added
 
 * `--fzf` on `get`, `show`, `code`, `edit`, `set`, `remove`, `archive`,
