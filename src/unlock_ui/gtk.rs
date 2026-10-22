@@ -92,9 +92,9 @@ fn fingerprint_icon(
             );
             let _ = context.stroke();
         } else if animate && animation.active {
-            let y = 5.0
-                + f64::from(u32::try_from(animation.tick % 90).unwrap_or(0))
-                    * 0.6;
+            let y =
+                f64::from(u32::try_from(animation.tick % 90).unwrap_or(0))
+                    .mul_add(0.6, 5.0);
             context.set_source_rgba(0.71, 0.60, 1.0, 0.8);
             context.set_line_width(1.5);
             context.move_to(6.0, y);

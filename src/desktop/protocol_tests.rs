@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use zbus::object_server::SignalEmitter;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::OwnedObjectPath;
 
 const SERVICE: &str = "net.reactivated.Fprint";
 const DEVICE_PATH: &str = "/net/reactivated/Fprint/Device/0";
@@ -183,16 +183,12 @@ fn fingerprint_protocol_and_cleanup() {
                     ..State::default()
                 });
                 let server = zbus::connection::Builder::session()
-                    .unwrap()
                     .name(SERVICE)
-                    .unwrap()
                     .serve_at(
                         "/net/reactivated/Fprint/Manager",
                         Manager { path: DEVICE_PATH },
                     )
-                    .unwrap()
                     .serve_at(DEVICE_PATH, Device(state.clone()))
-                    .unwrap()
                     .build()
                     .await
                     .unwrap();

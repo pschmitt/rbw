@@ -5399,7 +5399,7 @@ mod test {
         };
         assert_eq!(
             older_than,
-            Some(std::time::Duration::from_secs(90 * 24 * 60 * 60))
+            Some(std::time::Duration::from_hours(90 * 24))
         );
         parse(&[
             "rbw",

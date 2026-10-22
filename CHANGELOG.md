@@ -15,6 +15,11 @@
   settings, and matching Home Manager options. `unlock --pinentry` remains an
   explicit password-only recovery path.
 
+### Changed
+
+* Update `zbus` to 6, `gtk4` to 0.11 and `open` to 5.4.5. The minimum supported
+  Rust version is now 1.92.
+
 ### Security
 
 * Require Tokio 1.54.1 or newer, fixing the timer race in RUSTSEC-2026-0384.

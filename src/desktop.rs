@@ -46,10 +46,7 @@ mod native {
     use std::future::Future;
     use std::time::Duration;
     use tokio::time::{timeout, timeout_at, Instant};
-    use zbus::{
-        zvariant::{OwnedObjectPath, Value},
-        Connection, Proxy,
-    };
+    use zbus::{Connection, OwnedObjectPath, Proxy, Variant};
     use zeroize::Zeroizing;
 
     const OPERATION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -420,7 +417,7 @@ mod native {
                         "rbw fingerprint confirmation",
                         body,
                         Vec::<&str>::new(),
-                        HashMap::<&str, Value<'_>>::new(),
+                        HashMap::<&str, Variant<'_>>::new(),
                         60000_i32,
                     ),
                 )
