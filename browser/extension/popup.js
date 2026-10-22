@@ -728,6 +728,17 @@ async function openDetail(item, trashed = false) {
     const sourceIndex = data.type === "card" ? field.originalIndex : i;
     content.append(detailField(field.name || "Custom field", field.value || "", item, copyable(`custom/${sourceIndex}`), field.type === "hidden"));
   }
+  if (detail.attachments?.length) {
+    content.append(element("h3", `Attachments · ${detail.attachments.length}`));
+    for (const attachment of detail.attachments) {
+      const row = element("div", null, "field attachment-row");
+      const label = element("div", null, "attachment-info");
+      label.append(icon("note"), element("strong", attachment.file_name || "Attachment"), element("small", attachment.size_name || (attachment.size ? `${attachment.size} bytes` : "")));
+      row.append(label);
+      if (!trashed) row.append(actionButton("Download", "download", async () => { const result = await request("attachment_download", { item, attachment: attachment.id }); message(`Saved to ${result.path}`); }, "icon"));
+      content.append(row);
+    }
+  }
   for (const passkey of detail.passkeys) { content.append(element("h3", "Passkey"), element("p", `${passkey.rp} · ${passkey.user || ""}`), element("p", `Created ${passkey.created || "unknown"}`, "hint")); }
   if (detail.history.length) { const history = element("details", null, "history-section"); const historyHeader = element("summary"); historyHeader.append(element("h3", `Password history · ${detail.history.length}`), icon("chevron-down")); history.append(historyHeader); for (const [index, entry] of detail.history.entries()) history.append(detailField(entry.last_used_date, entry.password, item, copyable(`history/${index}`), true)); content.append(history); }
   if (detail.collection_options?.length && !trashed) {

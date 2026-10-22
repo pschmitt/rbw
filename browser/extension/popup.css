@@ -739,3 +739,8 @@ details.history-section[open] > summary svg { transform:rotate(180deg); }
 .locked-banner.is-swapping > span { animation:banner-content-in 320ms cubic-bezier(.2,.8,.2,1) both; }
 .locked-banner.is-swapping > svg { animation:icon-pop 520ms cubic-bezier(.2,.8,.2,1) both; }
 .locked-banner.is-leaving { animation:banner-out 320ms ease-in both; }
+.attachment-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.attachment-info { display:flex; align-items:center; gap:8px; min-width:0; }
+.attachment-info svg { width:16px; height:16px; flex:none; color:var(--muted); }
+.attachment-info strong { font-weight:500; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.attachment-info small { color:var(--muted); flex:none; }

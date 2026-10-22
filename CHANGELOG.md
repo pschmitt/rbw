@@ -6,6 +6,8 @@
 
 ### Changed
 
+* The item view lists the item's attachments (name and size) with a download
+  button; before they only showed in the editor.
 * Browser extension: with several accounts, a locked account is flagged: a
   banner above the list (with Unlock), an amber "L" on the toolbar icon
   while some accounts are locked (red when all are), and the account menu
