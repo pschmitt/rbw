@@ -18,7 +18,8 @@
 
 * Browser extension: the on-load autofill notice shows how many logins
   matched the page ("Autofilled (1/3)"), so you know the fill shortcut can
-  cycle through more. The options page's "Sync vault" icon spins while
+  cycle through more. The toolbar icon's syncing badge now uses the same
+  sync icon as the popup. The options page's "Sync vault" icon spins while
   syncing, like the popup's.
 * Browser extension settings: Sync and Lock moved into the header as icon
   buttons (the sync icon spins while syncing), settings are grouped into

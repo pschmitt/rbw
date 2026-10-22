@@ -170,6 +170,7 @@ async function refreshVaultLockState(preferences = null) {
 // rotating sync arrows in the top-right corner, standing in for the match
 // count until the sync ends. Writes sync afterwards, so they count as well.
 const SYNCING_ACTIONS = ["sync", "save", "mutate", "import", "set_collections", "upload_finish", "attachment_delete"];
+const SYNC_ICON_PATHS = ["M20 7v5h-5M4 17v-5h5", "M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6"];
 const syncAnimation = { active: 0, timer: null, frame: 0, bitmaps: null };
 async function toolbarBitmaps() {
   const icons = api.runtime.getManifest().action?.default_icon || {};
@@ -182,15 +183,12 @@ function syncFrame(bitmap, size, angle) {
   const r = size * 0.3, cx = size - r - 0.5, cy = r + 0.5;
   ctx.fillStyle = "#1e1e1e"; ctx.strokeStyle = "#e8e8e8"; ctx.lineWidth = Math.max(1, size / 20);
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.strokeStyle = "#8ab4f8"; ctx.fillStyle = "#8ab4f8"; ctx.lineWidth = Math.max(1.2, size / 14); ctx.lineCap = "round";
-  for (const offset of [0, Math.PI]) {
-    const start = angle + offset, end = start + Math.PI * 0.62, a = r * 0.58;
-    ctx.beginPath(); ctx.arc(cx, cy, a, start, end); ctx.stroke();
-    const tip = { x: cx + a * Math.cos(end), y: cy + a * Math.sin(end) }, head = Math.max(1.5, size / 10);
-    ctx.beginPath(); ctx.moveTo(tip.x + head * Math.cos(end + Math.PI / 2), tip.y + head * Math.sin(end + Math.PI / 2));
-    ctx.lineTo(tip.x + head * 0.9 * Math.cos(end), tip.y + head * 0.9 * Math.sin(end));
-    ctx.lineTo(tip.x - head * 0.2 * Math.cos(end + Math.PI / 2), tip.y - head * 0.2 * Math.sin(end + Math.PI / 2)); ctx.fill();
-  }
+  // The popup's sync icon (icons.js `refresh`), spinning inside the badge.
+  const k = (r * 1.6) / 24;
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle); ctx.scale(k, k); ctx.translate(-12, -12);
+  ctx.strokeStyle = "#8ab4f8"; ctx.lineWidth = Math.max(1.2, size / 14) / k; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  for (const path of SYNC_ICON_PATHS) ctx.stroke(new Path2D(path));
+  ctx.restore();
   return ctx.getImageData(0, 0, size, size);
 }
 async function drawSyncFrame() {
