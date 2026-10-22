@@ -182,7 +182,6 @@ div.switch-row { cursor:default; }
 .switch-row small.setting-warning, .hint.setting-warning { color:var(--warn); }
 .switch-row small[hidden] { display:none; }
 .switch-row:has(> select:disabled) { opacity:.45; cursor:default; }
-.settings-version { margin-top:4px; text-align:center; }
 .more-settings { display:flex; width:100%; justify-content:center; align-items:center; gap:8px; margin:10px 0; }
 @media (prefers-reduced-motion:reduce) { .spinner, #header-sync.is-syncing [data-icon] { animation:none; } }
 #editor.is-saving { opacity:.6; transition:opacity .15s; }
@@ -277,6 +276,8 @@ button.icon { border-radius:9px; color:var(--muted); }
 button.icon:hover:not(:disabled) { color:var(--accent); }
 button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible { outline:2px solid color-mix(in srgb, var(--accent) 75%, transparent); outline-offset:2px; }
 main { padding:4px 14px 76px; }
+/* Room for the Add button only where it shows. */
+html[data-page=settings] main { padding-bottom:12px; }
 .search-row { padding:9px 0 7px; margin-bottom:7px; }
 .search {
   min-height:40px;
