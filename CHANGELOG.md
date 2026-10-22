@@ -8,6 +8,10 @@
   buttons (the sync icon spins while syncing), settings are grouped into
   cards of switch rows, switches have a white knob, and "Detailed settings"
   is now a full-width "More settings" button.
+* "Show website icons" is now "Show favicons" and on by default, with a
+  warning that fetching them lets the saved sites (and the network) see
+  which ones are in the vault. A browser that already stored its settings
+  keeps its current choice.
 * Releases commit the signed browser packages on top of the tag and point a
   new `release` branch at that commit (then merge it into `main`), so commits
   landing on `main` during a release no longer break it. Nix consumers
