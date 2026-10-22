@@ -26,6 +26,11 @@ h1 { font-size:18px; font-weight:600; margin:0; line-height:1.2; }
 .version { display:block; color:var(--muted); font-size:10px; line-height:1.2; font-weight:400; margin-top:1px; }
 h2 { font-size:18px; margin:16px 0 8px; }
 .detail-title { display:flex; align-items:center; gap:8px; }
+.trash-banner { margin:4px 0 12px; padding:10px 12px; border:1px solid color-mix(in srgb, var(--danger) 35%, var(--line)); border-radius:10px; background:var(--danger-soft); }
+.trash-banner p { display:flex; align-items:center; gap:8px; margin:0 0 8px; color:var(--danger); font-weight:500; }
+.trash-banner-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.trash-banner-actions button { margin:0; }
+.trash-banner-actions button.danger { color:var(--danger); }
 .detail-favicon { width:22px; height:22px; flex:none; object-fit:contain; border-radius:4px; }
 .uri-icon { width:16px; height:16px; flex:none; object-fit:contain; border-radius:3px; display:inline-flex; align-items:center; justify-content:center; }
 .uri-icon-android { color:#3ddc84; }

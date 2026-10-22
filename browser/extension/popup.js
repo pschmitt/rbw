@@ -336,14 +336,16 @@ function itemRow(item) {
     : (item.passkeys ? "key" : (icons[item.type] || "note"));
   image.dataset.fallback = fallback; image.append(icon(fallback)); row.append(image);
   if (preference.favicons && item.iconOrigin) { image.dataset.origin = item.iconOrigin; faviconObserver.observe(image); }
-  const main = button("", async () => { if (item.deleted) return; await openDetail(item.id); }, "item-main");
+  const main = button("", async () => { await openDetail(item.id, item.deleted); }, "item-main");
   const title = element("div", null, "item-title");
   if (item.favorite) { const star = icon("star"); star.classList.add("favorite-icon"); title.append(star); }
   title.append(element("strong", item.name)); main.append(title, element("small", item.username || labels[item.type])); row.append(main);
   const autofillExcluded = Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(item.id);
   if (autofillExcluded) title.append(element("small", "Autofill off", "item-autofill-disabled"));
   const actions = element("div", null, "item-actions");
-  if (item.deleted) actions.append(actionButton("Restore", "archive", async () => { await request("mutate", { item: item.id, mutation: "restore" }); await search(); }));
+  if (item.deleted) actions.append(
+    actionButton("Restore", "undo", async () => { await restoreItem(item.id); await search(); }),
+    actionButton("Delete permanently", "trash", async () => { if (await purgeItem(item.id, item.name)) await search(); }, "danger"));
   else {
     if (!autofillExcluded && (item.matched || ["card", "identity"].includes(item.type))) { const fill = actionButton("Fill", "fill", async () => { const n = await request("fill", { item: item.id, type: item.type }); message(`Filled ${n} fields. Submit the form when ready.`); }); fill.title = "Fill"; fill.classList.add("item-fill"); fill.setAttribute("aria-label", `Fill ${item.name}`); actions.append(fill); }
     const field = item.type === "login" ? "password" : item.type === "card" ? "number" : item.type === "identity" ? "email" : item.type === "ssh_key" ? "public_key" : "notes";
@@ -528,18 +530,40 @@ function revealButton(input) {
     toggle.title = reveal ? "Hide" : "Show"; toggle.setAttribute("aria-label", toggle.title); toggle.setAttribute("aria-pressed", String(reveal));
   }, "icon reveal-secret"); toggle.setAttribute("aria-controls", input.id); toggle.setAttribute("aria-pressed", "false"); return toggle;
 }
-async function openDetail(item) {
+// Trash actions: restore, or delete for good after confirming.
+async function restoreItem(item) {
+  await request("mutate", { item, mutation: "restore" }); message("Restored from the trash.");
+}
+async function purgeItem(item, name) {
+  if (!await confirmDialog({ title: `Delete “${name}” permanently?`, text: "This cannot be undone.", confirm: "Delete permanently", danger: true })) return false;
+  await request("mutate", { item, mutation: "purge" }); message("Deleted permanently."); return true;
+}
+// `trashed` opens an item from the trash: read-only, without copy actions
+// (the native host only serves those for items outside the trash).
+async function openDetail(item, trashed = false) {
   const current = ++epoch;
-  const detail = await request("detail", { item }); if (current !== epoch) return;
+  const detail = await request("detail", { item, trashed }); if (current !== epoch) return;
   currentItem = item; currentDetail = detail; show("detail");
+  $("detail-header-actions").hidden = trashed;
+  const copyable = field => trashed ? null : field;
   const content = $("detail-content");
   const data = detail.cipher.data;
   const title = element("h2", null, "detail-title");
   title.append(element("span", detail.cipher.name));
+  let trashBanner = null;
+  if (trashed) {
+    const banner = element("div", null, "trash-banner");
+    const text = element("p"); text.append(icon("trash"), element("span", "This item is in the trash."));
+    const actions = element("div", null, "trash-banner-actions");
+    actions.append(
+      actionButton("Restore", "undo", async () => { await restoreItem(item); await openDetail(item); }, ""),
+      actionButton("Delete permanently", "trash", async () => { if (await purgeItem(item, detail.cipher.name)) { show("vault"); await search(); } }, "danger"));
+    banner.append(text, actions); trashBanner = banner;
+  }
   const firstUri = (data.uris || []).find(uri => {
     try { return ["http:", "https:"].includes(new URL(uri.uri).protocol); } catch (_) { return false; }
   });
-  content.replaceChildren(title);
+  content.replaceChildren(title, ...(trashBanner ? [trashBanner] : []));
   if (preference.favicons && firstUri) {
     request("favicon", { origin: new URL(firstUri.uri).origin }).then(favicon => {
       if (!favicon || current !== epoch || currentItem !== item) return;
@@ -558,9 +582,9 @@ async function openDetail(item) {
   for (const [field, value] of orderedEntries) {
     if (["type", "uris", "fido2_credentials", "totp"].includes(field) || value == null || value === "") continue;
     const label = data.type === "card" ? cardFieldLabels[field] || pretty(field) : field === "totp" ? "Authenticator key" : pretty(field);
-    content.append(detailField(label, String(value), item, field, secret(field)));
+    content.append(detailField(label, String(value), item, copyable(field), secret(field)));
   }
-  if (data.totp) content.append(totpField(item));
+  if (data.totp && !trashed) content.append(totpField(item));
   if (data.uris?.length) {
     content.append(element("h3", "URIs"));
     for (const uri of data.uris) {
@@ -580,11 +604,11 @@ async function openDetail(item) {
     : customFields;
   for (const [i, field] of orderedCustomFields.entries()) {
     const sourceIndex = data.type === "card" ? field.originalIndex : i;
-    content.append(detailField(field.name || "Custom field", field.value || "", item, `custom/${sourceIndex}`, field.type === "hidden"));
+    content.append(detailField(field.name || "Custom field", field.value || "", item, copyable(`custom/${sourceIndex}`), field.type === "hidden"));
   }
   for (const passkey of detail.passkeys) { content.append(element("h3", "Passkey"), element("p", `${passkey.rp} · ${passkey.user || ""}`), element("p", `Created ${passkey.created || "unknown"}`, "hint")); }
-  if (detail.history.length) { const history = element("details"); history.append(element("summary", `Password history · ${detail.history.length}`)); for (const [index, entry] of detail.history.entries()) history.append(detailField(entry.last_used_date, entry.password, item, `history/${index}`, true)); content.append(history); }
-  if (detail.collection_options?.length) {
+  if (detail.history.length) { const history = element("details"); history.append(element("summary", `Password history · ${detail.history.length}`)); for (const [index, entry] of detail.history.entries()) history.append(detailField(entry.last_used_date, entry.password, item, copyable(`history/${index}`), true)); content.append(history); }
+  if (detail.collection_options?.length && !trashed) {
     content.append(element("h3", "Collections"));
     const dropdown = element("details", null, "collection-picker"); const summary = element("summary");
     const updateSummary = () => { const count = dropdown.querySelectorAll("input:checked").length; summary.textContent = count ? `${count} collection${count === 1 ? "" : "s"} selected` : "Choose collections"; };

@@ -88,6 +88,9 @@ enum Operation {
     },
     Detail {
         item: String,
+        // Look the item up in the trash instead (read-only view there).
+        #[serde(default)]
+        trashed: bool,
     },
     Save {
         item: Option<String>,
@@ -896,8 +899,15 @@ fn dispatch(
                     &options,
                     password.as_deref(),
                 ),
-                Operation::Detail { item } => {
-                    let entry = entry(&db, &item)?;
+                Operation::Detail { item, trashed } => {
+                    let entry = if trashed {
+                        db.entries
+                            .iter()
+                            .find(|e| e.id == item && e.deleted)
+                            .context("item unavailable")?
+                    } else {
+                        entry(&db, &item)?
+                    };
                     let mut result = detail(entry)?;
                     let options = db.collections.iter().filter(|c| Some(&c.org_id) == entry.org_id.as_ref()).map(|c| Ok(json!({"id": c.id, "name": actions::decrypt(&c.name, None, Some(&c.org_id))?}))).collect::<anyhow::Result<Vec<_>>>()?;
                     result["collection_options"] = json!(options);
@@ -1073,6 +1083,21 @@ fn dispatch(
                                     .context("not logged in")?,
                                 &entry.id,
                             )?;
+                            commands::after_server_write(&mut db, tokens)?;
+                        }
+                        // Only from the trash, like the Bitwarden clients.
+                        "purge" => {
+                            ensure!(entry.deleted, "not in the trash");
+                            let (tokens, ()) =
+                                rbw::actions::delete_permanently(
+                                    db.access_token
+                                        .as_deref()
+                                        .context("not logged in")?,
+                                    db.refresh_token
+                                        .as_deref()
+                                        .context("not logged in")?,
+                                    &entry.id,
+                                )?;
                             commands::after_server_write(&mut db, tokens)?;
                         }
                         "favorite" => {

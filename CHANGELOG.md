@@ -36,6 +36,10 @@
 * The item editor picks the folder from a dropdown of the account's folders
   (or "No folder"); "New folder…" reveals a name field and saving creates it.
 
+* Trashed items open in a read-only item view with Restore and "Delete
+  permanently" (confirmed; only for items already in the trash), and trash
+  rows offer "Delete permanently" next to Restore.
+
 ### Fixed
 
 * `rbw unlock` names the account in "✓ Vault unlocked (NAME).", which
