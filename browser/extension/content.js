@@ -262,27 +262,41 @@ if (window === window.top) {
   }, true);
   const loaded = () => {
     autofillGate.waiting = false;
-    let observer, timer, expiry;
-    const eligible = () => document.querySelector('input[type="password"]:not([autocomplete="new-password"]),input[autocomplete="username"]');
+    let timer;
+    let pageUrl = location.href;
+    let attempted = new WeakSet();
+    const visible = el => el.getClientRects().length && (typeof el.checkVisibility === "function" ? el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) : getComputedStyle(el).visibility !== "hidden");
     const check = () => {
-      if (!eligible()) return false;
-      observer?.disconnect(); clearTimeout(timer); clearTimeout(expiry);
+      if (location.href !== pageUrl) {
+        pageUrl = location.href;
+        attempted = new WeakSet();
+        autofillGate.completed = false;
+      }
+      if (autofillGate.pending || document.visibilityState === "hidden") return;
+      const fields = [...document.querySelectorAll('input[type="password"]:not([autocomplete="new-password"]),input[autocomplete="username"]')];
+      const field = fields.find(el => !attempted.has(el) && !el.value && !el.disabled && !el.readOnly && visible(el));
+      if (!field) return;
+      // Mark only visible candidates: a hidden password step may become visible
+      // after passkey login without a document navigation.
+      for (const el of fields.filter(el => visible(el))) attempted.add(el);
       autofillGate.pending = true;
       (globalThis.browser || chrome).runtime.sendMessage({ action: "autofill_load" }).then(response => {
-        autofillGate.pending = false;
         autofillGate.completed = Number(response?.result) > 0;
-      }).catch(() => { autofillGate.pending = false; });
-      return true;
+      }).catch(() => {}).finally(() => {
+        autofillGate.pending = false;
+        schedule();
+      });
     };
-    if (check()) return;
-    // Briefly cover asynchronously rendered sign-in forms without keeping a
-    // permanent observer or querying the vault on ordinary content/search pages.
-    observer = new MutationObserver(() => {
-      if (eligible()) { check(); return; }
-      clearTimeout(timer); timer = setTimeout(check, 250);
-    });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-    expiry = setTimeout(() => { observer.disconnect(); clearTimeout(timer); }, 10000);
+    const schedule = () => { clearTimeout(timer); timer = setTimeout(check, 250); };
+    const observer = new MutationObserver(schedule);
+    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["type", "class", "style", "hidden", "disabled", "readonly", "autocomplete"] });
+    // History API navigation does not dispatch popstate. Poll only the URL;
+    // ordinary mutations never cause another lookup for the same form.
+    setInterval(() => { if (location.href !== pageUrl) schedule(); }, 1000);
+    addEventListener("popstate", schedule);
+    addEventListener("hashchange", schedule);
+    document.addEventListener("visibilitychange", schedule);
+    schedule();
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", loaded, { once: true }); else loaded();
 }

@@ -73,13 +73,22 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
   const assignments = [];
   let scoped = fields;
   const put = (el, value, field = null) => {
-    if (el && value != null) {
+    if (el && value != null && (!options.automatic || !el.value)) {
       assignments.push({ el, value, field });
       count++;
     }
   };
   if (data.type === "login") {
-    const passwords = fields.filter(el => el.type === "password" && el.autocomplete !== "new-password");
+    // Masked integration credentials are not login passwords, even on a
+    // matching site. Include associated labels (Rails often labels API keys).
+    const isIntegrationSecret = el => {
+      const text = [el.id, el.name, el.placeholder, el.getAttribute("aria-label"),
+        ...Array.from(el.labels || [], label => label.textContent),
+        ...(el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean).map(id => document.getElementById(id)?.textContent)]
+        .filter(Boolean).join(" ").replace(/([a-z])([A-Z])/g, "$1 $2");
+      return /api[\s_-]*key|access[\s_-]*key|token|client[\s_-]*secret|private[\s_-]*key|secret[\s_-]*key/i.test(text);
+    };
+    const passwords = fields.filter(el => el.type === "password" && !el.autocomplete.split(/\s+/).includes("new-password") && !isIntegrationSecret(el));
     if (passwords.length > 1) throw new Error("Several password fields found. Select a login form.");
     const password = passwords[0];
     const isSearch = el => el.type === "search" || el.closest('[role="search"],form[action*="search"]') || /search|(^|[\s_-])q($|[\s_-])/i.test([el.id, el.name, el.autocomplete, el.getAttribute("aria-label"), el.placeholder].filter(Boolean).join(" "));

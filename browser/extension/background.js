@@ -592,7 +592,7 @@ async function pageMessage(message, sender, respond) {
     const results = await cachedSearch({ account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
     const eligible = results.items.filter(item => !item.protected && !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems));
     if (!eligible.length) return respond({ result: false });
-    return respond({ result: await fill({ item: eligible[0].id, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, prefs.account || null) });
+    return respond({ result: await fill({ item: eligible[0].id, automatic: true, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, prefs.account || null) });
   }
   if (message.action === "inline_open") {
     if (!prefs.inlineSuggestions || autofillBlocked) return respond({ result: null });
@@ -675,7 +675,7 @@ async function fill(message, account) {
     const filledFrames = [];
     const prefs = await settings();
     const cardSecurityCode = ["fill", "clipboard"].includes(prefs.cardSecurityCode) ? prefs.cardSecurityCode : "off";
-    const fillOptions = { animations: prefs.animations, animationSpeed: prefs.animationSpeed, icon: prefs.animations === "plaid" ? await getNotificationIcon() : null, cardSecurityCode };
+    const fillOptions = { automatic: message.automatic === true, animations: prefs.animations, animationSpeed: prefs.animationSpeed, icon: prefs.animations === "plaid" ? await getNotificationIcon() : null, cardSecurityCode };
     for (const frame of frames.filter(f => { try { return new URL(f.url).origin === new URL(tab.url).origin; } catch (_) { return false; } })) {
       try {
         const results = await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [frame.frameId] }, func: fillPage, args: [frame.url, credential, token, fillOptions] });
@@ -687,6 +687,9 @@ async function fill(message, account) {
       } catch (error) { if (frame.frameId === 0 && frames.length === 1) throw error; }
     }
     if (!count) throw new Error("No supported fields found on this page.");
+    // Automatic, inline and popup fills all establish the shortcut's position.
+    // Remember the item rather than its index: matching order can change.
+    if (credential.type === "login") fillCycles.set(tab.id, { url: tab.url, account, item: message.item });
     const hasSecurityCode = credential.type === "card" && typeof credential.code === "string" && credential.code.length > 0;
     let copiedSecurityCode = false;
     let securityCodeCopyFailed = false;
@@ -991,11 +994,10 @@ async function fillShortcut(tabId) {
       await notifyFill(tab, { title: "No matching logins", error: true, message: "No matching logins found for this page." }).catch(() => {});
       return;
     }
-    const signature = JSON.stringify([account, eligible.map(item => item.id)]);
     const previous = fillCycles.get(tab.id);
-    const index = previous?.url === tab.url && previous.signature === signature && Date.now() - previous.time < 30000 ? (previous.index + 1) % eligible.length : 0;
+    const previousIndex = previous?.url === tab.url && previous.account === account ? eligible.findIndex(item => item.id === previous.item) : -1;
+    const index = (previousIndex + 1) % eligible.length;
     await fill({ item: eligible[index].id, displayName: eligible[index].name, expectedTab: tab.id, expectedUrl: tab.url, cycleIndex: index + 1, cycleCount: eligible.length }, account);
-    fillCycles.set(tab.id, { url: tab.url, signature, index, time: Date.now() });
     popupNotices.delete(tab.id);
   } catch (err) {
     if (tab) {
