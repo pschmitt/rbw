@@ -118,7 +118,8 @@ failing the whole lookup.
 When a lookup matches several entries, these commands fail with the list of
 candidates. Pass `--fzf` to pick one with [fzf](https://github.com/junegunn/fzf)
 instead: the matches are listed by name, user and folder, with a colored
-`rbw show` preview of the highlighted entry.
+`rbw show --mask` preview of the highlighted entry (secret values shown as
+dots).
 
 ```sh
 rbw get --fzf github
@@ -131,7 +132,9 @@ unset; they are applied after rbw's defaults and your own
 `FZF_DEFAULT_OPTS`, so they can override both. `rbw config set fzf.enabled
 true` uses the picker without `--fzf`, but only when rbw runs on a terminal,
 so scripts still get the error. The preview runs
-`CLICOLOR_FORCE=1 rbw show <id>`; `CLICOLOR_FORCE` forces colors in any rbw
+`CLICOLOR_FORCE=1 rbw show --mask <id>`. `rbw show --mask` prints `••••••••`
+in place of the password, TOTP seed, card number and CVV, SSN, SSH private
+key and hidden custom fields (text output only). `CLICOLOR_FORCE` forces colors in any rbw
 command whose output isn't a terminal, and `NO_COLOR` still disables them.
 
 `rbw list` also accepts an optional search term (`rbw list google`) to show only

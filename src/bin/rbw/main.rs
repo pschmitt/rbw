@@ -1108,6 +1108,13 @@ enum Opt {
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
         )]
         from_file_passphrase: Option<String>,
+        #[arg(
+            long,
+            conflicts_with_all = ["raw", "yaml"],
+            help = "Show dots instead of secret values (password, TOTP, card \
+                number and CVV, SSN, SSH private key, hidden fields)"
+        )]
+        mask: bool,
     },
 
     #[command(about = "Search for entries")]
@@ -4250,6 +4257,7 @@ fn main() {
             all,
             from_file,
             from_file_passphrase,
+            mask,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             commands::show(
@@ -4264,6 +4272,7 @@ fn main() {
                 all,
                 from_file.as_deref(),
                 from_file_passphrase.as_deref(),
+                mask,
             )
         })(),
         Opt::Search {

@@ -690,6 +690,14 @@ assert $COUNT in [v for v in info.values() if isinstance(v, int)], info
     [ "$status" -ne 0 ]
     [[ "$output" == *"multiple entries found"* ]]
 
+    # `show --mask` hides the password (and its length) but not the user.
+    output="$("$RBW" show --mask --user fzf-1 e2e-fzf)"
+    [[ "$output" == *"fzf-1"* ]]
+    [[ "$output" == *"••••••••"* ]]
+    [[ "$output" != *"fzf-pass-1"* ]]
+    run "$RBW" show --mask --json --user fzf-1 e2e-fzf
+    [ "$status" -ne 0 ]
+
     # Stand-in fzf: records how it was called, picks the candidate whose
     # username (fourth column) is $FAKE_FZF_USER, or exits like a cancel,
     # and runs the preview for the pick like fzf would.
@@ -712,8 +720,10 @@ SCRIPT
     grep -q -- '--select-1' "$FAKE_FZF_LOG"
     grep -q -- '--height=40%' "$FAKE_FZF_LOG"
     grep -q -- '--with-nth=3..' "$FAKE_FZF_LOG"
-    grep -q 'CLICOLOR_FORCE=1 .* show {1}' "$FAKE_FZF_LOG"
+    grep -q 'CLICOLOR_FORCE=1 .* show --mask {1}' "$FAKE_FZF_LOG"
     grep -q 'fzf-2' "$FAKE_FZF_PREVIEW"
+    grep -q '••••••••' "$FAKE_FZF_PREVIEW"
+    ! grep -q 'fzf-pass-2' "$FAKE_FZF_PREVIEW"
 
     # `config set`/`unset` stop the agent, hence the unlocks.
     "$RBW" config set fzf.options -- '--layout=reverse'

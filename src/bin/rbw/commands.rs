@@ -1491,11 +1491,21 @@ impl DecryptedCipher {
         )
     }
 
-    fn display_show(&self) {
+    // `mask` replaces every secret value (password, TOTP seed, card
+    // number/CVV, SSN, SSH private key, hidden fields) with a fixed run of
+    // dots, so neither the value nor its length is shown.
+    fn display_show(&self, mask: bool) {
         let c = stdout_supports_color();
         let lbl = |s: &str| style::label(&format!("{s:<12}"), c);
-        let dim = |s: &str| style::dim(s, c);
-        let secret = |s: &str| style::secret(s, c);
+        let dim = |s: &str| {
+            if mask {
+                style::secret(MASKED_SECRET, c)
+            } else {
+                style::dim(s, c)
+            }
+        };
+        let secret =
+            |s: &str| style::secret(if mask { MASKED_SECRET } else { s }, c);
         let section = |s: &str| style::section(s, c);
 
         // Header fields: Name, UID, Type, Folder
@@ -1664,7 +1674,7 @@ impl DecryptedCipher {
                 fingerprint,
             } => {
                 if let Some(fp) = fingerprint {
-                    println!("{} {}", lbl("Fingerprint"), dim(fp));
+                    println!("{} {}", lbl("Fingerprint"), style::dim(fp, c));
                 }
                 if let Some(pk) = public_key {
                     println!("{} {pk}", lbl("Public key"));
@@ -1714,6 +1724,9 @@ impl DecryptedCipher {
         }
     }
 }
+
+// What `rbw show --mask` prints instead of a secret value.
+const MASKED_SECRET: &str = "••••••••";
 
 // serde's `skip_serializing_if` requires a `fn(&T) -> bool`.
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -4725,6 +4738,7 @@ fn show_from_file(
     output: OutputMode,
     force_exact: bool,
     passphrase: Option<&str>,
+    mask: bool,
 ) -> anyhow::Result<()> {
     let vault = load_from_file(path, passphrase)?;
 
@@ -4754,7 +4768,7 @@ fn show_from_file(
     } else if output == OutputMode::Name {
         println!("{}", decrypted.name);
     } else {
-        decrypted.display_show();
+        decrypted.display_show(mask);
     }
     Ok(())
 }
@@ -4772,7 +4786,12 @@ pub fn show(
     all: bool,
     from_file: Option<&std::path::Path>,
     from_file_passphrase: Option<&str>,
+    mask: bool,
 ) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !mask || !output_is_structured(output),
+        "--mask only applies to the default text output"
+    );
     if let Some(path) = from_file {
         return show_from_file(
             path,
@@ -4783,6 +4802,7 @@ pub fn show(
             output,
             force_exact,
             from_file_passphrase,
+            mask,
         );
     }
 
@@ -4815,7 +4835,7 @@ pub fn show(
     } else if output == OutputMode::Name {
         println!("{}", decrypted.name);
     } else {
-        decrypted.display_show();
+        decrypted.display_show(mask);
     }
     Ok(())
 }
@@ -17728,7 +17748,7 @@ fn fzf_select(
     if accounts.iter().any(Option::is_some) {
         preview.push_str(" -a {2}");
     }
-    preview.push_str(" show {1}");
+    preview.push_str(" show --mask {1}");
 
     let default_opts = fzf_default_opts(
         std::env::var("FZF_DEFAULT_OPTS").ok().as_deref(),

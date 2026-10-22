@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+* `rbw show --mask` prints dots instead of secret values (password, TOTP
+  seed, card number and CVV, SSN, SSH private key, hidden custom fields),
+  without revealing their length.
+
+### Changed
+
+* The `--fzf` preview uses `rbw show --mask`, so passwords and other secrets
+  no longer appear in it.
+
 ## [2.25.0] - 2026-10-22
 
 ### Added
