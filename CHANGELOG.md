@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.23.0] - 2026-10-22
+
 ### Added
 
 * Native Linux fingerprint unlock and encrypted Secret Service enrollment for
