@@ -690,23 +690,30 @@ assert $COUNT in [v for v in info.values() if isinstance(v, int)], info
     [ "$status" -ne 0 ]
     [[ "$output" == *"multiple entries found"* ]]
 
-    # Stand-in fzf: records how it was called and picks the candidate whose
-    # username (third column) is $FAKE_FZF_USER, or exits like a cancel.
+    # Stand-in fzf: records how it was called, picks the candidate whose
+    # username (fourth column) is $FAKE_FZF_USER, or exits like a cancel,
+    # and runs the preview for the pick like fzf would.
     FAKE_BIN="$(mktemp -d)"
     cat >"$FAKE_BIN/fzf" <<'SCRIPT'
 #!/bin/sh
 printf '%s\n' "$*" "$FZF_DEFAULT_OPTS" >"$FAKE_FZF_LOG"
 [ -n "$FAKE_FZF_USER" ] || exit 130
-awk -F '\t' -v user="$FAKE_FZF_USER" '$3 == user'
+line="$(awk -F '\t' -v user="$FAKE_FZF_USER" '$4 == user')"
+id="$(printf '%s' "$line" | cut -f1)"
+account="$(printf '%s' "$line" | cut -f2)"
+preview="$(printf '%s' "$4" | sed "s/{1}/'$id'/; s/{2}/'$account'/")"
+sh -c "$preview" >"$FAKE_FZF_PREVIEW" 2>&1
+printf '%s\n' "$line"
 SCRIPT
     chmod +x "$FAKE_BIN/fzf"
-    export FAKE_FZF_LOG="$(mktemp)"
+    export FAKE_FZF_LOG="$(mktemp)" FAKE_FZF_PREVIEW="$(mktemp)"
 
     [ "$(PATH="$FAKE_BIN:$PATH" FAKE_FZF_USER=fzf-2 RBW_FZF_OPTS='--height=40%' "$RBW" get --fzf e2e-fzf)" = "fzf-pass-2" ]
     grep -q -- '--select-1' "$FAKE_FZF_LOG"
     grep -q -- '--height=40%' "$FAKE_FZF_LOG"
-    grep -q -- '--with-nth=2..' "$FAKE_FZF_LOG"
+    grep -q -- '--with-nth=3..' "$FAKE_FZF_LOG"
     grep -q 'CLICOLOR_FORCE=1 .* show {1}' "$FAKE_FZF_LOG"
+    grep -q 'fzf-2' "$FAKE_FZF_PREVIEW"
 
     # `config set`/`unset` stop the agent, hence the unlocks.
     "$RBW" config set fzf.options -- '--layout=reverse'

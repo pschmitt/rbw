@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* The `--fzf` preview failed with "no entry found" when the matches were
+  pooled from several accounts; it now looks each entry up in its own
+  account.
+
 ## [2.24.0] - 2026-10-22
 
 ### Added

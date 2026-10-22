@@ -17271,14 +17271,19 @@ fn find_entry_multi(
             needles = vec![Needle::Name(s.clone())];
         }
 
-        let (entry, _) = find_entry_raw(
+        // The active account is whichever was loaded last, so tell the fzf
+        // preview which account owns each pooled candidate.
+        set_fzf_entry_accounts(owner.clone());
+        let found = find_entry_raw(
             &pool,
             &needles,
             username,
             folder,
             ignore_case,
             force_exact,
-        )?;
+        );
+        set_fzf_entry_accounts(std::collections::HashMap::new());
+        let (entry, _) = found?;
         let account = owner[&entry.id].clone();
         crate::actions::set_active_account(Some(account.clone()))?;
         let decrypted = decrypt_cipher(&entry)?;
@@ -17618,12 +17623,44 @@ pub fn set_fzf_select(enabled: bool) {
     FZF_SELECT.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
+// Entry id -> owning account for candidates pooled from several accounts
+// (`find_entry_multi`), so each fzf preview targets the right account rather
+// than the active one. Empty outside such a lookup.
+static FZF_ENTRY_ACCOUNTS: std::sync::Mutex<
+    Option<std::collections::HashMap<String, String>>,
+> = std::sync::Mutex::new(None);
+
+fn set_fzf_entry_accounts(
+    accounts: std::collections::HashMap<String, String>,
+) {
+    *FZF_ENTRY_ACCOUNTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some(accounts).filter(|accounts| !accounts.is_empty());
+}
+
+// The account the fzf preview should look `id` up in: its owner when
+// pooled from several accounts, else the active account.
+fn fzf_entry_account(id: &str) -> Option<String> {
+    FZF_ENTRY_ACCOUNTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .and_then(|accounts| accounts.get(id).cloned())
+        .or_else(crate::actions::current_account)
+}
+
 // One tab-separated fzf line per candidate: the id (hidden, used for the
-// preview and to read the selection back), then what's shown.
-fn fzf_candidate_line(entry: &DecryptedSearchCipher) -> String {
+// preview and to read the selection back), the owning account (hidden, for
+// the preview), then what's shown.
+fn fzf_candidate_line(
+    entry: &DecryptedSearchCipher,
+    account: Option<&str>,
+) -> String {
     let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
     [
         clean(&entry.id),
+        clean(account.unwrap_or("")),
         clean(&entry.name),
         clean(entry.user.as_deref().unwrap_or("")),
         clean(entry.folder.as_deref().unwrap_or("")),
@@ -17668,13 +17705,16 @@ fn fzf_select(
 
     let exe = std::env::current_exe()
         .context("failed to find the rbw executable for the fzf preview")?;
+    let accounts: Vec<Option<String>> = candidates
+        .iter()
+        .map(|entry| fzf_entry_account(&entry.id))
+        .collect();
     let mut preview = format!(
         "CLICOLOR_FORCE=1 {}",
         shell_quote(&exe.display().to_string())
     );
-    if let Some(account) = crate::actions::current_account() {
-        preview.push_str(" -a ");
-        preview.push_str(&shell_quote(&account));
+    if accounts.iter().any(Option::is_some) {
+        preview.push_str(" -a {2}");
     }
     preview.push_str(" show {1}");
 
@@ -17683,7 +17723,7 @@ fn fzf_select(
         fzf_custom_opts().as_deref(),
     );
     let mut child = std::process::Command::new("fzf")
-        .args(["--delimiter=\t", "--with-nth=2..", "--preview", &preview])
+        .args(["--delimiter=\t", "--with-nth=3..", "--preview", &preview])
         .env("FZF_DEFAULT_OPTS", default_opts)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -17697,9 +17737,13 @@ fn fzf_select(
         })?;
     {
         let mut stdin = child.stdin.take().context("fzf has no stdin")?;
-        for entry in candidates {
-            writeln!(stdin, "{}", fzf_candidate_line(entry))
-                .context("failed to write to fzf")?;
+        for (entry, account) in candidates.iter().zip(&accounts) {
+            writeln!(
+                stdin,
+                "{}",
+                fzf_candidate_line(entry, account.as_deref())
+            )
+            .context("failed to write to fzf")?;
         }
     }
     let output =
@@ -24524,10 +24568,13 @@ mod test {
         let (_, mut entry) =
             make_entry("a\tname", Some("user"), Some("folder"), &[]);
         entry.id = "id-1".to_string();
-        assert_eq!(fzf_candidate_line(&entry), "id-1\ta name\tuser\tfolder");
+        assert_eq!(
+            fzf_candidate_line(&entry, Some("work")),
+            "id-1\twork\ta name\tuser\tfolder"
+        );
         let (_, mut bare) = make_entry("bare", None, None, &[]);
         bare.id = "id-2".to_string();
-        assert_eq!(fzf_candidate_line(&bare), "id-2\tbare\t\t");
+        assert_eq!(fzf_candidate_line(&bare, None), "id-2\t\tbare\t\t");
     }
 
     #[test]
