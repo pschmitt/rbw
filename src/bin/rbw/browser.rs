@@ -400,7 +400,7 @@ fn request_item(operation: &Operation) -> Option<&str> {
         | Operation::Copy { item, .. }
         | Operation::PasskeyGet { item, .. }
         | Operation::PasskeyVerify { item, .. }
-        | Operation::Detail { item }
+        | Operation::Detail { item, .. }
         | Operation::Mutate { item, .. }
         | Operation::SetCollections { item, .. }
         | Operation::AttachmentDownload { item, .. }
