@@ -619,6 +619,10 @@ async function pageMessage(message, sender, respond) {
   if (message.action === "inline_open") {
     if (!prefs.inlineSuggestions || autofillBlocked) return respond({ result: null });
     const kind = message.kind === "card" ? "card" : "login";
+    // With auto-fill on page load the login is filled for you (the page may
+    // focus its field before that has started); only an explicit request
+    // (the inline icon) lists logins.
+    if (kind === "login" && prefs.autoFill && message.explicit !== true) return respond({ result: null });
     try {
       const result = await cachedSearch(kind === "card"
         ? { account: prefs.account || null, kind: "card" }
