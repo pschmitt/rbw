@@ -4,8 +4,13 @@ The flake builds rbw, its browser extension and the native messaging host, and
 ships a Home Manager module that renders rbw's `config.yaml`.
 
 ```nix
-inputs.rbw.url = "github:pschmitt/rbw";
+# The latest release, with its signed browser packages:
+inputs.rbw.url = "github:pschmitt/rbw/release";
 ```
+
+`main` (`github:pschmitt/rbw`) also works, but carries unreleased changes, and
+its checked-in browser packages are those of the last release, which may lag
+behind its extension source.
 
 ## Flake outputs
 

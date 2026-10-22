@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Releases commit the signed browser packages on top of the tag and point a
+  new `release` branch at that commit (then merge it into `main`), so commits
+  landing on `main` during a release no longer break it. Nix consumers
+  should follow `github:pschmitt/rbw/release`.
+
 ## [2.26.0] - 2026-10-22
 
 ### Added

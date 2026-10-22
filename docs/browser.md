@@ -97,8 +97,11 @@ identity. Never put private signing keys or AMO credentials in the repository.
 The extension shares rbw's version: `build.py` and `nix/browser.nix` read it
 from `Cargo.toml`, so there is nothing to bump separately. The release workflow
 signs the tagged source through AMO and with the existing Chromium key,
-publishes the packages with the release and commits them back to `main` (the
-Nix package installs the checked-in ones). Pushes and pull requests only build
+publishes the packages with the release, commits them on top of the tag and
+merges that commit into `main` (the Nix package installs the checked-in
+ones). The `release` branch points at the latest such commit, so following
+`github:pschmitt/rbw/release` gets the latest release with matching signed
+packages. Commits that land on `main` while a release runs don't affect it. Pushes and pull requests only build
 unsigned ZIPs. Signing reads
 `RBW_AMO_API_KEY`, `RBW_AMO_API_SECRET` and `RBW_CHROMIUM_SIGNING_KEY` from
 GitHub Actions secrets. AMO signs each version once, so every release that
@@ -111,7 +114,8 @@ with
    commits and pushes.
 2. `tag` waits for green build, test and docker runs on that commit and pushes
    a GPG-signed `vX.Y.Z` tag; the release workflow signs and publishes
-   everything, then commits the signed packages to `main`.
+   everything, then commits the signed packages on top of the tag, moves
+   `release` there and merges it into `main`.
 The generated icon source is `browser/icon-source.png`; prompt provenance is
 recorded in `browser/icon-prompt.txt`, with sized toolbar assets in
 `browser/extension/icons/`.

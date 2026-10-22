@@ -30,13 +30,16 @@ to trigger CI; fix failures and wait for green checks before releasing it.
 The browser extension shares rbw's version (from `Cargo.toml`). Release with
 `just release-prepare X.Y.Z`, then `just release-tag` (see
 `tools/release.sh`); the tag must be GPG-signed, so unlock GPG first. The
-tag's release workflow signs the extension (AMO, CRX), publishes it and
-commits the signed packages to `main`; pin consumers to that commit. Any extension source change needs a new version, because
-AMO signs each version only once.
+tag's release workflow signs the extension (AMO, CRX), publishes it,
+commits the signed packages on top of the tag, points the `release` branch
+at that commit and merges it into `main`. Commits landing on `main` in the
+meantime don't matter. Any extension source change needs a new version,
+because AMO signs each version only once.
 
-This repo is consumed by `nixos-config` (flake input `rbw`). After pushing
-to `main`: bump the lock (`nix flake lock --update-input rbw` in
-`nixos-config.git`), then deploy with `just deploy fnuc` (fnuc is a full
+This repo is consumed by `nixos-config` (flake input `rbw`, following the
+`release` branch). After a release's workflow has finished: bump the lock
+(`nix flake lock --update-input rbw` in `nixos-config.git`; it picks up the
+latest release, never unreleased work on `main`), then deploy with `just deploy fnuc` (fnuc is a full
 NixOS host now, not a standalone Home Manager one — `hosts/fnuc/nixos.nix`
 is the source of truth, `hosts/fnuc/default.nix`/`just hm fnuc` is the old
 pre-migration path and shouldn't be relied on). `rbw`/`rbw-agent` on
