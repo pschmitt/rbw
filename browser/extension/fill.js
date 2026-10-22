@@ -366,7 +366,7 @@ function showFillNotice(expectedUrl, notice) {
   const border = notice.error ? "#efa9b9" : "#555555";
   const bg = notice.error ? "#302528" : "#282828";
   const motionRules = notice.animations === "off" ? "" : `@media(prefers-reduced-motion:no-preference){.notice{opacity:0;transform:translateX(40px)}.notice.entering{animation:rbw-in ${enterDuration}ms cubic-bezier(.16,1,.3,1) both}.notice.closing{animation:rbw-out ${exitDuration}ms ease-in both}@keyframes rbw-in{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}@keyframes rbw-out{to{opacity:0;transform:translateX(16px)}}}`;
-  sheet.replaceSync(`:host{all:initial}.notice{box-sizing:border-box;display:flex;align-items:center;gap:10px;width:360px;max-width:calc(100vw - 32px);padding:10px 12px;border:1px solid ${border};border-radius:12px;background:${bg};color:#efefef;box-shadow:0 6px 24px #0006;font:14px/1.4 system-ui,sans-serif;pointer-events:none}.brand{width:30px;height:30px;object-fit:contain;flex-shrink:0}.text{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}small{color:#adadad;font-size:12px;margin-top:2px}button{flex-shrink:0;pointer-events:auto;cursor:pointer;border:0;border-radius:6px;background:transparent;color:#adadad;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}button.settings{width:auto;padding:0 8px;font:600 12px system-ui,sans-serif}button svg{width:18px;height:18px;display:block;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}button:hover,button:focus-visible{background:#383838;color:#efefef;outline:1px solid #d0d0d0}${motionRules}`);
+  sheet.replaceSync(`:host{all:initial}.notice{box-sizing:border-box;display:flex;align-items:center;gap:14px;width:450px;max-width:calc(100vw - 32px);padding:14px 16px;border:1px solid ${border};border-radius:14px;background:${bg};color:#efefef;box-shadow:0 6px 24px #0006;font:17px/1.4 system-ui,sans-serif;pointer-events:none}.brand{width:38px;height:38px;object-fit:contain;flex-shrink:0}.text{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}small{color:#adadad;font-size:14.5px;margin-top:3px}button{flex-shrink:0;pointer-events:auto;cursor:pointer;border:0;border-radius:6px;background:transparent;color:#adadad;width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}button.settings{width:auto;padding:0 8px;font:600 14px system-ui,sans-serif}button svg{width:22px;height:22px;display:block;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}button:hover,button:focus-visible{background:#383838;color:#efefef;outline:1px solid #d0d0d0}${motionRules}`);
   shadow.adoptedStyleSheets = [sheet];
   const box = document.createElement("div"); box.className = "notice"; box.setAttribute("role", "status"); box.setAttribute("aria-live", "polite");
   const text = document.createElement("div"); text.className = "text";
@@ -404,6 +404,18 @@ function showFillNotice(expectedUrl, notice) {
   close.addEventListener("click", dismiss); document.addEventListener("keydown", onKey);
   if (notice.icon) { const image = document.createElement("img"); image.className = "brand"; image.alt = "rbw"; image.src = notice.icon; box.append(image); }
   box.append(text);
+  if (typeof notice.clipboard === "string") {
+    // Something was put on the clipboard: a clipboard icon says so.
+    const clip = document.createElementNS(closeIcon.namespaceURI, "svg"); clip.setAttribute("viewBox", "0 0 24 24"); clip.setAttribute("role", "img");
+    clip.setAttribute("aria-label", notice.clipboard.slice(0, 64)); clip.style.cssText = "width:22px;height:22px;flex:none;opacity:.85";
+    const clipTitle = document.createElementNS(closeIcon.namespaceURI, "title"); clipTitle.textContent = notice.clipboard.slice(0, 64); clip.append(clipTitle);
+    for (const [tag, attributes] of [["rect", { x: 8, y: 3, width: 8, height: 4, rx: 1 }], ["path", { d: "M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" }]]) {
+      const part = document.createElementNS(closeIcon.namespaceURI, tag);
+      for (const [name, value] of Object.entries({ fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", ...attributes })) part.setAttribute(name, value);
+      clip.append(part);
+    }
+    box.append(clip);
+  }
   if (notice.settingsAction) {
     const settings = document.createElement("button"); settings.type = "button"; settings.className = "settings"; settings.textContent = "Settings";
     settings.addEventListener("click", () => { api.runtime.sendMessage({ action: "open_settings" }).catch(() => {}); dismiss(); });

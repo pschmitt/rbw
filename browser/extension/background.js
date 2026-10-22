@@ -699,7 +699,7 @@ async function fill(message, account) {
   let count = 0;
   let securityCodeFieldPresent = false;
   try {
-    let credential, label, totpCode = null;
+    let credential, label, totpCode = null, shownUsername = null;
     if (message.type && message.type !== "login") {
       const detail = await native({ action: "detail", account, item: message.item });
       credential = { ...detail.cipher.data, custom: detail.cipher.fields };
@@ -710,7 +710,7 @@ async function fill(message, account) {
       if (message.totpOnly && !(credential.hasTotp === true && prefs.autofillTotp)) throw new Error("No authenticator code to fill.");
       // The code is generated per fill and goes to the page like the password.
       if (credential.hasTotp === true && prefs.autofillTotp) totpCode = (await native({ action: "totp", account, item: message.item })).code;
-      if (message.totpOnly) credential = { type: "login", name: credential.name, totpOnly: true, totpCode };
+      shownUsername = credential.username; if (message.totpOnly) credential = { type: "login", name: credential.name, totpOnly: true, totpCode };
       else if (totpCode) credential.totpCode = totpCode;
     }
     await api.tabs.sendMessage(tab.id, { action: "rbw_fill_state", token, active: true, item: message.item, name: label || credential.name || message.displayName }).catch(() => {});
@@ -754,7 +754,9 @@ async function fill(message, account) {
     clearTimeout(fillUndos.get(tab.id)?.timer);
     fillUndos.set(tab.id, { token, url: tab.url, frames: filledFrames, timer: setTimeout(() => { if (fillUndos.get(tab.id)?.token === token) fillUndos.delete(tab.id); }, 10000) });
     // Only public display metadata goes to the notice, never the credential.
-    const notice = { undoToken: token, name: label || credential.name || "Item", username: credential.type === "login" ? credential.username : null, position: message.cycleIndex, total: message.cycleCount, message: message.totpOnly ? "Authenticator code filled." : copiedTotp ? "TOTP code copied to clipboard. Paste it when the site asks for it." : totpCopyFailed ? "Login filled, but the TOTP code could not be copied." : copiedSecurityCode ? "Card security code copied to clipboard." : securityCodeCopyFailed ? "Card fields filled, but the security code could not be copied." : hasSecurityCode && securityCodeFieldPresent && cardSecurityCode === "off" ? "Security code left blank (see settings)." : hasSecurityCode && !securityCodeFieldPresent && cardSecurityCode === "fill" ? "No security-code field found on this page." : null };
+    const notice = { undoToken: token, name: label || credential.name || "Item", username: credential.type === "login" ? credential.username ?? shownUsername : null, position: message.cycleIndex, total: message.cycleCount, message: message.totpOnly ? `${label || credential.name || "Item"} · 2FA code filled` : totpCopyFailed ? "TOTP code could not be copied" : securityCodeCopyFailed ? "Security code could not be copied" : hasSecurityCode && securityCodeFieldPresent && cardSecurityCode === "off" ? "Security code left blank (see settings)." : hasSecurityCode && !securityCodeFieldPresent && cardSecurityCode === "fill" ? "No security-code field found." : null,
+      // The line below the title then names the item (and login) whose code is on the clipboard.
+      clipboard: copiedTotp ? "TOTP code copied to clipboard" : copiedSecurityCode ? "Card security code copied to clipboard" : null };
     await notifyFill(tab, notice).catch(() => {});
     return count;
   } finally {
