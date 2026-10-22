@@ -10746,6 +10746,27 @@ fn build_exported_vault(
     skip_trash: bool,
     skip_archived: bool,
 ) -> anyhow::Result<ExportedVault> {
+    build_exported_vault_matching(
+        attachments,
+        collection,
+        org,
+        skip_trash,
+        skip_archived,
+        None,
+    )
+}
+
+// `build_exported_vault`, optionally limited to the single entry `only_id`
+// (and the collections it belongs to), so `rbw move` doesn't decrypt -- or
+// download the attachments of -- the whole vault.
+fn build_exported_vault_matching(
+    attachments: bool,
+    collection: Option<&str>,
+    org: Option<&str>,
+    skip_trash: bool,
+    skip_archived: bool,
+    only_id: Option<&str>,
+) -> anyhow::Result<ExportedVault> {
     let mut db = load_db()?;
 
     // Same name-or-ID `--collection`/`--org` resolution the find-family
@@ -10762,6 +10783,7 @@ fn build_exported_vault(
         .filter(|entry| {
             export_entry_status_allowed(entry, skip_trash, skip_archived)
         })
+        .filter(|entry| only_id.is_none_or(|id| entry.id == id))
         .filter(|entry| {
             export_entry_in_scope(
                 entry,
@@ -10809,6 +10831,10 @@ fn build_exported_vault(
         .collections
         .iter()
         .filter(|c| scope_org_id.as_deref().is_none_or(|oid| c.org_id == oid))
+        .filter(|c| {
+            only_id.is_none()
+                || entries.iter().any(|e| e.collection_ids.contains(&c.id))
+        })
         .map(|c| {
             let name =
                 crate::actions::decrypt(&c.name, None, Some(&c.org_id))?;
@@ -14550,6 +14576,196 @@ fn mirror_vault_config_entry(
         dry_run,
         true,
     )
+}
+
+// `rbw move`: moves one entry to another configured account. The entry is
+// recreated in the destination through the same export -> import pipeline
+// `rbw mirror` uses (attachments included unless disabled), then the
+// original goes to the source account's trash, where `rbw restore` can
+// bring it back. The original is only trashed once the destination
+// verifiably gained a new entry with the same name: `import_vault` skips
+// entries whose name/username already exist there, and a skipped copy
+// must never cost the original.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum MoveSource {
+    // The original goes to its account's trash (restorable).
+    Trash,
+    // The original is deleted permanently.
+    Delete,
+    // The original stays: a copy to another account.
+    Keep,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn move_entry(
+    needles: Vec<Needle>,
+    username: Option<&str>,
+    folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+    to: &str,
+    attachments: bool,
+    source: MoveSource,
+    yes: bool,
+) -> anyhow::Result<()> {
+    let target_accounts =
+        list_target_accounts(false, rbw::config::ExcludeContext::Get, true)?;
+    let needle_str = needles
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let (from, entry, decrypted) = find_entry_multi(
+        &target_accounts,
+        needles,
+        username,
+        folder,
+        collection,
+        org,
+        ignore_case,
+        force_exact,
+    )
+    .with_context(|| format!("couldn't find entry for '{needle_str}'"))?;
+    move_entry_by_id(
+        &from,
+        &entry.id,
+        &decrypted.name,
+        to,
+        attachments,
+        source,
+        yes,
+    )
+}
+
+pub fn move_entry_by_id(
+    from: &str,
+    id: &str,
+    name: &str,
+    to: &str,
+    attachments: bool,
+    source: MoveSource,
+    yes: bool,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(from != to, "the entry is already in account '{to}'");
+    let config = rbw::config::Config::load()?;
+    config.account(Some(to))?;
+    let c = stdout_supports_color();
+    let fate = match source {
+        MoveSource::Trash => "The original goes to the trash",
+        MoveSource::Delete => "The original is deleted permanently",
+        MoveSource::Keep => "The original is kept",
+    };
+    if !yes
+        && !confirm(&format!(
+            "{} {} from '{from}' to '{to}'? {fate}.",
+            if source == MoveSource::Keep {
+                "Copy"
+            } else {
+                "Move"
+            },
+            style::name(name, c)
+        ))?
+    {
+        return Ok(());
+    }
+
+    crate::actions::set_active_account(Some(from.to_string()))?;
+    unlock(None, None)?;
+    let vault = build_exported_vault_matching(
+        attachments,
+        None,
+        None,
+        true,
+        false,
+        Some(id),
+    )?;
+    anyhow::ensure!(
+        vault.entries.len() == 1,
+        "entry {id} is not a live entry of account '{from}'"
+    );
+
+    crate::actions::set_active_account(Some(to.to_string()))?;
+    unlock(None, None)?;
+    let before: std::collections::HashSet<String> =
+        load_db()?.entries.into_iter().map(|e| e.id).collect();
+    let (bw, attachments_flat) = exported_vault_to_bw(&vault);
+    let attachments_map = attachments.then(|| {
+        let mut map: std::collections::HashMap<
+            String,
+            Vec<crate::import_bitwarden::ZipAttachment>,
+        > = std::collections::HashMap::new();
+        for (name, file_name, data) in attachments_flat {
+            map.entry(crate::import_bitwarden::sanitize_zip_folder_name(
+                &name,
+            ))
+            .or_default()
+            .push(crate::import_bitwarden::ZipAttachment { file_name, data });
+        }
+        map
+    });
+    import_vault(
+        bw_vault_to_imported(bw, attachments_map),
+        None,
+        None,
+        false,
+    )?;
+    crate::actions::sync()?;
+    let created = load_db()?.entries.into_iter().any(|e| {
+        !before.contains(&e.id)
+            && crate::actions::decrypt(
+                &e.name,
+                e.key.as_deref(),
+                e.org_id.as_deref(),
+            )
+            .is_ok_and(|n| n == name)
+    });
+    anyhow::ensure!(
+        created,
+        "'{name}' was not created in '{to}' (an entry with the same name \
+         and username may already be there); the original was left \
+         untouched in '{from}'"
+    );
+
+    if source == MoveSource::Keep {
+        eprintln!(
+            "{} Copied {} to '{to}'; the original is still in '{from}'.",
+            style::success("✓", c),
+            style::name(name, c)
+        );
+        return Ok(());
+    }
+    crate::actions::set_active_account(Some(from.to_string()))?;
+    let mut db = load_db()?;
+    let (access_token, refresh_token) = (
+        db.access_token.clone().unwrap(),
+        db.refresh_token.clone().unwrap(),
+    );
+    let rotated = if source == MoveSource::Delete {
+        rbw::actions::delete_permanently(&access_token, &refresh_token, id)?
+    } else {
+        rbw::actions::remove(&access_token, &refresh_token, id)?
+    };
+    if let (Some(tokens), ()) = rotated {
+        db.access_token = Some(tokens.access_token);
+        if let Some(refresh_token) = tokens.refresh_token {
+            db.refresh_token = Some(refresh_token);
+        }
+        save_db(&db)?;
+    }
+    crate::actions::sync()?;
+    eprintln!(
+        "{} Moved {} to '{to}'; the original was {}.",
+        style::success("✓", c),
+        style::name(name, c),
+        if source == MoveSource::Delete {
+            format!("deleted from '{from}'")
+        } else {
+            format!("moved to '{from}''s trash")
+        }
+    );
+    Ok(())
 }
 
 // `rbw mirror --from A --to B`: copies vault contents from one already-
@@ -20130,6 +20346,40 @@ fn should_unlock_for_merge(
         rbw::config::UnlockPolicy::Never => false,
         rbw::config::UnlockPolicy::OnDemand => all,
     }
+}
+
+// One configured account as the browser extension sees it in its merged
+// ("All accounts") view: whether `exclude_from` keeps it out of `ctx`, its
+// unlock policy, and whether the agent has it unlocked right now.
+pub struct AccountState {
+    pub name: String,
+    pub primary: bool,
+    pub unlocked: bool,
+    pub excluded: bool,
+    pub policy: rbw::config::UnlockPolicy,
+}
+
+// Like `list_target_accounts`' account selection, but passive: it never
+// unlocks anything, so a browser search or autofill can't pop up a
+// password prompt. Leaves the active account unset (the primary).
+pub fn account_states(
+    ctx: rbw::config::ExcludeContext,
+) -> anyhow::Result<Vec<AccountState>> {
+    let config = rbw::config::Config::load()?;
+    let primary = config.primary_account_name();
+    let mut out = Vec::new();
+    for account in config.accounts() {
+        crate::actions::set_active_account(Some(account.name.clone()))?;
+        out.push(AccountState {
+            primary: account.name == primary,
+            unlocked: active_account_unlocked(),
+            excluded: account.excluded_from(ctx),
+            policy: account.unlock.policy,
+            name: account.name.clone(),
+        });
+    }
+    crate::actions::set_active_account(None)?;
+    Ok(out)
 }
 
 // Which accounts `list`/`search`/`get` should query. An explicit --account/

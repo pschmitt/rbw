@@ -77,6 +77,11 @@ impl Transfers {
         );
         Ok(json!(token))
     }
+    /// The account an upload was started for, so its later chunks can be
+    /// routed there when the extension doesn't name one.
+    pub fn upload_account(&self, token: &str) -> Option<String> {
+        self.uploads.get(token)?.account.clone()
+    }
     pub fn chunk(
         &mut self,
         token: &str,

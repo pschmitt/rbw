@@ -153,6 +153,12 @@ enum Operation {
         data: Value,
     },
     Audit,
+    // Moves an item to another configured account (`rbw move`): recreated
+    // there, the original goes to its account's trash.
+    Move {
+        item: String,
+        to: String,
+    },
     Generate {
         #[serde(default)]
         mode: Option<String>,
@@ -361,9 +367,11 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
                         ..
                     }
                 );
+                let moving =
+                    matches!(&request.operation, Operation::Move { .. });
                 // Backend errors can contain vault data; never forward them.
                 dispatch(request, &mut attachments).map_or_else(
-                    |error| json!({"id": id, "error": if commands::exit_status(&error) == 2 { "The server write succeeded, but synchronization failed. Sync and inspect your vault before retrying to avoid duplicates." } else if fingerprint { "Fingerprint unlock failed. Scan again, or unlock with your master password." } else if unlocking { "Could not unlock this account. Check your master password and account configuration." } else { "Operation failed. Unlock this account or sync your vault, then try again." }}),
+                    |error| json!({"id": id, "error": if commands::exit_status(&error) == 2 { "The server write succeeded, but synchronization failed. Sync and inspect your vault before retrying to avoid duplicates." } else if moving { "Could not move the item; it was not deleted. Both accounts must be unlocked, and the other account must not already have an item with the same name and username." } else if fingerprint { "Fingerprint unlock failed. Scan again, or unlock with your master password." } else if unlocking { "Could not unlock this account. Check your master password and account configuration." } else { "Operation failed. Unlock this account or sync your vault, then try again." }}),
                     |result| json!({"id": id, "result": result}),
                 )
             }
@@ -373,11 +381,235 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
     }
 }
 
+// With several accounts configured, a request that names no account works
+// on all of them ("All accounts" in the extension): searches merge the
+// accounts `rbw search` would cover (passively: only unlocked ones), and a
+// request about one item goes to the account that holds it.
+fn merged_mode(account: Option<&String>) -> anyhow::Result<bool> {
+    Ok(
+        account.is_none()
+            && rbw::config::Config::load()?.accounts().len() > 1,
+    )
+}
+
+// The item a request is about, if any (new items have none).
+fn request_item(operation: &Operation) -> Option<&str> {
+    match operation {
+        Operation::Credential { item, .. }
+        | Operation::Totp { item }
+        | Operation::Copy { item, .. }
+        | Operation::PasskeyGet { item, .. }
+        | Operation::PasskeyVerify { item, .. }
+        | Operation::Detail { item }
+        | Operation::Mutate { item, .. }
+        | Operation::SetCollections { item, .. }
+        | Operation::AttachmentDownload { item, .. }
+        | Operation::AttachmentDelete { item, .. }
+        | Operation::UploadBegin { item, .. }
+        | Operation::Move { item, .. } => {
+            Some(item.as_str()).filter(|item| !item.is_empty())
+        }
+        Operation::Save { item, .. }
+        | Operation::PasskeyCreate { item, .. } => item.as_deref(),
+        _ => None,
+    }
+}
+
+// The configured account whose local vault holds `item`, if any. Reads only
+// the local databases (entry ids are not encrypted), so it works for locked
+// accounts too; the request itself then fails as usual if it's locked.
+fn item_owner(item: &str) -> anyhow::Result<Option<String>> {
+    let config = rbw::config::Config::load()?;
+    let mut owner = None;
+    for account in config.accounts() {
+        actions::set_active_account(Some(account.name.clone()))?;
+        if commands::load_db()
+            .is_ok_and(|db| db.entries.iter().any(|entry| entry.id == item))
+        {
+            owner = Some(account.name);
+            break;
+        }
+    }
+    actions::set_active_account(None)?;
+    Ok(owner)
+}
+
+fn lookup_copy(operation: &Operation) -> anyhow::Result<Operation> {
+    Ok(match operation {
+        Operation::Search {
+            query,
+            url,
+            site_only,
+            kind,
+            folder,
+            collection,
+            view,
+            match_default,
+        } => Operation::Search {
+            query: query.clone(),
+            url: url.clone(),
+            site_only: *site_only,
+            kind: kind.clone(),
+            folder: folder.clone(),
+            collection: collection.clone(),
+            view: view.clone(),
+            match_default: match_default.clone(),
+        },
+        Operation::PasskeyCandidates { origin, options } => {
+            Operation::PasskeyCandidates {
+                origin: origin.clone(),
+                options: options.clone(),
+            }
+        }
+        _ => anyhow::bail!("not a lookup"),
+    })
+}
+
+// Tags each element of a result array with the account it came from.
+fn tag_account(account: &str, values: &Value) -> Vec<Value> {
+    values
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|value| {
+            let mut value = value.clone();
+            value["account"] = json!(account);
+            value
+        })
+        .collect()
+}
+
+// Runs a search or passkey lookup in every unlocked account the CLI's own
+// search would cover, tagging each result with its account.
+fn merged_lookup(
+    operation: &Operation,
+    transfers: &mut attachments::Transfers,
+) -> anyhow::Result<Value> {
+    let states =
+        commands::account_states(rbw::config::ExcludeContext::Search)?;
+    let mut parts = Vec::new();
+    for state in states.iter().filter(|s| s.unlocked && !s.excluded) {
+        let request = Request {
+            id: 0,
+            account: Some(state.name.clone()),
+            operation: lookup_copy(operation)?,
+        };
+        match dispatch(request, transfers) {
+            Ok(value) => parts.push((state.name.clone(), value)),
+            Err(error) => {
+                log::warn!("skipping account '{}': {error:#}", state.name);
+            }
+        }
+    }
+    actions::set_active_account(None)?;
+    // Nothing unlocked: answer as the primary account would (locked).
+    let Some((_, first)) = parts.first() else {
+        let request = Request {
+            id: 0,
+            account: Some(
+                rbw::config::Config::load()?.primary_account_name(),
+            ),
+            operation: lookup_copy(operation)?,
+        };
+        return dispatch(request, transfers);
+    };
+    let mut merged = first.clone();
+    let mut items: Vec<Value> = parts
+        .iter()
+        .flat_map(|(account, value)| tag_account(account, &value["items"]))
+        .collect();
+    if matches!(operation, Operation::Search { .. }) {
+        items.sort_by_key(|v| {
+            (
+                !v["matched"].as_bool().unwrap_or(false),
+                !v["favorite"].as_bool().unwrap_or(false),
+                v["name"].as_str().unwrap_or_default().to_lowercase(),
+            )
+        });
+        let total: u64 = parts
+            .iter()
+            .map(|(_, v)| v["total"].as_u64().unwrap_or(0))
+            .sum();
+        items.truncate(200);
+        let folders: std::collections::BTreeSet<String> = parts
+            .iter()
+            .filter_map(|(_, v)| v["folders"].as_array())
+            .flatten()
+            .filter_map(|f| f.as_str().map(str::to_string))
+            .collect();
+        let collections: Vec<Value> = parts
+            .iter()
+            .flat_map(|(account, v)| tag_account(account, &v["collections"]))
+            .collect();
+        merged["total"] = json!(total);
+        merged["folders"] = json!(folders);
+        merged["collections"] = json!(collections);
+    }
+    merged["items"] = json!(items);
+    Ok(merged)
+}
+
+// Status for the merged view: every configured account with its lock
+// state, plus the single-account fields (for the primary) older code reads.
+fn merged_status(
+    transfers: &mut attachments::Transfers,
+) -> anyhow::Result<Value> {
+    let config = rbw::config::Config::load()?;
+    let agent_ok =
+        actions::version().is_ok_and(|v| v == rbw::protocol::VERSION);
+    let states =
+        commands::account_states(rbw::config::ExcludeContext::Search)?;
+    let unlocked =
+        agent_ok && states.iter().any(|s| s.unlocked && !s.excluded);
+    if !unlocked {
+        transfers.clear();
+    }
+    let primary = config.primary_account_name();
+    let fingerprint = fingerprint_unlock(&config, Some(&primary)).is_some();
+    Ok(json!({"unlocked": unlocked,
+        "merged": true,
+        "fingerprint": fingerprint,
+        "fingerprint_auto_start": fingerprint && config.browser.fingerprint_auto_start,
+        "accounts": config.accounts().iter().map(|a| &a.name).collect::<Vec<_>>(),
+        "accountStates": states.iter().map(|s| json!({"name": s.name, "primary": s.primary, "unlocked": agent_ok && s.unlocked, "excluded": s.excluded, "policy": s.policy})).collect::<Vec<_>>(),
+        "primary": primary}))
+}
+
 fn dispatch(
-    request: Request,
+    mut request: Request,
     transfers: &mut attachments::Transfers,
 ) -> anyhow::Result<Value> {
     transfers.prune();
+    if merged_mode(request.account.as_ref())? {
+        match &request.operation {
+            Operation::Status => return merged_status(transfers),
+            Operation::Search { .. }
+            | Operation::PasskeyCandidates { .. } => {
+                return merged_lookup(&request.operation, transfers);
+            }
+            // "Lock vault" in the merged view locks every account.
+            Operation::Lock => {
+                transfers.clear();
+                actions::set_active_account(None)?;
+                commands::lock(true)?;
+                return Ok(json!(true));
+            }
+            Operation::UploadChunk { token, .. }
+            | Operation::UploadFinish { token }
+            | Operation::UploadCancel { token } => {
+                if let Some(account) = transfers.upload_account(token) {
+                    request.account = Some(account);
+                }
+            }
+            operation => {
+                if let Some(item) = request_item(operation) {
+                    if let Some(owner) = item_owner(item)? {
+                        request.account = Some(owner);
+                    }
+                }
+            }
+        }
+    }
     actions::set_active_account(request.account)?;
     match request.operation {
         Operation::Status => {
@@ -434,6 +666,7 @@ fn dispatch(
             commands::lock(false)?;
             Ok(json!(true))
         }
+        Operation::Move { item, to } => transfer::move_item(&item, &to),
         Operation::Sync => {
             commands::sync(false)?;
             Ok(json!(true))
@@ -912,6 +1145,10 @@ fn dispatch(
                     let options = db.collections.iter().filter(|c| Some(&c.org_id) == entry.org_id.as_ref()).map(|c| Ok(json!({"id": c.id, "name": actions::decrypt(&c.name, None, Some(&c.org_id))?}))).collect::<anyhow::Result<Vec<_>>>()?;
                     result["collection_options"] = json!(options);
                     result["collection_ids"] = json!(entry.collection_ids);
+                    result["account"] = json!(actions::current_account()
+                        .unwrap_or_else(|| rbw::config::Config::load()
+                            .map(|c| c.primary_account_name())
+                            .unwrap_or_default()));
                     Ok(result)
                 }
                 Operation::SetCollections { item, collections } => {

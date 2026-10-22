@@ -112,3 +112,42 @@ pub fn import(
     ensure!(result.status.success(), "import failed");
     Ok(json!(true))
 }
+
+// Moves an item to another configured account through `rbw move`, run as a
+// child (like import/export) so its progress output stays off the native
+// messaging channel. The source is the active account (the item's owner).
+pub fn move_item(item: &str, to: &str) -> anyhow::Result<Value> {
+    ensure!(uuid::Uuid::parse_str(item).is_ok(), "invalid item");
+    let config = rbw::config::Config::load()?;
+    config.account(Some(to))?;
+    let from = actions::current_account()
+        .unwrap_or_else(|| config.primary_account_name());
+    ensure!(from != to, "the item is already in that account");
+    let mut child = command()?;
+    if actions::current_account().is_none() {
+        child.arg("--account").arg(&from);
+    }
+    let output = child
+        .arg("move")
+        .arg("--exact")
+        .arg(item)
+        .arg("--to")
+        .arg(to)
+        .arg("--yes")
+        .stdin(Stdio::null())
+        .output()?;
+    ensure!(output.status.success(), "{}", move_failure(&output.stderr));
+    Ok(json!({"from": from, "to": to}))
+}
+
+// `rbw move`'s last error line (no vault data: names and accounts only).
+fn move_failure(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map_or_else(
+            || "move failed".to_string(),
+            |line| line.trim().to_string(),
+        )
+}

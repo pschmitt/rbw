@@ -302,6 +302,8 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
             "edit",
             "set",
             "remove",
+            "move",
+            "copy",
             "archive",
             "unarchive",
             "restore",
@@ -1656,6 +1658,77 @@ enum Opt {
     },
 
     #[command(
+        about = "Move an entry to another configured account",
+        visible_alias = "mv",
+        long_about = "Move an entry to another configured account\n\n\
+            Recreates the entry in --to's vault (attachments included \
+            unless --no-attachments) and then moves the original to its \
+            account's trash, where `rbw restore` can bring it back. The \
+            source is the account the entry is found in: --account, or \
+            every account `rbw get` would search. The original is trashed by \
+            default (--trash); --delete removes it permanently and --keep \
+            leaves it alone (a copy). Nothing is trashed or deleted unless \
+            the copy was verifiably created; an entry with the same name \
+            and username already in --to stops the move."
+    )]
+    Move {
+        #[command(flatten)]
+        find_args: FindArgs,
+        #[arg(
+            long,
+            value_name = "ACCOUNT",
+            help = "Account to move the entry to"
+        )]
+        to: String,
+        #[arg(long, help = "Don't copy the entry's attachments")]
+        no_attachments: bool,
+        #[arg(
+            long,
+            conflicts_with_all = ["delete", "keep"],
+            help = "Move the original to the trash (default)"
+        )]
+        trash: bool,
+        #[arg(
+            long,
+            conflicts_with_all = ["trash", "keep"],
+            help = "Delete the original permanently"
+        )]
+        delete: bool,
+        #[arg(
+            long,
+            conflicts_with_all = ["trash", "delete"],
+            help = "Keep the original (copy instead of move)"
+        )]
+        keep: bool,
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
+    },
+
+    #[command(
+        about = "Copy an entry to another configured account",
+        visible_alias = "cp",
+        long_about = "Copy an entry to another configured account\n\n\
+            Same as `rbw move --keep`: recreates the entry in --to's vault \
+            (attachments included unless --no-attachments) and leaves the \
+            original untouched. An entry with the same name and username \
+            already in --to stops the copy."
+    )]
+    Copy {
+        #[command(flatten)]
+        find_args: FindArgs,
+        #[arg(
+            long,
+            value_name = "ACCOUNT",
+            help = "Account to copy the entry to"
+        )]
+        to: String,
+        #[arg(long, help = "Don't copy the entry's attachments")]
+        no_attachments: bool,
+        #[arg(short = 'y', long, help = "Skip confirmation prompt")]
+        yes: bool,
+    },
+
+    #[command(
         about = "Archive a given entry (hidden from list/search by default)"
     )]
     Archive {
@@ -2207,6 +2280,8 @@ impl Opt {
             Self::Passkey { .. } => "passkey".to_string(),
             Self::Set { .. } => "set".to_string(),
             Self::Remove { .. } => "remove".to_string(),
+            Self::Move { .. } => "move".to_string(),
+            Self::Copy { .. } => "copy".to_string(),
             Self::Archive { .. } => "archive".to_string(),
             Self::Unarchive { .. } => "unarchive".to_string(),
             Self::Restore { .. } => "restore".to_string(),
@@ -4604,6 +4679,51 @@ fn main() {
             yes,
             from_file.as_deref(),
             from_file_passphrase.as_deref(),
+        ),
+        Opt::Move {
+            find_args,
+            to,
+            no_attachments,
+            trash: _,
+            delete,
+            keep,
+            yes,
+        } => commands::move_entry(
+            find_args.needles,
+            find_args.user.as_deref(),
+            find_args.folder.as_deref(),
+            find_args.collection.as_deref(),
+            find_args.org.as_deref(),
+            find_args.ignorecase,
+            find_args.exact,
+            &to,
+            !no_attachments,
+            if delete {
+                commands::MoveSource::Delete
+            } else if keep {
+                commands::MoveSource::Keep
+            } else {
+                commands::MoveSource::Trash
+            },
+            yes,
+        ),
+        Opt::Copy {
+            find_args,
+            to,
+            no_attachments,
+            yes,
+        } => commands::move_entry(
+            find_args.needles,
+            find_args.user.as_deref(),
+            find_args.folder.as_deref(),
+            find_args.collection.as_deref(),
+            find_args.org.as_deref(),
+            find_args.ignorecase,
+            find_args.exact,
+            &to,
+            !no_attachments,
+            commands::MoveSource::Keep,
+            yes,
         ),
         Opt::Archive {
             find_args,
