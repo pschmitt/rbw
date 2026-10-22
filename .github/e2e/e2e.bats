@@ -638,6 +638,35 @@ print(json.dumps(d))
         <("$RBW" -a e2e-mirror list --include-archived --fields name | cut -f1 | sort)
 }
 
+@test "move and copy must transfer an entry between accounts" {
+    echo '{"name":"e2e-move","data":{"type":"login","username":"mv-user","password":"mv-pass"}}' | "$RBW" -a e2e add --json
+    echo '{"name":"e2e-move-keep","data":{"type":"login","username":"kp-user","password":"kp-pass"}}' | "$RBW" -a e2e add --json
+    "$RBW" -a e2e sync
+
+    # copy keeps the original.
+    "$RBW" -a e2e copy -y --to e2e-mirror e2e-move-keep
+    "$RBW" -a e2e-mirror sync
+    [ "$("$RBW" -a e2e-mirror get e2e-move-keep)" = "kp-pass" ]
+    [ "$("$RBW" -a e2e get e2e-move-keep)" = "kp-pass" ]
+    # An entry already there stops the move/copy and leaves the original.
+    ! "$RBW" -a e2e move -y --to e2e-mirror e2e-move-keep
+    [ "$("$RBW" -a e2e get e2e-move-keep)" = "kp-pass" ]
+
+    # move trashes the original by default.
+    "$RBW" -a e2e mv -y --to e2e-mirror e2e-move
+    "$RBW" -a e2e-mirror sync
+    [ "$("$RBW" -a e2e-mirror get e2e-move)" = "mv-pass" ]
+    ! "$RBW" -a e2e get e2e-move
+    "$RBW" -a e2e list --trashed --fields name | grep -q '^e2e-move'
+
+    # --delete removes it for good.
+    echo '{"name":"e2e-move-del","data":{"type":"login","username":"dl-user","password":"dl-pass"}}' | "$RBW" -a e2e add --json
+    "$RBW" -a e2e move -y --delete --to e2e-mirror e2e-move-del
+    "$RBW" -a e2e sync
+    [ "$("$RBW" -a e2e-mirror get e2e-move-del)" = "dl-pass" ]
+    ! "$RBW" -a e2e list --trashed --fields name | grep -q '^e2e-move-del'
+}
+
 @test "config and account commands must read and write settings" {
     [ "$("$RBW" config get baseUrl)" = "$BASE_URL" ]
     [ "$("$RBW" config get email)" = "$EMAIL" ]

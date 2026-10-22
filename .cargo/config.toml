@@ -1,0 +1,4 @@
+[env]
+# clap's derived parser for `Opt` needs more than the 2 MiB default test-thread
+# stack in debug builds.
+RUST_MIN_STACK = "8388608"

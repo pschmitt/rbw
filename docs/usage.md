@@ -187,6 +187,20 @@ independently of the trash:
 Archived entries are hidden by default, same as trashed ones -- see
 `--archived`/`--include-archived` and `hide.archived` above.
 
+## Moving and copying between accounts
+
+* `rbw move <entry> --to ACCOUNT` (alias `mv`): recreate an entry in another
+  configured account, attachments included (`--no-attachments` skips them),
+  then dispose of the original. `--trash` (the default) moves it to its
+  account's trash, where `rbw restore` can bring it back; `--delete` deletes
+  it permanently; `--keep` leaves it alone. The source is the account the
+  entry is found in (`--account`, or every account `rbw get` would search).
+  Nothing is trashed or deleted unless the copy was verifiably created: an
+  entry with the same name and username already in the destination stops
+  the move. Both accounts are unlocked as needed; `-y` skips the
+  confirmation.
+* `rbw copy <entry> --to ACCOUNT` (alias `cp`): the same as `move --keep`.
+
 ## Using the official Bitwarden server
 
 *Note to users of the official Bitwarden server (at bitwarden.com)*: The
