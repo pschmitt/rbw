@@ -201,7 +201,7 @@ function syncFrame(bitmap, size, angle) {
   const c = size / 2, lw = Math.max(1.6, size / 10), r = c - lw / 2 - size * 0.02;
   const inner = size * 0.76;
   ctx.drawImage(bitmap, (size - inner) / 2, (size - inner) / 2, inner, inner);
-  const accent = "255,176,32";
+  const accent = "157,134,255"; // theme.css --accent (dark)
   ctx.lineWidth = lw; ctx.lineCap = "round";
   ctx.strokeStyle = "rgba(128,128,128,.35)";
   ctx.beginPath(); ctx.arc(c, c, r, 0, Math.PI * 2); ctx.stroke();
