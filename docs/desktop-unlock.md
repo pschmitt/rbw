@@ -40,8 +40,9 @@ confirmation is enabled, the system fprintd service. Fingerprint, keyring, and n
 Normal unlock uses the integrated terminal dialog when standard input is a
 terminal. It displays password entry and live fingerprint status together;
 either method can unlock the account. No fingerprint output is printed over
-the dialog. The optional `gtk-ui` build feature adds a native GTK4 window,
-with the same authentication and cancellation behavior. The Nix flake exports
+the dialog. Terminals smaller than 40×27 get a compact layout without the
+card and artwork; below 16×4 input pauses until the window grows. The
+optional `gtk-ui` build feature adds a native GTK4 window, with the same authentication and cancellation behavior. The Nix flake exports
 `rbw-gtk` for that build; the default package has no GTK dependency.
 
 ```shell

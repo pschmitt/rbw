@@ -244,8 +244,7 @@ impl Frontend for TerminalDialog {
         let area = self.terminal.size()?;
         self.state.busy = view.checking
             || view.success
-            || area.width < 40
-            || area.height < 27;
+            || size_class(area.width, area.height) == SizeClass::TooSmall;
         let mask = (!self.no_echo).then(|| self.state.secret.char_count());
         let issue = self.state.issue;
         self.terminal.draw(|frame| draw(frame, view, mask, issue))?;
@@ -287,6 +286,84 @@ fn row(area: Rect, offset: u16, height: u16) -> Rect {
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SizeClass {
+    // The full card with the fingerprint art.
+    Full,
+    // Narrow or short terminals (tmux splits, phones): the same content as
+    // plain stacked lines, dropping decoration as space runs out.
+    Compact,
+    // Not even the compact layout fits; input is paused until it does.
+    TooSmall,
+}
+
+fn size_class(width: u16, height: u16) -> SizeClass {
+    if width >= 40 && height >= 27 {
+        SizeClass::Full
+    } else if width >= 16 && height >= 4 {
+        SizeClass::Compact
+    } else {
+        SizeClass::TooSmall
+    }
+}
+
+fn status_text(view: &View<'_>) -> String {
+    let indicator = if view.checking
+        || matches!(
+            view.fingerprint,
+            FingerprintStatus::Starting | FingerprintStatus::Checking
+        ) {
+        ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+            [usize::try_from((view.tick / 5) % 10).unwrap_or(0)]
+    } else {
+        "◎"
+    };
+    if view.success {
+        "✓  Verified. Finishing unlock…".to_string()
+    } else if view.checking {
+        format!("{indicator}  Checking master password…")
+    } else {
+        format!("{indicator}  {}", view.fingerprint.text())
+    }
+}
+
+fn mask_text(
+    view: &View<'_>,
+    mask: Option<usize>,
+    max: usize,
+    short: bool,
+) -> String {
+    match mask {
+        None => String::new(),
+        Some(0) if view.success => "✓ Verified".to_string(),
+        Some(0) if view.checking => "Checking password…".to_string(),
+        Some(0) if short => "Type password…".to_string(),
+        Some(0) => "Type your password…".to_string(),
+        Some(length) => "•".repeat(length.min(max)),
+    }
+}
+
+// The most detailed key hint that fits on one line of `width` columns.
+fn key_hint(width: u16) -> &'static str {
+    [
+        "Enter to unlock   ·   Esc to cancel   ·   Ctrl+U to clear",
+        "Enter unlock · Esc cancel · ^U clear",
+    ]
+    .into_iter()
+    .find(|hint| hint.chars().count() <= usize::from(width))
+    .unwrap_or("⏎ unlock · Esc cancel")
+}
+
+// Rows of `text` wrapped at `width` columns, at least one.
+fn wrapped_rows(text: &str, width: u16) -> u16 {
+    let width = usize::from(width.max(1));
+    let rows = text
+        .split('\n')
+        .map(|line| line.chars().count().div_ceil(width).max(1))
+        .sum::<usize>();
+    u16::try_from(rows).unwrap_or(u16::MAX)
+}
+
 fn draw(
     frame: &mut Frame<'_>,
     view: &View<'_>,
@@ -296,10 +373,180 @@ fn draw(
     let area = frame.area();
     frame
         .render_widget(Block::default().style(Style::default().bg(BG)), area);
-    if area.width < 40 || area.height < 27 {
-        frame.render_widget(Paragraph::new("Unlock rbw\n\nEnlarge this window to continue.\nEsc or Ctrl+C cancels.").style(Style::default().fg(INK)).alignment(Alignment::Center), area);
-        return;
+    match size_class(area.width, area.height) {
+        SizeClass::Full => draw_full(frame, view, mask, issue),
+        SizeClass::Compact => draw_compact(frame, view, mask, issue),
+        SizeClass::TooSmall => frame.render_widget(
+            Paragraph::new("rbw: enlarge window. Esc cancels.")
+                .style(Style::default().fg(INK))
+                .wrap(Wrap { trim: true }),
+            area,
+        ),
     }
+}
+
+// Stacks header, status, password field and hint, top to bottom, giving
+// up the field border, then wrapping, then the status and hint lines as the
+// height shrinks. The password field is never dropped.
+fn draw_compact(
+    frame: &mut Frame<'_>,
+    view: &View<'_>,
+    mask: Option<usize>,
+    issue: Option<&'static str>,
+) {
+    let area = frame.area();
+    let margin = u16::from(area.width >= 24);
+    let width = area.width.saturating_sub(2 * margin).min(66);
+    let x = area.x + (area.width - width) / 2;
+    let status = status_text(view);
+    let error = issue.or(view.error);
+    let hint = error.map_or_else(
+        || {
+            if view.success {
+                "✓ Verified. Finishing unlock…"
+            } else if view.checking {
+                "Checking password…"
+            } else {
+                key_hint(width)
+            }
+        },
+        |error| error,
+    );
+
+    // Fixed rows: header and a one-line field. Spend the rest, in order, on
+    // the status line and the hint (an error first, so it stays visible),
+    // a bordered field, then a second row for each when it wraps.
+    let mut free = area.height.saturating_sub(2);
+    let mut take = |rows: u16| {
+        let fits = free >= rows;
+        if fits {
+            free -= rows;
+        }
+        fits
+    };
+    let (hint_shown, status_shown) = if error.is_some() {
+        let hint = take(1);
+        (hint, take(1))
+    } else {
+        let status = take(1);
+        (take(1), status)
+    };
+    let boxed = take(2);
+    let status_rows = if status_shown {
+        1 + u16::from(wrapped_rows(&status, width) > 1 && take(1))
+    } else {
+        0
+    };
+    let hint_rows = if hint_shown {
+        1 + u16::from(wrapped_rows(hint, width) > 1 && take(1))
+    } else {
+        0
+    };
+    let field_rows = if boxed { 3 } else { 1 };
+    let total = 1 + status_rows + field_rows + hint_rows;
+    let mut y = area.y + (area.height - total) / 2;
+
+    let mut header = vec![Span::styled(
+        "◇ RBW ",
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+    )];
+    header.push(Span::styled(
+        if view.success {
+            "✓ Credential verified"
+        } else {
+            view.title
+        },
+        Style::default().fg(if view.success { INK } else { MUTED }),
+    ));
+    frame.render_widget(
+        Paragraph::new(Line::from(header)),
+        Rect::new(x, y, width, 1),
+    );
+    y += 1;
+    if status_rows > 0 {
+        frame.render_widget(
+            Paragraph::new(status)
+                .style(Style::default().fg(if view.success {
+                    Color::Rgb(134, 239, 172)
+                } else {
+                    CYAN
+                }))
+                .wrap(Wrap { trim: true }),
+            Rect::new(x, y, width, status_rows),
+        );
+        y += status_rows;
+    }
+    let border = if view.success {
+        Color::Rgb(134, 239, 172)
+    } else if view.checking {
+        BORDER
+    } else {
+        ACCENT
+    };
+    let short = width < 30;
+    if boxed {
+        let field = Block::default()
+            .title(match (mask.is_none(), short) {
+                (true, true) => " Password (no echo) ",
+                (true, false) => " Master password (no echo) ",
+                (false, true) => " Password ",
+                (false, false) => " Master password ",
+            })
+            .borders(Borders::ALL)
+            .padding(Padding::horizontal(1))
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(border));
+        let max = usize::from(width.saturating_sub(4));
+        frame.render_widget(
+            Paragraph::new(mask_text(view, mask, max, short))
+                .style(Style::default().fg(if mask == Some(0) {
+                    MUTED
+                } else {
+                    INK
+                }))
+                .block(field),
+            Rect::new(x, y, width, 3),
+        );
+    } else {
+        let label = if short { "› " } else { "Password › " };
+        let max = usize::from(width).saturating_sub(label.chars().count());
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(label, Style::default().fg(border)),
+                Span::styled(
+                    mask_text(view, mask, max, true),
+                    Style::default().fg(if mask == Some(0) {
+                        MUTED
+                    } else {
+                        INK
+                    }),
+                ),
+            ])),
+            Rect::new(x, y, width, 1),
+        );
+    }
+    y += field_rows;
+    if hint_rows > 0 {
+        frame.render_widget(
+            Paragraph::new(hint)
+                .style(Style::default().fg(if error.is_some() {
+                    ERROR
+                } else {
+                    MUTED
+                }))
+                .wrap(Wrap { trim: true }),
+            Rect::new(x, y, width, hint_rows),
+        );
+    }
+}
+
+fn draw_full(
+    frame: &mut Frame<'_>,
+    view: &View<'_>,
+    mask: Option<usize>,
+    issue: Option<&'static str>,
+) {
+    let area = frame.area();
     let width = area.width.saturating_sub(4).min(66);
     let height = 25.min(area.height.saturating_sub(2));
     let card = Rect::new(
@@ -394,30 +641,14 @@ fn draw(
             Rect::new(card.right() - 17, card.y + 1, 14, 6),
         );
     }
-    let indicator = if view.checking
-        || matches!(
-            view.fingerprint,
-            FingerprintStatus::Starting | FingerprintStatus::Checking
-        ) {
-        ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-            [usize::try_from((view.tick / 5) % 10).unwrap_or(0)]
-    } else {
-        "◎"
-    };
     frame.render_widget(
-        Paragraph::new(if view.success {
-            "✓  Verified. Finishing unlock…".to_string()
-        } else if view.checking {
-            format!("{indicator}  Checking master password…")
-        } else {
-            format!("{indicator}  {}", view.fingerprint.text())
-        })
-        .style(Style::default().fg(if view.success {
-            Color::Rgb(134, 239, 172)
-        } else {
-            CYAN
-        }))
-        .wrap(Wrap { trim: true }),
+        Paragraph::new(status_text(view))
+            .style(Style::default().fg(if view.success {
+                Color::Rgb(134, 239, 172)
+            } else {
+                CYAN
+            }))
+            .wrap(Wrap { trim: true }),
         row(card, 7, 2),
     );
     let field = Block::default()
@@ -439,23 +670,23 @@ fn draw(
     // Only a mask reaches Ratatui buffers, never the password. No-echo mode
     // renders an empty field regardless of whether any input is present.
     frame.render_widget(
-        Paragraph::new(match mask {
-            None => String::new(),
-            Some(0) if view.success => "✓ Verified".to_string(),
-            Some(0) if view.checking => "Checking password…".to_string(),
-            Some(0) => "Type your password…".to_string(),
-            Some(length) => "•".repeat(length.min(60)),
-        })
-        .style(Style::default().fg(if mask == Some(0) { MUTED } else { INK }))
-        .block(field),
+        Paragraph::new(mask_text(view, mask, 60, false))
+            .style(Style::default().fg(if mask == Some(0) {
+                MUTED
+            } else {
+                INK
+            }))
+            .block(field),
         row(card, 10, 5),
     );
-    let message = issue.or(view.error).unwrap_or(if view.success {
-        "✓ Verified. Finishing unlock…"
-    } else if view.checking {
-        "Checking password…"
-    } else {
-        "Enter to unlock   ·   Esc to cancel   ·   Ctrl+U to clear"
+    let message = issue.or(view.error).unwrap_or_else(|| {
+        if view.success {
+            "✓ Verified. Finishing unlock…"
+        } else if view.checking {
+            "Checking password…"
+        } else {
+            key_hint(row(card, 16, 2).width)
+        }
     });
     frame.render_widget(
         Paragraph::new(message)
@@ -586,6 +817,73 @@ mod tests {
             .collect();
         assert!(!text.contains('•'));
         assert!(text.contains("no echo"));
+    }
+
+    fn render(
+        width: u16,
+        height: u16,
+        view: &View<'_>,
+        mask: Option<usize>,
+        issue: Option<&'static str>,
+    ) -> Vec<String> {
+        let mut terminal =
+            Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, view, mask, issue))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    const DEMO: View<'static> = View {
+        title: "Unlock account default",
+        fingerprint: FingerprintStatus::Ready,
+        checking: false,
+        success: false,
+        error: None,
+        tick: 0,
+    };
+
+    #[test]
+    fn narrow_and_short_terminals_keep_the_password_field() {
+        for (width, height) in
+            [(16, 4), (20, 5), (30, 6), (36, 10), (39, 40), (120, 12)]
+        {
+            assert_eq!(size_class(width, height), SizeClass::Compact);
+            let text = render(width, height, &DEMO, Some(5), None).join("\n");
+            assert!(text.contains("RBW"), "{width}x{height}:\n{text}");
+            assert!(text.contains("•••••"), "{width}x{height}:\n{text}");
+        }
+        // Errors outrank the status line when only one of them fits.
+        let text =
+            render(30, 4, &DEMO, Some(0), Some("Wrong password")).join("\n");
+        assert!(text.contains("Wrong password"), "{text}");
+        assert_eq!(size_class(15, 20), SizeClass::TooSmall);
+        assert_eq!(size_class(80, 3), SizeClass::TooSmall);
+        assert_eq!(size_class(40, 27), SizeClass::Full);
+    }
+
+    // `cargo test print_compact_layouts -- --ignored --nocapture` shows
+    // what the compact layout looks like at a few sizes.
+    #[test]
+    #[ignore = "prints layouts for manual review"]
+    fn print_compact_layouts() {
+        for (width, height) in
+            [(16, 4), (24, 6), (30, 8), (36, 12), (60, 12), (90, 28)]
+        {
+            println!("--- {width}x{height}");
+            for line in render(width, height, &DEMO, Some(7), None) {
+                println!("|{line:width$}|", width = usize::from(width));
+            }
+        }
     }
 
     #[test]

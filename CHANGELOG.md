@@ -13,6 +13,13 @@
   new `browser.fingerprintAutoStart` setting (off by default, also a Home
   Manager option) starts the scan as soon as the popup opens.
 
+### Changed
+
+* The terminal unlock dialog has a compact layout for terminals smaller than
+  40×27 (narrow tmux panes, phones) instead of asking to enlarge the window:
+  it keeps the password field and drops decoration, status and hint lines as
+  space runs out. Only below 16×4 does it still pause input.
+
 ## [2.24.1] - 2026-10-22
 
 ### Fixed
