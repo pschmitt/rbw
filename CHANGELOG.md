@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.27.0] - 2026-10-22
+
 ### Added
 
 * `rbw move ENTRY --to ACCOUNT` (alias `mv`) moves an entry, attachments
