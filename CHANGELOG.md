@@ -35,6 +35,8 @@
 
 ### Fixed
 
+* `rbw unlock` names the account in "✓ Vault unlocked (NAME).", which
+  matters when one run unlocks several accounts.
 * "Manage keyboard shortcuts" did nothing in Firefox (extensions can't open
   `about:addons`); it now opens Firefox's shortcut settings directly.
 * Releases commit the signed browser packages on top of the tag and point a

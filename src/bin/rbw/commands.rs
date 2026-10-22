@@ -4004,7 +4004,11 @@ fn unlock_impl(
     };
     crate::actions::login(password.clone(), totp)?;
     crate::actions::unlock(password)?;
-    eprintln!("✓ Vault unlocked.");
+    // Several accounts can unlock in one run; say which one this was.
+    match active_account() {
+        Ok(account) => eprintln!("✓ Vault unlocked ({}).", account.name),
+        Err(_) => eprintln!("✓ Vault unlocked."),
+    }
 
     Ok(())
 }
