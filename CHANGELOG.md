@@ -28,6 +28,7 @@
   account and "Unlock all". They first use the account's own unlock policy
   (like `rbw unlock`, so chained unlocking works) and ask for the master
   password only if that fails.
+* The item view's collection picker is expanded by default.
 * Browser extension settings: the Accounts section shows each account's lock
   state (and how to unlock a locked one), and "Vault state" counts unlocked
   accounts.

@@ -678,7 +678,7 @@ async function openDetail(item, trashed = false) {
   if (detail.history.length) { const history = element("details", null, "history-section"); const historyHeader = element("summary"); historyHeader.append(element("h3", `Password history · ${detail.history.length}`), icon("chevron-down")); history.append(historyHeader); for (const [index, entry] of detail.history.entries()) history.append(detailField(entry.last_used_date, entry.password, item, copyable(`history/${index}`), true)); content.append(history); }
   if (detail.collection_options?.length && !trashed) {
     content.append(element("h3", "Collections"));
-    const dropdown = element("details", null, "collection-picker"); const summary = element("summary");
+    const dropdown = element("details", null, "collection-picker"); dropdown.open = true; const summary = element("summary");
     const updateSummary = () => { const count = dropdown.querySelectorAll("input:checked").length; summary.textContent = count ? `${count} collection${count === 1 ? "" : "s"} selected` : "Choose collections"; };
     dropdown.append(summary);
     for (const collection of detail.collection_options) {
