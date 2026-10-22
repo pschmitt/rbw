@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.24.1] - 2026-10-22
+
 ### Fixed
 
 * The `--fzf` preview failed with "no entry found" when the matches were
