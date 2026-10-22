@@ -30,6 +30,9 @@
   banner above the list (with Unlock), an amber "L" on the toolbar icon
   while some accounts are locked (red when all are), and the account menu
   opens by itself when everything is locked.
+* Browser extension: a locked account with an enrolled fingerprint gets a
+  fingerprint button in the popup's account menu (before, the scan was only
+  offered on the all-locked screen, for the primary account).
 * Browser extension: a locked account's row in the popup's account menu can
   take its master password inline (key button, or automatically when the
   account's own unlock method fails), so "Unlock all" works with a mix of

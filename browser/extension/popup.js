@@ -285,7 +285,13 @@ function renderAccountStates(primary) {
       unlock.title = `Unlock ${account.name} with its configured unlock method`;
       const key = actionButton("Use password", "key", () => { form.hidden = !form.hidden; if (!form.hidden) input.focus(); }, "icon");
       key.title = "Unlock with a master password";
-      row.append(unlock, key, form);
+      row.append(unlock);
+      // An account with an enrolled fingerprint also offers the scan.
+      if (account.fingerprint) {
+        const scan = actionButton("Unlock with fingerprint", "fingerprint", () => fingerprintUnlock(account.name), "icon");
+        scan.title = `Unlock ${account.name} with the fingerprint reader`; row.append(scan);
+      }
+      row.append(key, form);
     }
     return row;
   }));
@@ -1185,17 +1191,17 @@ async function cancelFingerprint() {
   fingerprintCancelled = true;
   await request("cancel_unlock").catch(() => {});
 }
-async function fingerprintUnlock() {
+async function fingerprintUnlock(account = null) {
   if (fingerprintPort) return;
   fingerprintPort = api.runtime.connect({ name: "rbw-fingerprint" }); fingerprintCancelled = false;
-  fingerprintScanning(true);
+  if (account) message(`Touch the fingerprint sensor to unlock ${account}…`); else fingerprintScanning(true);
   try {
     await attempt(async () => {
-      try { await request("unlock", { fingerprint: true }); }
+      try { await request("unlock", account ? { fingerprint: true, account } : { fingerprint: true }); }
       catch (error) { if (fingerprintCancelled) return; throw error; }
       await refresh(); message("Vault unlocked.");
     });
-  } finally { fingerprintPort.disconnect(); fingerprintPort = null; fingerprintScanning(false); }
+  } finally { fingerprintPort.disconnect(); fingerprintPort = null; if (!account) fingerprintScanning(false); }
 }
 $("unlock-fingerprint").onclick = () => fingerprintUnlock();
 $("unlock").onclick = () => { show(approvalId ? "approval" : "locked"); $("account-menu").hidden = true; $("unlock-password").focus(); };

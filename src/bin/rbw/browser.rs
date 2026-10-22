@@ -601,7 +601,7 @@ fn merged_status(
         "fingerprint": fingerprint,
         "fingerprint_auto_start": fingerprint && config.browser.fingerprint_auto_start,
         "accounts": config.accounts().iter().map(|a| &a.name).collect::<Vec<_>>(),
-        "accountStates": states.iter().map(|s| json!({"name": s.name, "primary": s.primary, "unlocked": agent_ok && s.unlocked, "excluded": s.excluded, "policy": s.policy})).collect::<Vec<_>>(),
+        "accountStates": states.iter().map(|s| json!({"name": s.name, "primary": s.primary, "unlocked": agent_ok && s.unlocked, "excluded": s.excluded, "policy": s.policy, "fingerprint": fingerprint_unlock(&config, Some(&s.name)).is_some()})).collect::<Vec<_>>(),
         "primary": primary}))
 }
 
