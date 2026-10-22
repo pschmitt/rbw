@@ -359,12 +359,14 @@ let
       };
 
       browser.fingerprintAutoStart = mkOption {
-        type = types.bool;
-        default = false;
+        type = types.nullOr types.bool;
+        default = null;
+        example = true;
         description = ''
           Start the fingerprint scan as soon as the browser extension popup
           opens on a locked account with fingerprint unlock enrolled
-          (`rbw security unlock enroll --keyring --fingerprint`).
+          (`rbw security unlock enroll --keyring --fingerprint`). `null`
+          keeps rbw's default (off).
         '';
       };
 
