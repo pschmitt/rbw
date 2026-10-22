@@ -726,9 +726,4 @@ details.history-section[open] > summary svg { transform:rotate(180deg); }
 .account-states li { flex-wrap:wrap; }
 .account-unlock { display:flex; gap:6px; flex-basis:100%; margin:2px 0 4px; }
 .account-unlock input { flex:1; min-width:0; }
-/* Notices (except errors, which need room) replace the header title for a
-   moment: same bar, icon and one short line, no box of their own. */
-#message.popup-notification:not(.is-error) { top:0; left:54px; width:calc(100% - 54px - var(--header-actions-width, 120px) - 12px); height:var(--header-height, 49px); box-sizing:border-box; align-items:center; margin:0; padding:0 4px; border:0; border-radius:0; background:var(--panel); box-shadow:none; color:var(--text); font-size:14px; font-weight:600; animation:notice-swap 160ms ease-out both; }
-#message.popup-notification:not(.is-error) #message-text { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-@keyframes notice-swap { from { opacity:0; } }
-@media (prefers-reduced-motion:reduce) { #message.popup-notification:not(.is-error) { animation:none; } }
+.locked-banner[data-kind=success] { border-color:var(--ok); background:color-mix(in srgb, var(--ok) 18%, var(--panel)); }

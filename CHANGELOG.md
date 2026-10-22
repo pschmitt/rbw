@@ -9,10 +9,8 @@
 * Browser extension: with several accounts, a locked account is flagged: a
   banner above the list (with Unlock), an amber "L" on the toolbar icon
   while some accounts are locked (red when all are), and the account menu
-  opens by itself when everything is locked.
-* Browser extension: the popup's notices ("Unlocked", "Copied", ...) are one
-  short line that replaces the header title for a moment, instead of a box
-  floating over the content; errors keep the dropdown.
+  opens by itself when everything is locked. Unlocking an account turns the
+  banner, in place, into a short "unlocked" notice.
 * Browser extension: a locked account with an enrolled fingerprint gets a
   fingerprint button in the popup's account menu (before, the scan was only
   offered on the all-locked screen, for the primary account).
