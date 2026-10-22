@@ -24,10 +24,14 @@
 
 ### Added
 
-* Filling a login that has a TOTP copies the current code to the clipboard
-  (through rbw-agent, so its clipboard clearing applies) and says so in the
-  in-page fill notification, ready for the site's second step. A new "Copy
-  TOTP after filling" switch, on by default, turns it off.
+* "Copy TOTP after filling" (off by default, like copying the card security
+  code): filling a login that has a TOTP copies the current code to the
+  clipboard (through rbw-agent, so its clipboard clearing applies) and the
+  in-page fill notification says so, ready for the site's second step.
+* Browser policy (managed storage) can set `copyTotp` and
+  `cardSecurityCode`; both settings views lock policy-set controls.
+* The options page's folder manager loads on its own, lists folders
+  alphabetically with a count, renames in place and uses icon buttons.
 
 ### Fixed
 
