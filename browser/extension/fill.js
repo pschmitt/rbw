@@ -68,6 +68,9 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     el.dispatchEvent(new Event("input", { bubbles: true }));
     if (commit) el.dispatchEvent(new Event("change", { bubbles: true }));
   };
+  // Authenticator-code fields: autocomplete=one-time-code, or a name that says so
+  // (signInMFA, ci-otpCode-0, totp, 2fa, ...).
+  const isOtpField = el => ["text", "tel", "number", ""].includes(el.type) && !el.autocomplete.split(/\s+/).includes("username") && (el.autocomplete.split(/\s+/).includes("one-time-code") || /(^|[^a-z])(otp|totp|mfa|2fa|tfa|authenticator|one[\s_-]*time|verification[\s_-]*code|auth(entication)?[\s_-]*code)([^a-z]|$)/i.test([el.id, el.name, el.getAttribute("aria-label"), el.placeholder].filter(Boolean).join(" ").replace(/([a-z])([A-Z])/g, "$1 $2")));
   let count = 0;
   let securityCodeFieldPresent = false;
   const assignments = [];
@@ -78,7 +81,11 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
       count++;
     }
   };
-  if (data.type === "login") {
+  if (data.type === "login" && data.totpOnly) {
+    // A 2FA step: only the authenticator code, never the password.
+    const otp = fields.find(isOtpField);
+    put(otp, data.totpCode); otp?.focus();
+  } else if (data.type === "login") {
     // Masked integration credentials are not login passwords, even on a
     // matching site. Include associated labels (Rails often labels API keys).
     const isIntegrationSecret = el => {
@@ -92,7 +99,7 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     if (passwords.length > 1) throw new Error("Several password fields found. Select a login form.");
     const password = passwords[0];
     const isSearch = el => el.type === "search" || el.closest('[role="search"],form[action*="search"]') || /search|(^|[\s_-])q($|[\s_-])/i.test([el.id, el.name, el.autocomplete, el.getAttribute("aria-label"), el.placeholder].filter(Boolean).join(" "));
-    const users = fields.filter(el => (!password?.form || el.form === password.form) && ["text", "email", "tel"].includes(el.type) && !isSearch(el));
+    const users = fields.filter(el => (!password?.form || el.form === password.form) && ["text", "email", "tel"].includes(el.type) && !isSearch(el) && !isOtpField(el));
     const recognizable = el => el.autocomplete?.split(/\s+/).includes("username") || el.type === "email" || /(^|[\s_-])(user(name)?|email|login|identifier|account)([\s_-]|$)/i.test([el.id, el.name, el.getAttribute("aria-label")].filter(Boolean).join(" "));
     // Generic text fields are only eligible inside the same real login form.
     // Username-only flows require explicit login semantics; never guess a search box.
@@ -100,6 +107,7 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     const user = password ? users.find(recognizable) || (password.form ? users.filter(el => el.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING).at(-1) : null) : users.find(usernameOnly);
     scoped = password?.form ? fields.filter(el => el.form === password.form) : fields;
     put(user, data.username); put(password, data.password);
+    if (data.totpCode) put(fields.find(isOtpField), data.totpCode);
     if (password) password.focus(); else user?.focus();
   } else {
     const names = data.type === "card" ? { "cc-name": "cardholder_name", "cc-number": "number", "cc-exp-month": "exp_month", "cc-exp-year": "exp_year", "cc-type": "brand" } : { "given-name": "first_name", "additional-name": "middle_name", "family-name": "last_name", "address-line1": "address1", "address-line2": "address2", "address-line3": "address3", "address-level2": "city", "address-level1": "state", "postal-code": "postal_code", "country": "country", "country-name": "country", "tel": "phone", "email": "email", "username": "username", "honorific-prefix": "title" };

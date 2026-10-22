@@ -274,13 +274,17 @@ if (window === window.top) {
       }
       if (autofillGate.pending || document.visibilityState === "hidden") return;
       const fields = [...document.querySelectorAll('input[type="password"]:not([autocomplete="new-password"]),input[autocomplete="username"]')];
+      // Authenticator-code fields too (the background fills them only when
+      // "Autofill TOTP codes" is on). Same detection as fill.js.
+      const otpFields = [...document.querySelectorAll("input")].filter(el => ["text", "tel", "number", ""].includes(el.type) && !el.autocomplete.split(/\s+/).includes("username") && (el.autocomplete.split(/\s+/).includes("one-time-code") || /(^|[^a-z])(otp|totp|mfa|2fa|tfa|authenticator|one[\s_-]*time|verification[\s_-]*code|auth(entication)?[\s_-]*code)([^a-z]|$)/i.test([el.id, el.name, el.getAttribute("aria-label"), el.placeholder].filter(Boolean).join(" ").replace(/([a-z])([A-Z])/g, "$1 $2"))));
+      fields.push(...otpFields.filter(el => !fields.includes(el)));
       const field = fields.find(el => !attempted.has(el) && !el.value && !el.disabled && !el.readOnly && visible(el));
       if (!field) return;
       // Mark only visible candidates: a hidden password step may become visible
       // after passkey login without a document navigation.
       for (const el of fields.filter(el => visible(el))) attempted.add(el);
       autofillGate.pending = true;
-      (globalThis.browser || chrome).runtime.sendMessage({ action: "autofill_load" }).then(response => {
+      (globalThis.browser || chrome).runtime.sendMessage({ action: "autofill_load", otp: otpFields.includes(field) && !fields.some(el => !otpFields.includes(el) && visible(el)) }).then(response => {
         autofillGate.completed = Number(response?.result) > 0;
       }).catch(() => {}).finally(() => {
         autofillGate.pending = false;

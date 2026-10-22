@@ -118,7 +118,7 @@ async function fetchFavicon(origin) {
   const value = await iconDataUrl(origin + "/favicon.ico");
   if (generation === metadataEpoch) cacheFor(faviconCache, origin, value, 5 * 60 * 1000, 128); return value;
 }
-const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, allowHttpFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", copyTotp: false, theme: "dark", account: "", accounts: [], showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true, uriMatchDefault: "" };
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, allowHttpFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", copyTotp: false, autofillTotp: false, theme: "dark", account: "", accounts: [], showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true, uriMatchDefault: "" };
 // Empty means "use rbw's defaultUriMatch"; otherwise an override for this browser.
 const URI_MATCH_TYPES = ["domain", "base_domain", "host", "starts_with", "exact", "regular_expression", "never"];
 let uriMatchOverride = null;
@@ -601,6 +601,19 @@ async function pageMessage(message, sender, respond) {
     const results = await cachedSearch({ account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
     const eligible = results.items.filter(item => !item.protected && !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems));
     if (!eligible.length) return respond({ result: false });
+    if (message.otp) {
+      // A 2FA step: fill the code of the login last filled here, else of the
+      // first matching login that has an authenticator key.
+      if (!prefs.autofillTotp) return respond({ result: false });
+      const last = fillCycles.get(sender.tab.id)?.item;
+      for (const item of [...eligible].sort((a, b) => (b.id === last) - (a.id === last)).slice(0, 5)) {
+        try {
+          if ((await native({ action: "credential", account: prefs.account || null, item: item.id, url: sender.url })).hasTotp !== true) continue;
+          return respond({ result: await fill({ item: item.id, totpOnly: true, automatic: true, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, prefs.account || null) });
+        } catch (_) { /* Try the next login. */ }
+      }
+      return respond({ result: false });
+    }
     return respond({ result: await fill({ item: eligible[0].id, automatic: true, cycleIndex: 1, cycleCount: eligible.length, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, prefs.account || null) });
   }
   if (message.action === "inline_open") {
@@ -656,6 +669,20 @@ async function pageMessage(message, sender, respond) {
     } catch (_) { /* The toolbar badge remains available until cancellation/expiry. */ }
   }
 }
+// Writes `text` to the system clipboard from the page's isolated world (a
+// background worker has no clipboard access). The textarea fallback lives in
+// a closed shadow root so the page can't read the value from the DOM.
+async function copyToClipboard(tabId, text) {
+  const [result] = await api.scripting.executeScript({ target: { tabId }, args: [text], func: async value => {
+    try { await navigator.clipboard.writeText(value); return true; } catch (_) { /* Fall back to execCommand. */ }
+    const host = document.createElement("div"); host.style.cssText = "position:fixed;top:-1000px;opacity:0";
+    const area = document.createElement("textarea"); area.value = value; area.setAttribute("readonly", "");
+    host.attachShadow({ mode: "closed" }).append(area); document.documentElement.append(host);
+    area.select(); let ok = false; try { ok = document.execCommand("copy"); } catch (_) { /* Not allowed. */ }
+    host.remove(); return ok;
+  } });
+  if (!result?.result) throw new Error("Could not write to the clipboard.");
+}
 async function fill(message, account) {
   const tab = await activeTab();
   const prefs = await settings();
@@ -668,7 +695,7 @@ async function fill(message, account) {
   let count = 0;
   let securityCodeFieldPresent = false;
   try {
-    let credential, label;
+    let credential, label, totpCode = null;
     if (message.type && message.type !== "login") {
       const detail = await native({ action: "detail", account, item: message.item });
       credential = { ...detail.cipher.data, custom: detail.cipher.fields };
@@ -676,13 +703,17 @@ async function fill(message, account) {
       if (!["card", "identity"].includes(credential.type)) throw new Error("This item cannot fill a form.");
     } else {
       credential = { type: "login", ...await native({ action: "credential", account, item: message.item, url: tab.url }) };
+      if (message.totpOnly && !(credential.hasTotp === true && prefs.autofillTotp)) throw new Error("No authenticator code to fill.");
+      // The code is generated per fill and goes to the page like the password.
+      if (credential.hasTotp === true && prefs.autofillTotp) totpCode = (await native({ action: "totp", account, item: message.item })).code;
+      if (message.totpOnly) credential = { type: "login", name: credential.name, totpOnly: true, totpCode };
+      else if (totpCode) credential.totpCode = totpCode;
     }
     await api.tabs.sendMessage(tab.id, { action: "rbw_fill_state", token, active: true, item: message.item, name: label || credential.name || message.displayName }).catch(() => {});
     const current = await activeTab();
     if (current.id !== tab.id || current.url !== tab.url) throw new Error("Page changed. Choose Fill again.");
     const frames = await api.webNavigation.getAllFrames({ tabId: tab.id });
     const filledFrames = [];
-    const prefs = await settings();
     const cardSecurityCode = ["fill", "clipboard"].includes(prefs.cardSecurityCode) ? prefs.cardSecurityCode : "off";
     const fillOptions = { automatic: message.automatic === true, animations: prefs.animations, animationSpeed: prefs.animationSpeed, icon: prefs.animations === "plaid" ? await getNotificationIcon() : null, cardSecurityCode };
     for (const frame of frames.filter(f => { try { return new URL(f.url).origin === new URL(tab.url).origin; } catch (_) { return false; } })) {
@@ -711,13 +742,15 @@ async function fill(message, account) {
     let copiedTotp = false;
     let totpCopyFailed = false;
     if (credential.type === "login" && credential.hasTotp === true && prefs.copyTotp) {
-      try { await native({ action: "copy", account, item: message.item, field: "totp" }); copiedTotp = true; }
+      // Copied by the extension itself, not the agent: the agent may have no
+      // clipboard (no display), and then reported success without copying.
+      try { await copyToClipboard(tab.id, totpCode || (await native({ action: "totp", account, item: message.item })).code); copiedTotp = true; }
       catch (_) { totpCopyFailed = true; }
     }
     clearTimeout(fillUndos.get(tab.id)?.timer);
     fillUndos.set(tab.id, { token, url: tab.url, frames: filledFrames, timer: setTimeout(() => { if (fillUndos.get(tab.id)?.token === token) fillUndos.delete(tab.id); }, 10000) });
     // Only public display metadata goes to the notice, never the credential.
-    const notice = { undoToken: token, name: label || credential.name || "Item", username: credential.type === "login" ? credential.username : null, position: message.cycleIndex, total: message.cycleCount, message: copiedTotp ? "TOTP code copied to clipboard. Paste it when the site asks for it." : totpCopyFailed ? "Login filled, but the TOTP code could not be copied." : copiedSecurityCode ? "Card security code copied to clipboard." : securityCodeCopyFailed ? "Card fields filled, but the security code could not be copied." : hasSecurityCode && securityCodeFieldPresent && cardSecurityCode === "off" ? "Security code left blank. Set Card security code to Fill the field in rbw settings." : hasSecurityCode && !securityCodeFieldPresent && cardSecurityCode === "fill" ? "No security-code field found on this page." : null };
+    const notice = { undoToken: token, name: label || credential.name || "Item", username: credential.type === "login" ? credential.username : null, position: message.cycleIndex, total: message.cycleCount, message: message.totpOnly ? "Authenticator code filled." : copiedTotp ? "TOTP code copied to clipboard. Paste it when the site asks for it." : totpCopyFailed ? "Login filled, but the TOTP code could not be copied." : copiedSecurityCode ? "Card security code copied to clipboard." : securityCodeCopyFailed ? "Card fields filled, but the security code could not be copied." : hasSecurityCode && securityCodeFieldPresent && cardSecurityCode === "off" ? "Security code left blank. Set Card security code to Fill the field in rbw settings." : hasSecurityCode && !securityCodeFieldPresent && cardSecurityCode === "fill" ? "No security-code field found on this page." : null };
     await notifyFill(tab, notice).catch(() => {});
     return count;
   } finally {

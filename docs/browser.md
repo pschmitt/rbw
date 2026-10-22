@@ -16,6 +16,18 @@ the saved host and its subdomains, `base_domain` matches like Bitwarden's
 "Base domain". The add-on options can override the default for this browser
 only, and the item editor sets match detection per URI.
 
+## TOTP
+
+With "Autofill TOTP codes" on, the extension fills the current code into a
+page's authenticator-code field: on 2FA pages when "Auto-fill on page load"
+is on (the code of the login last filled there, else of the first matching
+login with an authenticator key), and whenever you fill a login that has
+one. Fields are recognised by `autocomplete="one-time-code"` or an
+id/name/label such as `otp`, `totp`, `mfa`, `2fa`, `signInMFA`. "Copy TOTP
+after filling" puts the code on the clipboard, written by the extension;
+unlike rbw's own clipboard it isn't cleared by rbw-agent afterwards. Both
+settings can be set by browser policy (`autofillTotp`, `copyTotp`).
+
 ## Multiple accounts
 
 With more than one rbw account configured the account picker has an "All

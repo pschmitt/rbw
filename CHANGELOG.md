@@ -18,6 +18,14 @@
 
 ### Changed
 
+* Browser extension: "Autofill TOTP codes" (off by default, settable by
+  browser policy) fills the current code into authenticator-code fields
+  (`autocomplete=one-time-code`, or an id/name such as `otp`, `mfa`, `2fa`),
+  on 2FA pages with "Auto-fill on page load" and whenever a login is filled.
+  The "Copy TOTP after filling" copy is now done by the extension (new
+  `clipboardWrite` permission) instead of the agent.
+* The item view's password history has a proper section header with a
+  chevron, like the other sections.
 * The item view shows a globe placeholder for a URI whose favicon can't be
   fetched.
 * Browser extension settings: an Accounts section chooses which accounts

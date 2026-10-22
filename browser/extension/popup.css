@@ -700,3 +700,10 @@ select.save-account { max-width:110px; font-size:11px; }
 .confirm-dialog-choice select { flex:1; min-width:0; }
 .uri-icon-placeholder { color:var(--muted); }
 .uri-icon-placeholder svg { width:16px; height:16px; }
+/* Password history: a section header like "URIs", collapsible, entries as cards. */
+details.history-section > summary { display:flex; align-items:center; justify-content:space-between; cursor:pointer; list-style:none; }
+details.history-section > summary::-webkit-details-marker { display:none; }
+details.history-section > summary h3 { margin:18px 0 8px; }
+details.history-section > summary svg { width:16px; height:16px; color:var(--muted); transition:transform .15s; }
+details.history-section[open] > summary svg { transform:rotate(180deg); }
+@media (prefers-reduced-motion:reduce) { details.history-section > summary svg { transition:none; } }

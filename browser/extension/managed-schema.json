@@ -11,6 +11,11 @@
       "title": "Copy TOTP after filling",
       "description": "After filling a login that has a TOTP, copy the current code to the clipboard."
     },
+    "autofillTotp": {
+      "type": "boolean",
+      "title": "Autofill TOTP codes",
+      "description": "Fill the current TOTP code into a site's authenticator-code field."
+    },
     "cardSecurityCode": {
       "type": "string",
       "enum": [

@@ -637,7 +637,7 @@ async function openDetail(item, trashed = false) {
     content.append(detailField(field.name || "Custom field", field.value || "", item, copyable(`custom/${sourceIndex}`), field.type === "hidden"));
   }
   for (const passkey of detail.passkeys) { content.append(element("h3", "Passkey"), element("p", `${passkey.rp} · ${passkey.user || ""}`), element("p", `Created ${passkey.created || "unknown"}`, "hint")); }
-  if (detail.history.length) { const history = element("details"); history.append(element("summary", `Password history · ${detail.history.length}`)); for (const [index, entry] of detail.history.entries()) history.append(detailField(entry.last_used_date, entry.password, item, copyable(`history/${index}`), true)); content.append(history); }
+  if (detail.history.length) { const history = element("details", null, "history-section"); const historyHeader = element("summary"); historyHeader.append(element("h3", `Password history · ${detail.history.length}`), icon("chevron-down")); history.append(historyHeader); for (const [index, entry] of detail.history.entries()) history.append(detailField(entry.last_used_date, entry.password, item, copyable(`history/${index}`), true)); content.append(history); }
   if (detail.collection_options?.length && !trashed) {
     content.append(element("h3", "Collections"));
     const dropdown = element("details", null, "collection-picker"); const summary = element("summary");
@@ -1410,10 +1410,10 @@ $("open-options").onclick = event => {
 };
 $("settings-open-options").onclick = () => api.runtime.openOptionsPage();
 function applyTheme(theme) { document.documentElement.dataset.theme = theme === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme; }
-for (const id of ["setting-autofill", "setting-http-fill", "setting-animations", "setting-animation-speed", "setting-card-code", "setting-copy-totp", "setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
+for (const id of ["setting-autofill", "setting-http-fill", "setting-animations", "setting-animation-speed", "setting-card-code", "setting-copy-totp", "setting-autofill-totp", "setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
   $("setting-animation-speed").disabled = $("setting-animations").value === "off";
   $("setting-animation-speed").closest(".switch-row").hidden = $("setting-animations").value === "off";
-  preference = await request("set_preferences", { preferences: { autoFill: $("setting-autofill").checked, allowHttpFill: $("setting-http-fill").checked, animations: $("setting-animations").value, animationSpeed: $("setting-animation-speed").value, cardSecurityCode: $("setting-card-code").value, copyTotp: $("setting-copy-totp").checked, passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
+  preference = await request("set_preferences", { preferences: { autoFill: $("setting-autofill").checked, allowHttpFill: $("setting-http-fill").checked, animations: $("setting-animations").value, animationSpeed: $("setting-animation-speed").value, cardSecurityCode: $("setting-card-code").value, copyTotp: $("setting-copy-totp").checked, autofillTotp: $("setting-autofill-totp").checked, passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
 });
 setInterval(() => attempt(async () => {
   if (!approvalId) {
@@ -1436,11 +1436,11 @@ attempt(async () => {
       $("setting-http-fill").disabled = true;
       $("setting-http-fill-managed").hidden = false;
     }
-    lockManagedControls(managedPreferences, { copyTotp: "setting-copy-totp", cardSecurityCode: "setting-card-code" });
+    lockManagedControls(managedPreferences, { copyTotp: "setting-copy-totp", autofillTotp: "setting-autofill-totp", cardSecurityCode: "setting-card-code" });
     $("setting-animations").value = preference.animations;
     $("setting-animation-speed").value = preference.animationSpeed; $("setting-animation-speed").disabled = preference.animations === "off"; $("setting-animation-speed").closest(".switch-row").hidden = preference.animations === "off";
     $("setting-card-code").value = ["fill", "clipboard"].includes(preference.cardSecurityCode) ? preference.cardSecurityCode : "off";
-    $("setting-passkeys").checked = preference.passkeys; $("setting-copy-totp").checked = preference.copyTotp === true; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
+    $("setting-passkeys").checked = preference.passkeys; $("setting-copy-totp").checked = preference.copyTotp === true; $("setting-autofill-totp").checked = preference.autofillTotp === true; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
     if (!approvalId) approvalId = await activeApproval();
     const status = initial.status;
     renderAccounts(status.accounts || [], status.primary, preference.account, status.accountStates || []);

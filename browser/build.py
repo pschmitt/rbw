@@ -33,7 +33,7 @@ for target in ("firefox", "chromium"):
         "name": "rbw",
         "version": VERSION,
         "description": "Use your existing rbw-agent vault in the browser.",
-        "permissions": ["nativeMessaging", "activeTab", "scripting", "storage", "contextMenus", "webNavigation", "alarms"],
+        "permissions": ["nativeMessaging", "activeTab", "scripting", "storage", "contextMenus", "webNavigation", "alarms", "clipboardWrite"],
         "host_permissions": ["https://*/*", "http://*/*"],
         "content_scripts": [
             {"matches": ["https://*/*", "http://*/*"], "js": ["webauthn.js"], "run_at": "document_start", "all_frames": True, "world": "MAIN"},
