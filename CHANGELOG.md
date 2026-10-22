@@ -16,6 +16,16 @@
   and an Android logo for `androidapp://` URIs.
 * Locking the vault from the browser extension asks for confirmation first,
   since it locks rbw-agent for every client, including the command line.
+* The extension's options page ("More settings") uses the popup's design:
+  switch rows instead of checkboxes, selects aligned on the right, and icons
+  on the section headings. "Animation speed" is hidden while animations are
+  off (popup too), and the export password only shows for the encrypted
+  Bitwarden format, which needs it.
+
+### Fixed
+
+* "Manage keyboard shortcuts" did nothing in Firefox (extensions can't open
+  `about:addons`); it now opens Firefox's shortcut settings directly.
 * Releases commit the signed browser packages on top of the tag and point a
   new `release` branch at that commit (then merge it into `main`), so commits
   landing on `main` during a release no longer break it. Nix consumers

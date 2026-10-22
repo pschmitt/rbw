@@ -179,6 +179,7 @@ details.menu button .svg-icon { width:16px; height:16px; }
 .switch-row > select { display:inline-block; width:auto; max-width:46%; margin:0; flex:none; padding:4px 8px; }
 .switch-row > kbd { flex:none; }
 div.switch-row { cursor:default; }
+.switch-row[hidden] { display:none; }
 .switch-row small.setting-warning, .hint.setting-warning { color:var(--warn); }
 .switch-row small[hidden] { display:none; }
 .switch-row:has(> select:disabled) { opacity:.45; cursor:default; }

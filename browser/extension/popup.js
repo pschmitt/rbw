@@ -1311,6 +1311,7 @@ $("settings-open-options").onclick = () => api.runtime.openOptionsPage();
 function applyTheme(theme) { document.documentElement.dataset.theme = theme === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : theme; }
 for (const id of ["setting-autofill", "setting-http-fill", "setting-animations", "setting-animation-speed", "setting-card-code", "setting-passkeys", "setting-save", "theme", "setting-generator", "setting-send", "setting-health", "setting-favicons"]) $(id).onchange = () => attempt(async () => {
   $("setting-animation-speed").disabled = $("setting-animations").value === "off";
+  $("setting-animation-speed").closest(".switch-row").hidden = $("setting-animations").value === "off";
   preference = await request("set_preferences", { preferences: { autoFill: $("setting-autofill").checked, allowHttpFill: $("setting-http-fill").checked, animations: $("setting-animations").value, animationSpeed: $("setting-animation-speed").value, cardSecurityCode: $("setting-card-code").value, passkeys: $("setting-passkeys").checked, savePrompts: $("setting-save").checked, theme: $("theme").value, showGenerator: $("setting-generator").checked, showSend: $("setting-send").checked, showHealth: $("setting-health").checked, favicons: $("setting-favicons").checked } }); applyTheme(preference.theme); applyTabs();
 });
 setInterval(() => attempt(async () => {
@@ -1335,7 +1336,7 @@ attempt(async () => {
       $("setting-http-fill-managed").hidden = false;
     }
     $("setting-animations").value = preference.animations;
-    $("setting-animation-speed").value = preference.animationSpeed; $("setting-animation-speed").disabled = preference.animations === "off";
+    $("setting-animation-speed").value = preference.animationSpeed; $("setting-animation-speed").disabled = preference.animations === "off"; $("setting-animation-speed").closest(".switch-row").hidden = preference.animations === "off";
     $("setting-card-code").value = ["fill", "clipboard"].includes(preference.cardSecurityCode) ? preference.cardSecurityCode : "off";
     $("setting-passkeys").checked = preference.passkeys; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
     if (!approvalId) approvalId = await activeApproval();

@@ -20,11 +20,20 @@ async function status() {
 }
 for (const id of ["account", "passkeys", "inline", "autofill", "allow-http-fill", "autofill-blocklist", "animations", "animation-speed", "card-security-code", "save-prompts", "theme", "show-generator", "show-send", "show-health", "favicons", "uri-match"]) $(id).onchange = () => attempt(async () => {
   const preferences = { account: $("account").value, passkeys: $("passkeys").checked, savePrompts: $("save-prompts").checked, inlineSuggestions: $("inline").checked, autoFill: $("autofill").checked, allowHttpFill: $("allow-http-fill").checked, autofillBlocklist: $("autofill-blocklist").value, animations: $("animations").value, animationSpeed: $("animation-speed").value, cardSecurityCode: $("card-security-code").value, theme: $("theme").value, showGenerator: $("show-generator").checked, showSend: $("show-send").checked, showHealth: $("show-health").checked, favicons: $("favicons").checked, uriMatchDefault: $("uri-match").value };
-  await request("set_preferences", { preferences }); $("animation-speed").disabled = preferences.animations === "off"; theme(preferences.theme); $("message").textContent = "Settings saved."; await status();
+  await request("set_preferences", { preferences }); $("animation-speed").disabled = preferences.animations === "off"; $("animation-speed").closest(".switch-row").hidden = preferences.animations === "off"; theme(preferences.theme); $("message").textContent = "Settings saved."; await status();
   showPolicy(await request("agent_settings"));
 });
 for (const action of ["sync", "lock"]) $(action).onclick = () => attempt(async () => { if (action === "lock" && !await confirmLock()) return; await request(action); await status(); $("message").textContent = action === "sync" ? "Vault synchronized." : "Vault locked."; });
-$("shortcuts").onclick = () => { const firefox = !!globalThis.browser; api.tabs.create({ url: firefox ? "about:addons" : "chrome://extensions/shortcuts" }).catch(() => { $("message").textContent = "Open your browser’s extension manager to change shortcuts."; }); };
+// Firefox can't open about:addons from an extension, but has its own API
+// for the shortcut settings (Firefox 137+); Chromium opens its page. A
+// failure is explained right below the button.
+$("shortcuts").onclick = async () => {
+  $("shortcuts-hint").hidden = true;
+  try {
+    if (api.commands?.openShortcutSettings) await api.commands.openShortcutSettings();
+    else await api.tabs.create({ url: "chrome://extensions/shortcuts" });
+  } catch (_) { $("shortcuts-hint").hidden = false; }
+};
 attempt(async () => {
   const prefs = await request("preferences"); theme(prefs.theme);
   const managedPreferences = await request("managed_preferences");
@@ -32,7 +41,7 @@ attempt(async () => {
   const state = await status();
   $("account").replaceChildren(...(state.accounts || []).map(a => new Option(a === state.primary ? `${a} *` : a, a)));
   $("account").value = prefs.account || state.primary || "";
-  $("autofill").checked = prefs.autoFill; $("allow-http-fill").checked = prefs.allowHttpFill === true; $("allow-http-fill").disabled = Object.hasOwn(managedPreferences, "allowHttpFill"); $("allow-http-fill-managed").hidden = !Object.hasOwn(managedPreferences, "allowHttpFill"); $("autofill-blocklist").value = prefs.autofillBlocklist || ""; $("animations").value = prefs.animations; $("animation-speed").value = prefs.animationSpeed; $("animation-speed").disabled = prefs.animations === "off"; $("card-security-code").value = ["fill", "clipboard"].includes(prefs.cardSecurityCode) ? prefs.cardSecurityCode : "off"; $("inline").checked = prefs.inlineSuggestions; $("passkeys").checked = prefs.passkeys; $("save-prompts").checked = prefs.savePrompts; $("theme").value = prefs.theme; $("uri-match").value = prefs.uriMatchDefault || ""; await status();
+  $("autofill").checked = prefs.autoFill; $("allow-http-fill").checked = prefs.allowHttpFill === true; $("allow-http-fill").disabled = Object.hasOwn(managedPreferences, "allowHttpFill"); $("allow-http-fill-managed").hidden = !Object.hasOwn(managedPreferences, "allowHttpFill"); $("autofill-blocklist").value = prefs.autofillBlocklist || ""; $("animations").value = prefs.animations; $("animation-speed").value = prefs.animationSpeed; $("animation-speed").disabled = prefs.animations === "off"; $("animation-speed").closest(".switch-row").hidden = prefs.animations === "off"; $("card-security-code").value = ["fill", "clipboard"].includes(prefs.cardSecurityCode) ? prefs.cardSecurityCode : "off"; $("inline").checked = prefs.inlineSuggestions; $("passkeys").checked = prefs.passkeys; $("save-prompts").checked = prefs.savePrompts; $("theme").value = prefs.theme; $("uri-match").value = prefs.uriMatchDefault || ""; await status();
   showPolicy(await request("agent_settings"));
 });
 
@@ -49,6 +58,13 @@ async function folders() {
 $("load-folders").onclick = () => attempt(folders);
 $("folder-form").onsubmit = event => { event.preventDefault(); attempt(async () => { await request("folders", { method: "create", name: $("folder-name").value }); $("folder-name").value = ""; await folders(); }); };
 
+// Only the encrypted Bitwarden format takes (and requires) an export password.
+function syncExportPassword() {
+  const encrypted = $("export-format").value === "bitwarden-encrypted-json";
+  $("export-password-field").hidden = !encrypted; $("export-password").required = encrypted;
+  if (!encrypted) $("export-password").value = "";
+}
+$("export-format").onchange = syncExportPassword; syncExportPassword();
 $("export-form").onsubmit = event => { event.preventDefault(); attempt(async () => {
   const format = $("export-format").value;
   const password = $("export-password").value; $("export-password").value = "";
