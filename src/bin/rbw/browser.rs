@@ -18,6 +18,10 @@ struct Request {
     id: u64,
     #[serde(default)]
     account: Option<String>,
+    // The accounts the user picked in the extension's settings (two or
+    // more), when no single `account` is named; absent means "as the CLI".
+    #[serde(default)]
+    accounts: Option<Vec<String>>,
     #[serde(flatten)]
     operation: Operation,
 }
@@ -385,6 +389,23 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
 // on all of them ("All accounts" in the extension): searches merge the
 // accounts `rbw search` would cover (passively: only unlocked ones), and a
 // request about one item goes to the account that holds it.
+// The accounts a merged request covers: the ones the user picked in the
+// extension (even if `exclude_from` would keep them out of the CLI's
+// search), or else the ones `rbw search` covers.
+fn scoped_states(
+    scope: Option<&[String]>,
+) -> anyhow::Result<Vec<commands::AccountState>> {
+    let mut states =
+        commands::account_states(rbw::config::ExcludeContext::Search)?;
+    if let Some(scope) = scope.filter(|scope| !scope.is_empty()) {
+        states.retain(|state| scope.contains(&state.name));
+        for state in &mut states {
+            state.excluded = false;
+        }
+    }
+    Ok(states)
+}
+
 fn merged_mode(account: Option<&String>) -> anyhow::Result<bool> {
     Ok(
         account.is_none()
@@ -483,14 +504,15 @@ fn tag_account(account: &str, values: &Value) -> Vec<Value> {
 // search would cover, tagging each result with its account.
 fn merged_lookup(
     operation: &Operation,
+    scope: Option<&[String]>,
     transfers: &mut attachments::Transfers,
 ) -> anyhow::Result<Value> {
-    let states =
-        commands::account_states(rbw::config::ExcludeContext::Search)?;
+    let states = scoped_states(scope)?;
     let mut parts = Vec::new();
     for state in states.iter().filter(|s| s.unlocked && !s.excluded) {
         let request = Request {
             id: 0,
+            accounts: None,
             account: Some(state.name.clone()),
             operation: lookup_copy(operation)?,
         };
@@ -506,9 +528,11 @@ fn merged_lookup(
     let Some((_, first)) = parts.first() else {
         let request = Request {
             id: 0,
-            account: Some(
-                rbw::config::Config::load()?.primary_account_name(),
-            ),
+            accounts: None,
+            account: Some(match states.first() {
+                Some(state) => state.name.clone(),
+                None => rbw::config::Config::load()?.primary_account_name(),
+            }),
             operation: lookup_copy(operation)?,
         };
         return dispatch(request, transfers);
@@ -552,13 +576,13 @@ fn merged_lookup(
 // Status for the merged view: every configured account with its lock
 // state, plus the single-account fields (for the primary) older code reads.
 fn merged_status(
+    scope: Option<&[String]>,
     transfers: &mut attachments::Transfers,
 ) -> anyhow::Result<Value> {
     let config = rbw::config::Config::load()?;
     let agent_ok =
         actions::version().is_ok_and(|v| v == rbw::protocol::VERSION);
-    let states =
-        commands::account_states(rbw::config::ExcludeContext::Search)?;
+    let states = scoped_states(scope)?;
     let unlocked =
         agent_ok && states.iter().any(|s| s.unlocked && !s.excluded);
     if !unlocked {
@@ -582,16 +606,44 @@ fn dispatch(
     transfers.prune();
     if merged_mode(request.account.as_ref())? {
         match &request.operation {
-            Operation::Status => return merged_status(transfers),
+            Operation::Status => {
+                return merged_status(request.accounts.as_deref(), transfers);
+            }
             Operation::Search { .. }
             | Operation::PasskeyCandidates { .. } => {
-                return merged_lookup(&request.operation, transfers);
+                return merged_lookup(
+                    &request.operation,
+                    request.accounts.as_deref(),
+                    transfers,
+                );
             }
-            // "Lock vault" in the merged view locks every account.
+            // "Lock vault" in the merged view locks every account it covers.
             Operation::Lock => {
                 transfers.clear();
+                if let Some(scope) =
+                    request.accounts.as_deref().filter(|a| !a.is_empty())
+                {
+                    for name in scope {
+                        actions::set_active_account(Some(name.clone()))?;
+                        commands::lock(false)?;
+                    }
+                    actions::set_active_account(None)?;
+                } else {
+                    actions::set_active_account(None)?;
+                    commands::lock(true)?;
+                }
+                return Ok(json!(true));
+            }
+            // Likewise "Sync": every unlocked account in scope.
+            Operation::Sync => {
+                for state in scoped_states(request.accounts.as_deref())?
+                    .iter()
+                    .filter(|s| s.unlocked && !s.excluded)
+                {
+                    actions::set_active_account(Some(state.name.clone()))?;
+                    commands::sync(false)?;
+                }
                 actions::set_active_account(None)?;
-                commands::lock(true)?;
                 return Ok(json!(true));
             }
             Operation::UploadChunk { token, .. }

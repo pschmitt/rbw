@@ -118,7 +118,7 @@ async function fetchFavicon(origin) {
   const value = await iconDataUrl(origin + "/favicon.ico");
   if (generation === metadataEpoch) cacheFor(faviconCache, origin, value, 5 * 60 * 1000, 128); return value;
 }
-const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, allowHttpFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", copyTotp: false, theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true, uriMatchDefault: "" };
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, allowHttpFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", copyTotp: false, theme: "dark", account: "", accounts: [], showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true, uriMatchDefault: "" };
 // Empty means "use rbw's defaultUriMatch"; otherwise an override for this browser.
 const URI_MATCH_TYPES = ["domain", "base_domain", "host", "starts_with", "exact", "regular_expression", "never"];
 let uriMatchOverride = null;
@@ -146,12 +146,22 @@ function isAutofillBlocked(pageUrl, blocklist) {
 function isItemAutofillExcluded(item, excludedItems) {
   return typeof item === "string" && Array.isArray(excludedItems) && excludedItems.includes(item);
 }
+// Which accounts requests without an explicit account cover: nothing named
+// (the rbw CLI's choice), one account, or a list to merge. The legacy single
+// `account` preference counts as a selection of one.
+let accountScope = {};
+function accountScopeOf(prefs) {
+  const names = prefs.accounts?.length ? prefs.accounts : prefs.account ? [prefs.account] : [];
+  return names.length === 1 ? { account: names[0] } : names.length > 1 ? { accounts: names } : {};
+}
 async function settings() {
   const stored = (await api.storage.local.get("preferences")).preferences || {};
   let managed = {};
   try { managed = await api.storage.managed.get(null); } catch (_) { /* Managed storage is optional. */ }
   const result = { ...defaults, ...stored, ...managed };
   result.allowHttpFill = result.allowHttpFill === true;
+  result.accounts = Array.isArray(result.accounts) ? result.accounts.filter(name => typeof name === "string" && name) : [];
+  accountScope = accountScopeOf(result);
   result.animations = ["off", "on", "plaid"].includes(stored.animations) ? stored.animations : stored.crabify === true ? "plaid" : "on";
   result.animationSpeed = ["slow", "normal", "fast"].includes(stored.animationSpeed) ? stored.animationSpeed : "normal";
   delete result.crabify;
@@ -211,6 +221,7 @@ function syncFinished() {
 let nativePort;
 const nativeRequests = new Map();
 function native(request) {
+  if (!request.account) request = { ...request, ...accountScope };
   if (!SYNCING_ACTIONS.includes(request.action) && !(request.action === "folders" && request.method !== "list")) return nativeCall(request);
   syncStarted();
   const call = (async () => nativeCall(request))();
@@ -785,13 +796,14 @@ async function handle(message) {
       const old = await settings();
       const next = { ...old, ...Object.fromEntries(Object.entries(message.preferences || {}).filter(([k, v]) => (k in defaults) && typeof v === typeof defaults[k])) };
       next.autofillBlocklist = String(next.autofillBlocklist || "").slice(0, 16384);
+      next.accounts = Array.isArray(next.accounts) ? [...new Set(next.accounts.filter(name => typeof name === "string" && name.length <= 256))].slice(0, 64) : [];
       next.autofillExcludedItems = Array.isArray(next.autofillExcludedItems) ? [...new Set(next.autofillExcludedItems.filter(item => typeof item === "string" && item.length > 0 && item.length <= 128))].slice(0, 10000) : [];
       if (!["off", "on", "plaid"].includes(next.animations)) next.animations = "on";
       if (!["slow", "normal", "fast"].includes(next.animationSpeed)) next.animationSpeed = "normal";
       if (!["off", "fill", "clipboard"].includes(next.cardSecurityCode)) next.cardSecurityCode = "off";
       if (!URI_MATCH_TYPES.includes(next.uriMatchDefault)) next.uriMatchDefault = "";
       uriMatchOverride = next.uriMatchDefault || null;
-      if (next.account !== old.account || !next.favicons || next.uriMatchDefault !== old.uriMatchDefault) clearMetadata();
+      if (next.account !== old.account || JSON.stringify(next.accounts) !== JSON.stringify(old.accounts) || !next.favicons || next.uriMatchDefault !== old.uriMatchDefault) clearMetadata();
       await api.storage.local.set({ preferences: next }); return next;
     }
     case "search": {

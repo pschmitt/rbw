@@ -31,6 +31,13 @@ in-page "save this login?" prompt saves to the primary account; use the
 popup's unsaved-logins list to pick another. Choosing a single account in the
 picker restores the old single-account behaviour.
 
+The settings page has an Accounts section: by default the extension follows
+the rbw command line (the accounts `rbw search` covers); turn that off to
+tick the accounts yourself. With two or more ticked, search, autofill, sync
+and lock cover exactly those accounts (even ones `exclude_from` hides from
+the CLI), and the popup picker offers only them; with one, the extension
+behaves as a single-account setup.
+
 ## Permissions and data flow
 
 Only this extension's popup and options pages can call the native API. Isolated

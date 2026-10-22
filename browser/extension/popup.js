@@ -248,8 +248,11 @@ function selectOptions(id, values, label) {
 // With several accounts the empty value means "All accounts" (the default);
 // with one, the account is always named.
 function renderAccounts(accounts, primary, chosen, states = []) {
+  // Only the accounts picked in the settings (if any) are on offer.
+  const picked = Array.isArray(preference.accounts) ? preference.accounts.filter(name => accounts.includes(name)) : [];
+  if (picked.length) accounts = picked;
   const select = $("account"), multiple = accounts.length > 1;
-  accountNames = accounts; accountStates = states;
+  accountNames = accounts; accountStates = states.filter(state => accounts.includes(state.name));
   const active = multiple ? (chosen ?? preference.account ?? "") : (chosen || preference.account || primary || (accounts[0] || ""));
   select.replaceChildren(...(multiple ? [new Option("All accounts", "")] : []), ...accounts.map(name => new Option(name === primary ? `${name} *` : name, name)));
   select.value = active;

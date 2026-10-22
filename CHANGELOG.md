@@ -16,6 +16,9 @@
 
 ### Changed
 
+* Browser extension settings: an Accounts section chooses which accounts
+  the extension covers: the rbw command line's (default) or any number you
+  tick, whose items are all listed and autofilled together.
 * Browser extension: the on-load autofill notice shows how many logins
   matched the page ("Autofilled (1/3)"), so you know the fill shortcut can
   cycle through more. The toolbar icon's syncing badge now uses the same

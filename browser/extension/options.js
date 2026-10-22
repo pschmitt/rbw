@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 for (const el of document.querySelectorAll("[data-icon]")) el.replaceChildren(icon(el.dataset.icon));
 document.querySelector("[data-extension-version]").textContent = `v${api?.runtime?.getManifest?.()?.version || "0.2.27"}`;
 async function request(action, values = {}) {
-  const response = await api.runtime.sendMessage({ action, account: $("account").value, ...values });
+  const response = await api.runtime.sendMessage({ action, account: ["import", "export", "folders"].includes(action) ? $("account").value || null : null, ...values });
   if (!response || response.error) throw new Error(response?.error || "Background unavailable.");
   return response.result;
 }
@@ -14,12 +14,44 @@ function showPolicy(policy) {
   $("agent-policy").textContent = `Automatic lock: ${policy.lockTimeout} seconds. Sync: every ${policy.syncInterval} seconds. Clipboard: ${policy.clipboard}. Generator default length: ${policy.passwordGen.length || 20}. URI matching: ${uriMatchNames[policy.defaultUriMatch] || uriMatchNames.domain}.`;
   $("uri-match").options[0].textContent = `Use rbw default (${uriMatchNames[policy.defaultUriMatch] || uriMatchNames.domain})`;
 }
+// Which accounts the extension covers: the rbw CLI's choice, or the ones
+// ticked here (two or more are merged). The legacy single `account`
+// preference counts as a selection of one.
+function chosenAccounts(prefs) { return Array.isArray(prefs.accounts) && prefs.accounts.length ? prefs.accounts : prefs.account ? [prefs.account] : []; }
+function renderAccountChoices(state, prefs) {
+  const names = state.accounts || [], chosen = chosenAccounts(prefs).filter(name => names.includes(name));
+  $("accounts-section").hidden = names.length < 2;
+  $("accounts-cli").checked = !chosen.length;
+  const list = $("accounts-list"); list.hidden = !chosen.length && $("accounts-cli").checked;
+  list.replaceChildren(...names.map(name => {
+    const label = document.createElement("label"); label.className = "switch-row";
+    const text = document.createElement("span"); text.textContent = state.primary === name ? `${name} (primary)` : name;
+    const input = document.createElement("input"); input.type = "checkbox"; input.className = "switch"; input.value = name; input.checked = chosen.includes(name); input.disabled = $("accounts-cli").checked;
+    label.append(text, input); return label;
+  }));
+  const picked = chosen.length ? chosen : names;
+  $("account-target-row").hidden = names.length < 2;
+  $("account").replaceChildren(...picked.map(name => new Option(name === state.primary ? `${name} *` : name, name)));
+  $("account").value = picked.includes($("account").value) ? $("account").value : picked.includes(state.primary) ? state.primary : picked[0];
+}
+async function saveAccountChoice() {
+  const chosen = $("accounts-cli").checked ? [] : [...$("accounts-list").querySelectorAll("input:checked")].map(input => input.value);
+  if (!$("accounts-cli").checked && !chosen.length) { $("accounts-cli").checked = true; }
+  const prefs = await request("set_preferences", { preferences: { accounts: chosen, account: "" } });
+  renderAccountChoices(await status(), prefs); $("message").textContent = "Accounts saved.";
+}
+$("accounts-cli").onchange = () => attempt(async () => {
+  // Turning the CLI default off starts from every account selected.
+  if (!$("accounts-cli").checked) for (const input of $("accounts-list").querySelectorAll("input")) input.checked = true;
+  await saveAccountChoice();
+});
+$("accounts-list").onchange = () => attempt(saveAccountChoice);
 async function status() {
   const state = await request("status"); $("connection").textContent = "Connected to rbw native messaging"; $("lock-state").textContent = state.unlocked ? "Unlocked" : "Locked";
   return state;
 }
-for (const id of ["account", "passkeys", "inline", "autofill", "allow-http-fill", "autofill-blocklist", "animations", "animation-speed", "card-security-code", "copy-totp", "save-prompts", "theme", "show-generator", "show-send", "show-health", "favicons", "uri-match"]) $(id).onchange = () => attempt(async () => {
-  const preferences = { account: $("account").value, passkeys: $("passkeys").checked, savePrompts: $("save-prompts").checked, inlineSuggestions: $("inline").checked, autoFill: $("autofill").checked, allowHttpFill: $("allow-http-fill").checked, autofillBlocklist: $("autofill-blocklist").value, animations: $("animations").value, animationSpeed: $("animation-speed").value, cardSecurityCode: $("card-security-code").value, copyTotp: $("copy-totp").checked, theme: $("theme").value, showGenerator: $("show-generator").checked, showSend: $("show-send").checked, showHealth: $("show-health").checked, favicons: $("favicons").checked, uriMatchDefault: $("uri-match").value };
+for (const id of ["passkeys", "inline", "autofill", "allow-http-fill", "autofill-blocklist", "animations", "animation-speed", "card-security-code", "copy-totp", "save-prompts", "theme", "show-generator", "show-send", "show-health", "favicons", "uri-match"]) $(id).onchange = () => attempt(async () => {
+  const preferences = { passkeys: $("passkeys").checked, savePrompts: $("save-prompts").checked, inlineSuggestions: $("inline").checked, autoFill: $("autofill").checked, allowHttpFill: $("allow-http-fill").checked, autofillBlocklist: $("autofill-blocklist").value, animations: $("animations").value, animationSpeed: $("animation-speed").value, cardSecurityCode: $("card-security-code").value, copyTotp: $("copy-totp").checked, theme: $("theme").value, showGenerator: $("show-generator").checked, showSend: $("show-send").checked, showHealth: $("show-health").checked, favicons: $("favicons").checked, uriMatchDefault: $("uri-match").value };
   await request("set_preferences", { preferences }); $("animation-speed").disabled = preferences.animations === "off"; $("animation-speed").closest(".switch-row").hidden = preferences.animations === "off"; theme(preferences.theme); $("message").textContent = "Settings saved."; await status();
   showPolicy(await request("agent_settings"));
 });
@@ -44,9 +76,7 @@ attempt(async () => {
   const managedPreferences = await request("managed_preferences");
   $("favicons").checked = prefs.favicons; $("show-generator").checked = prefs.showGenerator; $("show-send").checked = prefs.showSend; $("show-health").checked = prefs.showHealth;
   const state = await status();
-  const multiple = (state.accounts || []).length > 1;
-  $("account").replaceChildren(...(multiple ? [new Option("All accounts", "")] : []), ...(state.accounts || []).map(a => new Option(a === state.primary ? `${a} *` : a, a)));
-  $("account").value = multiple ? prefs.account || "" : prefs.account || state.primary || "";
+  renderAccountChoices(state, prefs);
   $("autofill").checked = prefs.autoFill; $("copy-totp").checked = prefs.copyTotp === true; $("allow-http-fill").checked = prefs.allowHttpFill === true; $("allow-http-fill").disabled = Object.hasOwn(managedPreferences, "allowHttpFill"); $("allow-http-fill-managed").hidden = !Object.hasOwn(managedPreferences, "allowHttpFill"); $("autofill-blocklist").value = prefs.autofillBlocklist || ""; $("animations").value = prefs.animations; $("animation-speed").value = prefs.animationSpeed; $("animation-speed").disabled = prefs.animations === "off"; $("animation-speed").closest(".switch-row").hidden = prefs.animations === "off"; $("card-security-code").value = ["fill", "clipboard"].includes(prefs.cardSecurityCode) ? prefs.cardSecurityCode : "off"; $("inline").checked = prefs.inlineSuggestions; $("passkeys").checked = prefs.passkeys; $("save-prompts").checked = prefs.savePrompts; $("theme").value = prefs.theme; $("uri-match").value = prefs.uriMatchDefault || ""; await status();
   lockManagedControls(managedPreferences, { copyTotp: "copy-totp", cardSecurityCode: "card-security-code" });
   showPolicy(await request("agent_settings"));
