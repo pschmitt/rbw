@@ -764,7 +764,8 @@ $NEW_PASSWORD_1"
 }
 
 @test "security rotate-key must re-encrypt the vault without changing its contents" {
-    DB="$(ls "$HOME"/.cache/rbw/*.json | head -1)"
+    # Other accounts (e.g. the mirror test's) have their own db file.
+    DB="$(ls "$HOME"/.cache/rbw/*"$EMAIL".json)"
     ENCRYPTED_BEFORE="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['protected_private_key'])" "$DB")"
 
     "$RBW" security rotate-key -y --stdin <<<"$PASSWORD"
