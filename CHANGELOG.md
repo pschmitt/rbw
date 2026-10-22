@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.27.2] - 2026-10-23
+
 ### Added
 
 * Browser extension: while syncing, the toolbar icon gets a spinning amber ring
