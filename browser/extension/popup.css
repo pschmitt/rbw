@@ -726,7 +726,3 @@ details.history-section[open] > summary svg { transform:rotate(180deg); }
 .account-states li { flex-wrap:wrap; }
 .account-unlock { display:flex; gap:6px; flex-basis:100%; margin:2px 0 4px; }
 .account-unlock input { flex:1; min-width:0; }
-/* Experiment: notices (except errors, which need room) show in the header in
-   place of the title. Delete this block to get the old dropdown back. */
-#message.popup-notification:not(.is-error) { top:7px; left:54px; right:auto; width:calc(100% - 54px - var(--header-actions-width, 120px) - 18px); height:34px; box-sizing:border-box; align-items:center; padding:0 12px; border-radius:999px; box-shadow:none; }
-#message.popup-notification:not(.is-error) #message-text { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }

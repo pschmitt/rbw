@@ -90,9 +90,7 @@ function message(text, error = false, action = null) {
   const notification = $("message");
   notification.dataset.kind = kind;
   $("message-icon").replaceChildren(icon(kind === "success" ? "check" : kind === "info" ? "info" : "warning"));
-  $("message-text").textContent = text; $("message-text").title = text;
-  // Experiment: non-error notices sit in the header, between the avatar and the buttons.
-  notification.style.setProperty("--header-actions-width", `${$("header-actions").offsetWidth}px`);
+  $("message-text").textContent = text;
   $("message-action").hidden = !action; $("message-action").textContent = action?.label || "";
   $("message-action").onclick = action ? () => { message(""); attempt(action.run); } : null;
   notification.classList.toggle("is-error", error);
