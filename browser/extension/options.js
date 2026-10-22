@@ -18,6 +18,8 @@ function showPolicy(policy) {
 // ticked here (two or more are merged). The legacy single `account`
 // preference counts as a selection of one.
 function chosenAccounts(prefs) { return Array.isArray(prefs.accounts) ? prefs.accounts : []; }
+let accountTarget = null;
+$("account").onchange = () => { accountTarget = $("account").value; };
 function renderAccountChoices(state, prefs) {
   const names = state.accounts || [], chosen = chosenAccounts(prefs).filter(name => names.includes(name));
   $("accounts-section").hidden = names.length < 2;
@@ -36,7 +38,8 @@ function renderAccountChoices(state, prefs) {
   const picked = chosen.length ? chosen : names;
   $("account-target-row").hidden = names.length < 2;
   $("account").replaceChildren(...picked.map(name => new Option((name === state.primary ? `${name} *` : name) + ((state.accountStates || []).find(s => s.name === name)?.unlocked === false ? " (locked)" : ""), name)));
-  $("account").value = picked.includes($("account").value) ? $("account").value : picked.includes(state.primary) ? state.primary : picked[0];
+  // The primary account unless the user picked another one here.
+  $("account").value = picked.includes(accountTarget) ? accountTarget : picked.includes(state.primary) ? state.primary : picked[0];
 }
 async function saveAccountChoice() {
   const chosen = $("accounts-cli").checked ? [] : [...$("accounts-list").querySelectorAll("input:checked")].map(input => input.value);
