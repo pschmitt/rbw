@@ -23,7 +23,7 @@ for (const id of ["account", "passkeys", "inline", "autofill", "allow-http-fill"
   await request("set_preferences", { preferences }); $("animation-speed").disabled = preferences.animations === "off"; theme(preferences.theme); $("message").textContent = "Settings saved."; await status();
   showPolicy(await request("agent_settings"));
 });
-for (const action of ["sync", "lock"]) $(action).onclick = () => attempt(async () => { await request(action); await status(); $("message").textContent = action === "sync" ? "Vault synchronized." : "Vault locked."; });
+for (const action of ["sync", "lock"]) $(action).onclick = () => attempt(async () => { if (action === "lock" && !await confirmLock()) return; await request(action); await status(); $("message").textContent = action === "sync" ? "Vault synchronized." : "Vault locked."; });
 $("shortcuts").onclick = () => { const firefox = !!globalThis.browser; api.tabs.create({ url: firefox ? "about:addons" : "chrome://extensions/shortcuts" }).catch(() => { $("message").textContent = "Open your browser’s extension manager to change shortcuts."; }); };
 attempt(async () => {
   const prefs = await request("preferences"); theme(prefs.theme);

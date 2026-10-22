@@ -14,6 +14,8 @@
   keeps its current choice.
 * The item view shows each URI's favicon again (with "Show favicons" on),
   and an Android logo for `androidapp://` URIs.
+* Locking the vault from the browser extension asks for confirmation first,
+  since it locks rbw-agent for every client, including the command line.
 * Releases commit the signed browser packages on top of the tag and point a
   new `release` branch at that commit (then merge it into `main`), so commits
   landing on `main` during a release no longer break it. Nix consumers

@@ -21,3 +21,12 @@ function confirmDialog({ title, text = "", confirm = "Confirm", danger = false, 
     (danger ? cancel : ok).focus();
   });
 }
+// Locking rbw-agent affects every client of it, not just this browser.
+function confirmLock() {
+  return confirmDialog({
+    title: "Lock the vault?",
+    text: "This locks rbw-agent for everything using it, including the command line, until you unlock it again.",
+    confirm: "Lock vault",
+    icon: "lock",
+  });
+}

@@ -1020,7 +1020,7 @@ $("cancel-passkey").onclick = () => attempt(async () => {
     throw err;
   }
 });
-for (const action of ["lock", "sync"]) $(action).onclick = () => attempt(async () => { message("Working…"); await request(action); message(""); await refresh(); });
+for (const action of ["lock", "sync"]) $(action).onclick = () => attempt(async () => { if (action === "lock" && !await confirmLock()) return; message("Working…"); await request(action); message(""); await refresh(); });
 $("unlock-form").onsubmit = event => {
   event.preventDefault();
   const password = $("unlock-password").value; $("unlock-password").value = "";
