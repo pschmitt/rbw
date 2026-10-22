@@ -33,6 +33,9 @@
 * The options page's folder manager loads on its own, lists folders
   alphabetically with a count, renames in place and uses icon buttons.
 
+* The item editor picks the folder from a dropdown of the account's folders
+  (or "No folder"); "New folder…" reveals a name field and saving creates it.
+
 ### Fixed
 
 * `rbw unlock` names the account in "✓ Vault unlocked (NAME).", which

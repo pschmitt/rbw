@@ -737,10 +737,41 @@ function addCustom(field = {}) {
   card.append(header, body);
   $("custom-fields").append(card);
 }
+// The editor's folder: a select of the account's folders (from the last
+// search), "No folder", or "New folder…", which reveals a name field; saving
+// an unknown name creates that folder.
+const NEW_FOLDER = "\u0000new";
+function fillFolderSelect(names, selected) {
+  const sorted = [...new Set(names.concat(selected ? [selected] : []))]
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  const select = $("edit-folder-select");
+  select.replaceChildren(new Option("No folder", ""), ...sorted.map(folder => new Option(folder, folder)), new Option("New folder…", NEW_FOLDER));
+  select.value = selected;
+}
+function setEditFolder(name) {
+  fillFolderSelect([...$("folder-list").options].map(option => option.value), name);
+  $("edit-folder").value = ""; $("edit-folder").required = false; $("edit-folder-new").hidden = true;
+  // The editor can open before any search filled the list; fetch it.
+  request("folders", { method: "list" }).then(list => {
+    const select = $("edit-folder-select");
+    if (select.value === NEW_FOLDER) return;
+    fillFolderSelect(list.map(folder => folder.name), select.value);
+  }).catch(() => {});
+}
+function editFolder() {
+  const select = $("edit-folder-select");
+  if (select.value !== NEW_FOLDER) return select.value || null;
+  return $("edit-folder").value.trim() || null;
+}
+$("edit-folder-select").onchange = () => {
+  const creating = $("edit-folder-select").value === NEW_FOLDER;
+  $("edit-folder-new").hidden = !creating; $("edit-folder").required = creating;
+  if (creating) $("edit-folder").focus();
+};
 function editItem(fresh = false, draft = null) {
   if (fresh) { currentItem = null; currentDetail = null; }
   const cipher = draft?.cipher || currentDetail?.cipher || { name: "", data: { type: "login" } };
-  $("edit-name").value = cipher.name; $("edit-folder").value = cipher.folder || ""; $("edit-notes").value = cipher.notes || "";
+  $("edit-name").value = cipher.name; setEditFolder(cipher.folder || ""); $("edit-notes").value = cipher.notes || "";
   $("edit-type").value = cipher.data.type; $("edit-type").disabled = !!currentDetail?.passkeys.length;
   $("edit-uris").replaceChildren(); for (const uri of cipher.data.uris || []) addUri(uri);
   if (!$("edit-uris").children.length) addUri();
@@ -770,7 +801,7 @@ function editorCipher() {
     value: card.querySelector(".custom-value-input")?.value || "",
     type: card.querySelector(".custom-type-select")?.value || "text"
   }));
-  return { name: $("edit-name").value, folder: $("edit-folder").value || null, notes: $("edit-notes").value || null, data, fields };
+  return { name: $("edit-name").value, folder: editFolder(), notes: $("edit-notes").value || null, data, fields };
 }
 function editorDraft() { return { item: currentItem, revision: editRevision, cipher: editorCipher(), noAutofill: $("edit-no-autofill").checked }; }
 function rememberEditDraft() {
