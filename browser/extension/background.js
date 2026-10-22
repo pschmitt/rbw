@@ -592,7 +592,7 @@ async function pageMessage(message, sender, respond) {
     const results = await cachedSearch({ account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
     const eligible = results.items.filter(item => !item.protected && !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems));
     if (!eligible.length) return respond({ result: false });
-    return respond({ result: await fill({ item: eligible[0].id, automatic: true, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, prefs.account || null) });
+    return respond({ result: await fill({ item: eligible[0].id, automatic: true, cycleIndex: 1, cycleCount: eligible.length, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, prefs.account || null) });
   }
   if (message.action === "inline_open") {
     if (!prefs.inlineSuggestions || autofillBlocked) return respond({ result: null });
@@ -717,7 +717,7 @@ async function fill(message, account) {
 }
 async function handle(message) {
   const account = message.account || null;
-  if (["lock", "sync", "save", "mutate", "set_collections", "folders", "import", "save_offer_apply", "unsaved_login_apply", "passkey_approve"].includes(message.action)) clearMetadata();
+  if (["lock", "sync", "save", "mutate", "set_collections", "folders", "import", "save_offer_apply", "unsaved_login_apply", "passkey_approve", "move"].includes(message.action)) clearMetadata();
   switch (message.action) {
     case "bootstrap": {
       const preferences = await settings();
@@ -849,6 +849,7 @@ async function handle(message) {
     case "upload_cancel": return native({ action: "upload_cancel", account, token: message.token });
     case "totp": return native({ action: "totp", account, item: message.item });
     case "detail": return native({ action: "detail", account, item: message.item });
+    case "move": return native({ action: "move", account, item: message.item, to: message.to });
     case "save": return native({ action: "save", account, item: message.item || null, revision: message.revision || null, cipher: message.cipher });
     case "mutate": return native({ action: "mutate", account, item: message.item, mutation: message.mutation });
     case "copy": return native({ action: "copy", account, item: message.item, field: message.field });

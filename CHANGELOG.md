@@ -2,8 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+* `rbw move ENTRY --to ACCOUNT` (alias `mv`) moves an entry, attachments
+  included, to another configured account; the original goes to the trash
+  (`--trash`, default), is deleted (`--delete`) or kept (`--keep`).
+  `rbw copy` (alias `cp`) is `move --keep`.
+* Browser extension: an "All accounts" view (the default with several
+  accounts) merges search results with an account badge per item, shows
+  which accounts are locked with an Unlock button each, offers "Save to
+  account" for new items and unsaved logins, and "Move to account..." in the
+  item menu.
+
 ### Changed
 
+* Browser extension: the on-load autofill notice shows how many logins
+  matched the page ("Autofilled (1/3)"), so you know the fill shortcut can
+  cycle through more. The options page's "Sync vault" icon spins while
+  syncing, like the popup's.
 * Browser extension settings: Sync and Lock moved into the header as icon
   buttons (the sync icon spins while syncing), settings are grouped into
   cards of switch rows, switches have a white knob, and "Detailed settings"

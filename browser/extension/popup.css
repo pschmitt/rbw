@@ -689,3 +689,12 @@ dialog.confirm-dialog::backdrop { background:#0007; backdrop-filter:blur(2px); }
 button.danger-solid { background:var(--danger); border-color:var(--danger); color:var(--bg); }
 button.danger-solid:hover { background:color-mix(in srgb, var(--danger) 85%, var(--text)); }
 @media (prefers-reduced-motion:reduce) { dialog.confirm-dialog[open] { animation:none; } }
+.item-title .item-account { color:var(--muted); font-size:10px; font-weight:600; border:1px solid var(--line); border-radius:999px; padding:0 6px; white-space:nowrap; }
+.account-states { list-style:none; margin:4px 0; padding:0; display:grid; gap:4px; }
+.account-states li { display:flex; align-items:center; gap:8px; }
+.account-states li span { font-weight:600; }
+.account-states li small { color:var(--muted); flex:1; }
+.account-states li.is-locked small { color:var(--danger, var(--muted)); }
+select.save-account { max-width:110px; font-size:11px; }
+.confirm-dialog-choice { display:flex; align-items:center; gap:8px; margin:10px 0 0; }
+.confirm-dialog-choice select { flex:1; min-width:0; }

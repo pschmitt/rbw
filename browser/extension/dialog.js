@@ -1,7 +1,7 @@
 /* In-page confirmation sheet for the popup and options pages, replacing
    window.confirm(). Resolves true only when the confirm button is used;
    Escape, Cancel and clicking the backdrop all resolve false. */
-function confirmDialog({ title, text = "", confirm = "Confirm", danger = false, icon: iconName = danger ? "trash" : "check" } = {}) {
+function confirmDialog({ title, text = "", confirm = "Confirm", choices = null, choiceLabel = "", danger = false, icon: iconName = danger ? "trash" : "check" } = {}) {
   return new Promise(resolve => {
     const dialog = document.createElement("dialog");
     dialog.className = `confirm-dialog${danger ? " is-danger" : ""}`;
@@ -10,12 +10,19 @@ function confirmDialog({ title, text = "", confirm = "Confirm", danger = false, 
     const badge = document.createElement("span"); badge.className = "confirm-dialog-icon"; badge.append(icon(iconName));
     const heading = document.createElement("h2"); heading.id = "confirm-dialog-title"; heading.textContent = title;
     const body = document.createElement("p"); body.textContent = text; body.hidden = !text;
+    // With `choices` ([{ value, label }]) the dialog resolves to the chosen value.
+    let select = null, choiceRow = null;
+    if (choices) {
+      select = document.createElement("select"); select.setAttribute("aria-label", choiceLabel || title);
+      for (const choice of choices) select.append(new Option(choice.label, choice.value));
+      choiceRow = document.createElement("label"); choiceRow.className = "confirm-dialog-choice"; choiceRow.append(choiceLabel, select);
+    }
     const actions = document.createElement("div"); actions.className = "confirm-dialog-actions";
     const cancel = document.createElement("button"); cancel.value = "cancel"; cancel.textContent = "Cancel";
     const ok = document.createElement("button"); ok.value = "ok"; ok.textContent = confirm; ok.className = danger ? "danger-solid" : "primary";
-    actions.append(cancel, ok); form.append(badge, heading, body, actions); dialog.append(form);
+    actions.append(cancel, ok); form.append(badge, heading, body, ...(choiceRow ? [choiceRow] : []), actions); dialog.append(form);
     dialog.addEventListener("click", event => { if (event.target === dialog) dialog.close("cancel"); });
-    dialog.addEventListener("close", () => { resolve(dialog.returnValue === "ok"); dialog.remove(); }, { once: true });
+    dialog.addEventListener("close", () => { resolve(dialog.returnValue === "ok" ? (select ? select.value : true) : false); dialog.remove(); }, { once: true });
     document.body.append(dialog); dialog.showModal();
     // Destructive actions start on Cancel, so Enter never deletes by accident.
     (danger ? cancel : ok).focus();

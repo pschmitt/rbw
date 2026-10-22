@@ -36,6 +36,7 @@ function stopTotp() { clearTimeout(totpTimer); }
 const initialSearch = new URLSearchParams(location.search).get("search");
 const initialSettings = new URLSearchParams(location.search).get("settings") === "1";
 let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
+let accountNames = [], accountStates = [], unlockAccount = null;
 let loadingRequests = 0, loadingTimer, notificationTimer, stateTimer, ready = false;
 const filterIds = ["query", "kind", "folder", "collection", "view"];
 function remember() {
@@ -244,15 +245,36 @@ function selectOptions(id, values, label) {
   $(id).replaceChildren(new Option(label, ""), ...values.map(v => new Option(typeof v === "string" ? v : v.name, typeof v === "string" ? v : v.id)));
   $(id).value = selected;
 }
-function renderAccounts(accounts, primary, chosen) {
-  const select = $("account");
-  const active = chosen || preference.account || primary || (accounts[0] || "");
-  select.replaceChildren(...accounts.map(name => {
-    const isPrimary = name === primary;
-    return new Option(isPrimary ? `${name} *` : name, name);
-  }));
+// With several accounts the empty value means "All accounts" (the default);
+// with one, the account is always named.
+function renderAccounts(accounts, primary, chosen, states = []) {
+  const select = $("account"), multiple = accounts.length > 1;
+  accountNames = accounts; accountStates = states;
+  const active = multiple ? (chosen ?? preference.account ?? "") : (chosen || preference.account || primary || (accounts[0] || ""));
+  select.replaceChildren(...(multiple ? [new Option("All accounts", "")] : []), ...accounts.map(name => new Option(name === primary ? `${name} *` : name, name)));
   select.value = active;
   preference.account = select.value;
+  renderAccountStates(primary);
+}
+// Merged view: which accounts are locked, each with a way to unlock it.
+function renderAccountStates(primary) {
+  const list = $("account-states");
+  list.hidden = $("account").value !== "" || accountStates.length < 2;
+  list.replaceChildren(...accountStates.map(account => {
+    const row = element("li", null, account.unlocked ? "is-unlocked" : "is-locked");
+    row.append(element("span", account.name === primary ? `${account.name} *` : account.name), element("small", account.excluded ? "excluded from search" : account.unlocked ? "unlocked" : "locked"));
+    if (!account.unlocked) {
+      const unlock = actionButton("Unlock", "unlock", () => { unlockAccount = account.name; show("locked"); $("account-menu").hidden = true; $("unlock-password").focus(); message(`Unlock ${account.name}.`); });
+      unlock.title = `Unlock ${account.name}`; row.append(unlock);
+    }
+    return row;
+  }));
+}
+// Accounts an item could be saved or moved to.
+function fillAccountSelect(select, except = null, preferred = null) {
+  select.replaceChildren(...accountNames.filter(name => name !== except).map(name => new Option(name, name)));
+  const primary = accountStates.find(a => a.primary)?.name;
+  select.value = [preferred, $("account").value, primary].find(name => name && name !== except && accountNames.includes(name)) || select.options[0]?.value || "";
 }
 async function activeApproval() {
   const [tab] = await api.tabs.query({ active: true, currentWindow: true });
@@ -272,8 +294,8 @@ async function refresh(knownStatus = null, skipList = false) {
   try {
   clearVault();
   const status = knownStatus || await request("status"); unlocked = status.unlocked;
-  renderAccounts(status.accounts || [], status.primary, preference.account);
-  $("state").textContent = unlocked ? "Unlocked · shared rbw-agent" : "Locked";
+  renderAccounts(status.accounts || [], status.primary, preference.account, status.accountStates || []);
+  $("state").textContent = unlocked ? (status.merged ? `${status.accountStates.filter(a => a.unlocked).length} of ${status.accountStates.length} accounts unlocked · shared rbw-agent` : "Unlocked · shared rbw-agent") : "Locked";
   $("unlock").disabled = unlocked; $("lock").disabled = !unlocked;
   $("header-lock").disabled = !unlocked;
   if (!$("header-sync").classList.contains("is-syncing")) $("header-sync").disabled = !unlocked;
@@ -339,7 +361,9 @@ function itemRow(item) {
   const main = button("", async () => { await openDetail(item.id, item.deleted); }, "item-main");
   const title = element("div", null, "item-title");
   if (item.favorite) { const star = icon("star"); star.classList.add("favorite-icon"); title.append(star); }
-  title.append(element("strong", item.name)); main.append(title, element("small", item.username || labels[item.type])); row.append(main);
+  title.append(element("strong", item.name));
+  if (item.account && accountNames.length > 1) title.append(element("small", item.account, "item-account"));
+  main.append(title, element("small", item.username || labels[item.type])); row.append(main);
   const autofillExcluded = Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(item.id);
   if (autofillExcluded) title.append(element("small", "Autofill off", "item-autofill-disabled"));
   const actions = element("div", null, "item-actions");
@@ -546,6 +570,7 @@ async function openDetail(item, trashed = false) {
   currentItem = item; currentDetail = detail; show("detail");
   $("detail-header-actions").hidden = trashed;
   const copyable = field => trashed ? null : field;
+  $("header-move").hidden = accountNames.length < 2;
   const content = $("detail-content");
   const data = detail.cipher.data;
   const title = element("h2", null, "detail-title");
@@ -796,6 +821,9 @@ function editItem(fresh = false, draft = null) {
   if (fresh) { currentItem = null; currentDetail = null; }
   const cipher = draft?.cipher || currentDetail?.cipher || { name: "", data: { type: "login" } };
   $("edit-name").value = cipher.name; setEditFolder(cipher.folder || ""); $("edit-notes").value = cipher.notes || "";
+  // New items choose their account; existing ones stay where they are.
+  $("edit-account-row").hidden = !!currentItem || accountNames.length < 2;
+  if (!$("edit-account-row").hidden) fillAccountSelect($("edit-account"), null, draft?.account);
   $("edit-type").value = cipher.data.type; $("edit-type").disabled = !!currentDetail?.passkeys.length;
   $("edit-uris").replaceChildren(); for (const uri of cipher.data.uris || []) addUri(uri);
   if (!$("edit-uris").children.length) addUri();
@@ -827,7 +855,7 @@ function editorCipher() {
   }));
   return { name: $("edit-name").value, folder: editFolder(), notes: $("edit-notes").value || null, data, fields };
 }
-function editorDraft() { return { item: currentItem, revision: editRevision, cipher: editorCipher(), noAutofill: $("edit-no-autofill").checked }; }
+function editorDraft() { return { account: $("edit-account-row").hidden ? null : $("edit-account").value, item: currentItem, revision: editRevision, cipher: editorCipher(), noAutofill: $("edit-no-autofill").checked }; }
 function rememberEditDraft() {
   clearTimeout(draftTimer);
   if (currentPage !== "editor" || editSaving || editBase === null) return;
@@ -877,7 +905,7 @@ $("edit-form").onsubmit = event => { event.preventDefault(); if (editSaving) ret
   setEditSaving(true);
   try {
     const cipher = editorCipher(), type = cipher.data.type;
-    await request("save", { item: currentItem, revision: editRevision, cipher });
+    await request("save", { item: currentItem, revision: editRevision, cipher, ...(!currentItem && !$("edit-account-row").hidden ? { account: $("edit-account").value } : {}) });
     if (currentItem && ["login", "card", "identity"].includes(type)) {
       const excluded = new Set(Array.isArray(preference.autofillExcludedItems) ? preference.autofillExcludedItems : []);
       if ($("edit-no-autofill").checked) excluded.add(currentItem); else excluded.delete(currentItem);
@@ -897,11 +925,13 @@ async function suggestions() {
   for (const entry of unsaved) {
     const row = element("article", null, "unsaved-login"), main = element("div", null, "item-main"), actions = element("div", null, "item-actions");
     main.append(element("strong", entry.host), element("small", `${entry.username || "No username"} · ${entry.update ? `changed password for ${entry.update.name}` : "new login"}`));
-    const apply = async (item, text) => { await request("unsaved_login_apply", { id: entry.id, item }); message(text); await refresh(); };
+    const target = element("select", null, "save-account"); target.setAttribute("aria-label", "Save to account");
+    if (accountNames.length > 1 && !entry.update) fillAccountSelect(target); else target.hidden = true;
+    const apply = async (item, text) => { await request("unsaved_login_apply", { id: entry.id, item, ...(!item && !target.hidden ? { account: target.value } : {}) }); message(text); await refresh(); };
     if (entry.update) actions.append(actionButton(`Update ${entry.update.name}`, "check", () => apply(entry.update.id, `Updated ${entry.update.name}.`), "icon"));
     actions.append(actionButton(entry.update ? "Save as a new login" : "Save login", entry.update ? "plus" : "check", () => apply(null, `Saved a login for ${entry.host}.`), "icon"));
     actions.append(actionButton("Dismiss", "close", async () => { await request("unsaved_login_dismiss", { id: entry.id }); await suggestions(); }, "icon"));
-    row.append(icon("key"), main, actions); area.append(row);
+    row.append(icon("key"), main, target, actions); area.append(row);
   }
 }
 async function showApproval(id) {
@@ -1079,7 +1109,8 @@ for (const action of ["lock", "sync"]) $(action).onclick = () => attempt(async (
 $("unlock-form").onsubmit = event => {
   event.preventDefault();
   const password = $("unlock-password").value; $("unlock-password").value = "";
-  attempt(async () => { await cancelFingerprint(); message("Unlocking…"); await request("unlock", { password }); await refresh(); message("Vault unlocked."); });
+  const target = unlockAccount; unlockAccount = null;
+  attempt(async () => { await cancelFingerprint(); message("Unlocking…"); await request("unlock", target ? { password, account: target } : { password }); await refresh(); message(target ? `${target} unlocked.` : "Vault unlocked."); });
 };
 // Fingerprint unlock runs in rbw-browser (fprintd, then the enrolled keyring
 // password); the popup only sees the outcome. The "rbw-fingerprint" port lets
@@ -1175,6 +1206,16 @@ $("header-archive").onclick = () => attempt(async () => {
   $("detail-menu").removeAttribute("open");
   await request("mutate", { item: currentItem, mutation: "archive" });
   await openDetail(currentItem);
+});
+$("header-move").onclick = () => attempt(async () => {
+  $("detail-menu").removeAttribute("open");
+  const from = currentDetail?.account, name = currentDetail?.cipher.name || "this item";
+  const choices = accountNames.filter(account => account !== from).map(account => ({ value: account, label: account }));
+  if (!from || !choices.length) return;
+  const to = await confirmDialog({ title: `Move “${name}” to another account?`, text: `It is copied from ${from} to the account below; the original goes to ${from}'s trash.`, confirm: "Move", icon: "upload", choices, choiceLabel: "Move to " });
+  if (!to) return;
+  await request("move", { item: currentItem, to });
+  message(`Moved to ${to}. The original is in ${from}'s trash.`); await refresh();
 });
 $("header-delete").onclick = () => attempt(async () => {
   $("detail-menu").removeAttribute("open");
@@ -1397,7 +1438,7 @@ attempt(async () => {
     $("setting-passkeys").checked = preference.passkeys; $("setting-copy-totp").checked = preference.copyTotp === true; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
     if (!approvalId) approvalId = await activeApproval();
     const status = initial.status;
-    renderAccounts(status.accounts || [], status.primary, preference.account);
+    renderAccounts(status.accounts || [], status.primary, preference.account, status.accountStates || []);
     const saved = status.unlocked && !approvalId && !initialSearch ? initial.saved : null;
     if (initialSearch) {
       $("view").value = "vault";

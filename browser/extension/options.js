@@ -23,7 +23,12 @@ for (const id of ["account", "passkeys", "inline", "autofill", "allow-http-fill"
   await request("set_preferences", { preferences }); $("animation-speed").disabled = preferences.animations === "off"; $("animation-speed").closest(".switch-row").hidden = preferences.animations === "off"; theme(preferences.theme); $("message").textContent = "Settings saved."; await status();
   showPolicy(await request("agent_settings"));
 });
-for (const action of ["sync", "lock"]) $(action).onclick = () => attempt(async () => { if (action === "lock" && !await confirmLock()) return; await request(action); await status(); $("message").textContent = action === "sync" ? "Vault synchronized." : "Vault locked."; });
+for (const action of ["sync", "lock"]) $(action).onclick = () => attempt(async () => {
+  if (action === "lock" && !await confirmLock()) return;
+  // The sync icon spins while syncing, like the popup's header button.
+  const button = $(action); if (action === "sync") { button.classList.add("is-syncing"); button.disabled = true; }
+  try { await request(action); } finally { button.classList.remove("is-syncing"); button.disabled = false; }
+  await status(); $("message").textContent = action === "sync" ? "Vault synchronized." : "Vault locked."; });
 // Firefox can't open about:addons from an extension, but has its own API
 // for the shortcut settings (Firefox 137+); Chromium opens its page. A
 // failure is explained right below the button.
@@ -39,8 +44,9 @@ attempt(async () => {
   const managedPreferences = await request("managed_preferences");
   $("favicons").checked = prefs.favicons; $("show-generator").checked = prefs.showGenerator; $("show-send").checked = prefs.showSend; $("show-health").checked = prefs.showHealth;
   const state = await status();
-  $("account").replaceChildren(...(state.accounts || []).map(a => new Option(a === state.primary ? `${a} *` : a, a)));
-  $("account").value = prefs.account || state.primary || "";
+  const multiple = (state.accounts || []).length > 1;
+  $("account").replaceChildren(...(multiple ? [new Option("All accounts", "")] : []), ...(state.accounts || []).map(a => new Option(a === state.primary ? `${a} *` : a, a)));
+  $("account").value = multiple ? prefs.account || "" : prefs.account || state.primary || "";
   $("autofill").checked = prefs.autoFill; $("copy-totp").checked = prefs.copyTotp === true; $("allow-http-fill").checked = prefs.allowHttpFill === true; $("allow-http-fill").disabled = Object.hasOwn(managedPreferences, "allowHttpFill"); $("allow-http-fill-managed").hidden = !Object.hasOwn(managedPreferences, "allowHttpFill"); $("autofill-blocklist").value = prefs.autofillBlocklist || ""; $("animations").value = prefs.animations; $("animation-speed").value = prefs.animationSpeed; $("animation-speed").disabled = prefs.animations === "off"; $("animation-speed").closest(".switch-row").hidden = prefs.animations === "off"; $("card-security-code").value = ["fill", "clipboard"].includes(prefs.cardSecurityCode) ? prefs.cardSecurityCode : "off"; $("inline").checked = prefs.inlineSuggestions; $("passkeys").checked = prefs.passkeys; $("save-prompts").checked = prefs.savePrompts; $("theme").value = prefs.theme; $("uri-match").value = prefs.uriMatchDefault || ""; await status();
   lockManagedControls(managedPreferences, { copyTotp: "copy-totp", cardSecurityCode: "card-security-code" });
   showPolicy(await request("agent_settings"));

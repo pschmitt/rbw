@@ -16,6 +16,21 @@ the saved host and its subdomains, `base_domain` matches like Bitwarden's
 "Base domain". The add-on options can override the default for this browser
 only, and the item editor sets match detection per URI.
 
+## Multiple accounts
+
+With more than one rbw account configured the account picker has an "All
+accounts" entry, which is the default. Searches merge every account that
+`rbw search` would cover (accounts excluded from search, and accounts that
+are locked, are skipped rather than prompting), and items from several
+accounts show a small account badge. Requests about one item go to the
+account that holds it. The account menu lists each account's lock state,
+with an Unlock button for locked ones. New items and unsaved logins have a
+"Save to account" select, and an item's menu has "Move to account...", which
+does what `rbw move` does (the original goes to its account's trash). The
+in-page "save this login?" prompt saves to the primary account; use the
+popup's unsaved-logins list to pick another. Choosing a single account in the
+picker restores the old single-account behaviour.
+
 ## Permissions and data flow
 
 Only this extension's popup and options pages can call the native API. Isolated
