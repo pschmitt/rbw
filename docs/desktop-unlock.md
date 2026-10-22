@@ -140,3 +140,19 @@ Live integration tests are ignored by default. On a desktop with an unlocked
 keyring, run `cargo test --lib desktop::tests::live_keyring_roundtrip -- --ignored`.
 The test uses a disposable random credential and removes it. The
 `live_fingerprint_confirmation` test requires a human at the reader.
+
+## Browser extension
+
+With fingerprint confirmation enrolled, the extension's locked view offers
+**Unlock with fingerprint**. The native host runs the same scan (three
+tries, 60 seconds, with desktop notifications) and unlocks the agent with the
+enrolled keyring password; the popup never sees it. Typing the master password
+or closing the popup cancels the scan. To start the scan as soon as the popup
+opens on a locked account, enable it (off by default):
+
+```shell
+rbw config set browser.fingerprintAutoStart true
+```
+
+or `programs.rbw.declarative.settings.browser.fingerprintAutoStart = true;`
+in Home Manager.

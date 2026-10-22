@@ -274,6 +274,10 @@ async function refresh(knownStatus = null, skipList = false) {
   renderAccounts(status.accounts || [], status.primary, preference.account);
   $("state").textContent = unlocked ? "Unlocked · shared rbw-agent" : "Locked";
   $("unlock").disabled = unlocked; $("lock").disabled = !unlocked;
+  $("unlock-fingerprint").hidden = unlocked || !status.fingerprint;
+  if (!unlocked && status.fingerprint_auto_start && !fingerprintAutoStarted.has($("account").value)) {
+    fingerprintAutoStarted.add($("account").value); fingerprintUnlock();
+  }
   if (approvalId) { await showApproval(approvalId); return; }
   if (!unlocked) { show("locked"); return; }
   vaultListed = !skipList;
@@ -996,8 +1000,36 @@ for (const action of ["lock", "sync"]) $(action).onclick = () => attempt(async (
 $("unlock-form").onsubmit = event => {
   event.preventDefault();
   const password = $("unlock-password").value; $("unlock-password").value = "";
-  attempt(async () => { message("Unlocking…"); await request("unlock", { password }); await refresh(); message("Vault unlocked."); });
+  attempt(async () => { await cancelFingerprint(); message("Unlocking…"); await request("unlock", { password }); await refresh(); message("Vault unlocked."); });
 };
+// Fingerprint unlock runs in rbw-browser (fprintd, then the enrolled keyring
+// password); the popup only sees the outcome. The "rbw-fingerprint" port lets
+// the background cancel the scan when this popup closes.
+let fingerprintPort = null, fingerprintCancelled = false;
+const fingerprintAutoStarted = new Set();
+function fingerprintScanning(scanning) {
+  $("unlock-fingerprint").disabled = scanning;
+  $("unlock-fingerprint").classList.toggle("is-scanning", scanning);
+  $("unlock-fingerprint-label").textContent = scanning ? "Touch the fingerprint sensor…" : "Unlock with fingerprint";
+}
+async function cancelFingerprint() {
+  if (!fingerprintPort) return;
+  fingerprintCancelled = true;
+  await request("cancel_unlock").catch(() => {});
+}
+async function fingerprintUnlock() {
+  if (fingerprintPort) return;
+  fingerprintPort = api.runtime.connect({ name: "rbw-fingerprint" }); fingerprintCancelled = false;
+  fingerprintScanning(true);
+  try {
+    await attempt(async () => {
+      try { await request("unlock", { fingerprint: true }); }
+      catch (error) { if (fingerprintCancelled) return; throw error; }
+      await refresh(); message("Vault unlocked.");
+    });
+  } finally { fingerprintPort.disconnect(); fingerprintPort = null; fingerprintScanning(false); }
+}
+$("unlock-fingerprint").onclick = () => fingerprintUnlock();
 $("unlock").onclick = () => { show(approvalId ? "approval" : "locked"); $("account-menu").hidden = true; $("unlock-password").focus(); };
 $("settings-sync").onclick = $("sync").onclick; $("settings-lock").onclick = $("lock").onclick;
 let accountMenuTimer;

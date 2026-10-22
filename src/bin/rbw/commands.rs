@@ -2767,6 +2767,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "clipboard",
     "defaultUriMatch",
     "browser.clients",
+    "browser.fingerprintAutoStart",
 ];
 
 pub fn config_show(json: bool) -> anyhow::Result<()> {
@@ -2813,6 +2814,9 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
         "hide.trashed" => Some(config.hide.trashed.to_string()),
         "fzf.enabled" => Some(config.fzf.enabled.to_string()),
         "fzf.options" => config.fzf.options,
+        "browser.fingerprintAutoStart" => {
+            Some(config.browser.fingerprint_auto_start.to_string())
+        }
         "passwordGen.length" => {
             config.password_gen.length.map(|length| length.to_string())
         }
@@ -2977,6 +2981,11 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
                 value.parse().context("fzf.enabled must be true or false")?;
         }
         "fzf.options" => config.fzf.options = Some(value.to_string()),
+        "browser.fingerprintAutoStart" => {
+            config.browser.fingerprint_auto_start = value.parse().context(
+                "browser.fingerprintAutoStart must be true or false",
+            )?;
+        }
         "passwordGen.length" => {
             config.password_gen.length =
                 Some(value.parse().context(
@@ -3050,6 +3059,9 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
         "termux.keyAlias" => config.termux.key_alias = None,
         "fzf.enabled" => config.fzf.enabled = false,
         "fzf.options" => config.fzf.options = None,
+        "browser.fingerprintAutoStart" => {
+            config.browser.fingerprint_auto_start = false;
+        }
         "pinentry.timeout" => {
             config.pinentry.timeout = rbw::config::default_pinentry_timeout();
         }

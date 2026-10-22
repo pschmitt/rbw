@@ -99,6 +99,10 @@ button + button:not(.header-group button, .title-dropdown button, .field-actions
 .unlock-password-row { display:flex; align-items:center; gap:8px; }
 .unlock-password-row input { flex:1; min-width:0; }
 .unlock-password-row button { flex:none; }
+.unlock-fingerprint { width:100%; margin-top:8px; justify-content:center; }
+.unlock-fingerprint.is-scanning { animation:fingerprint-pulse 1.4s ease-in-out infinite; }
+@keyframes fingerprint-pulse { 50% { opacity:.55; } }
+@media (prefers-reduced-motion: reduce) { .unlock-fingerprint.is-scanning { animation:none; } }
 
 /* Field display & long text wrapping */
 .field { background:var(--panel); border:1px solid var(--line); border-radius:7px; padding:8px 10px; margin:6px 0; }

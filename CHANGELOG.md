@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+* The browser extension unlocks with the fingerprint reader for accounts
+  enrolled with `rbw security unlock enroll --keyring --fingerprint`: an
+  **Unlock with fingerprint** button in the locked view runs the scan in the
+  native host, and typing the password or closing the popup cancels it. The
+  new `browser.fingerprintAutoStart` setting (off by default, also a Home
+  Manager option) starts the scan as soon as the popup opens.
+
 ## [2.24.1] - 2026-10-22
 
 ### Fixed

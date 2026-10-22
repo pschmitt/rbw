@@ -620,6 +620,10 @@ pub struct BrowserConfig {
     /// all zeros reports an anonymous authenticator.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passkey_aaguid: Option<String>,
+    /// Start the fingerprint scan as soon as the extension popup opens on a
+    /// locked account that has fingerprint unlock enrolled.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fingerprint_auto_start: bool,
 }
 
 /// `d548826e-79b4-db40-a3d8-11116f7e8349`, the AAGUID Bitwarden clients use.

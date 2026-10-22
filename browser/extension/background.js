@@ -264,6 +264,26 @@ function nativeCall(request) {
   });
 }
 
+// The native host handles one request at a time, so a pending fingerprint
+// scan can only be stopped by closing the port: that ends rbw-browser and
+// fprintd releases the reader. The next request reconnects.
+function cancelNative(reason) {
+  if (!nativePort) return;
+  const port = nativePort; nativePort = null;
+  port.disconnect();
+  for (const entry of nativeRequests.values()) entry.reject(new Error(reason));
+  nativeRequests.clear();
+}
+
+// A popup holds an "rbw-fingerprint" port while its scan runs; closing the
+// popup drops the port, which cancels the scan.
+let fingerprintScans = 0;
+async function fingerprintUnlock(account) {
+  fingerprintScans++;
+  try { return await native({ action: "unlock", account, password: null, fingerprint: true }); }
+  finally { fingerprintScans--; }
+}
+
 function reportPasskeyProgress(request, step, retry = false) {
   api.runtime.sendMessage({ action: "passkey_progress", request, step, retry }).catch(() => {});
 }
@@ -445,6 +465,11 @@ async function inlineMessage(port, message, state) {
   }
 }
 api.runtime.onConnect.addListener(port => {
+  if (port.name === "rbw-fingerprint") {
+    if (port.sender?.id !== api.runtime.id || port.sender.url?.split(/[?#]/)[0] !== api.runtime.getURL("popup.html")) { port.disconnect(); return; }
+    port.onDisconnect.addListener(() => { if (fingerprintScans) cancelNative("Fingerprint unlock cancelled."); });
+    return;
+  }
   if (port.name !== "rbw-inline") return;
   const sender = port.sender;
   if (sender?.id !== api.runtime.id || !sender.tab || sender.url?.split(/[?#]/)[0] !== api.runtime.getURL("inline.html")) { port.disconnect(); return; }
@@ -693,10 +718,15 @@ async function handle(message) {
       return { preferences, status, saved: status.unlocked ? popupStates.get(selected) || popupStates.get(account) || null : null };
     }
     case "unlock": {
-      const result = await native({ action: "unlock", account, password: typeof message.password === "string" ? message.password : null });
+      const result = message.fingerprint === true
+        ? await fingerprintUnlock(account)
+        : await native({ action: "unlock", account, password: typeof message.password === "string" ? message.password : null });
       setVaultUnlocked(true);
       return result;
     }
+    case "cancel_unlock":
+      cancelNative("Fingerprint unlock cancelled.");
+      return true;
     case "status": {
       const state = await native({ action: "status", account });
       setVaultUnlocked(state.unlocked);
@@ -885,7 +915,7 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
   // Options and pop-out pages may themselves live in a tab. Authenticate the
   // exact extension document before handling the narrower content-script API.
   if (trustedUI) {
-    const independent = ["preferences", "managed_preferences", "pending", "save_offers", "popup_notice", "favicon", "popup_state", "save_popup_state", "edit_draft", "save_edit_draft"].includes(message.action);
+    const independent = ["cancel_unlock", "preferences", "managed_preferences", "pending", "save_offers", "popup_notice", "favicon", "popup_state", "save_popup_state", "edit_draft", "save_edit_draft"].includes(message.action);
     const operation = independent ? handle(message) : queue.then(() => handle(message));
     if (!independent) queue = operation.catch(() => {});
     operation.then(result => {

@@ -28,6 +28,10 @@ enum Operation {
     Status,
     Unlock {
         password: Option<String>,
+        // Unlock with the account's enrolled Secret Service credential after
+        // a fingerprint scan instead of a password.
+        #[serde(default)]
+        fingerprint: bool,
     },
     Lock,
     Sync,
@@ -272,6 +276,23 @@ fn authorize(_arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
     anyhow::bail!("Native messaging browser allowlist requires Linux")
 }
 
+// The account's fingerprint-confirmed Secret Service enrollment (`rbw
+// security unlock enroll --keyring --fingerprint`), if any. Linux only.
+fn fingerprint_unlock(
+    config: &rbw::config::Config,
+    account: Option<&str>,
+) -> Option<rbw::config::SecretServiceUnlock> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    config
+        .account(account)
+        .ok()?
+        .unlock
+        .secret_service
+        .filter(|desktop| desktop.fingerprint)
+}
+
 fn write_response(
     output: &mut impl std::io::Write,
     response: &Value,
@@ -330,9 +351,16 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
                 let id = request.id;
                 let unlocking =
                     matches!(&request.operation, Operation::Unlock { .. });
+                let fingerprint = matches!(
+                    &request.operation,
+                    Operation::Unlock {
+                        fingerprint: true,
+                        ..
+                    }
+                );
                 // Backend errors can contain vault data; never forward them.
                 dispatch(request, &mut attachments).map_or_else(
-                    |error| json!({"id": id, "error": if commands::exit_status(&error) == 2 { "The server write succeeded, but synchronization failed. Sync and inspect your vault before retrying to avoid duplicates." } else if unlocking { "Could not unlock this account. Check your master password and account configuration." } else { "Operation failed. Unlock this account or sync your vault, then try again." }}),
+                    |error| json!({"id": id, "error": if commands::exit_status(&error) == 2 { "The server write succeeded, but synchronization failed. Sync and inspect your vault before retrying to avoid duplicates." } else if fingerprint { "Fingerprint unlock failed. Scan again, or unlock with your master password." } else if unlocking { "Could not unlock this account. Check your master password and account configuration." } else { "Operation failed. Unlock this account or sync your vault, then try again." }}),
                     |result| json!({"id": id, "result": result}),
                 )
             }
@@ -357,11 +385,40 @@ fn dispatch(
             if !unlocked {
                 transfers.clear();
             }
+            let fingerprint = fingerprint_unlock(
+                &config,
+                actions::current_account().as_deref(),
+            )
+            .is_some();
             Ok(json!({"unlocked": unlocked,
+                "fingerprint": fingerprint,
+                "fingerprint_auto_start": fingerprint && config.browser.fingerprint_auto_start,
                 "accounts": config.accounts().iter().map(|a| &a.name).collect::<Vec<_>>(),
                 "primary": config.primary_account_name()}))
         }
-        Operation::Unlock { password } => {
+        Operation::Unlock {
+            password,
+            fingerprint: true,
+        } => {
+            ensure!(
+                password.is_none(),
+                "fingerprint unlock takes no password"
+            );
+            let config = rbw::config::Config::load()?;
+            let desktop = fingerprint_unlock(
+                &config,
+                actions::current_account().as_deref(),
+            )
+            .context("fingerprint unlock is not enrolled")?;
+            // Scans (up to three tries, 60 seconds) and then reads the
+            // enrolled password from Secret Service. The extension cancels
+            // by closing the native port, which ends this process and lets
+            // fprintd release the reader.
+            let password = rbw::desktop::unlock(&desktop)?;
+            commands::unlock(Some(password), None)?;
+            Ok(json!(true))
+        }
+        Operation::Unlock { password, .. } => {
             ensure!(
                 password.as_ref().is_none_or(|v| v.len() <= 4096),
                 "password too long"
@@ -1329,7 +1386,53 @@ fn detail(entry: &rbw::db::Entry) -> anyhow::Result<Value> {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
-    use super::store_package_name;
+    use super::{fingerprint_unlock, store_package_name, Operation, Request};
+
+    #[test]
+    fn unlock_requests_default_to_password() {
+        let request: Request = serde_json::from_str(
+            r#"{"id":1,"action":"unlock","password":"pw"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            request.operation,
+            Operation::Unlock {
+                fingerprint: false,
+                ..
+            }
+        ));
+        let request: Request = serde_json::from_str(
+            r#"{"id":2,"action":"unlock","password":null,"fingerprint":true}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            request.operation,
+            Operation::Unlock {
+                password: None,
+                fingerprint: true
+            }
+        ));
+    }
+
+    #[test]
+    fn fingerprint_unlock_needs_a_fingerprint_enrollment() {
+        let config: rbw::config::Config = serde_json::from_str(
+            r#"{"accounts":[
+                {"name":"plain"},
+                {"name":"keyring","unlock":{"secretService":{"id":"k"}}},
+                {"name":"finger","unlock":{"secretService":{"id":"f","fingerprint":true}}}
+            ],"browser":{"fingerprintAutoStart":true}}"#,
+        )
+        .unwrap();
+        assert!(config.browser.fingerprint_auto_start);
+        assert!(fingerprint_unlock(&config, Some("plain")).is_none());
+        assert!(fingerprint_unlock(&config, Some("keyring")).is_none());
+        assert_eq!(
+            fingerprint_unlock(&config, Some("finger")).map(|d| d.id),
+            Some("f".to_string())
+        );
+        assert!(fingerprint_unlock(&config, Some("missing")).is_none());
+    }
 
     #[test]
     fn store_package_names() {
