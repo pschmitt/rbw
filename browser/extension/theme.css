@@ -1,0 +1,41 @@
+/* rbw's palette and type, imported by popup.css. browser-daemon's live view
+   (pschmitt/browser-daemon, tools/rbw-theme.mjs) derives its vault styles from
+   this file, so keep it to these two rules: light on :root, dark on
+   :root[data-theme=dark], custom properties plus font and color-scheme. */
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --raised: #eceef2;
+  --line: #e2e5eb;
+  --text: #1d2330;
+  --muted: #646d7e;
+  --accent: #6d4aff;
+  --accent-soft: #efeaff;
+  --on-accent: #ffffff;
+  --danger: #c73545;
+  --danger-soft: #fdecee;
+  --ok: #1f8a5b;
+  --warn: #b47718;
+  --digit: #315f9f;
+  --symbol: #a94f24;
+  font: 13px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: light;
+}
+:root[data-theme=dark] {
+  --bg: #15171c;
+  --panel: #1e2128;
+  --raised: #292d36;
+  --line: #2e323b;
+  --text: #e8eaef;
+  --muted: #9aa2b1;
+  --accent: #9d86ff;
+  --accent-soft: #2a2443;
+  --on-accent: #171427;
+  --danger: #ff6b7a;
+  --danger-soft: #3a1f25;
+  --ok: #4cc38a;
+  --warn: #e6c07b;
+  --digit: #8ab4f8;
+  --symbol: #f2a971;
+  color-scheme: dark;
+}

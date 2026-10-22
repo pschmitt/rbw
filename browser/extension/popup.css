@@ -1,5 +1,4 @@
-:root { color-scheme: dark; font: 14px/1.45 system-ui, sans-serif; --bg:#202020; --panel:#282828; --raised:#383838; --line:#494949; --text:#efefef; --muted:#adadad; --accent:#d0d0d0; --danger:#efa9b9; --ok:#81c995; --warn:#e6c07b; --digit:#8ab4f8; --symbol:#f2a971; }
-:root[data-theme=light] { color-scheme:light; --bg:#f5f5f5; --panel:#fff; --raised:#e8e8e8; --line:#cacaca; --text:#202020; --muted:#626262; --accent:#454545; --danger:#b42238; --ok:#1e7e3e; --warn:#8a5a00; --digit:#1a5fb4; --symbol:#b4530b; }
+@import url("theme.css");
 * { box-sizing:border-box; }
 /* Firefox measures the body to size toolbar popups, not the root; Chromium sizes the popup to the document. */
 html, body { width:420px; height:600px; max-height:600px; margin:0; padding:0; overflow:hidden; }
@@ -225,42 +224,7 @@ details.menu button .svg-icon { width:16px; height:16px; }
 .totp-progress.is-expiring .totp-progress-fill { background:#efa9b9; }
 @media (prefers-reduced-motion: reduce) { .totp-progress-fill { transition:none; } }
 
-/* Modern popup surface and component finish. */
-:root {
-  --bg: #f6f7f9;
-  --panel: #ffffff;
-  --raised: #eceef2;
-  --line: #e2e5eb;
-  --text: #1d2330;
-  --muted: #646d7e;
-  --accent: #6d4aff;
-  --accent-soft: #efeaff;
-  --danger: #c73545;
-  --danger-soft: #fdecee;
-  --ok: #1f8a5b;
-  --warn: #b47718;
-  --digit: #315f9f;
-  --symbol: #a94f24;
-  font: 13px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  color-scheme: light;
-}
-:root[data-theme=dark] {
-  --bg: #15171c;
-  --panel: #1e2128;
-  --raised: #292d36;
-  --line: #2e323b;
-  --text: #e8eaef;
-  --muted: #9aa2b1;
-  --accent: #9d86ff;
-  --accent-soft: #2a2443;
-  --danger: #ff6b7a;
-  --danger-soft: #3a1f25;
-  --ok: #4cc38a;
-  --warn: #e6c07b;
-  --digit: #8ab4f8;
-  --symbol: #f2a971;
-  color-scheme: dark;
-}
+/* Modern popup surface and component finish (palette and type: theme.css). */
 html, body { background:var(--bg); }
 body { letter-spacing:.005em; }
 header {
@@ -284,12 +248,11 @@ button {
 button:hover:not(:disabled) { border-color:color-mix(in srgb, var(--accent) 34%, var(--line)); background:var(--raised); }
 button:active:not(:disabled) { transform:translateY(1px); }
 button.primary {
-  color:#fff;
+  color:var(--on-accent);
   border-color:var(--accent);
   background:linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 78%, #4028ac));
   box-shadow:0 3px 9px color-mix(in srgb, var(--accent) 24%, transparent);
 }
-:root[data-theme=dark] button.primary { color:#171427; }
 button.primary:hover:not(:disabled) { filter:brightness(1.06); background:var(--accent); }
 button.icon { border-radius:9px; color:var(--muted); }
 button.icon:hover:not(:disabled) { color:var(--accent); }
@@ -350,8 +313,7 @@ input:not([type=checkbox]):focus,select:focus,textarea:focus {
 }
 .segmented { padding:4px; border:0; border-radius:12px; background:var(--raised); }
 .segmented button { border-radius:9px; }
-.segmented button[aria-checked=true] { color:#fff; background:var(--accent); box-shadow:0 2px 8px color-mix(in srgb, var(--accent) 28%, transparent); }
-:root[data-theme=dark] .segmented button[aria-checked=true] { color:#171427; }
+.segmented button[aria-checked=true] { color:var(--on-accent); background:var(--accent); box-shadow:0 2px 8px color-mix(in srgb, var(--accent) 28%, transparent); }
 .gen-card {
   border-color:color-mix(in srgb, var(--accent) 24%, var(--line));
   border-radius:16px;

@@ -21,6 +21,9 @@
 ### Fixed
 
 * `rbw purge` no longer fails on systems without `termux-keystore`.
+* The browser extension's light theme uses its own palette again: the old grey
+  light colors overrode it. The palette now lives in `theme.css`, which
+  browser-daemon's live view shares.
 * `rbw org delete` uses `DELETE /organizations/{id}`; Vaultwarden 1.37 dropped
   the `POST .../delete` route it used.
 * `rbw send create --file` uploads work against Vaultwarden again (the file
