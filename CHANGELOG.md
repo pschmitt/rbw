@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.26.0] - 2026-10-22
+
 ### Added
 
 * Desktop unlock can store the master password outside the keyring:
