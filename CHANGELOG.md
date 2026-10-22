@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.25.1] - 2026-10-22
+
 ### Added
 
 * `rbw show --mask` prints dots instead of secret values (password, TOTP
