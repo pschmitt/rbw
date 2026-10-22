@@ -24,6 +24,10 @@
   on 2FA pages with "Auto-fill on page load" and whenever a login is filled.
   The "Copy TOTP after filling" copy is now done by the extension (new
   `clipboardWrite` permission) instead of the agent.
+* Browser extension: with several accounts, a locked account is flagged: a
+  banner above the list (with Unlock), an amber "L" on the toolbar icon
+  while some accounts are locked (red when all are), and the account menu
+  opens by itself when everything is locked.
 * Browser extension: the popup's account menu has an Unlock button per locked
   account and "Unlock all". They first use the account's own unlock policy
   (like `rbw unlock`, so chained unlocking works) and ask for the master

@@ -279,11 +279,20 @@ function renderAccountStates(primary) {
     return row;
   }));
   const locked = accountStates.filter(account => !account.unlocked && !account.excluded).map(account => account.name);
+  renderLockedBanner(locked);
   if (locked.length > 1) {
     const row = element("li", null, "unlock-all");
     row.append(actionButton(`Unlock all (${locked.length})`, "unlock", () => unlockAccounts(locked)));
     list.append(row);
   }
+}
+// Warns above the list that locked accounts' items are missing from it.
+function renderLockedBanner(locked) {
+  const banner = $("locked-accounts");
+  banner.hidden = $("account").value !== "" || !locked.length;
+  if (banner.hidden) return;
+  const text = element("span", locked.length === 1 ? `${locked[0]} is locked; its items aren't listed.` : `${locked.join(", ")} are locked; their items aren't listed.`);
+  banner.replaceChildren(icon("lock"), text, button("Unlock", () => unlockAccounts(locked), "banner-unlock"));
 }
 // Unlocks each account by its own policy; the ones that need a password
 // are reported (use their Unlock button).
@@ -330,7 +339,8 @@ async function refresh(knownStatus = null, skipList = false) {
     fingerprintAutoStarted.add($("account").value); fingerprintUnlock();
   }
   if (approvalId) { await showApproval(approvalId); return; }
-  if (!unlocked) { show("locked"); return; }
+  // Locked: show the accounts (with Unlock buttons) right away.
+  if (!unlocked) { show("locked"); if (accountStates.length > 1) $("account-menu").hidden = false; return; }
   vaultListed = !skipList;
   show("vault"); if (!skipList) { await search(); await suggestions(); }
   remember();
@@ -365,13 +375,7 @@ function renderSearch(result) {
   }
   if (!result.items.length) $("items").append(element("p", "No items found.", "empty"));
   $("count").textContent = result.total > result.limit ? `${result.limit} of ${result.total} items. Narrow your search to see more.` : `${result.total} items`;
-  // Items of locked accounts can't be listed (nothing prompts for them here).
-  const locked = $("account").value === "" ? accountStates.filter(account => !account.unlocked && !account.excluded).map(account => account.name) : [];
-  if (locked.length) {
-    $("count").textContent += ` · ${locked.join(", ")} locked `;
-    const open = button("Unlock…", async () => { $("account-menu").hidden = false; $("account-menu").scrollIntoView?.({ block: "nearest" }); }, "link");
-    $("count").append(open);
-  }
+
 }
 const faviconObserver = new IntersectionObserver(entries => {
   for (const entry of entries) if (entry.isIntersecting) {

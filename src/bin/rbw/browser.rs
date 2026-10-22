@@ -524,7 +524,13 @@ fn merged_lookup(
         }
     }
     actions::set_active_account(None)?;
-    // Nothing unlocked: answer as the primary account would (locked).
+    // Nothing unlocked: an empty list (the status says what is locked), but a
+    // passkey lookup answers as the first account would (locked).
+    if parts.is_empty() && matches!(operation, Operation::Search { .. }) {
+        return Ok(
+            json!({"items": [], "limit": 200, "total": 0, "folders": [], "collections": []}),
+        );
+    }
     let Some((_, first)) = parts.first() else {
         let request = Request {
             id: 0,
