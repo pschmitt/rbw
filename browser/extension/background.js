@@ -165,7 +165,6 @@ async function settings() {
   result.animations = ["off", "on", "plaid"].includes(stored.animations) ? stored.animations : stored.crabify === true ? "plaid" : "on";
   result.animationSpeed = ["slow", "normal", "fast"].includes(stored.animationSpeed) ? stored.animationSpeed : "normal";
   delete result.crabify;
-  delete result.account; // Retired: it pinned autofill and search to one account.
   if (!URI_MATCH_TYPES.includes(result.uriMatchDefault)) result.uriMatchDefault = "";
   uriMatchOverride = result.uriMatchDefault || null;
   return result;
