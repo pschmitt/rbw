@@ -4,6 +4,9 @@
 
 ### Added
 
+* Browser extension: while syncing, the toolbar icon gets a spinning amber ring
+  around the crab (a comet-tail arc) instead of a tiny badge; it stays legible
+  on dark and light toolbars and at 16, 32 and 48 px.
 * The item view lists the item's attachments (name and size) with a download
   button; before they only showed in the editor.
 * Browser extension: unlocking an account turns the locked-accounts banner, in
