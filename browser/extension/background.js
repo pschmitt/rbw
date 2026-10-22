@@ -118,7 +118,7 @@ async function fetchFavicon(origin) {
   const value = await iconDataUrl(origin + "/favicon.ico");
   if (generation === metadataEpoch) cacheFor(faviconCache, origin, value, 5 * 60 * 1000, 128); return value;
 }
-const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, allowHttpFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true, uriMatchDefault: "" };
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, allowHttpFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", copyTotp: true, theme: "dark", account: "", showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true, uriMatchDefault: "" };
 // Empty means "use rbw's defaultUriMatch"; otherwise an override for this browser.
 const URI_MATCH_TYPES = ["domain", "base_domain", "host", "starts_with", "exact", "regular_expression", "never"];
 let uriMatchOverride = null;
@@ -697,10 +697,18 @@ async function fill(message, account) {
       try { await native({ action: "copy_text", account, text: credential.code }); copiedSecurityCode = true; }
       catch (_) { securityCodeCopyFailed = true; }
     }
+    // A login with TOTP: copy the current code (the native host generates and
+    // copies it, so it never reaches the extension) for the site's next step.
+    let copiedTotp = false;
+    let totpCopyFailed = false;
+    if (credential.type === "login" && credential.hasTotp === true && prefs.copyTotp) {
+      try { await native({ action: "copy", account, item: message.item, field: "totp" }); copiedTotp = true; }
+      catch (_) { totpCopyFailed = true; }
+    }
     clearTimeout(fillUndos.get(tab.id)?.timer);
     fillUndos.set(tab.id, { token, url: tab.url, frames: filledFrames, timer: setTimeout(() => { if (fillUndos.get(tab.id)?.token === token) fillUndos.delete(tab.id); }, 10000) });
     // Only public display metadata goes to the notice, never the credential.
-    const notice = { undoToken: token, name: label || credential.name || "Item", username: credential.type === "login" ? credential.username : null, position: message.cycleIndex, total: message.cycleCount, message: copiedSecurityCode ? "Card security code copied to clipboard." : securityCodeCopyFailed ? "Card fields filled, but the security code could not be copied." : hasSecurityCode && securityCodeFieldPresent && cardSecurityCode === "off" ? "Security code left blank. Set Card security code to Fill the field in rbw settings." : hasSecurityCode && !securityCodeFieldPresent && cardSecurityCode === "fill" ? "No security-code field found on this page." : null };
+    const notice = { undoToken: token, name: label || credential.name || "Item", username: credential.type === "login" ? credential.username : null, position: message.cycleIndex, total: message.cycleCount, message: copiedTotp ? "TOTP code copied to clipboard. Paste it when the site asks for it." : totpCopyFailed ? "Login filled, but the TOTP code could not be copied." : copiedSecurityCode ? "Card security code copied to clipboard." : securityCodeCopyFailed ? "Card fields filled, but the security code could not be copied." : hasSecurityCode && securityCodeFieldPresent && cardSecurityCode === "off" ? "Security code left blank. Set Card security code to Fill the field in rbw settings." : hasSecurityCode && !securityCodeFieldPresent && cardSecurityCode === "fill" ? "No security-code field found on this page." : null };
     await notifyFill(tab, notice).catch(() => {});
     return count;
   } finally {

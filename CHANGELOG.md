@@ -22,6 +22,13 @@
   off (popup too), and the export password only shows for the encrypted
   Bitwarden format, which needs it.
 
+### Added
+
+* Filling a login that has a TOTP copies the current code to the clipboard
+  (through rbw-agent, so its clipboard clearing applies) and says so in the
+  in-page fill notification, ready for the site's second step. A new "Copy
+  TOTP after filling" switch, on by default, turns it off.
+
 ### Fixed
 
 * "Manage keyboard shortcuts" did nothing in Firefox (extensions can't open
