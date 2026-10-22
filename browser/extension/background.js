@@ -118,7 +118,7 @@ async function fetchFavicon(origin) {
   const value = await iconDataUrl(origin + "/favicon.ico");
   if (generation === metadataEpoch) cacheFor(faviconCache, origin, value, 5 * 60 * 1000, 128); return value;
 }
-const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, allowHttpFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", copyTotp: false, autofillTotp: false, theme: "dark", account: "", accounts: [], showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true, uriMatchDefault: "" };
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, allowHttpFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", copyTotp: false, autofillTotp: false, theme: "dark", popupAccount: "", accounts: [], showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true, uriMatchDefault: "" };
 // Empty means "use rbw's defaultUriMatch"; otherwise an override for this browser.
 const URI_MATCH_TYPES = ["domain", "base_domain", "host", "starts_with", "exact", "regular_expression", "never"];
 let uriMatchOverride = null;
@@ -151,7 +151,7 @@ function isItemAutofillExcluded(item, excludedItems) {
 // `account` preference counts as a selection of one.
 let accountScope = {};
 function accountScopeOf(prefs) {
-  const names = prefs.accounts?.length ? prefs.accounts : prefs.account ? [prefs.account] : [];
+  const names = prefs.accounts || [];
   return names.length === 1 ? { account: names[0] } : names.length > 1 ? { accounts: names } : {};
 }
 async function settings() {
@@ -165,6 +165,7 @@ async function settings() {
   result.animations = ["off", "on", "plaid"].includes(stored.animations) ? stored.animations : stored.crabify === true ? "plaid" : "on";
   result.animationSpeed = ["slow", "normal", "fast"].includes(stored.animationSpeed) ? stored.animationSpeed : "normal";
   delete result.crabify;
+  delete result.account; // Retired: it pinned autofill and search to one account.
   if (!URI_MATCH_TYPES.includes(result.uriMatchDefault)) result.uriMatchDefault = "";
   uriMatchOverride = result.uriMatchDefault || null;
   return result;
@@ -172,7 +173,7 @@ async function settings() {
 async function refreshVaultLockState(preferences = null) {
   try {
     const prefs = preferences || await settings();
-    const status = await native({ action: "status", account: prefs.account || null });
+    const status = await native({ action: "status", account: null });
     setVaultUnlocked(status.unlocked);
   } catch (_) { /* The toolbar badge is cosmetic; the popup reports connection errors. */ }
 }
@@ -347,7 +348,7 @@ async function updateSuggestionsBadge(tabId, knownTab) {
       suggestionCounts.set(tabId, { url: tab.url, count: 0 }); badge(tabId);
       return;
     }
-    const result = await cachedSearch({ account: prefs.account || null, url: tab.url, site_only: true, kind: "login" });
+    const result = await cachedSearch({ account: null, url: tab.url, site_only: true, kind: "login" });
     if (badgeRequests.get(tabId) !== token) return;
     const count = result.items.filter(item => !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems)).length;
     suggestionCounts.set(tabId, { url: tab.url, count }); badge(tabId);
@@ -421,7 +422,7 @@ async function inlineMessage(port, message, state) {
   const relay = action => api.tabs.sendMessage(session.tabId, { action, token: session.token, height: message.height }, { frameId: session.frameId }).catch(() => {});
   if (message.type === "size") { if (Number.isFinite(message.height)) relay("rbw_inline_size"); return; }
   if (message.type === "close") { closeInlineSession(session.token, true); return; }
-  const prefs = await settings(); const account = prefs.account || null;
+  const prefs = await settings(); const account = null;
   if (session.mode === "choices") {
     if (message.type === "icons") {
       if (session.kind !== "login" || !prefs.favicons || isAutofillBlocked(session.url, prefs.autofillBlocklist)) return;
@@ -598,7 +599,7 @@ async function pageMessage(message, sender, respond) {
   if (message.action === "passkey_available") return respond({ result: prefs.passkeys });
   if (message.action === "autofill_load") {
     if (!prefs.autoFill || autofillBlocked || sender.frameId !== 0 || !sender.tab.active) return respond({ result: false });
-    const results = await cachedSearch({ account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
+    const results = await cachedSearch({ account: null, url: sender.url, site_only: true, kind: "login" });
     const eligible = results.items.filter(item => !item.protected && !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems));
     if (!eligible.length) return respond({ result: false });
     if (message.otp) {
@@ -608,13 +609,13 @@ async function pageMessage(message, sender, respond) {
       const last = fillCycles.get(sender.tab.id)?.item;
       for (const item of [...eligible].sort((a, b) => (b.id === last) - (a.id === last)).slice(0, 5)) {
         try {
-          if ((await native({ action: "credential", account: prefs.account || null, item: item.id, url: sender.url })).hasTotp !== true) continue;
-          return respond({ result: await fill({ item: item.id, totpOnly: true, automatic: true, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, prefs.account || null) });
+          if ((await native({ action: "credential", account: null, item: item.id, url: sender.url })).hasTotp !== true) continue;
+          return respond({ result: await fill({ item: item.id, totpOnly: true, automatic: true, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, null) });
         } catch (_) { /* Try the next login. */ }
       }
       return respond({ result: false });
     }
-    return respond({ result: await fill({ item: eligible[0].id, automatic: true, cycleIndex: 1, cycleCount: eligible.length, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, prefs.account || null) });
+    return respond({ result: await fill({ item: eligible[0].id, automatic: true, cycleIndex: 1, cycleCount: eligible.length, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, null) });
   }
   if (message.action === "inline_open") {
     if (!prefs.inlineSuggestions || autofillBlocked) return respond({ result: null });
@@ -625,8 +626,8 @@ async function pageMessage(message, sender, respond) {
     if (kind === "login" && prefs.autoFill && message.explicit !== true) return respond({ result: null });
     try {
       const result = await cachedSearch(kind === "card"
-        ? { account: prefs.account || null, kind: "card" }
-        : { account: prefs.account || null, url: sender.url, site_only: true, kind: "login" });
+        ? { account: null, kind: "card" }
+        : { account: null, url: sender.url, site_only: true, kind: "login" });
       const eligible = result.items.filter(v => !v.protected && !isItemAutofillExcluded(v.id, prefs.autofillExcludedItems));
       if (!eligible.length) return respond({ result: null });
       const items = eligible.slice(0, 5).map(v => ({ id: v.id, name: v.name, username: v.username, brand: kind === "card" ? String(v.username || "").split(",", 1)[0].trim() : null,
@@ -647,7 +648,7 @@ async function pageMessage(message, sender, respond) {
   if (message.action === "save_offer") {
     if (!prefs.savePrompts || typeof message.username !== "string" || typeof message.password !== "string" || message.password.length > 4096 || message.username.length > 1024) return respond({ result: false });
     const tabId = sender.tab.id;
-    const known = await classifySaveOffer(prefs.account || null, sender.url, message.username, message.password);
+    const known = await classifySaveOffer(null, sender.url, message.username, message.password);
     if (known.saved) return respond({ result: false });
     const previous = offers.get(tabId); if (previous && (previous.origin !== url.origin || previous.username !== message.username)) rememberUnsaved(previous); else if (previous) clearTimeout(previous.timer);
     const offer = { origin: url.origin, url: sender.url, username: message.username, password: message.password, update: known.update, timer: setTimeout(() => { rememberUnsaved(offers.get(tabId)); offers.delete(tabId); badge(); api.tabs.sendMessage(tabId, { action: "rbw_save_offer_clear" }).catch(() => {}); }, 120000) };
@@ -769,11 +770,11 @@ async function handle(message) {
   switch (message.action) {
     case "bootstrap": {
       const preferences = await settings();
-      const account = preferences.account || null;
+      const account = null;
       const status = await native({ action: "status", account });
       setVaultUnlocked(status.unlocked);
       if (!status.unlocked) { clearMetadata(); popupStates.clear(); editDraft = null; unsavedLogins = []; }
-      const selected = preferences.account || status.primary || status.accounts?.[0] || null;
+      const selected = status.primary || status.accounts?.[0] || null;
       return { preferences, status, saved: status.unlocked ? popupStates.get(selected) || popupStates.get(account) || null : null };
     }
     case "unlock": {
@@ -842,7 +843,7 @@ async function handle(message) {
       if (!["off", "fill", "clipboard"].includes(next.cardSecurityCode)) next.cardSecurityCode = "off";
       if (!URI_MATCH_TYPES.includes(next.uriMatchDefault)) next.uriMatchDefault = "";
       uriMatchOverride = next.uriMatchDefault || null;
-      if (next.account !== old.account || JSON.stringify(next.accounts) !== JSON.stringify(old.accounts) || !next.favicons || next.uriMatchDefault !== old.uriMatchDefault) clearMetadata();
+      if (next.popupAccount !== old.popupAccount || JSON.stringify(next.accounts) !== JSON.stringify(old.accounts) || !next.favicons || next.uriMatchDefault !== old.uriMatchDefault) clearMetadata();
       await api.storage.local.set({ preferences: next }); return next;
     }
     case "search": {
@@ -1036,7 +1037,7 @@ async function fillShortcut(tabId) {
       await notifyFill(tab, { title: "Autofill blocked", error: true, message: "HTTP is unencrypted. Change this in rbw settings.", settingsAction: true }).catch(() => {});
       return;
     }
-    const account = prefs.account || null;
+    const account = null;
     if (isAutofillBlocked(tab.url, prefs.autofillBlocklist)) throw new Error("Autofill is blocked for this site in rbw settings.");
     const status = await native({ action: "status", account });
     setVaultUnlocked(status.unlocked);

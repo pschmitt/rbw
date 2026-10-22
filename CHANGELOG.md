@@ -24,6 +24,10 @@
   on 2FA pages with "Auto-fill on page load" and whenever a login is filled.
   The "Copy TOTP after filling" copy is now done by the extension (new
   `clipboardWrite` permission) instead of the agent.
+* Browser extension: an old saved single-account preference (written by every
+  settings change before 2.27) no longer pins search and autofill to the
+  primary account; the popup's account choice is kept separately. The list
+  says which accounts are locked and so missing.
 * The in-page autofill notice is larger, names the item whose TOTP or card
   code was copied, and shows a clipboard icon when something was put on the
   clipboard; its messages are shorter.

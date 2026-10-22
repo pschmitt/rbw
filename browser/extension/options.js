@@ -17,7 +17,7 @@ function showPolicy(policy) {
 // Which accounts the extension covers: the rbw CLI's choice, or the ones
 // ticked here (two or more are merged). The legacy single `account`
 // preference counts as a selection of one.
-function chosenAccounts(prefs) { return Array.isArray(prefs.accounts) && prefs.accounts.length ? prefs.accounts : prefs.account ? [prefs.account] : []; }
+function chosenAccounts(prefs) { return Array.isArray(prefs.accounts) ? prefs.accounts : []; }
 function renderAccountChoices(state, prefs) {
   const names = state.accounts || [], chosen = chosenAccounts(prefs).filter(name => names.includes(name));
   $("accounts-section").hidden = names.length < 2;
@@ -37,7 +37,7 @@ function renderAccountChoices(state, prefs) {
 async function saveAccountChoice() {
   const chosen = $("accounts-cli").checked ? [] : [...$("accounts-list").querySelectorAll("input:checked")].map(input => input.value);
   if (!$("accounts-cli").checked && !chosen.length) { $("accounts-cli").checked = true; }
-  const prefs = await request("set_preferences", { preferences: { accounts: chosen, account: "" } });
+  const prefs = await request("set_preferences", { preferences: { accounts: chosen } });
   renderAccountChoices(await status(), prefs); $("message").textContent = "Accounts saved.";
 }
 $("accounts-cli").onchange = () => attempt(async () => {

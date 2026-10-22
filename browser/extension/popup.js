@@ -253,10 +253,10 @@ function renderAccounts(accounts, primary, chosen, states = []) {
   if (picked.length) accounts = picked;
   const select = $("account"), multiple = accounts.length > 1;
   accountNames = accounts; accountStates = states.filter(state => accounts.includes(state.name));
-  const active = multiple ? (chosen ?? preference.account ?? "") : (chosen || preference.account || primary || (accounts[0] || ""));
+  const active = multiple ? (chosen ?? preference.popupAccount ?? "") : (chosen || preference.popupAccount || primary || (accounts[0] || ""));
   select.replaceChildren(...(multiple ? [new Option("All accounts", "")] : []), ...accounts.map(name => new Option(name === primary ? `${name} *` : name, name)));
   select.value = active;
-  preference.account = select.value;
+  preference.popupAccount = select.value;
   renderAccountStates(primary);
 }
 // Merged view: which accounts are locked, each with a way to unlock it.
@@ -297,7 +297,7 @@ async function refresh(knownStatus = null, skipList = false) {
   try {
   clearVault();
   const status = knownStatus || await request("status"); unlocked = status.unlocked;
-  renderAccounts(status.accounts || [], status.primary, preference.account, status.accountStates || []);
+  renderAccounts(status.accounts || [], status.primary, preference.popupAccount, status.accountStates || []);
   $("state").textContent = unlocked ? (status.merged ? `${status.accountStates.filter(a => a.unlocked).length} of ${status.accountStates.length} accounts unlocked · shared rbw-agent` : "Unlocked · shared rbw-agent") : "Locked";
   $("unlock").disabled = unlocked; $("lock").disabled = !unlocked;
   $("header-lock").disabled = !unlocked;
@@ -342,6 +342,9 @@ function renderSearch(result) {
   }
   if (!result.items.length) $("items").append(element("p", "No items found.", "empty"));
   $("count").textContent = result.total > result.limit ? `${result.limit} of ${result.total} items. Narrow your search to see more.` : `${result.total} items`;
+  // Items of locked accounts can't be listed (nothing prompts for them here).
+  const locked = $("account").value === "" ? accountStates.filter(account => !account.unlocked && !account.excluded).map(account => account.name) : [];
+  if (locked.length) $("count").textContent += ` · ${locked.join(", ")} locked: unlock from the account menu`;
 }
 const faviconObserver = new IntersectionObserver(entries => {
   for (const entry of entries) if (entry.isIntersecting) {
@@ -1176,7 +1179,7 @@ $("account-toggle").ondblclick = () => {
     if (document.documentElement.dataset.surface !== "window") window.close();
   });
 };
-$("account").onchange = () => attempt(async () => { await request("set_preferences", { preferences: { account: $("account").value } }); await refresh(); });
+$("account").onchange = () => attempt(async () => { await request("set_preferences", { preferences: { popupAccount: $("account").value } }); await refresh(); });
 $("filter-toggle").onclick = () => { $("filters").hidden = !$("filters").hidden; $("filter-toggle").setAttribute("aria-expanded", String(!$("filters").hidden)); remember(); };
 // Keyboard navigation: arrows move a highlight through the item cards (from
 // the search field or the list), Enter opens the highlighted item and
@@ -1451,7 +1454,7 @@ attempt(async () => {
     $("setting-passkeys").checked = preference.passkeys; $("setting-copy-totp").checked = preference.copyTotp === true; $("setting-autofill-totp").checked = preference.autofillTotp === true; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
     if (!approvalId) approvalId = await activeApproval();
     const status = initial.status;
-    renderAccounts(status.accounts || [], status.primary, preference.account, status.accountStates || []);
+    renderAccounts(status.accounts || [], status.primary, preference.popupAccount, status.accountStates || []);
     const saved = status.unlocked && !approvalId && !initialSearch ? initial.saved : null;
     if (initialSearch) {
       $("view").value = "vault";
