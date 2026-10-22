@@ -267,11 +267,34 @@ function renderAccountStates(primary) {
     const row = element("li", null, account.unlocked ? "is-unlocked" : "is-locked");
     row.append(element("span", account.name === primary ? `${account.name} *` : account.name), element("small", account.excluded ? "excluded from search" : account.unlocked ? "unlocked" : "locked"));
     if (!account.unlocked) {
-      const unlock = actionButton("Unlock", "unlock", () => { unlockAccount = account.name; show("locked"); $("account-menu").hidden = true; $("unlock-password").focus(); message(`Unlock ${account.name}.`); });
+      // First the account's own unlock policy (as `rbw unlock` does: a
+      // credential source, a phone approval, chained unlocking); only if that
+      // fails ask for the master password.
+      const unlock = actionButton("Unlock", "unlock", async () => {
+        try { await request("unlock", { account: account.name }); await refresh(); message(`${account.name} unlocked.`); }
+        catch (_) { unlockAccount = account.name; show("locked"); $("account-menu").hidden = true; $("unlock-password").focus(); message(`Enter the master password for ${account.name}.`); }
+      });
       unlock.title = `Unlock ${account.name}`; row.append(unlock);
     }
     return row;
   }));
+  const locked = accountStates.filter(account => !account.unlocked && !account.excluded).map(account => account.name);
+  if (locked.length > 1) {
+    const row = element("li", null, "unlock-all");
+    row.append(actionButton(`Unlock all (${locked.length})`, "unlock", () => unlockAccounts(locked)));
+    list.append(row);
+  }
+}
+// Unlocks each account by its own policy; the ones that need a password
+// are reported (use their Unlock button).
+async function unlockAccounts(names) {
+  const failed = [];
+  for (const name of names) {
+    message(`Unlocking ${name}…`);
+    try { await request("unlock", { account: name }); } catch (_) { failed.push(name); }
+  }
+  await refresh();
+  message(failed.length ? `Could not unlock ${failed.join(", ")} automatically; use its Unlock button.` : "Accounts unlocked.", failed.length > 0);
 }
 // Accounts an item could be saved or moved to.
 function fillAccountSelect(select, except = null, preferred = null) {

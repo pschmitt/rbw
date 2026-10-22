@@ -718,3 +718,4 @@ details.history-section[open] > summary svg { transform:rotate(180deg); }
 .meta-chip small { color:var(--muted); }
 .meta-chip strong { font-weight:500; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #count button.link { border:0; background:none; padding:0 2px; color:var(--accent, #8ab4f8); text-decoration:underline; cursor:pointer; font:inherit; }
+.unlock-all { display:flex; justify-content:flex-end; }

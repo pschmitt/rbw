@@ -385,10 +385,6 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
     }
 }
 
-// With several accounts configured, a request that names no account works
-// on all of them ("All accounts" in the extension): searches merge the
-// accounts `rbw search` would cover (passively: only unlocked ones), and a
-// request about one item goes to the account that holds it.
 // The accounts a merged request covers: the ones the user picked in the
 // extension (even if `exclude_from` would keep them out of the CLI's
 // search), or else the ones `rbw search` covers.
@@ -406,6 +402,10 @@ fn scoped_states(
     Ok(states)
 }
 
+// With several accounts configured, a request that names no account works
+// on all of them ("All accounts" in the extension): searches merge the
+// accounts `rbw search` would cover (passively: only unlocked ones), and a
+// request about one item goes to the account that holds it.
 fn merged_mode(account: Option<&String>) -> anyhow::Result<bool> {
     Ok(
         account.is_none()
