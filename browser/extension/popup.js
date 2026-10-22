@@ -1335,10 +1335,11 @@ attempt(async () => {
       $("setting-http-fill").disabled = true;
       $("setting-http-fill-managed").hidden = false;
     }
+    lockManagedControls(managedPreferences, { copyTotp: "setting-copy-totp", cardSecurityCode: "setting-card-code" });
     $("setting-animations").value = preference.animations;
     $("setting-animation-speed").value = preference.animationSpeed; $("setting-animation-speed").disabled = preference.animations === "off"; $("setting-animation-speed").closest(".switch-row").hidden = preference.animations === "off";
     $("setting-card-code").value = ["fill", "clipboard"].includes(preference.cardSecurityCode) ? preference.cardSecurityCode : "off";
-    $("setting-passkeys").checked = preference.passkeys; $("setting-copy-totp").checked = preference.copyTotp !== false; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
+    $("setting-passkeys").checked = preference.passkeys; $("setting-copy-totp").checked = preference.copyTotp === true; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
     if (!approvalId) approvalId = await activeApproval();
     const status = initial.status;
     renderAccounts(status.accounts || [], status.primary, preference.account);

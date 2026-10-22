@@ -5,6 +5,21 @@
       "type": "boolean",
       "title": "Allow autofill on HTTP sites",
       "description": "Allow filling passwords on unencrypted HTTP pages."
+    },
+    "copyTotp": {
+      "type": "boolean",
+      "title": "Copy TOTP after filling",
+      "description": "After filling a login that has a TOTP, copy the current code to the clipboard."
+    },
+    "cardSecurityCode": {
+      "type": "string",
+      "enum": [
+        "off",
+        "fill",
+        "clipboard"
+      ],
+      "title": "Card security code",
+      "description": "Leave the card security code alone (off), fill it, or copy it to the clipboard."
     }
   }
 }

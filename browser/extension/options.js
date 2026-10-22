@@ -41,22 +41,52 @@ attempt(async () => {
   const state = await status();
   $("account").replaceChildren(...(state.accounts || []).map(a => new Option(a === state.primary ? `${a} *` : a, a)));
   $("account").value = prefs.account || state.primary || "";
-  $("autofill").checked = prefs.autoFill; $("copy-totp").checked = prefs.copyTotp !== false; $("allow-http-fill").checked = prefs.allowHttpFill === true; $("allow-http-fill").disabled = Object.hasOwn(managedPreferences, "allowHttpFill"); $("allow-http-fill-managed").hidden = !Object.hasOwn(managedPreferences, "allowHttpFill"); $("autofill-blocklist").value = prefs.autofillBlocklist || ""; $("animations").value = prefs.animations; $("animation-speed").value = prefs.animationSpeed; $("animation-speed").disabled = prefs.animations === "off"; $("animation-speed").closest(".switch-row").hidden = prefs.animations === "off"; $("card-security-code").value = ["fill", "clipboard"].includes(prefs.cardSecurityCode) ? prefs.cardSecurityCode : "off"; $("inline").checked = prefs.inlineSuggestions; $("passkeys").checked = prefs.passkeys; $("save-prompts").checked = prefs.savePrompts; $("theme").value = prefs.theme; $("uri-match").value = prefs.uriMatchDefault || ""; await status();
+  $("autofill").checked = prefs.autoFill; $("copy-totp").checked = prefs.copyTotp === true; $("allow-http-fill").checked = prefs.allowHttpFill === true; $("allow-http-fill").disabled = Object.hasOwn(managedPreferences, "allowHttpFill"); $("allow-http-fill-managed").hidden = !Object.hasOwn(managedPreferences, "allowHttpFill"); $("autofill-blocklist").value = prefs.autofillBlocklist || ""; $("animations").value = prefs.animations; $("animation-speed").value = prefs.animationSpeed; $("animation-speed").disabled = prefs.animations === "off"; $("animation-speed").closest(".switch-row").hidden = prefs.animations === "off"; $("card-security-code").value = ["fill", "clipboard"].includes(prefs.cardSecurityCode) ? prefs.cardSecurityCode : "off"; $("inline").checked = prefs.inlineSuggestions; $("passkeys").checked = prefs.passkeys; $("save-prompts").checked = prefs.savePrompts; $("theme").value = prefs.theme; $("uri-match").value = prefs.uriMatchDefault || ""; await status();
+  lockManagedControls(managedPreferences, { copyTotp: "copy-totp", cardSecurityCode: "card-security-code" });
   showPolicy(await request("agent_settings"));
 });
+// Independent of the panels above, so their failures don't leave it loading.
+folders().catch(() => { $("folders").replaceChildren(Object.assign(document.createElement("p"), { className: "hint", textContent: "Unlock the vault to manage folders." })); });
 
-async function folders() {
-  const list = await request("folders", { method: "list" }); $("folders").replaceChildren();
-  for (const folder of list) {
-    const row = document.createElement("div"); row.className = "actions";
-    const input = document.createElement("input"); input.value = folder.name; input.setAttribute("aria-label", "Folder name");
-    const rename = document.createElement("button"); rename.append(icon("edit"), document.createTextNode("Rename")); rename.onclick = () => attempt(async () => { await request("folders", { method: "rename", id: folder.id, name: input.value }); await folders(); });
-    const remove = document.createElement("button"); remove.append(icon("trash"), document.createTextNode("Delete")); remove.className = "danger"; remove.onclick = () => attempt(async () => { if (!await confirmDialog({ title: `Delete the folder “${folder.name}”?`, text: "Its items stay in your vault.", confirm: "Delete folder", danger: true })) return; await request("folders", { method: "delete", id: folder.id }); await folders(); });
-    row.append(input, rename, remove); $("folders").append(row);
-  }
+// One row per folder: its name with icon-only rename and delete buttons.
+// Rename edits the name in place (Enter saves, Escape cancels).
+function iconButton(name, label, onclick, className = "") {
+  const button = document.createElement("button"); button.type = "button"; button.className = `icon ${className}`.trim();
+  button.title = label; button.setAttribute("aria-label", label); button.append(icon(name)); button.onclick = onclick;
+  return button;
 }
-$("load-folders").onclick = () => attempt(folders);
-$("folder-form").onsubmit = event => { event.preventDefault(); attempt(async () => { await request("folders", { method: "create", name: $("folder-name").value }); $("folder-name").value = ""; await folders(); }); };
+function folderRow(folder) {
+  const row = document.createElement("div"); row.className = "switch-row folder-row";
+  const name = document.createElement("span"); name.className = "folder-name"; name.append(icon("folder"), document.createTextNode(folder.name));
+  const actions = document.createElement("span"); actions.className = "folder-actions";
+  const view = () => {
+    actions.replaceChildren(
+      iconButton("edit", `Rename “${folder.name}”`, edit),
+      iconButton("trash", `Delete “${folder.name}”`, () => attempt(async () => {
+        if (!await confirmDialog({ title: `Delete the folder “${folder.name}”?`, text: "Its items stay in your vault.", confirm: "Delete folder", danger: true })) return;
+        await request("folders", { method: "delete", id: folder.id }); await folders();
+      }), "danger"));
+    row.replaceChildren(name, actions);
+  };
+  const edit = () => {
+    const input = document.createElement("input"); input.value = folder.name; input.maxLength = 1024; input.setAttribute("aria-label", "Folder name");
+    const save = () => attempt(async () => {
+      const value = input.value.trim();
+      if (!value || value === folder.name) { view(); return; }
+      await request("folders", { method: "rename", id: folder.id, name: value }); await folders();
+    });
+    input.onkeydown = event => { if (event.key === "Enter") { event.preventDefault(); save(); } else if (event.key === "Escape") { event.preventDefault(); view(); } };
+    actions.replaceChildren(iconButton("check", "Save", save), iconButton("close", "Cancel", view));
+    row.replaceChildren(input, actions); input.focus(); input.select();
+  };
+  view(); return row;
+}
+async function folders() {
+  const list = (await request("folders", { method: "list" })).slice().sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: "base" }));
+  $("folder-count").textContent = list.length ? `${list.length}` : "";
+  $("folders").replaceChildren(...(list.length ? list.map(folderRow) : [Object.assign(document.createElement("p"), { className: "hint", textContent: "No folders yet." })]));
+}
+$("folder-form").onsubmit = event => { event.preventDefault(); attempt(async () => { const name = $("folder-name").value.trim(); if (!name) return; await request("folders", { method: "create", name }); $("folder-name").value = ""; await folders(); }); };
 
 // Only the encrypted Bitwarden format takes (and requires) an export password.
 function syncExportPassword() {

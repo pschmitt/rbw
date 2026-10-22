@@ -30,3 +30,18 @@ function confirmLock() {
     icon: "lock",
   });
 }
+// Locks the controls of preferences set by browser policy (managed storage),
+// noting why in the control's settings row. `controls` maps preference keys
+// to control ids.
+function lockManagedControls(managed, controls) {
+  for (const [key, id] of Object.entries(controls)) {
+    if (!Object.hasOwn(managed, key)) continue;
+    const control = document.getElementById(id); if (!control) continue;
+    control.disabled = true;
+    const label = control.closest(".switch-row")?.querySelector("span");
+    if (label && !label.querySelector(".managed-note")) {
+      const note = document.createElement("small"); note.className = "managed-note"; note.textContent = "Managed by your browser configuration.";
+      label.append(note);
+    }
+  }
+}

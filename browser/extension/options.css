@@ -9,4 +9,16 @@ section { background:var(--panel); border:1px solid var(--line); border-radius:1
 section > h2 { display:flex; align-items:center; gap:10px; }
 section > h2 > [data-icon] { display:inline-flex; color:var(--accent); }
 section .switch-list { padding:0; }
+#folder-count { font-size:13px; font-weight:400; }
+.folder-list { max-height:360px; overflow-y:auto; margin:4px 0 12px; }
+.folder-row { padding:6px 0; }
+.folder-name { display:flex; align-items:center; gap:10px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.folder-name > svg, .folder-name > [data-icon] { flex:none; color:var(--muted); }
+.folder-row > input { flex:1; min-width:0; margin:0; padding:5px 8px; }
+.folder-row > .folder-actions { display:flex; gap:2px; flex:none; }
+.folder-actions button.icon { font-size:16px; padding:4px 6px; }
+.folder-actions button.danger { color:var(--danger); }
+.folder-add { display:flex; gap:8px; align-items:center; }
+.folder-add > input { flex:1; min-width:0; margin:0; }
+.folder-add > button { margin:0; flex:none; }
 label { margin:16px 0; } select { max-width:350px; } dt { color:var(--muted); } dd { margin:0 0 10px; } p { overflow-wrap:anywhere; }
