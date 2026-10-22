@@ -4,7 +4,7 @@
 
 ### Added
 
-* Browser extension: while syncing, the toolbar icon gets a spinning purple ring
+* Browser extension: while syncing, the toolbar icon gets a spinning amber ring
   around the crab (a comet-tail arc) instead of a tiny badge; it stays legible
   on dark and light toolbars and at 16, 32 and 48 px.
 * The item view lists the item's attachments (name and size) with a download
@@ -14,8 +14,6 @@
 * Browser extension: all popup notices use that banner style: in the layout
   under the header (so they push the content down instead of covering it),
   colored by kind, and animated in and out.
-
-## [2.27.1] - 2026-10-23
 
 ### Changed
 
