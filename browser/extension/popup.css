@@ -727,3 +727,12 @@ details.history-section[open] > summary svg { transform:rotate(180deg); }
 .account-unlock { display:flex; gap:6px; flex-basis:100%; margin:2px 0 4px; }
 .account-unlock input { flex:1; min-width:0; }
 .locked-banner[data-kind=success] { border-color:var(--ok); background:color-mix(in srgb, var(--ok) 18%, var(--panel)); }
+@keyframes banner-in { from { opacity:0; transform:translateY(-8px); } }
+@keyframes banner-out { to { opacity:0; transform:translateY(-8px); max-height:0; margin-bottom:0; padding-top:0; padding-bottom:0; border-width:0; } }
+@keyframes banner-swap { 0% { opacity:.4; transform:scale(.97); } 100% { opacity:1; transform:none; } }
+@keyframes icon-pop { 0% { transform:scale(.4) rotate(-20deg); } 60% { transform:scale(1.25); } 100% { transform:none; } }
+.locked-banner { overflow:hidden; max-height:80px; }
+.locked-banner.is-entering { animation:banner-in 220ms cubic-bezier(.2,.8,.2,1) both; }
+.locked-banner.is-swapping { animation:banner-swap 260ms ease-out both; }
+.locked-banner.is-swapping svg { animation:icon-pop 380ms cubic-bezier(.2,.8,.2,1) both; }
+.locked-banner.is-leaving { animation:banner-out 240ms ease-in both; }

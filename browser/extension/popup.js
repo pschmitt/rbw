@@ -307,24 +307,41 @@ function renderAccountStates(primary) {
 // The warning above the list turns, in place, into an "unlocked" notice when
 // an account gets unlocked, and goes away (or back to the warning for the
 // accounts still locked) after a moment.
-let lockedSeen = null, bannerHoldUntil = 0, bannerTimer;
-function renderLockedBanner(locked) {
+let lockedSeen = null, bannerHoldUntil = 0, bannerTimer, bannerLeaving;
+const bannerAnimated = () => preference.animations !== "off" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+// Shows the banner (sliding in when it wasn't visible; a swap pop when it only changes).
+function showBanner(kind, ...children) {
   const banner = $("locked-accounts");
+  clearTimeout(bannerLeaving); banner.classList.remove("is-leaving");
+  const wasVisible = !banner.hidden && banner.dataset.kind !== kind;
+  const appearing = banner.hidden;
+  banner.dataset.kind = kind; banner.hidden = false;
+  banner.replaceChildren(...children);
+  if (!bannerAnimated()) return;
+  banner.classList.remove("is-entering", "is-swapping"); void banner.offsetWidth;
+  banner.classList.add(appearing ? "is-entering" : wasVisible ? "is-swapping" : "is-entering");
+}
+function hideBanner() {
+  const banner = $("locked-accounts");
+  if (banner.hidden) return;
+  if (!bannerAnimated()) { banner.hidden = true; return; }
+  banner.classList.add("is-leaving");
+  clearTimeout(bannerLeaving); bannerLeaving = setTimeout(() => { banner.hidden = true; banner.classList.remove("is-leaving"); }, 240);
+}
+function renderLockedBanner(locked) {
   const unlockedNow = lockedSeen ? lockedSeen.filter(name => !locked.includes(name)) : [];
   lockedSeen = locked;
-  if ($("account").value !== "") { banner.hidden = true; return; }
+  if ($("account").value !== "") { clearTimeout(bannerTimer); hideBanner(); return; }
   if (unlockedNow.length) {
     bannerHoldUntil = Date.now() + 2500;
     clearTimeout(bannerTimer); bannerTimer = setTimeout(() => { bannerHoldUntil = 0; renderLockedBanner(lockedSeen); }, 2600);
-    banner.dataset.kind = "success"; banner.hidden = false;
-    banner.replaceChildren(icon("check"), element("span", `${unlockedNow.join(", ")} unlocked`));
+    showBanner("success", icon("check"), element("span", `${unlockedNow.join(", ")} unlocked`));
     return;
   }
   if (Date.now() < bannerHoldUntil) return; // still showing the notice
-  banner.dataset.kind = "warning"; banner.hidden = !locked.length;
-  if (banner.hidden) return;
+  if (!locked.length) { hideBanner(); return; }
   const text = element("span", locked.length === 1 ? `${locked[0]} is locked; its items aren't listed.` : `${locked.join(", ")} are locked; their items aren't listed.`);
-  banner.replaceChildren(icon("lock"), text, button("Unlock", () => unlockAccounts(locked), "banner-unlock"));
+  showBanner("warning", icon("lock"), text, button("Unlock", () => unlockAccounts(locked), "banner-unlock"));
 }
 // Unlocks each account by its own policy; the ones that need a password
 // are reported (use their Unlock button).
