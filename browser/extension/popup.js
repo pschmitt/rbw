@@ -36,7 +36,8 @@ function stopTotp() { clearTimeout(totpTimer); }
 const initialSearch = new URLSearchParams(location.search).get("search");
 const initialSettings = new URLSearchParams(location.search).get("settings") === "1";
 let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
-let accountNames = [], accountStates = [], unlockAccount = null;
+let accountNames = [], accountStates = [];
+const needsPassword = new Set(); // locked accounts whose row shows a password field
 let loadingRequests = 0, loadingTimer, notificationTimer, stateTimer, ready = false;
 const filterIds = ["query", "kind", "folder", "collection", "view"];
 function remember() {
@@ -267,14 +268,24 @@ function renderAccountStates(primary) {
     const row = element("li", null, account.unlocked ? "is-unlocked" : "is-locked");
     row.append(element("span", account.name === primary ? `${account.name} *` : account.name), element("small", account.excluded ? "excluded from search" : account.unlocked ? "unlocked" : "locked"));
     if (!account.unlocked) {
-      // First the account's own unlock policy (as `rbw unlock` does: a
-      // credential source, a phone approval, chained unlocking); only if that
-      // fails ask for the master password.
+      // Unlock tries the account's own policy first (as `rbw unlock` does: a
+      // credential source, a phone approval, chained unlocking); the key
+      // button, or a failed attempt, opens a password field in the row.
+      const form = element("form", null, "account-unlock"), input = element("input"), submit = element("button", "Unlock");
+      input.type = "password"; input.placeholder = `Master password for ${account.name}`; input.autocomplete = "off"; input.maxLength = 4096; input.required = true; input.spellcheck = false;
+      submit.type = "submit"; form.append(input, submit); form.hidden = !needsPassword.has(account.name);
+      form.onsubmit = event => {
+        event.preventDefault(); const password = input.value; input.value = "";
+        attempt(async () => { message("Unlocking…"); await request("unlock", { account: account.name, password }); needsPassword.delete(account.name); await refresh(); message(`${account.name} unlocked.`); });
+      };
       const unlock = actionButton("Unlock", "unlock", async () => {
-        try { await request("unlock", { account: account.name }); await refresh(); message(`${account.name} unlocked.`); }
-        catch (_) { unlockAccount = account.name; show("locked"); $("account-menu").hidden = true; $("unlock-password").focus(); message(`Enter the master password for ${account.name}.`); }
+        try { await request("unlock", { account: account.name }); needsPassword.delete(account.name); await refresh(); message(`${account.name} unlocked.`); }
+        catch (_) { needsPassword.add(account.name); form.hidden = false; input.focus(); message(`${account.name} needs its master password.`); }
       });
-      unlock.title = `Unlock ${account.name}`; row.append(unlock);
+      unlock.title = `Unlock ${account.name} with its configured unlock method`;
+      const key = actionButton("Use password", "key", () => { form.hidden = !form.hidden; if (!form.hidden) input.focus(); }, "icon");
+      key.title = "Unlock with a master password";
+      row.append(unlock, key, form);
     }
     return row;
   }));
@@ -300,10 +311,11 @@ async function unlockAccounts(names) {
   const failed = [];
   for (const name of names) {
     message(`Unlocking ${name}…`);
-    try { await request("unlock", { account: name }); } catch (_) { failed.push(name); }
+    try { await request("unlock", { account: name }); needsPassword.delete(name); } catch (_) { failed.push(name); needsPassword.add(name); }
   }
   await refresh();
-  message(failed.length ? `Could not unlock ${failed.join(", ")} automatically; use its Unlock button.` : "Accounts unlocked.", failed.length > 0);
+  if (failed.length) $("account-menu").hidden = false; // their rows now ask for a password
+  message(failed.length ? `${failed.join(", ")} need${failed.length === 1 ? "s" : ""} a master password: enter it in the account menu.` : "Accounts unlocked.", failed.length > 0);
 }
 // Accounts an item could be saved or moved to.
 function fillAccountSelect(select, except = null, preferred = null) {
@@ -1156,8 +1168,7 @@ for (const action of ["lock", "sync"]) $(action).onclick = () => attempt(async (
 $("unlock-form").onsubmit = event => {
   event.preventDefault();
   const password = $("unlock-password").value; $("unlock-password").value = "";
-  const target = unlockAccount; unlockAccount = null;
-  attempt(async () => { await cancelFingerprint(); message("Unlocking…"); await request("unlock", target ? { password, account: target } : { password }); await refresh(); message(target ? `${target} unlocked.` : "Vault unlocked."); });
+  attempt(async () => { await cancelFingerprint(); message("Unlocking…"); await request("unlock", { password }); await refresh(); message("Vault unlocked."); });
 };
 // Fingerprint unlock runs in rbw-browser (fprintd, then the enrolled keyring
 // password); the popup only sees the outcome. The "rbw-fingerprint" port lets

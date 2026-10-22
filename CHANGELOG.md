@@ -30,6 +30,10 @@
   banner above the list (with Unlock), an amber "L" on the toolbar icon
   while some accounts are locked (red when all are), and the account menu
   opens by itself when everything is locked.
+* Browser extension: a locked account's row in the popup's account menu can
+  take its master password inline (key button, or automatically when the
+  account's own unlock method fails), so "Unlock all" works with a mix of
+  chained and password accounts.
 * Browser extension: the popup's account menu has an Unlock button per locked
   account and "Unlock all". They first use the account's own unlock policy
   (like `rbw unlock`, so chained unlocking works) and ask for the master

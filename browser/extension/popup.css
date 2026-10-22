@@ -723,3 +723,6 @@ details.history-section[open] > summary svg { transform:rotate(180deg); }
 .locked-banner svg { width:16px; height:16px; flex:none; }
 .locked-banner span { flex:1; min-width:0; }
 .locked-banner .banner-unlock { flex:none; }
+.account-states li { flex-wrap:wrap; }
+.account-unlock { display:flex; gap:6px; flex-basis:100%; margin:2px 0 4px; }
+.account-unlock input { flex:1; min-width:0; }
