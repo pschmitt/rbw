@@ -4,6 +4,7 @@
 
 ### Added
 
+* Browser extension: the clipboard marker in the autofill notice wiggles once.
 * Browser extension: the autofill suggestion window and the save-login prompt
   injected into pages slide and fade in and out (not with reduced motion).
 * Accounts have a `color` (`rbw account set NAME --color #rrggbb` or

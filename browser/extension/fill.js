@@ -417,6 +417,11 @@ function showFillNotice(expectedUrl, notice) {
       clip.append(part);
     }
     account.prepend(clip);
+    // A little wiggle once the notice has landed, to catch the eye.
+    if (!matchMedia("(prefers-reduced-motion: reduce)").matches && notice.animations !== "off") {
+      clip.style.transformOrigin = "50% 75%";
+      clip.animate([{ transform: "rotate(0)" }, { transform: "rotate(-16deg) scale(1.15)", offset: .2 }, { transform: "rotate(13deg) scale(1.15)", offset: .4 }, { transform: "rotate(-9deg)", offset: .6 }, { transform: "rotate(5deg)", offset: .8 }, { transform: "rotate(0)" }], { duration: 650, delay: 350, easing: "ease-in-out" });
+    }
   }
   if (notice.settingsAction) {
     const settings = document.createElement("button"); settings.type = "button"; settings.className = "settings"; settings.textContent = "Settings";
