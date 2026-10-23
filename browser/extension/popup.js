@@ -1442,6 +1442,12 @@ window.addEventListener("keydown", event => {
     if (target.isContentEditable || target.closest?.("input,textarea,select,details.menu[open]")) return;
     event.preventDefault(); attempt(navigateBack); return;
   }
+  // "e" edits the open item (not while typing, with a menu or dialog open, or in the trash).
+  if (event.key === "e" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && currentPage === "detail" && !$("detail-header-actions").hidden) {
+    const target = event.target;
+    if (target.isContentEditable || target.closest?.("input,textarea,select,dialog[open],details.menu[open]")) return;
+    event.preventDefault(); $("header-edit").click(); return;
+  }
   if (event.key === "Escape") {
     if ($("title-menu").open) $("title-menu").open = false;
     for (const m of document.querySelectorAll("details.menu[open]")) {

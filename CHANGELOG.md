@@ -5,6 +5,7 @@
 ### Added
 
 * Browser extension: the clipboard marker in the autofill notice wiggles once.
+* Browser extension: pressing "e" in the item view opens the editor.
 * Browser extension: the editor's URIs have more room between them, show the
   site's favicon (the Android icon for androidapp://; it follows what you type),
   and "Match for all" is now "Bulk edit match detection".
