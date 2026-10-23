@@ -366,7 +366,7 @@ function showFillNotice(expectedUrl, notice) {
   const border = notice.error ? "#efa9b9" : "#555555";
   const bg = notice.error ? "#302528" : "#282828";
   const motionRules = notice.animations === "off" ? "" : `@media(prefers-reduced-motion:no-preference){.notice{opacity:0;transform:translateX(40px)}.notice.entering{animation:rbw-in ${enterDuration}ms cubic-bezier(.16,1,.3,1) both}.notice.closing{animation:rbw-out ${exitDuration}ms ease-in both}@keyframes rbw-in{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}@keyframes rbw-out{to{opacity:0;transform:translateX(16px)}}}`;
-  sheet.replaceSync(`:host{all:initial}.notice{box-sizing:border-box;display:flex;align-items:center;gap:14px;width:450px;max-width:calc(100vw - 32px);padding:14px 16px;border:1px solid ${border};border-radius:14px;background:${bg};color:#efefef;box-shadow:0 6px 24px #0006;font:17px/1.4 system-ui,sans-serif;pointer-events:none}.brand{width:38px;height:38px;object-fit:contain;flex-shrink:0}.text{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}small{color:#adadad;font-size:14.5px;margin-top:3px}button{flex-shrink:0;pointer-events:auto;cursor:pointer;border:0;border-radius:6px;background:transparent;color:#adadad;width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}button.settings{width:auto;padding:0 8px;font:600 14px system-ui,sans-serif}button svg{width:22px;height:22px;display:block;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}button:hover,button:focus-visible{background:#383838;color:#efefef;outline:1px solid #d0d0d0}${motionRules}`);
+  sheet.replaceSync(`:host{all:initial}.notice{box-sizing:border-box;display:flex;align-items:center;gap:14px;width:450px;max-width:calc(100vw - 32px);padding:14px 16px;border:1px solid ${border};border-radius:14px;background:${bg};color:#efefef;box-shadow:0 6px 24px #0006;font:17px/1.4 system-ui,sans-serif;pointer-events:auto}.brand{width:38px;height:38px;object-fit:contain;flex-shrink:0}.text{min-width:0;flex:1}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}small{color:#adadad;font-size:14.5px;margin-top:3px}button{flex-shrink:0;pointer-events:auto;cursor:pointer;border:0;border-radius:6px;background:transparent;color:#adadad;width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}button.settings{width:auto;padding:0 8px;font:600 14px system-ui,sans-serif}button svg{width:22px;height:22px;display:block;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}button:hover,button:focus-visible{background:#383838;color:#efefef;outline:1px solid #d0d0d0}${motionRules}`);
   shadow.adoptedStyleSheets = [sheet];
   const box = document.createElement("div"); box.className = "notice"; box.setAttribute("role", "status"); box.setAttribute("aria-live", "polite");
   const text = document.createElement("div"); text.className = "text";
@@ -443,6 +443,11 @@ function showFillNotice(expectedUrl, notice) {
       clearTimeout(timer); timer = setTimeout(dismiss, 3000);
     }); box.append(undoButton);
   }
+  // The notice takes clicks itself (they no longer fall through to the page
+  // underneath): a click on it dismisses it, and hovering keeps it around.
+  box.addEventListener("click", event => { if (event.isTrusted && !event.target.closest?.("button")) dismiss(); });
+  box.addEventListener("mouseenter", () => clearTimeout(timer));
+  box.addEventListener("mouseleave", () => { if (!closing) { clearTimeout(timer); timer = setTimeout(dismiss, 2000); } });
   box.append(close); shadow.append(box); document.documentElement.append(host);
   requestAnimationFrame(() => { if (host.isConnected) box.classList.add("entering"); });
   timer = setTimeout(dismiss, undo ? 8000 : 4500);
