@@ -31,6 +31,7 @@ let vaultUnlocked = null;
 // Accounts in scope that are locked while others work: the badge still says L.
 let lockedAccounts = [];
 function noteStatus(status) {
+  setPasskeySyncFailure(status.passkeySyncFailure || null);
   const locked = (status.accountStates || []).filter(account => !account.unlocked && !account.excluded).map(account => account.name);
   const changed = locked.join("\n") !== lockedAccounts.join("\n");
   lockedAccounts = locked;
@@ -307,17 +308,6 @@ async function fingerprintUnlock(account) {
 
 function reportPasskeyProgress(request, step, retry = false) {
   api.runtime.sendMessage({ action: "passkey_progress", request, step, retry }).catch(() => {});
-}
-
-async function syncPasskeyStage(account, request, step, failureMessage) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    reportPasskeyProgress(request, step, attempt > 0);
-    try {
-      return await native({ action: "sync", account });
-    } catch (_) {
-      if (attempt === 1) throw new Error(failureMessage);
-    }
-  }
 }
 
 async function activeTab() {
@@ -933,25 +923,12 @@ async function handle(message) {
       await checkDocument(p);
       let result;
       if (p.method === "get") {
-        await syncPasskeyStage(account, p.id, "before", "Could not sync the vault before signing in. Nothing was signed; sync the vault and try again.");
         if (!pending.has(p.id)) throw new Error("The request was cancelled.");
         await checkDocument(p);
         reportPasskeyProgress(p.id, "signing");
+        // The agent side does the rest: it syncs when its copy is stale, and
+        // confirms the new counter after answering (see `passkeySyncFailure`).
         result = await native({ action: "passkey_get", account, item: message.item || null, password: typeof message.password === "string" ? message.password : null, origin: p.origin, options: p.options });
-        const counter = result?.counter;
-        if (!Number.isSafeInteger(counter) || counter < 0) throw new Error("The passkey counter could not be confirmed.");
-        // The counter is already written to the server before signing; the
-        // follow-up sync only confirms it, so don't hold the login for it.
-        // The next sign-in syncs first anyway.
-        const verify = { action: "passkey_verify", account, item: message.item || null, origin: p.origin, options: p.options, counter };
-        syncPasskeyStage(account, p.id, "after", "Could not sync the vault after passkey sign-in.")
-          .then(() => native(verify))
-          .then(() => setPasskeySyncFailure(null))
-          .catch(error => {
-            console.warn("rbw: passkey counter confirmation failed:", error);
-            setPasskeySyncFailure({ origin: p.origin, time: Date.now() });
-          });
-        delete result.counter;
       } else {
         result = await native({ action: "passkey_create", account, item: message.item || null, password: typeof message.password === "string" ? message.password : null, origin: p.origin, options: p.options });
       }

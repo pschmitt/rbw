@@ -128,6 +128,54 @@ pub fn candidates(origin: &str, options: &Value) -> anyhow::Result<Value> {
     Ok(json!({"rp": rp, "items": found}))
 }
 
+/// A passkey sign-in with everything the vault needs around it, so the
+/// client just asks for the signature:
+///
+/// * It signs straight away. The new counter is written to the server first
+///   and guarded by the entry's revision, so a stale local vault is refused
+///   instead of signing with an old counter; only then is the vault synced
+///   and the sign-in tried once more.
+/// * Afterwards (once the response is out) it syncs and checks the new
+///   counter is in the synchronized vault. A failure is reported through the
+///   status until a sync succeeds.
+pub fn authenticate_synced(
+    item: &str,
+    origin: &str,
+    options: &Value,
+    password: Option<&str>,
+) -> anyhow::Result<Value> {
+    let mut result = match authenticate(item, origin, options, password) {
+        Ok(result) => result,
+        Err(first) => {
+            log::debug!(
+                "passkey sign-in failed, syncing and retrying: {first:#}"
+            );
+            actions::sync().context("could not synchronize the vault")?;
+            authenticate(item, origin, options, password)?
+        }
+    };
+    let counter = result["counter"]
+        .as_u64()
+        .and_then(|counter| u32::try_from(counter).ok())
+        .context("the passkey counter could not be confirmed")?;
+    if let Some(object) = result.as_object_mut() {
+        object.remove("counter");
+    }
+    let (item, origin, options) =
+        (item.to_owned(), origin.to_owned(), options.clone());
+    let account = actions::current_account();
+    crate::browser::after_response(move || {
+        let confirmed = actions::set_active_account(account)
+            .and_then(|()| actions::sync())
+            .and_then(|()| confirm_counter(&item, &origin, &options, counter))
+            .is_ok();
+        crate::browser::set_passkey_sync_failure(
+            (!confirmed).then_some(origin.as_str()),
+        );
+    });
+    Ok(result)
+}
+
 pub fn authenticate(
     item: &str,
     origin: &str,

@@ -306,6 +306,50 @@ fn fingerprint_unlock(
         .filter(|desktop| desktop.fingerprint)
 }
 
+// Work to do once the response to the current request is on the wire, so a
+// sign-in isn't held up by the vault synchronization that follows it. The
+// host handles one request at a time, so this runs before the next one.
+thread_local! {
+    static AFTER_RESPONSE: std::cell::RefCell<Vec<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub fn after_response(work: impl FnOnce() + 'static) {
+    AFTER_RESPONSE.with(|queue| queue.borrow_mut().push(Box::new(work)));
+}
+
+fn run_after_response() {
+    let work = AFTER_RESPONSE.with(std::cell::RefCell::take);
+    for work in work {
+        work();
+    }
+}
+
+// Set when the vault could not be synchronized after a passkey sign-in (the
+// origin and when); the status reports it until a sync succeeds.
+static PASSKEY_SYNC_FAILURE: std::sync::Mutex<Option<(String, u64)>> =
+    std::sync::Mutex::new(None);
+
+pub fn set_passkey_sync_failure(origin: Option<&str>) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0));
+    if let Ok(mut failure) = PASSKEY_SYNC_FAILURE.lock() {
+        *failure = origin.map(|origin| (origin.to_owned(), now));
+    }
+}
+
+fn passkey_sync_failure() -> Value {
+    PASSKEY_SYNC_FAILURE
+        .lock()
+        .ok()
+        .and_then(|failure| failure.clone())
+        .map_or(
+            Value::Null,
+            |(origin, time)| json!({"origin": origin, "time": time}),
+        )
+}
+
 fn write_response(
     output: &mut impl std::io::Write,
     response: &Value,
@@ -382,6 +426,7 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
             Err(_) => json!({"id": null, "error": "Invalid browser request"}),
         };
         write_response(&mut output, &response)?;
+        run_after_response();
     }
 }
 
@@ -611,6 +656,7 @@ fn merged_status(
         "fingerprint_auto_start": fingerprint && config.browser.fingerprint_auto_start,
         "accounts": config.accounts().iter().map(|a| &a.name).collect::<Vec<_>>(),
         "accountColors": account_colors(&config),
+        "passkeySyncFailure": passkey_sync_failure(),
         "accountStates": states.iter().map(|s| json!({"name": s.name, "primary": s.primary, "unlocked": agent_ok && s.unlocked, "excluded": s.excluded, "policy": s.policy, "fingerprint": fingerprint_unlock(&config, Some(&s.name)).is_some()})).collect::<Vec<_>>(),
         "primary": primary}))
 }
@@ -660,6 +706,7 @@ fn dispatch(
                     commands::sync(false)?;
                 }
                 actions::set_active_account(None)?;
+                set_passkey_sync_failure(None);
                 return Ok(json!(true));
             }
             Operation::UploadChunk { token, .. }
@@ -698,6 +745,7 @@ fn dispatch(
                 "fingerprint_auto_start": fingerprint && config.browser.fingerprint_auto_start,
                 "accounts": config.accounts().iter().map(|a| &a.name).collect::<Vec<_>>(),
                 "accountColors": account_colors(&config),
+                "passkeySyncFailure": passkey_sync_failure(),
                 "primary": config.primary_account_name()}))
         }
         Operation::Unlock {
@@ -738,6 +786,7 @@ fn dispatch(
         Operation::Move { item, to } => transfer::move_item(&item, &to),
         Operation::Sync => {
             commands::sync(false)?;
+            set_passkey_sync_failure(None);
             Ok(json!(true))
         }
         Operation::AgentSettings => {
@@ -1176,7 +1225,7 @@ fn dispatch(
                     item,
                     origin,
                     options,
-                } => passkeys::authenticate(
+                } => passkeys::authenticate_synced(
                     &item,
                     &origin,
                     &options,

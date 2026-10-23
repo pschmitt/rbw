@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Passkey sign-in in the browser extension no longer syncs the vault first. The
+  native host signs right away (the counter write is guarded by the entry's server
+  revision, so a stale vault is refused), syncs and retries once if it was, and
+  confirms the new counter in a sync after answering. The extension only asks for
+  the signature; a failed final sync is reported through the status.
+
 ## [2.27.2] - 2026-10-23
 
 ### Added

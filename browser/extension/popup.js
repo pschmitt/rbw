@@ -152,13 +152,12 @@ $("diagnostic-copy").onclick = () => {
 };
 $("diagnostic-retry").onclick = () => window.location.reload();
 const passkeyProgressLabels = {
-  before: "Syncing vault before signing…",
   signing: "Signing with your passkey…",
   done: "Signed in.",
 };
 function updatePasskeyProgress(step, retry = false) {
   if (!passkeyProgressLabels[step] || !$("approval-progress-steps")) return;
-  const order = ["before", "signing"];
+  const order = ["signing"];
   const active = step === "done" ? order.length : order.indexOf(step);
   for (const [index, name] of order.entries()) {
     const row = $("approval-progress-steps").querySelector(`[data-step="${name}"]`);
@@ -1116,7 +1115,7 @@ async function showApproval(id) {
     $("approval-progress-username").textContent = selectedChoiceEl?.dataset.username || pending.origin;
     $("approval-progress-steps").hidden = pending.method !== "get";
     for (const row of $("approval-progress-steps").querySelectorAll("[data-step]")) row.dataset.state = "pending";
-    if (pending.method === "get") updatePasskeyProgress("before");
+    if (pending.method === "get") updatePasskeyProgress("signing");
     $("approval-progress-icon").replaceChildren(icon("key"));
     if (selectedChoiceEl?.dataset.iconOrigin) {
       const origin = selectedChoiceEl.dataset.iconOrigin;
