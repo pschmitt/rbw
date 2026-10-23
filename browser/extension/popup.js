@@ -1289,7 +1289,7 @@ for (const action of ["lock", "sync"]) $(action).onclick = () => attempt(async (
 $("unlock-form").onsubmit = event => {
   event.preventDefault();
   const password = $("unlock-password").value; $("unlock-password").value = "";
-  attempt(async () => { await cancelFingerprint(); message("Unlocking…"); await request("unlock", { password }); await refresh(); message("Vault unlocked."); });
+  attempt(async () => { await cancelFingerprint(); message("Unlocking…"); await request("unlock", { password }); lockedSeen = null; await refresh(); message("Vault unlocked."); });
 };
 // Fingerprint unlock runs in rbw-browser (fprintd, then the enrolled keyring
 // password); the popup only sees the outcome. The "rbw-fingerprint" port lets
@@ -1314,7 +1314,7 @@ async function fingerprintUnlock(account = null) {
     await attempt(async () => {
       try { await request("unlock", account ? { fingerprint: true, account } : { fingerprint: true }); }
       catch (error) { if (fingerprintCancelled) return; throw error; }
-      await refresh(); message("Vault unlocked.");
+      lockedSeen = null; await refresh(); message("Vault unlocked.");
     });
   } finally { fingerprintPort.disconnect(); fingerprintPort = null; if (!account) fingerprintScanning(false); }
 }
