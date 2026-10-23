@@ -19,6 +19,7 @@ pub fn fingerprint() -> anyhow::Result<()> {
 pub fn store(
     _config: &crate::config::SecretServiceUnlock,
     _password: &[u8],
+    _account: &str,
 ) -> anyhow::Result<()> {
     fingerprint()
 }
@@ -121,6 +122,7 @@ mod native {
     pub fn store(
         config: &crate::config::SecretServiceUnlock,
         password: &[u8],
+        account: &str,
     ) -> anyhow::Result<()> {
         use crate::config::UnlockStore;
         if password.is_empty() {
@@ -148,7 +150,9 @@ mod native {
             });
         }
         match config.store {
-            UnlockStore::Keyring => keyring_store(&config.id, password),
+            UnlockStore::Keyring => {
+                keyring_store(&config.id, password, account)
+            }
             UnlockStore::Tpm2 => run(async {
                 let path = credential_file(config);
                 if let Some(dir) = path.parent() {
@@ -278,7 +282,13 @@ mod native {
         }
     }
 
-    fn keyring_store(id: &str, password: &[u8]) -> anyhow::Result<()> {
+    // The label (all a keyring UI shows) names the account, so several
+    // enrollments can be told apart; lookups still go by `unlock-id`.
+    fn keyring_store(
+        id: &str,
+        password: &[u8],
+        account: &str,
+    ) -> anyhow::Result<()> {
         run(async {
             timeout(OPERATION_TIMEOUT, async {
                 let service =
@@ -286,10 +296,12 @@ mod native {
                 let collection = service.get_default_collection().await?;
                 collection.unlock().await?;
                 collection.ensure_unlocked().await?;
+                let mut attributes = attributes(id);
+                attributes.insert("account", account);
                 collection
                     .create_item(
-                        "rbw account unlock",
-                        attributes(id),
+                        &format!("rbw account unlock ({account})"),
+                        attributes,
                         password,
                         true,
                         "text/plain",
@@ -921,7 +933,7 @@ mod tests {
             secure_boot: false,
             broker: false,
         };
-        store(&config, password.as_bytes())
+        store(&config, password.as_bytes(), "test")
             .expect("store disposable credential");
         let result = unlock(&config).map(Zeroizing::new);
         let removed = remove(&config);

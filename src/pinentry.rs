@@ -43,6 +43,17 @@ pub async fn getpin(
     {
         args.extend(["--display".into(), display.clone()]);
     }
+    // Without a locale pinentry-curses prints "no LC_CTYPE known - assuming
+    // UTF-8" over the dialog; the usual gpg-agent hands it one.
+    let locale = ["LC_ALL", "LC_CTYPE", "LANG"].iter().find_map(|name| {
+        env_vars
+            .get(std::ffi::OsString::from(name).as_os_str())
+            .filter(|value| !value.is_empty())
+    });
+    args.extend([
+        "--lc-ctype".into(),
+        locale.map_or_else(|| "C.UTF-8".into(), Clone::clone),
+    ]);
     if !grab {
         args.push("--no-global-grab".into());
     }

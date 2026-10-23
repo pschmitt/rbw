@@ -3339,6 +3339,55 @@ pub fn secret_service_status() -> anyhow::Result<()> {
     Ok(())
 }
 
+// The master password for an enrollment: the same dialog `rbw unlock` uses
+// (it checks the password against the local vault before accepting it), or
+// pinentry when no custom UI is available.
+fn enroll_password(
+    config: &rbw::config::Config,
+    account: &rbw::config::Account,
+    name: &str,
+) -> anyhow::Result<String> {
+    #[cfg(target_os = "linux")]
+    if let Ok(db) = load_db() {
+        let mode = rbw::unlock_ui::resolve(
+            UNLOCK_UI_OVERRIDE
+                .with(std::cell::Cell::get)
+                .unwrap_or(config.unlock_ui),
+        )?;
+        if mode != rbw::config::UnlockUi::Pinentry {
+            let account = account.clone();
+            return rbw::desktop::unlock_with_dialog(
+                None,
+                rbw::unlock_ui::Options {
+                    mode,
+                    no_echo: config.unlock_no_echo
+                        || UNLOCK_NO_ECHO.with(std::cell::Cell::get),
+                },
+                &format!("Enroll desktop unlock for account {name}"),
+                config.pinentry.timeout,
+                std::sync::Arc::new(move |password| {
+                    verify_cached_password(&account, &db, password)
+                }),
+            );
+        }
+    }
+    let _ = account;
+    let runtime = tokio::runtime::Runtime::new()?;
+    let environment = crate::actions::get_environment();
+    let response = runtime.block_on(rbw::pinentry::getpin(
+        &config.pinentry.command,
+        "Master password",
+        &format!("Enroll rbw desktop keyring unlock for account {name}"),
+        None,
+        &environment,
+        false,
+        None,
+        config.pinentry.timeout,
+    ))?;
+    String::from_utf8(response.password().to_vec())
+        .map_err(|_| anyhow::anyhow!("master password is not UTF-8"))
+}
+
 pub fn secret_service_enroll(
     fingerprint: bool,
     desktop: DesktopStore,
@@ -3387,23 +3436,8 @@ pub fn secret_service_enroll(
     for warning in desktop_store_warnings(&provider) {
         eprintln!("{} {warning}", style::warning("warning:", c));
     }
-    let runtime = tokio::runtime::Runtime::new()?;
-    let environment = crate::actions::get_environment();
-    let response = runtime.block_on(rbw::pinentry::getpin(
-        &config.pinentry.command,
-        "Master password",
-        "Enroll rbw desktop keyring unlock",
-        None,
-        &environment,
-        false,
-        None,
-        config.pinentry.timeout,
-    ))?;
-    let password = Zeroizing::new(
-        String::from_utf8(response.password().to_vec())
-            .map_err(|_| anyhow::anyhow!("master password is not UTF-8"))?,
-    );
     crate::actions::set_active_account(Some(name.clone()))?;
+    let password = Zeroizing::new(enroll_password(&config, &account, &name)?);
     unlock_impl(Some(password.to_string()), None, &mut Vec::new()).context(
         "password did not unlock the account; enrollment cancelled",
     )?;
@@ -3420,7 +3454,9 @@ pub fn secret_service_enroll(
     if fingerprint && !provider.broker {
         rbw::desktop::fingerprint()?;
     }
-    if let Err(error) = rbw::desktop::store(&provider, password.as_bytes()) {
+    if let Err(error) =
+        rbw::desktop::store(&provider, password.as_bytes(), &name)
+    {
         let _ = rbw::desktop::remove(&provider);
         return Err(error);
     }
@@ -7817,7 +7853,7 @@ pub fn security_change_password(
         eprintln!("{} {msg}", style::warning("warning:", c));
     };
     if let Some(provider) = &account.unlock.secret_service {
-        match rbw::desktop::store(provider, new.as_bytes()) {
+        match rbw::desktop::store(provider, new.as_bytes(), &account.name) {
             Ok(()) => {
                 eprintln!("Updated the desktop unlock credential.");
             }

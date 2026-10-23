@@ -90,6 +90,10 @@ pub const ENVIRONMENT_VARIABLES: &[&str] = &[
     "PINENTRY_USER_DATA",
     // Used to pass window information
     "PINENTRY_GEOM_HINT",
+    // Tell pinentry the client's locale (character set)
+    "LC_ALL",
+    "LC_CTYPE",
+    "LANG",
 ];
 
 pub static ENVIRONMENT_VARIABLES_OS: std::sync::LazyLock<

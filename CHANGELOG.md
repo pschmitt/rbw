@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* `rbw account unlock enroll` (desktop keyring) asks for the master password in
+  the same dialog `rbw unlock` uses, checked against the local vault, instead of
+  a bare pinentry; pinentry is only the fallback.
+* Desktop keyring entries are labelled "rbw account unlock (ACCOUNT)" instead of
+  all sharing one label, so several enrollments can be told apart in the
+  keyring UI (they were always separate items, keyed by their own unlock id).
+  Existing entries keep their old label until you enroll again.
+* pinentry-curses no longer prints "no LC_CTYPE known - assuming UTF-8": rbw now
+  passes it the client's locale (`LC_ALL`/`LC_CTYPE`/`LANG`, else `C.UTF-8`).
+
 ### Changed
 
 * Browser extension: every checkbox is a switch now, including "Do not
