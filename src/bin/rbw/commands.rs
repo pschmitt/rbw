@@ -3877,7 +3877,7 @@ pub fn account_set_primary(name: &str) -> anyhow::Result<()> {
 // Change one or more per-account settings (currently `unlock.policy`,
 // `exclude_from`, and `unlock.credentials` — see `rbw::config::Account`).
 // Leaves a setting unchanged when its argument is `None`/empty/`false`.
-#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn account_set(
     name: &str,
     unlock: Option<rbw::config::UnlockPolicy>,
@@ -4512,7 +4512,6 @@ fn list_from_file(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 // Bitwarden/Vaultwarden send .NET-style RFC 3339 timestamps (up to 7
 // fractional digits, `Z` suffix), which humantime's weak parser accepts.
 fn parse_revision_date(date: &str) -> anyhow::Result<std::time::SystemTime> {
@@ -6666,7 +6665,6 @@ pub fn search(
     Ok(())
 }
 
-#[allow(clippy::fn_params_excessive_bools)]
 // `code --from-file`: same TOTP-generation logic as the live-account path,
 // against a `DecryptedCipher` found in-memory instead of via an unlocked
 // account.
@@ -9748,7 +9746,6 @@ fn set_from_file_bulk(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 // `rbw set --if-revision`: refuses the update when the entry changed since
 // the caller looked at it. Timestamps are compared as points in time, so a
 // differently formatted but equal date still matches.
@@ -12076,7 +12073,6 @@ fn exported_vault_to_bw(
     )
 }
 
-#[allow(clippy::type_complexity)]
 fn bw_data_from_decrypted(
     data: &DecryptedData,
 ) -> (
@@ -16692,7 +16688,6 @@ pub fn confirm_org_user(
 // specific naming-convention-driven policy that doesn't fit every org;
 // this is the generic primitive underneath it, for anyone who just wants
 // to set a permission on a (collection, member) pair directly.
-#[allow(clippy::fn_params_excessive_bools)]
 pub fn grant_collection_access(
     collection: &str,
     user: &str,

@@ -118,7 +118,6 @@ pub enum UnlockStore {
 }
 
 impl UnlockStore {
-    #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn is_keyring(&self) -> bool {
         *self == Self::Keyring
     }

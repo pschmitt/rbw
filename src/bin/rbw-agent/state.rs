@@ -78,13 +78,6 @@ impl State {
             .is_none_or(AccountKeys::needs_unlock)
     }
 
-    // True if at least one account is currently unlocked.
-    // Not called yet: needed by the in-flight multi-account branch.
-    #[allow(dead_code)]
-    pub fn any_unlocked(&self) -> bool {
-        self.accounts.values().any(|a| !a.needs_unlock())
-    }
-
     pub fn set_unlocked(
         &mut self,
         account: &str,

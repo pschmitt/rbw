@@ -320,7 +320,6 @@ pub fn change_kdf_body(
 // rather than half-applied. The KDF settings and email can't change here,
 // but the password can: `new_master_password_hash`/`key` may come from a
 // new password.
-#[allow(clippy::too_many_arguments)]
 pub fn rotate_user_key_body(
     master_password_hash: &crate::locked::PasswordHash,
     email: &str,
@@ -440,7 +439,6 @@ async fn delete_org_once(
         .await
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn create_org(
     access_token: &str,
     refresh_token: &str,
