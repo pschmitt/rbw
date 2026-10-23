@@ -69,7 +69,7 @@ impl GtkDialog {
         ))
         .context("could not load rbw logo")?;
         let logo = gtk::Image::from_pixbuf(Some(&logo));
-        logo.set_pixel_size(96);
+        logo.set_pixel_size(64);
         logo.set_valign(gtk::Align::Center);
         // GtkPasswordEntry uses GtkPasswordEntryBuffer, backed by GTK's secure
         // allocator. No reveal button, undo history, or app clipboard actions.

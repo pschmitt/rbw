@@ -158,7 +158,8 @@ with
    `release` there and merges it into `main`.
 The generated icon source is `browser/icon-source.png`; prompt provenance is
 recorded in `browser/icon-prompt.txt`, with sized toolbar assets in
-`browser/extension/icons/`.
+`browser/extension/icons/`. The `rbw-*` icons are the white crab of the source
+image cut out of the shield and recoloured `#6394e2` (no shield anywhere).
 
 ## Native messaging allowlist
 
