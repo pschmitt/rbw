@@ -7,7 +7,8 @@
 * Browser extension: the clipboard marker in the autofill notice wiggles once.
 * Browser extension: in the item list the account is an emblem (its first two
   letters, in the account's color) on the corner of the item's icon instead of a
-  badge after the name, which leaves the name more room.
+  badge after the name, which leaves the name more room Items of the primary
+  account have no emblem.
 * Browser extension settings: the Agent policy lists one setting per line, with
   durations in readable units ("24 hours" instead of "86400 seconds").
 * Browser extension: an item's collections are edited in the editor (switches,

@@ -36,7 +36,7 @@ function stopTotp() { clearTimeout(totpTimer); }
 const initialSearch = new URLSearchParams(location.search).get("search");
 const initialSettings = new URLSearchParams(location.search).get("settings") === "1";
 let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
-let accountNames = [], accountStates = [], allAccounts = [], cliAccountColors = {};
+let accountNames = [], accountStates = [], allAccounts = [], cliAccountColors = {}, primaryAccount = "";
 const colorOf = name => accountColor(name, allAccounts, preference.accountColors, cliAccountColors);
 const needsPassword = new Set(); // locked accounts whose row shows a password field
 let loadingRequests = 0, loadingTimer, notificationTimer, notificationLeaving, stateTimer, ready = false;
@@ -258,7 +258,7 @@ function selectOptions(id, values, label) {
 // With several accounts the empty value means "All accounts" (the default);
 // with one, the account is always named.
 function renderAccounts(accounts, primary, chosen, states = [], cliColors = {}) {
-  cliAccountColors = cliColors || {};
+  cliAccountColors = cliColors || {}; primaryAccount = primary || "";
   allAccounts = accounts.slice(); // every configured account: default colors go by this list
   // Only the accounts picked in the settings (if any) are on offer.
   const picked = Array.isArray(preference.accounts) ? preference.accounts.filter(name => accounts.includes(name)) : [];
@@ -457,7 +457,8 @@ function itemRow(item) {
   image.dataset.fallback = fallback; image.append(icon(fallback));
   // With several accounts, an emblem on the icon's corner says which one holds the item.
   const lead = element("span", null, "item-lead"); lead.append(image);
-  if (item.account && accountNames.length > 1) {
+  // The primary account is the default one: its items carry no emblem.
+  if (item.account && accountNames.length > 1 && item.account !== primaryAccount) {
     const emblem = element("span", item.account.slice(0, 2).toUpperCase(), "account-emblem"); const color = colorOf(item.account);
     emblem.style.setProperty("--account-color", color); emblem.style.setProperty("--emblem-text", accountTextColor(color)); emblem.title = item.account; emblem.setAttribute("aria-label", `Account ${item.account}`);
     lead.append(emblem);
