@@ -5,6 +5,9 @@
 ### Added
 
 * Browser extension: the clipboard marker in the autofill notice wiggles once.
+* Browser extension: the editor's URI list is redesigned: each URI is a card with
+  the URI on the full width and its match detection and remove button on a line
+  below, instead of three cramped columns.
 * Browser extension: an item's menu has "Autofill" (fills the active page) and
   "Autofill and save" (for logins: adds the page's URL to the login if it has no
   URI for that site yet, then fills).

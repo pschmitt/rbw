@@ -848,7 +848,10 @@ function uriMatchSelect(value = "") {
 function addUri(uri = {}) {
   const row = element("div", null, "uri-row");
   const input = element("input", null, "uri-input"); input.value = uri.uri || ""; input.placeholder = "https://example.com"; input.spellcheck = false; input.setAttribute("aria-label", "Website URI");
-  row.append(input, uriMatchSelect(uri.match_type || ""), actionButton("Remove URI", "trash", () => row.remove(), "icon danger"));
+  // The URI gets the full width; match detection and remove sit on a line below it.
+  const meta = element("div", null, "uri-meta");
+  meta.append(element("span", "Match detection", "uri-meta-label"), uriMatchSelect(uri.match_type || ""), actionButton("Remove URI", "trash", () => row.remove(), "icon danger"));
+  row.append(input, meta);
   $("edit-uris").append(row);
   return input;
 }
