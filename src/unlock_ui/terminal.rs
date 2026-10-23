@@ -319,7 +319,7 @@ fn status_text(view: &View<'_>) -> String {
         "◎"
     };
     if view.success {
-        "✓  Verified. Finishing unlock…".to_string()
+        "✓  Unlocked".to_string()
     } else if view.checking {
         format!("{indicator}  Checking master password…")
     } else {
@@ -335,7 +335,7 @@ fn mask_text(
 ) -> String {
     match mask {
         None => String::new(),
-        Some(0) if view.success => "✓ Verified".to_string(),
+        Some(0) if view.success => String::new(),
         Some(0) if view.checking => "Checking password…".to_string(),
         Some(0) if short => "Type password…".to_string(),
         Some(0) => "Type your password…".to_string(),
@@ -403,7 +403,7 @@ fn draw_compact(
     let hint = error.map_or_else(
         || {
             if view.success {
-                "✓ Verified. Finishing unlock…"
+                ""
             } else if view.checking {
                 "Checking password…"
             } else {
@@ -450,14 +450,7 @@ fn draw_compact(
         "◇ RBW ",
         Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
     )];
-    header.push(Span::styled(
-        if view.success {
-            "✓ Credential verified"
-        } else {
-            view.title
-        },
-        Style::default().fg(if view.success { INK } else { MUTED }),
-    ));
+    header.push(Span::styled(view.title, Style::default().fg(MUTED)));
     frame.render_widget(
         Paragraph::new(Line::from(header)),
         Rect::new(x, y, width, 1),
@@ -585,12 +578,8 @@ fn draw_full(
         row(card, 1, 1),
     );
     frame.render_widget(
-        Paragraph::new(if view.success {
-            "✓ Credential verified"
-        } else {
-            "Welcome back"
-        })
-        .style(Style::default().fg(INK).add_modifier(Modifier::BOLD)),
+        Paragraph::new("Welcome back")
+            .style(Style::default().fg(INK).add_modifier(Modifier::BOLD)),
         row(card, 3, 1),
     );
     frame.render_widget(
@@ -681,7 +670,7 @@ fn draw_full(
     );
     let message = issue.or(view.error).unwrap_or_else(|| {
         if view.success {
-            "✓ Verified. Finishing unlock…"
+            ""
         } else if view.checking {
             "Checking password…"
         } else {

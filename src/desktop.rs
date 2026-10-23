@@ -572,7 +572,6 @@ mod native {
                     pin_done = true;
                     if let Ok(password) = result {
                         cancel_pending(&mut stop_bio, bio.as_mut(), !bio_done).await;
-                        eprintln!("Master password accepted.");
                         return Ok(password);
                     }
                 }

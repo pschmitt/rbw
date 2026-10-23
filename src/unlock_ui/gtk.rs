@@ -335,7 +335,7 @@ impl Frontend for GtkDialog {
         });
         self.fingerprint_icon.queue_draw();
         self.status.set_label(if view.success {
-            "✓ Verified. Finishing unlock…"
+            "✓ Unlocked"
         } else {
             view.fingerprint.text()
         });
@@ -345,7 +345,7 @@ impl Frontend for GtkDialog {
         }
         self.busy = view.checking || view.success;
         self.button_label.set_label(if view.success {
-            "Verified"
+            "Unlocked"
         } else if view.checking {
             "Checking…"
         } else {

@@ -307,7 +307,7 @@ function renderAccountStates(primary) {
       const actions = element("div", null, "account-actions");
       // An account with an enrolled fingerprint also offers the scan.
       if (account.fingerprint) {
-        const scan = actionButton("Unlock with fingerprint", "fingerprint", () => fingerprintUnlock(account.name), "icon");
+        const scan = actionButton("Fingerprint", "fingerprint", () => fingerprintUnlock(account.name), "icon");
         scan.title = `Unlock ${account.name} with the fingerprint reader`; actions.append(scan);
       }
       actions.append(key, unlock);
@@ -415,11 +415,9 @@ async function refresh(knownStatus = null, skipList = false) {
   $("locked").classList.toggle("is-multi", several && !unlocked);
   if (several && !unlocked) {
     const count = accountStates.filter(account => !account.excluded).length;
-    $("locked").querySelector("h2").textContent = `${count} accounts are locked`;
-    $("locked").querySelector("p").textContent = "Unlock them above, or enter a master password below.";
+    $("locked").querySelector("h2").textContent = `${count} accounts locked`;
   } else {
-    $("locked").querySelector("h2").textContent = "Your vault is locked";
-    $("locked").querySelector("p").textContent = "Unlock your shared rbw-agent to access your vault.";
+    $("locked").querySelector("h2").textContent = "Vault locked";
   }
   if (!unlocked) { show("locked"); if (several) $("account-menu").hidden = false; return; }
   vaultListed = !skipList;
@@ -1299,7 +1297,7 @@ const fingerprintAutoStarted = new Set();
 function fingerprintScanning(scanning) {
   $("unlock-fingerprint").disabled = scanning;
   $("unlock-fingerprint").classList.toggle("is-scanning", scanning);
-  $("unlock-fingerprint-label").textContent = scanning ? "Touch the fingerprint sensor…" : "Unlock with fingerprint";
+  $("unlock-fingerprint-label").textContent = scanning ? "Touch the fingerprint sensor…" : "Fingerprint";
 }
 async function cancelFingerprint() {
   if (!fingerprintPort) return;
