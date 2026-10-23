@@ -1487,6 +1487,13 @@ window.addEventListener("keydown", event => {
     if (target.isContentEditable || target.closest?.("input,textarea,select,details.menu[open]")) return;
     event.preventDefault(); attempt(navigateBack); return;
   }
+  // Ctrl+C on the generator page copies the generated value, unless some text is selected.
+  if ((event.key === "c" || event.key === "C") && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && currentPage === "generator" && !$("copy-generated").disabled) {
+    const selected = window.getSelection()?.toString() || "";
+    const field = event.target;
+    const fieldSelected = typeof field?.selectionStart === "number" && field.selectionStart !== field.selectionEnd;
+    if (!selected && !fieldSelected) { event.preventDefault(); $("copy-generated").click(); return; }
+  }
   // "e" edits the open item (not while typing, with a menu or dialog open, or in the trash).
   if (event.key === "e" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && currentPage === "detail" && !$("detail-header-actions").hidden) {
     const target = event.target;
