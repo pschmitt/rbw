@@ -238,8 +238,11 @@ Security hardening following an internal review:
 
 ### Features in 0.2.33
 
-- Passkey sign-in shows the selected account and tracks the initial vault sync,
-  signing and final counter sync. A failed sync is retried once.
+- Passkey sign-in shows the selected account while the native host signs. It
+  signs straight away (the counter write is guarded by the entry's server
+  revision, so a stale vault is refused), syncs and retries once if it was, and
+  confirms the new counter in a sync after answering; a failed confirmation is
+  reported through the status.
 - Login save and update prompts appear inline in the page.
 - Credit cards can be selected and filled from matching payment forms. Card
   brand icons appear in inline suggestions and type is filled when a recognized

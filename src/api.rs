@@ -1938,21 +1938,21 @@ impl Client {
         device_id: &str,
         apikey: &crate::locked::ApiKey,
     ) -> Result<()> {
+        let client_secret =
+            String::from_utf8(apikey.client_secret().to_vec())
+                .map_err(|_| Error::InvalidApiKey)?;
+        let client_id = String::from_utf8(apikey.client_id().to_vec())
+            .map_err(|_| Error::InvalidApiKey)?;
         let connect_req = ConnectTokenReq {
             auth: ConnectTokenAuth::ClientCredentials(
                 ConnectTokenClientCredentials {
                     username: email.to_string(),
-                    client_secret: String::from_utf8(
-                        apikey.client_secret().to_vec(),
-                    )
-                    .unwrap(),
+                    client_secret,
                 },
             ),
             grant_type: "client_credentials".to_string(),
             scope: "api".to_string(),
-            // XXX unwraps here are not necessarily safe
-            client_id: String::from_utf8(apikey.client_id().to_vec())
-                .unwrap(),
+            client_id,
             device_type: u32::from(DEVICE_TYPE),
             device_identifier: device_id.to_string(),
             device_name: "rbw".to_string(),

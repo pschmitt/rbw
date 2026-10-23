@@ -91,6 +91,9 @@ pub enum Error {
     #[error("{message}")]
     IncorrectPassword { message: String },
 
+    #[error("the API key's client id and secret must be valid UTF-8")]
+    InvalidApiKey,
+
     #[error("invalid base64")]
     InvalidBase64 { source: base64::DecodeError },
 

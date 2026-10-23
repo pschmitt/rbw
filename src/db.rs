@@ -347,7 +347,6 @@ impl Db {
         Ok(slf)
     }
 
-    // XXX need to make this atomic
     // Write atomically: serialize to a sibling temp file, then rename over the
     // target. rename(2) is atomic on POSIX, so a concurrent reader always sees
     // either the old or the new complete db, never a truncated one.

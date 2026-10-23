@@ -14,6 +14,16 @@ out by running `rbw purge`, and you can explicitly lock the database by running
 `rbw lock` or `rbw agent stop` (`rbw stop-agent` remains as a compatibility
 alias). If the agent is unresponsive, use `rbw agent stop --kill`.
 
+With several accounts, an account can take its master password from a login
+item in another account's vault (`unlock.credentials`). Unlocking the source
+account then also unlocks the accounts that follow it, and so on down the
+chain: the agent starts a background `rbw unlock --credentials-only` for each
+one, which never prompts, does nothing if the account is already unlocked or
+has no credential source, and fails quietly (the account just stays locked)
+if the source can't supply the password. Accounts with `unlock.policy: never`
+are skipped. The same happens when you unlock the source account from the
+browser extension.
+
 Locking is account-aware: with multiple accounts configured, `rbw lock` with
 no account selected locks every account, while `rbw -a <name> lock` (or
 `RBW_ACCOUNT=<name> rbw lock`) locks only that account. `rbw lock --all`
