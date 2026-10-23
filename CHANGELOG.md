@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.28.0] - 2026-10-23
+
 ### Added
 
 * `rbw unlock --force` stops the unlock already in progress for the account
