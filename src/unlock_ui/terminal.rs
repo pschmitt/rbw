@@ -298,7 +298,7 @@ enum SizeClass {
 }
 
 fn size_class(width: u16, height: u16) -> SizeClass {
-    if width >= 40 && height >= 27 {
+    if width >= 40 && height >= 17 {
         SizeClass::Full
     } else if width >= 16 && height >= 4 {
         SizeClass::Compact
@@ -541,7 +541,7 @@ fn draw_full(
 ) {
     let area = frame.area();
     let width = area.width.saturating_sub(4).min(66);
-    let height = 25.min(area.height.saturating_sub(2));
+    let height = 15.min(area.height.saturating_sub(2));
     let card = Rect::new(
         area.x + (area.width - width) / 2,
         area.y + (area.height - height) / 2,
@@ -588,19 +588,18 @@ fn draw_full(
     );
     if width >= 58 {
         let art = [
-            " ▄█▄      ▄█▄ ",
-            " ▀█▀ ▄▄▄▄ ▀█▀ ",
-            "   ▄██████▄   ",
-            "   ██●██●██   ",
-            "   ▀██████▀   ",
-            "  ▞▞ ▞  ▚ ▚▚  ",
+            "⢠⣶⣆⡄⠀⠀⠀⠀⠀⠀⢠⣰⣶⡄",
+            "⠘⠿⣿⢃⣀⣤⣤⣤⣤⣀⡘⣿⠿⠃",
+            "⠀⠀⣸⣿⣟⢙⣿⣿⡋⣻⣿⣇⠀⠀",
+            "⠀⢀⣘⣿⣿⣿⣿⣿⣿⣿⣿⣃⠀⠀",
+            "⠀⢐⠝⠋⠀⠉⠉⠉⠉⠈⠛⢕⠀⠀",
         ];
         let lines: Vec<Line<'_>> = art
             .iter()
             .enumerate()
             .map(|(index, line)| {
                 let color = if view.success {
-                    if index <= usize::try_from(view.tick / 4).unwrap_or(6) {
+                    if index <= usize::try_from(view.tick / 4).unwrap_or(5) {
                         Color::Rgb(134, 239, 172)
                     } else {
                         ACCENT
@@ -613,19 +612,9 @@ fn draw_full(
             .collect();
         frame.render_widget(
             Paragraph::new(lines),
-            Rect::new(card.right() - 17, card.y + 1, 14, 6),
+            Rect::new(card.right() - 17, card.y + 1, 14, 5),
         );
     }
-    frame.render_widget(
-        Paragraph::new(status_text(view))
-            .style(Style::default().fg(if view.success {
-                Color::Rgb(134, 239, 172)
-            } else {
-                CYAN
-            }))
-            .wrap(Wrap { trim: true }),
-        row(card, 7, 2),
-    );
     let field = Block::default()
         .title(if mask.is_none() {
             " Master password (no echo) "
@@ -633,7 +622,7 @@ fn draw_full(
             " Master password "
         })
         .borders(Borders::ALL)
-        .padding(Padding::new(2, 2, 1, 1))
+        .padding(Padding::horizontal(1))
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(if view.success {
             verified_color
@@ -645,14 +634,25 @@ fn draw_full(
     // Only a mask reaches Ratatui buffers, never the password. No-echo mode
     // renders an empty field regardless of whether any input is present.
     frame.render_widget(
-        Paragraph::new(mask_text(view, mask, 60, false))
-            .style(Style::default().fg(if mask == Some(0) {
-                MUTED
+        Paragraph::new(mask_text(
+            view,
+            mask,
+            usize::from(row(card, 6, 3).width.saturating_sub(4)),
+            false,
+        ))
+        .style(Style::default().fg(if mask == Some(0) { MUTED } else { INK }))
+        .block(field),
+        row(card, 6, 3),
+    );
+    frame.render_widget(
+        Paragraph::new(status_text(view))
+            .style(Style::default().fg(if view.success {
+                Color::Rgb(134, 239, 172)
             } else {
-                INK
+                CYAN
             }))
-            .block(field),
-        row(card, 10, 5),
+            .wrap(Wrap { trim: true }),
+        row(card, 10, 2),
     );
     let message = issue.or(view.error).unwrap_or_else(|| {
         if view.success {
@@ -660,7 +660,7 @@ fn draw_full(
         } else if view.checking {
             "Checking password…"
         } else {
-            key_hint(row(card, 16, 2).width)
+            key_hint(row(card, 12, 2).width)
         }
     });
     frame.render_widget(
@@ -671,7 +671,7 @@ fn draw_full(
                 MUTED
             }))
             .wrap(Wrap { trim: true }),
-        row(card, 16, 2),
+        row(card, 12, 2),
     );
 }
 
