@@ -832,3 +832,4 @@ button.is-copied .copy-check path { stroke-dasharray:30; stroke-dashoffset:30; a
 @media (prefers-reduced-motion:reduce) { button.is-copied .copy-check, button.is-copied .copy-check path { animation:none; stroke-dashoffset:0; } }
 /* Hover rules (accent colour) must not win over the confirmation colour. */
 button.is-copied, button.is-copied:hover, button.is-copied:focus-visible, button.is-copied:disabled { color:var(--ok) !important; }
+.gen-copy.is-copied, .gen-copy.is-copied:hover, .gen-copy.is-copied:focus-visible { background:var(--ok) !important; border-color:var(--ok) !important; }
