@@ -680,8 +680,9 @@ async function openDetail(item, trashed = false) {
   const copyable = field => trashed ? null : field;
   $("header-move").hidden = accountNames.length < 2;
   // Filling the page applies to logins (and cards/identities) outside the trash.
-  const fillable = !trashed && ["login", "card", "identity"].includes(data.type);
-  $("header-autofill").hidden = !fillable; $("header-autofill-save").hidden = !fillable || data.type !== "login";
+  const itemType = detail.cipher.data.type;
+  const fillable = !trashed && ["login", "card", "identity"].includes(itemType);
+  $("header-autofill").hidden = !fillable; $("header-autofill-save").hidden = !fillable || itemType !== "login";
   const content = $("detail-content");
   const data = detail.cipher.data;
   const title = element("h2", null, "detail-title");
