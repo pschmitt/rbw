@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+### Added
+
+* `rbw unlock --force` stops the unlock already in progress for the account
+  (and its dialog) and shows a new one, even when the account is already
+  unlocked.
+* Browser extension: copy and fill buttons confirm in place with a stamped
+  check (red cross on a failed fill) instead of a notification. The animation
+  follows the animations setting and its speed.
+* Browser extension: Ctrl+C on the generator page copies the generated value.
+
+### Changed
+
+* The unlock dialogs (terminal, GTK, extension popup) show much less text. The
+  GTK dialog is now a horizontal GNOME-style window that follows the system
+  theme, and `rbw` no longer prints "Master password accepted." to the terminal.
+* The terminal dialog's fingerprint status ("Fingerprint not configured.") sits
+  below the password field, which has the same size at every window size.
+* The shield is gone from the icons everywhere: the crab alone is used in the
+  README, the extension, the GTK dialog and the desktop icon.
+* Browser extension: the locked popup shows one way to unlock (the password
+  field) with the accounts collapsed below it. Popup notifications show a
+  countdown bar.
+
+### Fixed
+
+* Browser extension: the master password entered in the popup is tried on every
+  locked account when "All accounts" is selected, not just the active one.
+* Browser extension: a full unlock no longer also shows an "<account> unlocked"
+  banner next to the "Vault unlocked." notification.
+
 ## [2.27.6] - 2026-10-23
 
 ### Fixed
