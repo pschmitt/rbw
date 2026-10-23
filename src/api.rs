@@ -1856,7 +1856,7 @@ impl Client {
         }
     }
 
-    async fn reqwest_client(&self) -> Result<reqwest::Client> {
+    fn default_headers() -> axum::http::HeaderMap {
         let mut default_headers = axum::http::HeaderMap::new();
         default_headers.insert(
             "Bitwarden-Client-Name",
@@ -1873,12 +1873,20 @@ impl Client {
             axum::http::HeaderValue::from_str(&DEVICE_TYPE.to_string())
                 .unwrap(),
         );
-        let user_agent = format!(
-            "{}/{}",
-            env!("CARGO_PKG_NAME"),
-            env!("CARGO_PKG_VERSION")
-        );
-        if let Some(client_cert_path) = self.client_cert_path.as_ref() {
+        default_headers
+    }
+
+    fn user_agent() -> String {
+        format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+    }
+
+    async fn reqwest_client(&self) -> Result<reqwest::Client> {
+        let builder = reqwest::Client::builder()
+            .user_agent(Self::user_agent())
+            .default_headers(Self::default_headers());
+        let builder = if let Some(client_cert_path) =
+            self.client_cert_path.as_ref()
+        {
             let mut buf = Vec::new();
             let mut f = tokio::fs::File::open(client_cert_path)
                 .await
@@ -1892,21 +1900,47 @@ impl Client {
                     file: client_cert_path.clone(),
                 }
             })?;
-            let pem = reqwest::Identity::from_pem(&buf)
-                .map_err(|e| Error::CreateReqwestClient { source: e })?;
-            Ok(reqwest::Client::builder()
-                .user_agent(user_agent)
-                .identity(pem)
-                .default_headers(default_headers)
-                .build()
-                .map_err(|e| Error::CreateReqwestClient { source: e })?)
+            builder.identity(
+                reqwest::Identity::from_pem(&buf)
+                    .map_err(|e| Error::CreateReqwestClient { source: e })?,
+            )
         } else {
-            Ok(reqwest::Client::builder()
-                .user_agent(user_agent)
-                .default_headers(default_headers)
-                .build()
-                .map_err(|e| Error::CreateReqwestClient { source: e })?)
-        }
+            builder
+        };
+        builder
+            .build()
+            .map_err(|e| Error::CreateReqwestClient { source: e })
+    }
+
+    // The blocking counterpart of `reqwest_client`, for the cipher, folder,
+    // attachment and other write calls: the same Bitwarden client headers,
+    // user agent and client certificate. A bare `reqwest::blocking::Client`
+    // sends none of them, so a server-side version gate (a missing
+    // Bitwarden-Client-Version parses as no version at all) or a server that
+    // requires the client certificate would reject those calls.
+    fn blocking_client(&self) -> Result<reqwest::blocking::Client> {
+        let builder = reqwest::blocking::Client::builder()
+            .user_agent(Self::user_agent())
+            .default_headers(Self::default_headers());
+        let builder = if let Some(client_cert_path) =
+            self.client_cert_path.as_ref()
+        {
+            let pem = std::fs::read(client_cert_path).map_err(|source| {
+                Error::LoadClientCert {
+                    source,
+                    file: client_cert_path.clone(),
+                }
+            })?;
+            builder.identity(
+                reqwest::Identity::from_pem(&pem)
+                    .map_err(|e| Error::CreateReqwestClient { source: e })?,
+            )
+        } else {
+            builder
+        };
+        builder
+            .build()
+            .map_err(|e| Error::CreateReqwestClient { source: e })
     }
 
     pub async fn prelogin(
@@ -2467,7 +2501,7 @@ impl Client {
             ssh_key,
             encrypted_for: user_id_from_access_token(access_token),
         };
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .post(self.api_url("/ciphers"))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -2664,7 +2698,7 @@ impl Client {
         path: &str,
         req: &impl serde::Serialize,
     ) -> Result<()> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .post(self.api_url(path))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -2870,16 +2904,10 @@ impl Client {
                 });
             }
         }
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .put(self.api_url(&format!("/ciphers/{id}")))
             .header("Authorization", format!("Bearer {access_token}"))
-            // Bare reqwest::blocking clients (unlike self.reqwest_client())
-            // don't get Bitwarden-Client-Version by default, and a missing
-            // header parses server-side as no version at all, which fails
-            // the server's FIDO2-cipher-edit version gate (see
-            // BITWARDEN_CLIENT_VERSION's doc comment).
-            .header("Bitwarden-Client-Version", BITWARDEN_CLIENT_VERSION)
             .json(&req)
             .send()
             .map_err(|source| Error::Reqwest { source })?;
@@ -2913,7 +2941,7 @@ impl Client {
     // instead (confirmed against bitwarden/server's CiphersController.cs
     // `PutDelete`/`SoftDeleteAsync` and vaultwarden's `delete_cipher_put`).
     pub fn remove(&self, access_token: &str, id: &str) -> Result<()> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .put(self.api_url(&format!("/ciphers/{id}/delete")))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -2939,7 +2967,7 @@ impl Client {
         access_token: &str,
         id: &str,
     ) -> Result<()> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .delete(self.api_url(&format!("/ciphers/{id}")))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -2957,7 +2985,7 @@ impl Client {
     }
 
     pub fn archive(&self, access_token: &str, id: &str) -> Result<()> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .put(self.api_url(&format!("/ciphers/{id}/archive")))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -2975,7 +3003,7 @@ impl Client {
     }
 
     pub fn unarchive(&self, access_token: &str, id: &str) -> Result<()> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .put(self.api_url(&format!("/ciphers/{id}/unarchive")))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -2998,7 +3026,7 @@ impl Client {
         ids: &[String],
     ) -> Result<()> {
         let req = CipherIdsReq { ids: ids.to_vec() };
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .put(self.api_url("/ciphers/archive"))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -3022,7 +3050,7 @@ impl Client {
         ids: &[String],
     ) -> Result<()> {
         let req = CipherIdsReq { ids: ids.to_vec() };
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .put(self.api_url("/ciphers/unarchive"))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -3041,7 +3069,7 @@ impl Client {
     }
 
     pub fn restore(&self, access_token: &str, id: &str) -> Result<()> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .put(self.api_url(&format!("/ciphers/{id}/restore")))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -3064,7 +3092,7 @@ impl Client {
         ids: &[String],
     ) -> Result<()> {
         let req = CipherIdsReq { ids: ids.to_vec() };
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .put(self.api_url("/ciphers/restore"))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -3088,7 +3116,7 @@ impl Client {
         cipher_id: &str,
         attachment_id: &str,
     ) -> Result<()> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .delete(self.api_url(&format!(
                 "/ciphers/{cipher_id}/attachment/{attachment_id}"
@@ -3116,7 +3144,7 @@ impl Client {
         let req = CiphersCollectionsPutReq {
             collection_ids: collection_ids.to_vec(),
         };
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .put(self.api_url(&format!("/ciphers/{id}/collections")))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -3140,7 +3168,7 @@ impl Client {
         cipher_id: &str,
         attachment_id: &str,
     ) -> Result<String> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .get(self.api_url(&format!(
                 "/ciphers/{cipher_id}/attachment/{attachment_id}"
@@ -3175,7 +3203,7 @@ impl Client {
         encrypted_key: &str,
         encrypted_data: Vec<u8>,
     ) -> Result<()> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
 
         // Step 1: reserve an upload slot.
         let req = AttachmentUploadDataReq {
@@ -3244,7 +3272,7 @@ impl Client {
     }
 
     pub fn download_attachment(&self, url: &str) -> Result<Vec<u8>> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .get(url)
             .header("cache", "no-cache")
@@ -3277,7 +3305,7 @@ impl Client {
             name: name.to_string(),
             billing_email: billing_email.to_string(),
         };
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .put(self.api_url(&format!("/organizations/{org_id}")))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -3309,7 +3337,7 @@ impl Client {
             groups: vec![],
             users: vec![],
         };
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .put(self.api_url(&format!(
                 "/organizations/{org_id}/collections/{collection_id}"
@@ -3342,7 +3370,7 @@ impl Client {
             groups: vec![],
             users: vec![],
         };
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .post(
                 self.api_url(&format!("/organizations/{org_id}/collections")),
@@ -3372,7 +3400,7 @@ impl Client {
         org_id: &str,
         collection_id: &str,
     ) -> Result<()> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .delete(self.api_url(&format!(
                 "/organizations/{org_id}/collections/{collection_id}"
@@ -3396,7 +3424,7 @@ impl Client {
         access_token: &str,
         org_id: &str,
     ) -> Result<Vec<OrgUser>> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .get(self.api_url(&format!("/organizations/{org_id}/users")))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -3444,7 +3472,7 @@ impl Client {
             collections: vec![],
             groups: vec![],
         };
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res =
             client
                 .post(self.api_url(&format!(
@@ -3478,7 +3506,7 @@ impl Client {
         org_id: &str,
         user_id: &str,
     ) -> Result<()> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res =
             client
                 .delete(self.api_url(&format!(
@@ -3515,7 +3543,7 @@ impl Client {
         let req = OrgAcceptReq {
             token: token.to_string(),
         };
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .post(self.api_url(&format!(
                 "/organizations/{org_id}/users/{user_id}/accept"
@@ -3549,7 +3577,7 @@ impl Client {
         access_token: &str,
         user_id: &str,
     ) -> Result<String> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .get(self.api_url(&format!("/users/{user_id}/public-key")))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -3621,7 +3649,7 @@ impl Client {
         access_token: &str,
         org_id: &str,
     ) -> Result<Vec<CollectionDetail>> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .get(self.api_url(&format!(
                 "/organizations/{org_id}/collections/details"
@@ -3690,7 +3718,7 @@ impl Client {
             groups: groups.to_vec(),
             users,
         };
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .put(self.api_url(&format!(
                 "/organizations/{org_id}/collections/{collection_id}"
@@ -3714,7 +3742,7 @@ impl Client {
         &self,
         access_token: &str,
     ) -> Result<Vec<(String, String)>> {
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .get(self.api_url("/folders"))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -3746,7 +3774,7 @@ impl Client {
         let req = FoldersPostReq {
             name: name.to_string(),
         };
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .post(self.api_url("/folders"))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -3776,7 +3804,7 @@ impl Client {
             client_id: "cli".to_string(),
             refresh_token: refresh_token.to_string(),
         };
-        let client = reqwest::blocking::Client::new();
+        let client = self.blocking_client()?;
         let res = client
             .post(self.identity_url("/connect/token"))
             .form(&connect_req)
@@ -4123,6 +4151,56 @@ fn classify_login_error(error_res: &ConnectErrorRes, code: u16) -> Error {
 
     log::warn!("unexpected error received during login: {error_res:?}");
     Error::RequestFailed { status: code }
+}
+
+#[cfg(test)]
+mod blocking_client_tests {
+    use super::*;
+
+    // Every write call goes through `blocking_client`, so it has to carry the
+    // Bitwarden client headers and user agent like `reqwest_client` does.
+    #[test]
+    fn blocking_client_sends_the_bitwarden_client_headers() {
+        use std::io::{BufRead as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader =
+                std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                request.push_str(&line.to_ascii_lowercase());
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                .unwrap();
+            request
+        });
+        let client = Client::new(&base_url, &base_url, &base_url, None);
+        client
+            .blocking_client()
+            .unwrap()
+            .get(&base_url)
+            .send()
+            .unwrap();
+        let request = server.join().unwrap();
+        assert!(request.contains("bitwarden-client-name: cli"), "{request}");
+        assert!(
+            request.contains(&format!(
+                "bitwarden-client-version: {}",
+                BITWARDEN_CLIENT_VERSION.to_ascii_lowercase()
+            )),
+            "{request}"
+        );
+        assert!(request.contains("device-type: "), "{request}");
+        assert!(request.contains("user-agent: rbw/"), "{request}");
+    }
 }
 
 #[cfg(test)]

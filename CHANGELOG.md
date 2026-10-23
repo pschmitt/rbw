@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Creating, editing and deleting items, folders, attachments and the like now
+  send the same Bitwarden client headers, user agent and client certificate as
+  sync and login do, instead of a bare HTTP client. Servers that require the
+  client certificate, or gate features on the client version, no longer reject
+  those calls. A non-UTF-8 API key is reported as an error instead of
+  panicking.
+
 ## [2.27.3] - 2026-10-23
 
 ### Added

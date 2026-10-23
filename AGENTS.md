@@ -61,13 +61,3 @@ bump locally only — never push that repo unless separately asked.
   keep `BITWARDEN_CLIENT_VERSION` in `src/api.rs` below that threshold —
   bumping it without implementing V2 encryption would make the server
   start sending/expecting data rbw can't decrypt/encrypt correctly.
-- Every `reqwest::blocking::Client::new()` call site in `src/api.rs` (~30
-  of them, for cipher/folder/attachment/etc. CRUD) builds a bare client
-  with no default headers, unlike `self.reqwest_client()` (used by
-  `sync`/login/2FA flows). That means none of them send
-  `Bitwarden-Client-Version`/`Bitwarden-Client-Name`/`Device-Type` unless
-  a call site adds them individually (as `edit()` now does, to dodge the
-  FIDO2 cipher-edit version gate — see 2026-09-22 fix). Any of these bare
-  clients could hit the same or a future server-side version gate the
-  same way; consider making them all share `reqwest_client()`'s headers
-  instead of patching call sites one at a time as they're discovered.
