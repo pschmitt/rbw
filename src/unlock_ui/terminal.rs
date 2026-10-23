@@ -8,7 +8,7 @@ use ratatui::crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    layout::{Alignment, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap},
@@ -568,26 +568,18 @@ fn draw_full(
         card,
     );
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                "◇  RBW",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("    YOUR VAULT", Style::default().fg(MUTED)),
-        ])),
+        Paragraph::new(Line::from(vec![Span::styled(
+            "◇  RBW",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )])),
         row(card, 1, 1),
-    );
-    frame.render_widget(
-        Paragraph::new("Welcome back")
-            .style(Style::default().fg(INK).add_modifier(Modifier::BOLD)),
-        row(card, 3, 1),
     );
     frame.render_widget(
         Paragraph::new(view.title)
             .style(Style::default().fg(MUTED))
             .wrap(Wrap { trim: true }),
         {
-            let mut title = row(card, 4, 2);
+            let mut title = row(card, 3, 2);
             if width >= 58 {
                 title.width = title.width.saturating_sub(17);
             }
@@ -596,12 +588,12 @@ fn draw_full(
     );
     if width >= 58 {
         let art = [
-            "    ⢀⣀⣀⣀⣀⡀    ",
-            "  ⣠⠾⣛⡯⣥⣬⢽⣛⢷⣄  ",
-            " ⢸⠏⡞⣵⠟⠃⠸⡝⡎⢧⢻⠇ ",
-            " ⠘⠸⡅⣿ ⡇ ⡇ ⠈⢸  ",
-            "   ⠁⠻⠳⡙⢦⡙⢦ ⠉  ",
-            "      ⠉ ⠁     ",
+            " ▄█▄      ▄█▄ ",
+            " ▀█▀ ▄▄▄▄ ▀█▀ ",
+            "   ▄██████▄   ",
+            "   ██●██●██   ",
+            "   ▀██████▀   ",
+            "  ▞▞ ▞  ▚ ▚▚  ",
         ];
         let lines: Vec<Line<'_>> = art
             .iter()
@@ -611,16 +603,10 @@ fn draw_full(
                     if index <= usize::try_from(view.tick / 4).unwrap_or(6) {
                         Color::Rgb(134, 239, 172)
                     } else {
-                        CYAN
+                        ACCENT
                     }
-                } else if view.fingerprint == FingerprintStatus::Disabled {
-                    BORDER
-                } else if index
-                    == usize::try_from((view.tick / 10) % 6).unwrap_or(0)
-                {
-                    ACCENT
                 } else {
-                    CYAN
+                    ACCENT
                 };
                 Line::styled(*line, Style::default().fg(color))
             })
@@ -687,20 +673,6 @@ fn draw_full(
             .wrap(Wrap { trim: true }),
         row(card, 16, 2),
     );
-    if card.height >= 24 {
-        frame.render_widget(
-            Paragraph::new(
-                if view.fingerprint == FingerprintStatus::Disabled {
-                    "PASSWORD UNLOCK"
-                } else {
-                    "PASSWORD OR FINGERPRINT · EITHER CAN UNLOCK"
-                },
-            )
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(MUTED)),
-            row(card, 21, 1),
-        );
-    }
 }
 
 #[cfg(test)]
@@ -773,7 +745,6 @@ mod tests {
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
-        assert!(text.contains("Welcome back"));
         assert!(text.contains("••••••••••••"));
         assert!(text.contains("any enrolled finger"));
     }
