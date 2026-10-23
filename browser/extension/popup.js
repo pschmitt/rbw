@@ -1375,7 +1375,7 @@ async function autofillItem(item, type) {
 // from now on. Returns whether a URI was added.
 async function autofillAndSave(item, knownDetail = null) {
   const [tab] = await api.tabs.query({ active: true, currentWindow: true });
-  let url; try { url = new URL(tab?.url || ""); } catch (_) { throw new Error("Open an HTTP or HTTPS page first."); }
+  let url; try { url = new URL(tab?.url || ""); } catch (error) { throw new Error("Open an HTTP or HTTPS page first.", { cause: error }); }
   if (!["http:", "https:"].includes(url.protocol)) throw new Error("Open an HTTP or HTTPS page first.");
   const detail = knownDetail || await request("detail", { item });
   const data = detail.cipher.data, uris = data.uris || [];
