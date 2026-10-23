@@ -433,6 +433,19 @@ let
         description = "Hide all password input feedback in integrated unlock dialogs.";
       };
 
+      passkeyCounter = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Let `rbw passkey inject`/`assert` start tracking a signature counter
+          on passkeys that have none (counter 0). Off keeps 0 as 0, as
+          Bitwarden's own clients do; a tracking counter makes every client
+          that does not increment it (Keyguard, Bitwarden mobile) look like a
+          clone to the site. Passkeys that already carry a counter keep
+          advancing it either way.
+        '';
+      };
+
       unlockUi = mkOption {
         type = types.enum [
           "auto"

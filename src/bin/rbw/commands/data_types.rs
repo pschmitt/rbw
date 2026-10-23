@@ -470,6 +470,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "agent.lockTimeout",
     "unlockUi",
     "unlockNoEcho",
+    "passkeyCounter",
     "pinentry.command",
     "pinentry.timeout",
     "termux.keyAlias",

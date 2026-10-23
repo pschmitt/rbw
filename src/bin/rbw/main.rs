@@ -2224,8 +2224,23 @@ enum Passkey {
         find_args: FindArgs,
         #[arg(long, help = "Select the passkey by relying party")]
         rp_id: Option<String>,
-        #[arg(long, help = "Advance the counter (never decrease it)")]
+        #[arg(
+            long,
+            conflicts_with_all = ["reset", "all"],
+            help = "Advance the counter (never decrease it)"
+        )]
         set: Option<u32>,
+        #[arg(
+            long,
+            conflicts_with = "all",
+            help = "Set the counter back to 0, as Bitwarden's own clients use. Sites that already stored a higher one flag a clone until they are reset too"
+        )]
+        reset: bool,
+        #[arg(
+            long,
+            help = "List every passkey in the vault with its counter (JSON, no secrets)"
+        )]
+        all: bool,
     },
     #[command(
         about = "Inject a passkey via CDP and sync its assertion counter"
@@ -4135,7 +4150,15 @@ fn main() {
                 find_args,
                 rp_id,
                 set,
-            } => passkey::counter(&find_args, rp_id.as_deref(), set),
+                reset,
+                all,
+            } => passkey::counter(
+                &find_args,
+                rp_id.as_deref(),
+                set,
+                reset,
+                all,
+            ),
             Passkey::Inject {
                 find_args,
                 rp_id,

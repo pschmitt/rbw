@@ -777,6 +777,12 @@ pub struct Config {
     pub unlock_ui: UnlockUi,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unlock_no_echo: bool,
+    // Let `rbw passkey` start tracking a signature counter on passkeys that
+    // have none (counter 0). Off: counter 0 stays 0, like Bitwarden's own
+    // clients, so every client can sign in. Passkeys that already carry a
+    // counter keep advancing it either way.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub passkey_counter: bool,
     #[serde(default)]
     pub tui: TuiConfig,
     #[serde(default)]

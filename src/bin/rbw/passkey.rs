@@ -134,24 +134,25 @@ fn stored_counter(
 }
 
 fn advance(selected: &Selected, counter: u32) -> anyhow::Result<()> {
-    advance_inner(selected, counter, true)
+    advance_inner(selected, counter, true, false)
 }
 
 fn advance_for_browser(
     selected: &Selected,
     counter: u32,
 ) -> anyhow::Result<()> {
-    advance_inner(selected, counter, false)
+    advance_inner(selected, counter, false, false)
 }
 
 fn advance_inner(
     selected: &Selected,
     counter: u32,
     synchronize: bool,
+    allow_decrease: bool,
 ) -> anyhow::Result<()> {
     let old = stored_counter(&selected.credential)?;
     anyhow::ensure!(
-        counter >= old,
+        allow_decrease || counter >= old,
         "refusing to decrease the passkey counter"
     );
     if counter == old {
@@ -295,13 +296,67 @@ pub fn find(args: &FindArgs, rp_id: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Every live passkey in the vault with its counter, as JSON without secrets.
+/// For finding the sites a counter reset could affect.
+fn list_all() -> anyhow::Result<()> {
+    actions::sync()?;
+    let db = commands::load_db()?;
+    let mut list = Vec::new();
+    for entry in &db.entries {
+        let has_passkeys = matches!(
+            &entry.data,
+            rbw::db::EntryData::Login { fido2_credentials, .. }
+                if !fido2_credentials.is_empty()
+        );
+        if entry.deleted || entry.archived || !has_passkeys {
+            continue;
+        }
+        let decrypted = commands::decrypt_cipher(entry)?;
+        let commands::DecryptedData::Login {
+            fido2_credentials, ..
+        } = &decrypted.data
+        else {
+            continue;
+        };
+        for c in fido2_credentials {
+            list.push(json!({
+                "id": entry.id,
+                "name": decrypted.name,
+                "rp_id": c.rp_id,
+                "counter": stored_counter(c).ok(),
+            }));
+        }
+    }
+    println!("{}", Value::Array(list));
+    Ok(())
+}
+
 pub fn counter(
     args: &FindArgs,
     rp_id: Option<&str>,
     set: Option<u32>,
+    reset: bool,
+    all: bool,
 ) -> anyhow::Result<()> {
     commands::unlock(None, None)?;
+    if all {
+        return list_all();
+    }
     let selected = select(args, rp_id)?;
+    if reset {
+        advance_inner(&selected, 0, true, true)?;
+        let fresh = select(args, rp_id)?;
+        anyhow::ensure!(
+            stored_counter(&fresh.credential)? == 0,
+            "the server still holds a passkey counter after the reset; reconcile the vault"
+        );
+        eprintln!(
+            "Passkey counter reset to 0 for {}. Sync every other Bitwarden client. A site that stored a higher counter flags a clone until its record is reset too.",
+            fresh.name
+        );
+        println!("0");
+        return Ok(());
+    }
     if let Some(value) = set {
         advance(&selected, value)?;
         warn_counter_enabled(stored_counter(&selected.credential)?, value);
@@ -336,8 +391,15 @@ fn credential_id(value: &str) -> anyhow::Result<String> {
 }
 
 fn next_counter(current: u32) -> anyhow::Result<u32> {
-    // Enable counter tracking for Bitwarden credentials created with counter 0.
     current.checked_add(1).context("passkey counter exhausted")
+}
+
+/// Whether a passkey at `current` may be advanced. A passkey that already
+/// counts always is; starting to count on a counter-less one (0) needs the
+/// `passkeyCounter` setting, because a counter that clients do not all
+/// increment makes the lagging ones look like clones to the site.
+fn tracking(current: u32) -> anyhow::Result<bool> {
+    Ok(current > 0 || rbw::config::Config::load()?.passkey_counter)
 }
 
 fn cdp_credential(
@@ -658,7 +720,8 @@ fn assertion_value(
     .map_err(|_| anyhow::anyhow!("unreadable passkey key"))?;
 
     let previous = stored_counter(c)?;
-    let reserved = if preserve_zero && previous == 0 {
+    let reserved = if previous == 0 && (preserve_zero || !tracking(previous)?)
+    {
         0
     } else {
         next_counter(previous)?
@@ -728,6 +791,12 @@ pub fn inject(
     // session finished its writeback.
     let selected = select(args, rp_id)?;
     let previous = stored_counter(&selected.credential)?;
+    // The browser's virtual authenticator always counts up, so injecting
+    // would start tracking on its own.
+    anyhow::ensure!(
+        tracking(previous)?,
+        "this passkey has no counter and passkeyCounter is off; inject would start one. Use `rbw passkey assert` or the browser extension, or run `rbw config set passkeyCounter true`"
+    );
     let reserved = next_counter(previous)?;
     let credential = cdp_credential(&selected, reserved)?;
     let injected_id = credential["credentialId"]
