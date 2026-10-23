@@ -173,7 +173,8 @@ api.runtime.onMessage.addListener(message => {
 function element(tag, text, cls) { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; }
 function button(label, action, cls) { const el = element("button", label, cls); el.type = "button"; el.onclick = () => attempt(async () => { el.disabled = true; try { await action(); } finally { el.disabled = false; } }); return el; }
 function actionButton(label, name, action, cls) {
-  const el = button("", action, cls); el.append(icon(name)); if (label && !cls?.split(" ").includes("icon")) el.append(element("span", label)); el.title = label; el.setAttribute("aria-label", label); return el;
+  const el = button("", action, cls); el.append(icon(name));
+  if (name === "copy") el.onclick = () => attempt(action); // never disabled: spamming replays the confirmation if (label && !cls?.split(" ").includes("icon")) el.append(element("span", label)); el.title = label; el.setAttribute("aria-label", label); return el;
 }
 function pretty(value) { return value.replaceAll("_", " ").replace(/^./, c => c.toUpperCase()); }
 function countVisibleTabs() {
@@ -554,14 +555,19 @@ function flashCopied(trigger, text) {
   clearTimeout(trigger._copiedTimer);
   const original = trigger._copyOriginal || current;
   trigger._copyOriginal = original;
+  // Every copy replays the whole animation, even while the last one still runs.
+  trigger.classList.remove("is-copied"); trigger.querySelector(".copy-burst")?.remove();
   const check = icon("check"); check.classList.add("copy-check");
-  current.replaceWith(check); trigger.classList.add("is-copied");
+  current.replaceWith(check);
   // A ring and a ring of sparks burst out from the button (purely decorative).
-  trigger.querySelector(".copy-burst")?.remove();
   const burst = element("span", null, "copy-burst"); burst.setAttribute("aria-hidden", "true");
   for (let i = 0; i < 8; i++) { const spark = element("i"); spark.style.setProperty("--a", `${i * 45 + 22}deg`); burst.append(spark); }
   trigger.append(burst);
-  trigger._copiedTimer = setTimeout(() => { burst.remove(); check.replaceWith(original); trigger.classList.remove("is-copied"); delete trigger._copyOriginal; }, 1500);
+  void trigger.offsetWidth; trigger.classList.add("is-copied");
+  trigger._copiedTimer = setTimeout(() => {
+    trigger.querySelector(".copy-burst")?.remove(); trigger.querySelector(".copy-check")?.replaceWith(original);
+    trigger.classList.remove("is-copied"); delete trigger._copyOriginal;
+  }, 1500);
 }
 async function copyField(item, field, allowFallback = false, trigger = null) {
   try {
@@ -1638,7 +1644,7 @@ $("gen-picker-query").oninput = () => { clearTimeout(pickerTimer); pickerTimer =
 $("copy-generated").onclick = () => attempt(async () => {
   if (!generatedValue) throw new Error("Generate a value first.");
   await request("copy_text", { text: generatedValue });
-  clearTimeout(copiedTimer); $("copy-generated").classList.add("is-copied"); $("copy-generated-label").textContent = "Copied";
+  clearTimeout(copiedTimer); $("copy-generated").classList.remove("is-copied"); void $("copy-generated").offsetWidth; $("copy-generated").classList.add("is-copied"); $("copy-generated-label").textContent = "Copied";
   copiedTimer = setTimeout(() => { $("copy-generated").classList.remove("is-copied"); $("copy-generated-label").textContent = "Copy"; }, 1600);
 });
 $("audit").onclick = () => attempt(async () => {
