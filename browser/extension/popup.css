@@ -817,3 +817,8 @@ html[data-page=locked] #account-menu > label, html[data-page=locked] #state, htm
 #message.popup-notification.is-timed::after { content:""; position:absolute; left:0; right:0; bottom:0; height:3px; background:var(--notice-color, var(--accent)); transform-origin:left center; animation:notification-countdown 4500ms linear forwards; pointer-events:none; }
 @keyframes notification-countdown { from { transform:scaleX(1); } to { transform:scaleX(0); } }
 @media (prefers-reduced-motion:reduce) { #message.popup-notification.is-timed::after { animation:none; display:none; } }
+
+/* Without the back chevron there is nothing to reserve room for on the left,
+   so the hover highlight hugs the logo. */
+button.avatar:has(#back[hidden]) { width:36px; grid-template-columns:32px; }
+button.avatar:has(#back[hidden]) img { grid-column:1; }
