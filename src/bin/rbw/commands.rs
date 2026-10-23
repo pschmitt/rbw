@@ -4065,6 +4065,26 @@ fn unlock_impl(
     Ok(())
 }
 
+// Unlocks the active account from its `credential_source` alone and never
+// prompts: with no source configured, a source that can't supply the
+// password, or an account that is already unlocked, it does nothing.
+// Returns whether the account was unlocked by this call.
+pub fn unlock_from_credential_source() -> anyhow::Result<bool> {
+    ensure_agent()?;
+    if active_account()?.unlock.credentials.is_none()
+        || crate::actions::unlocked().is_ok()
+    {
+        return Ok(false);
+    }
+    let Some((password, totp)) = resolve_credential_source(&mut Vec::new())
+    else {
+        return Ok(false);
+    };
+    crate::actions::login(Some(password.clone()), totp)?;
+    crate::actions::unlock(Some(password))?;
+    Ok(true)
+}
+
 // Explicit Termux configuration is fail-closed: a configured provider must
 // work, rather than silently falling back to a weaker pinentry path.
 thread_local! {

@@ -574,6 +574,15 @@ enum Opt {
                 as needed) every account instead of just the active one"
         )]
         all: bool,
+        #[arg(
+            long,
+            hide = true,
+            help = "Unlock only from the account's configured credential \
+                source, never prompting; do nothing without one (used by \
+                the agent to unlock the accounts that follow another one)",
+            conflicts_with_all = ["stdin", "pinentry", "all", "ui", "no_echo", "totp"]
+        )]
+        credentials_only: bool,
     },
 
     #[command(about = "Check if the local Bitwarden database is unlocked")]
@@ -3962,9 +3971,12 @@ fn main() {
             pinentry,
             ui,
             no_echo,
+            credentials_only,
         } => {
             commands::set_unlock_ui(ui, no_echo);
-            if pinentry {
+            if credentials_only {
+                commands::unlock_from_credential_source().map(|_| ())
+            } else if pinentry {
                 commands::unlock_pinentry()
             } else if all {
                 commands::unlock_all()
@@ -5670,6 +5682,27 @@ mod test {
             vec!["rbw", "unlock", "--ui", "unknown"],
         ] {
             assert!(Cli::try_parse_from(arguments).is_err());
+        }
+    }
+
+    #[test]
+    fn unlock_credentials_only_takes_no_other_unlock_options() {
+        let cli = parse(&["rbw", "unlock", "--credentials-only"]);
+        assert!(matches!(
+            cli.command,
+            Opt::Unlock {
+                credentials_only: true,
+                ..
+            }
+        ));
+        for option in ["--pinentry", "--stdin", "--all", "--no-echo"] {
+            assert!(Cli::try_parse_from([
+                "rbw",
+                "unlock",
+                "--credentials-only",
+                option
+            ])
+            .is_err());
         }
     }
 

@@ -795,7 +795,66 @@ async fn unlock_success(
         org_keys,
         rsa_private_key,
     );
+    cascade_unlock(&account.name);
     Ok(())
+}
+
+// Unlocking an account also unlocks the accounts whose master password is
+// kept in its vault (`unlock.credentials`), so one unlock opens everything
+// that was set up to follow it. The resolution lives in the CLI, which reads
+// the linked item through this agent, so each follower is unlocked by a
+// detached `rbw unlock --credentials-only`: it never prompts, does nothing
+// for an account that is already unlocked, and unlocking a follower cascades
+// again through this same function. Best effort and in the background; a
+// follower that can't be unlocked this way stays locked, and so does one
+// whose `unlock.policy` is `never`.
+fn cascade_unlock(unlocked: &str) {
+    let Ok(config) = rbw::config::Config::load() else {
+        return;
+    };
+    let followers: Vec<String> = config
+        .accounts()
+        .iter()
+        .filter(|account| {
+            account.unlock.policy != rbw::config::UnlockPolicy::Never
+                && account
+                    .unlock
+                    .credentials
+                    .as_ref()
+                    .is_some_and(|source| source.account == unlocked)
+        })
+        .map(|account| account.name.clone())
+        .collect();
+    if followers.is_empty() {
+        return;
+    }
+    let rbw = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("rbw")))
+        .filter(|path| path.exists())
+        .unwrap_or_else(|| "rbw".into());
+    for follower in followers {
+        log::debug!("unlocking {follower} from {unlocked}'s vault");
+        let spawned = tokio::process::Command::new(&rbw)
+            .args(["--account", &follower, "unlock", "--credentials-only"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(false)
+            .spawn();
+        match spawned {
+            Ok(mut child) => {
+                tokio::spawn(async move {
+                    let _ = child.wait().await;
+                });
+            }
+            Err(error) => {
+                log::warn!(
+                    "could not start the unlock of {follower}: {error}"
+                );
+            }
+        }
+    }
 }
 
 // Permanently, irrecoverably deletes every entry in the account's personal

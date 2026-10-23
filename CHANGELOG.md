@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+* Unlocking an account now also unlocks the accounts whose master password is
+  stored in its vault (`unlock.credentials`), in the background and without
+  prompting, so unlocking the primary account in the browser extension (or with
+  `rbw unlock`) opens the accounts that follow it. Accounts with
+  `unlock.policy: never` are left alone.
+
 ### Changed
 
 * Passkey sign-in in the browser extension no longer syncs the vault first. The
