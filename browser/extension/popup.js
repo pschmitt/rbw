@@ -272,8 +272,14 @@ function renderAccounts(accounts, primary, chosen, states = [], cliColors = {}) 
 }
 // Merged view: which accounts are locked, each with a way to unlock it.
 function renderAccountStates(primary) {
-  const list = $("account-states");
-  list.hidden = $("account").value !== "" || accountStates.length < 2;
+  const list = $("account-states"), details = $("account-details");
+  details.hidden = $("account").value !== "" || accountStates.length < 2;
+  // Collapsed by default so several accounts don't crowd the popup; the
+  // summary says how many are unlocked, and a password prompt opens it.
+  const unlockedCount = accountStates.filter(account => account.unlocked).length;
+  const summary = $("account-summary");
+  summary.replaceChildren(...accountStates.map(account => { const dot = element("span", null, account.unlocked ? "account-dot is-unlocked" : "account-dot"); dot.style.setProperty("--account-color", colorOf(account.name)); dot.title = `${account.name}: ${account.unlocked ? "unlocked" : "locked"}`; return dot; }), element("span", `${unlockedCount} of ${accountStates.length} accounts unlocked`, "account-summary-text"));
+  if (needsPassword.size && accountStates.some(account => needsPassword.has(account.name) && !account.unlocked)) details.open = true;
   list.replaceChildren(...accountStates.map(account => {
     const row = element("li", null, account.unlocked ? "is-unlocked" : "is-locked");
     const nameLabel = element("span", account.name === primary ? `${account.name} *` : account.name); nameLabel.style.setProperty("--account-color", colorOf(account.name)); nameLabel.classList.add("account-name");
@@ -311,11 +317,9 @@ function renderAccountStates(primary) {
   }));
   const locked = accountStates.filter(account => !account.unlocked && !account.excluded).map(account => account.name);
   renderLockedBanner(locked);
-  if (locked.length > 1) {
-    const row = element("li", null, "unlock-all");
-    row.append(actionButton(`Unlock all ${locked.length} accounts`, "unlock", () => unlockAccounts(locked), "primary"));
-    list.append(row);
-  }
+  const bulk = $("account-bulk");
+  bulk.hidden = details.hidden || locked.length < 2;
+  bulk.replaceChildren(...(locked.length > 1 ? [actionButton(`Unlock all ${locked.length} accounts`, "unlock", () => unlockAccounts(locked), "primary")] : []));
 }
 // Warns above the list that locked accounts' items are missing from it.
 // The warning above the list turns, in place, into an "unlocked" notice when
@@ -407,7 +411,7 @@ async function refresh(knownStatus = null, skipList = false) {
   // With several accounts each row has its own unlock, so the page-level one and
   // the (pointless while locked) Lock button go away and the hero shrinks.
   const several = accountStates.length > 1;
-  $("unlock").hidden = several; $("lock").hidden = !unlocked; $("state").hidden = several && !unlocked;
+  $("unlock").hidden = several; $("lock").hidden = !unlocked; $("state").hidden = several;
   $("locked").classList.toggle("is-multi", several && !unlocked);
   if (several && !unlocked) {
     const count = accountStates.filter(account => !account.excluded).length;
