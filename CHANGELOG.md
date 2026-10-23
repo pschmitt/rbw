@@ -2,7 +2,22 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Browser extension: with several accounts, the locked state is tidier. Each
+  account is a card with a status pill and aligned fingerprint, password and
+  Unlock buttons, "Unlock all" is a full-width button, the page-level Unlock
+  and Lock buttons stay out of the way while the rows have their own, and the
+  large "Your vault is locked" block shrinks to a one-line header. The per-account
+  list is collapsed by default behind a one-line summary (a dot per account and
+  how many are unlocked); a failed unlock that needs a master password opens it.
+* Browser extension: the settings header shows Lock before Sync.
+
 ### Fixed
+
+* Unlocking one account no longer logs it in twice when an unlock cascade
+  overlaps with the unlock that triggered it (which could use the same TOTP code
+  twice); unlocks of one account now take turns.
 
 * Creating, editing and deleting items, folders, attachments and the like now
   send the same Bitwarden client headers, user agent and client certificate as
