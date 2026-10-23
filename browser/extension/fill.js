@@ -235,7 +235,7 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     const reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const animate = !reducedMotion && options.animations !== "off";
     const typeable = el => el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement && !["checkbox", "radio", "button", "submit", "reset", "hidden", "file"].includes(el.type);
-    let animationTask = null;
+    let animationTask;
     if (animate && (options.animations === "plaid" && options.icon || options.animations === "on")) {
       for (const item of assignments) {
         if (!previous.has(item.el)) previous.set(item.el, { before: read(item.el) });
