@@ -276,7 +276,10 @@ function renderAccountStates(primary) {
   list.hidden = $("account").value !== "" || accountStates.length < 2;
   list.replaceChildren(...accountStates.map(account => {
     const row = element("li", null, account.unlocked ? "is-unlocked" : "is-locked");
-    const nameLabel = element("span", account.name === primary ? `${account.name} *` : account.name); nameLabel.style.setProperty("--account-color", colorOf(account.name)); nameLabel.classList.add("account-name"); row.append(nameLabel, element("small", account.excluded ? "excluded from search" : account.unlocked ? "unlocked" : "locked"));
+    const nameLabel = element("span", account.name === primary ? `${account.name} *` : account.name); nameLabel.style.setProperty("--account-color", colorOf(account.name)); nameLabel.classList.add("account-name");
+    const status = element("small", account.excluded ? "Excluded from search" : account.unlocked ? "Unlocked" : "Locked"); status.dataset.state = account.unlocked ? "unlocked" : "locked";
+    row.append(element("div", null, "account-info"));
+    row.firstChild.append(nameLabel, status);
     if (!account.unlocked) {
       // Unlock tries the account's own policy first (as `rbw unlock` does: a
       // credential source, a phone approval, chained unlocking); the key
@@ -291,17 +294,18 @@ function renderAccountStates(primary) {
       const unlock = actionButton("Unlock", "unlock", async () => {
         try { await request("unlock", { account: account.name }); needsPassword.delete(account.name); await refresh(); }
         catch (_) { needsPassword.add(account.name); form.hidden = false; input.focus(); message(`${account.name} needs its master password.`); }
-      });
+      }, "primary");
       unlock.title = `Unlock ${account.name} with its configured unlock method`;
       const key = actionButton("Use password", "key", () => { form.hidden = !form.hidden; if (!form.hidden) input.focus(); }, "icon");
       key.title = "Unlock with a master password";
-      row.append(unlock);
+      const actions = element("div", null, "account-actions");
       // An account with an enrolled fingerprint also offers the scan.
       if (account.fingerprint) {
         const scan = actionButton("Unlock with fingerprint", "fingerprint", () => fingerprintUnlock(account.name), "icon");
-        scan.title = `Unlock ${account.name} with the fingerprint reader`; row.append(scan);
+        scan.title = `Unlock ${account.name} with the fingerprint reader`; actions.append(scan);
       }
-      row.append(key, form);
+      actions.append(key, unlock);
+      row.append(actions, form);
     }
     return row;
   }));
@@ -309,7 +313,7 @@ function renderAccountStates(primary) {
   renderLockedBanner(locked);
   if (locked.length > 1) {
     const row = element("li", null, "unlock-all");
-    row.append(actionButton(`Unlock all (${locked.length})`, "unlock", () => unlockAccounts(locked)));
+    row.append(actionButton(`Unlock all ${locked.length} accounts`, "unlock", () => unlockAccounts(locked), "primary"));
     list.append(row);
   }
 }
@@ -400,7 +404,20 @@ async function refresh(knownStatus = null, skipList = false) {
   }
   if (approvalId) { await showApproval(approvalId); return; }
   // Locked: show the accounts (with Unlock buttons) right away.
-  if (!unlocked) { show("locked"); if (accountStates.length > 1) $("account-menu").hidden = false; return; }
+  // With several accounts each row has its own unlock, so the page-level one and
+  // the (pointless while locked) Lock button go away and the hero shrinks.
+  const several = accountStates.length > 1;
+  $("unlock").hidden = several; $("lock").hidden = !unlocked; $("state").hidden = several && !unlocked;
+  $("locked").classList.toggle("is-multi", several && !unlocked);
+  if (several && !unlocked) {
+    const count = accountStates.filter(account => !account.excluded).length;
+    $("locked").querySelector("h2").textContent = `${count} accounts are locked`;
+    $("locked").querySelector("p").textContent = "Unlock them above, or enter a master password below.";
+  } else {
+    $("locked").querySelector("h2").textContent = "Your vault is locked";
+    $("locked").querySelector("p").textContent = "Unlock your shared rbw-agent to access your vault.";
+  }
+  if (!unlocked) { show("locked"); if (several) $("account-menu").hidden = false; return; }
   vaultListed = !skipList;
   show("vault"); if (!skipList) { await search(); await suggestions(); }
   remember();
