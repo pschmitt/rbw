@@ -755,7 +755,7 @@ async function openDetail(item, trashed = false) {
     const updateSummary = () => { const count = dropdown.querySelectorAll("input:checked").length; summary.textContent = count ? `${count} collection${count === 1 ? "" : "s"} selected` : "Choose collections"; };
     dropdown.append(summary);
     for (const collection of detail.collection_options) {
-      const label = element("label"); const input = element("input"); input.type = "checkbox"; input.value = collection.id; input.checked = detail.collection_ids.includes(collection.id); input.onchange = updateSummary; label.append(input, document.createTextNode(" " + collection.name)); dropdown.append(label);
+      const label = element("label", null, "switch-row"); const input = element("input", null, "switch"); input.type = "checkbox"; input.value = collection.id; input.checked = detail.collection_ids.includes(collection.id); input.onchange = updateSummary; label.append(element("span", collection.name), input); dropdown.append(label);
     }
     updateSummary(); content.append(dropdown, actionButton("Save collections", "collections", async () => { await request("set_collections", { item, collections: Array.from(dropdown.querySelectorAll("input:checked"), input => input.value) }); message("Collections updated."); await openDetail(item); }));
   }

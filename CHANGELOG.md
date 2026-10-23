@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Browser extension: every checkbox is a switch now, including "Do not
+  autofill this item" and the collection picker; any checkbox added later gets
+  the switch look by default.
+
 ## [2.27.1] - 2026-10-23
 
 ### Added
