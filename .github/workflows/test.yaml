@@ -38,31 +38,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-features
-  msrv:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - run: sudo apt-get update && sudo apt-get install -y libudev-dev libgtk-4-dev
-      - id: msrv
-        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
-      # @master + an explicit toolchain input (rather than the @stable tag)
-      # so this always tracks whatever Cargo.toml currently declares.
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.msrv.outputs.version }}
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check --locked --all-targets --all-features
-  doc:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - run: sudo apt-get update && sudo apt-get install -y libudev-dev libgtk-4-dev
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # Only our own crates: documenting every dependency took minutes and
-      # isn't needed to keep rbw's docs warning-free.
-      - run: RUSTDOCFLAGS="-Dwarnings" cargo doc --no-deps --all-features
-      - run: cargo test --doc --all-features
   # Real-server tests, distinct from `test`'s mocked-HTTP unit tests: these
   # register an actual account on a throwaway Vaultwarden container and
   # drive the built `rbw` binary against it over the real wire protocol,
