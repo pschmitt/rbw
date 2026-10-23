@@ -245,7 +245,7 @@ function clearVault() {
   vaultListed = false; stopTotp();
   faviconObserver.disconnect();
   ++epoch; currentItem = null; currentDetail = null;
-  for (const id of ["items", "suggestions", "detail-content", "edit-fields", "custom-fields", "edit-attachments", "audit-results", "approval-items", "send-items"]) $(id).replaceChildren();
+  for (const id of ["items", "suggestions", "detail-content", "edit-fields", "custom-fields", "edit-attachments", "edit-collections", "audit-results", "approval-items", "send-items"]) $(id).replaceChildren();
   $("send-file").value = "";
   generatedValue = ""; $("generated").replaceChildren(); closeGeneratorPicker(); delete $("generated").closest(".gen-card").dataset.strength;
   for (const id of ["unlock-password", "approval-password", "edit-name", "edit-folder", "edit-notes", "send-name", "send-text", "send-notes", "send-password"]) $(id).value = "";
@@ -714,7 +714,7 @@ async function openDetail(item, trashed = false) {
       : entries;
   for (const [field, value] of orderedEntries) {
     if (["type", "uris", "fido2_credentials", "totp"].includes(field) || value == null || value === "") continue;
-    const label = data.type === "card" ? cardFieldLabels[field] || pretty(field) : field === "totp" ? "Authenticator key" : pretty(field);
+    const label = data.type === "card" ? cardFieldLabels[field] || pretty(field) : field === "totp" ? "TOTP" : pretty(field);
     content.append(detailField(label, String(value), item, copyable(field), secret(field)));
   }
   if (data.totp && !trashed) content.append(totpField(item));
@@ -752,16 +752,6 @@ async function openDetail(item, trashed = false) {
   }
   for (const passkey of detail.passkeys) { content.append(element("h3", "Passkey"), element("p", `${passkey.rp} · ${passkey.user || ""}`), element("p", `Created ${passkey.created || "unknown"}`, "hint")); }
   if (detail.history.length) { const history = element("details", null, "history-section"); const historyHeader = element("summary"); historyHeader.append(element("h3", `Password history · ${detail.history.length}`), icon("chevron-down")); history.append(historyHeader); for (const [index, entry] of detail.history.entries()) history.append(detailField(entry.last_used_date, entry.password, item, copyable(`history/${index}`), true)); content.append(history); }
-  if (detail.collection_options?.length && !trashed) {
-    content.append(element("h3", "Collections"));
-    const dropdown = element("details", null, "collection-picker"); dropdown.open = true; const summary = element("summary");
-    const updateSummary = () => { const count = dropdown.querySelectorAll("input:checked").length; summary.textContent = count ? `${count} collection${count === 1 ? "" : "s"} selected` : "Choose collections"; };
-    dropdown.append(summary);
-    for (const collection of detail.collection_options) {
-      const label = element("label", null, "switch-row"); const input = element("input", null, "switch"); input.type = "checkbox"; input.value = collection.id; input.checked = detail.collection_ids.includes(collection.id); input.onchange = updateSummary; label.append(element("span", collection.name), input); dropdown.append(label);
-    }
-    updateSummary(); content.append(dropdown, actionButton("Save collections", "collections", async () => { await request("set_collections", { item, collections: Array.from(dropdown.querySelectorAll("input:checked"), input => input.value) }); message("Collections updated."); await openDetail(item); }));
-  }
   $("header-favorite-label").textContent = detail.favorite ? "Unfavorite" : "Favorite";
   $("header-favorite").classList.toggle("is-favorite", detail.favorite);
   $("header-archive-label").textContent = detail.archived ? "Unarchive" : "Archive";
@@ -816,7 +806,7 @@ function renderAttachments(detail, item) {
 function renderEditFields(data = {}) {
   const type = $("edit-type").value; $("edit-fields").replaceChildren();
   for (const name of schema[type]) {
-    const label = element("label", type === "card" ? cardFieldLabels[name] || pretty(name) : name === "totp" ? "Authenticator key" : pretty(name)); const input = element(name === "private_key" || name === "public_key" ? "textarea" : "input");
+    const label = element("label", type === "card" ? cardFieldLabels[name] || pretty(name) : name === "totp" ? "TOTP" : pretty(name)); const input = element(name === "private_key" || name === "public_key" ? "textarea" : "input");
     input.id = `field-${name}`; input.value = data[name] || ""; input.autocomplete = "off"; input.spellcheck = false;
     if (input.tagName === "INPUT") input.type = secret(name) ? "password" : "text";
     if (input.type === "password") {
@@ -936,6 +926,22 @@ $("edit-folder-select").onchange = () => {
   $("edit-folder-new").hidden = !creating; $("edit-folder").required = creating;
   if (creating) $("edit-folder").focus();
 };
+// Collections are edited with the item, not in the read-only view.
+function renderEditCollections(detail) {
+  const box = $("edit-collections"); box.replaceChildren();
+  if (!currentItem || !detail?.collection_options?.length) return;
+  box.append(element("h3", "Collections"));
+  const card = element("div", null, "settings-card switch-list");
+  for (const collection of detail.collection_options) {
+    const row = element("label", null, "switch-row"); const input = element("input", null, "switch"); input.type = "checkbox"; input.value = collection.id; input.checked = (detail.collection_ids || []).includes(collection.id);
+    row.append(element("span", collection.name), input); card.append(row);
+  }
+  box.append(card);
+}
+function editedCollections() {
+  const inputs = [...$("edit-collections").querySelectorAll("input")];
+  return inputs.length ? inputs.filter(input => input.checked).map(input => input.value) : null;
+}
 function editItem(fresh = false, draft = null) {
   if (fresh) { currentItem = null; currentDetail = null; }
   const cipher = draft?.cipher || currentDetail?.cipher || { name: "", data: { type: "login" } };
@@ -954,6 +960,7 @@ function editItem(fresh = false, draft = null) {
   $("edit-no-autofill-hint").textContent = currentItem ? "Inline suggestions, on-load autofill and the fill shortcut skip this item." : "Save the item first to exclude it from autofill.";
   $("edit-passkeys").textContent = currentDetail?.passkeys.length ? "Existing passkeys are preserved by rbw. Their private keys never enter this editor." : "";
   renderAttachments(currentDetail, currentItem);
+  renderEditCollections(currentDetail);
   renderEditFields(cipher.data); show("editor"); $("edit-name").focus();
   // A resumed draft keeps the revision it started from, so saving still
   // refuses to overwrite changes made elsewhere in the meantime.
@@ -1024,7 +1031,9 @@ $("edit-form").onsubmit = event => { event.preventDefault(); if (editSaving) ret
   setEditSaving(true);
   try {
     const cipher = editorCipher(), type = cipher.data.type;
+    const collections = currentItem ? editedCollections() : null, before = currentDetail?.collection_ids || [];
     await request("save", { item: currentItem, revision: editRevision, cipher, ...(!currentItem && !$("edit-account-row").hidden ? { account: $("edit-account").value } : {}) });
+    if (collections && (collections.length !== before.length || collections.some(id => !before.includes(id)))) await request("set_collections", { item: currentItem, collections });
     if (currentItem && ["login", "card", "identity"].includes(type)) {
       const excluded = new Set(Array.isArray(preference.autofillExcludedItems) ? preference.autofillExcludedItems : []);
       if ($("edit-no-autofill").checked) excluded.add(currentItem); else excluded.delete(currentItem);
