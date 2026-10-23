@@ -312,6 +312,7 @@
                 archived = true;
                 trashed = true;
               };
+              passkeyCounter = false;
               clipboard = "auto";
               defaultUriMatch = "domain";
             }
