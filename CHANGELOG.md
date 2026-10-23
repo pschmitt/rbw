@@ -5,6 +5,8 @@
 ### Added
 
 * Browser extension: the clipboard marker in the autofill notice wiggles once.
+* Browser extension: the in-page autofill notice has a countdown bar along its
+  bottom edge (like the suggestion window's) that pauses while you hover it.
 * Browser extension: the in-page autofill notice has a "next" button when several
   logins match, to fill the next one (the fill shortcut's cycle).
 * Browser extension: clicks on the in-page autofill notice no longer fall through to
