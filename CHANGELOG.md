@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.29.0] - 2026-10-24
+
 ### Added
 
 * browser-daemon's live view gets its vault popover and passkey prompt from
