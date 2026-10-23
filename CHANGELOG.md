@@ -5,6 +5,9 @@
 ### Added
 
 * Browser extension: the clipboard marker in the autofill notice wiggles once.
+* Browser extension: an item's menu has "Autofill" (fills the active page) and
+  "Autofill and save" (for logins: adds the page's URL to the login if it has no
+  URI for that site yet, then fills).
 * Browser extension: in the item list the account is an emblem (its first two
   letters, in the account's color) on the corner of the item's icon instead of a
   badge after the name, which leaves the name more room Items of the primary

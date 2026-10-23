@@ -679,6 +679,9 @@ async function openDetail(item, trashed = false) {
   $("detail-header-actions").hidden = trashed;
   const copyable = field => trashed ? null : field;
   $("header-move").hidden = accountNames.length < 2;
+  // Filling the page applies to logins (and cards/identities) outside the trash.
+  const fillable = !trashed && ["login", "card", "identity"].includes(data.type);
+  $("header-autofill").hidden = !fillable; $("header-autofill-save").hidden = !fillable || data.type !== "login";
   const content = $("detail-content");
   const data = detail.cipher.data;
   const title = element("h2", null, "detail-title");
@@ -1341,6 +1344,28 @@ $("header-archive").onclick = () => attempt(async () => {
   $("detail-menu").removeAttribute("open");
   await request("mutate", { item: currentItem, mutation: "archive" });
   await openDetail(currentItem);
+});
+// Fills the active page with the open item.
+$("header-autofill").onclick = () => attempt(async () => {
+  $("detail-menu").removeAttribute("open");
+  const n = await request("fill", { item: currentItem, type: currentDetail.cipher.data.type });
+  message(`Filled ${n} fields`);
+});
+// Like Autofill, but first adds the page's URL (without query and fragment) to
+// the login when it has no URI for that site yet, so it matches from now on.
+$("header-autofill-save").onclick = () => attempt(async () => {
+  $("detail-menu").removeAttribute("open");
+  const [tab] = await api.tabs.query({ active: true, currentWindow: true });
+  let url; try { url = new URL(tab?.url || ""); } catch (_) { throw new Error("Open an HTTP or HTTPS page first."); }
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Open an HTTP or HTTPS page first.");
+  const data = currentDetail.cipher.data, uris = data.uris || [];
+  const known = uris.some(entry => { try { return new URL(entry.uri).hostname === url.hostname; } catch (_) { return false; } });
+  if (!known) {
+    await request("save", { item: currentItem, revision: currentDetail.revision, cipher: { ...currentDetail.cipher, data: { ...data, uris: [...uris, { uri: `${url.origin}${url.pathname}` }] } } });
+  }
+  const n = await request("fill", { item: currentItem, type: data.type });
+  message(known ? `Filled ${n} fields` : `Added ${url.hostname}; filled ${n} fields`);
+  if (!known) await openDetail(currentItem);
 });
 $("header-move").onclick = () => attempt(async () => {
   $("detail-menu").removeAttribute("open");
