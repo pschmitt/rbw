@@ -4042,6 +4042,7 @@ fn unlock_impl(
     visited: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     ensure_agent()?;
+    let _unlocking = lock_unlocking()?;
     if password.is_none() && crate::actions::unlocked().is_ok() {
         return Ok(());
     }
@@ -4065,15 +4066,39 @@ fn unlock_impl(
     Ok(())
 }
 
+// Serializes unlocks of the active account across rbw processes. Unlocking
+// an account makes the agent start `rbw unlock --credentials-only` for the
+// accounts that follow it, which can overlap with the unlock that caused it
+// (a follower's own unlock unlocks its source first); whoever comes second
+// waits here, finds the account unlocked and has nothing left to do, instead
+// of logging in a second time with the same TOTP code. The lock is released
+// when the returned file is dropped.
+fn lock_unlocking() -> anyhow::Result<std::fs::File> {
+    let name = active_account()?.name;
+    let path = rbw::dirs::pid_file()
+        .with_file_name(format!("unlock-{}.lock", name.replace('/', "_")));
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive)
+        .context("failed to lock the unlock of this account")?;
+    Ok(file)
+}
+
 // Unlocks the active account from its `credential_source` alone and never
 // prompts: with no source configured, a source that can't supply the
 // password, or an account that is already unlocked, it does nothing.
 // Returns whether the account was unlocked by this call.
 pub fn unlock_from_credential_source() -> anyhow::Result<bool> {
     ensure_agent()?;
-    if active_account()?.unlock.credentials.is_none()
-        || crate::actions::unlocked().is_ok()
-    {
+    if active_account()?.unlock.credentials.is_none() {
+        return Ok(false);
+    }
+    let _unlocking = lock_unlocking()?;
+    if crate::actions::unlocked().is_ok() {
         return Ok(false);
     }
     let Some((password, totp)) = resolve_credential_source(&mut Vec::new())
