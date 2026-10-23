@@ -428,6 +428,19 @@ function showFillNotice(expectedUrl, notice) {
     settings.addEventListener("click", () => { api.runtime.sendMessage({ action: "open_settings" }).catch(() => {}); dismiss(); });
     box.append(settings);
   }
+  // With several matching logins: a button for the next one (what the fill
+  // shortcut does); the next notice replaces this one.
+  if (Number.isInteger(notice.position) && Number.isInteger(notice.total) && notice.total > 1 && !notice.error && !notice.title) {
+    const nextButton = document.createElement("button"); nextButton.type = "button"; nextButton.setAttribute("aria-label", "Fill the next matching login"); nextButton.title = "Fill the next matching login";
+    const nextIcon = document.createElementNS(closeIcon.namespaceURI, "svg"); nextIcon.setAttribute("viewBox", "0 0 24 24"); nextIcon.setAttribute("aria-hidden", "true");
+    const nextPath = document.createElementNS(closeIcon.namespaceURI, "path"); nextPath.setAttribute("d", "M5 12h14M13 6l6 6-6 6"); nextIcon.append(nextPath); nextButton.append(nextIcon);
+    nextButton.addEventListener("click", event => {
+      if (!event.isTrusted) return;
+      nextButton.disabled = true;
+      api.runtime.sendMessage({ action: "keyboard_fill_shortcut" }).catch(() => {});
+      dismiss();
+    }); box.append(nextButton);
+  }
   if (undo) {
     const undoButton = document.createElement("button"); undoButton.type = "button"; undoButton.setAttribute("aria-label", "Undo autofill"); undoButton.title = "Undo autofill";
     const undoIcon = document.createElementNS(closeIcon.namespaceURI, "svg"); undoIcon.setAttribute("viewBox", "0 0 24 24"); undoIcon.setAttribute("aria-hidden", "true");
