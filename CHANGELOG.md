@@ -4,9 +4,21 @@
 
 ### Added
 
+* `rbw passkey counter --reset` sets a passkey's counter back to 0, as
+  Bitwarden's own clients use (sites that stored a higher one flag a clone
+  until they are reset too), and `rbw passkey counter --all` lists every
+  passkey in the vault with its counter (JSON, no secrets).
 * Browser extension: hovering an entry in the list for two seconds scrolls its
   name and subtitle when they are cut off by an ellipsis, so the rest can be
   read. Leaving the entry puts them back; reduced-motion settings turn it off.
+
+### Changed
+
+* Passkey counter tracking is opt-in. With `passkeyCounter` off (the default),
+  `rbw passkey inject`/`assert` keep a counter-less passkey at 0 instead of
+  starting to count, so clients that never increment it (Keyguard, Bitwarden
+  mobile) are not flagged as clones. Passkeys that already count keep advancing;
+  set `passkeyCounter` (also a Home Manager option) to start tracking.
 
 ## [2.27.4] - 2026-10-23
 
