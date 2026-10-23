@@ -823,13 +823,21 @@ html[data-page=locked] #account-menu > label, html[data-page=locked] #state, htm
 #account-toggle:has(#back[hidden]):hover, #account-toggle:has(#back[hidden]):focus-visible { background:transparent; }
 #account-toggle:has(#back[hidden]):hover img { border-radius:8px; box-shadow:0 0 0 2px var(--raised); background:var(--raised); }
 
-/* Copy buttons confirm in place: the icon turns into a check that pops in. */
-button.is-copied { color:var(--ok); }
-button.is-copied .copy-check { animation:copy-pop 380ms cubic-bezier(.2,1.4,.4,1) both; }
-button.is-copied .copy-check path { stroke-dasharray:30; stroke-dashoffset:30; animation:copy-draw 320ms ease-out 60ms forwards; }
-@keyframes copy-pop { from { transform:scale(.4); opacity:0; } to { transform:scale(1); opacity:1; } }
+/* Copy buttons confirm in place: the icon becomes a check that springs in and
+   draws itself, with a glow, an expanding ring and a burst of sparks. */
+button.is-copied { position:relative; overflow:visible; color:var(--ok); animation:copy-glow 700ms ease-out; }
+button.is-copied .copy-check { animation:copy-pop 520ms cubic-bezier(.2,1.6,.35,1) both; filter:drop-shadow(0 0 4px color-mix(in srgb, var(--ok) 70%, transparent)); }
+button.is-copied .copy-check path { stroke-width:2.6; stroke-dasharray:30; stroke-dashoffset:30; animation:copy-draw 340ms cubic-bezier(.5,0,.2,1) 120ms forwards; }
+button.is-copied::before { content:""; position:absolute; inset:0; border-radius:inherit; border:2px solid var(--ok); pointer-events:none; animation:copy-ring 640ms cubic-bezier(.1,.7,.2,1) both; }
+.copy-burst { position:absolute; left:50%; top:50%; width:0; height:0; pointer-events:none; }
+.copy-burst i { position:absolute; left:-2px; top:-2px; width:4px; height:4px; border-radius:50%; background:var(--ok); opacity:0; animation:copy-spark 620ms cubic-bezier(.1,.8,.3,1) both; transform:rotate(var(--a)) translateX(4px); }
+.copy-burst i:nth-child(even) { width:3px; height:3px; background:color-mix(in srgb, var(--ok) 55%, white); animation-delay:40ms; }
+@keyframes copy-pop { 0% { transform:scale(.2) rotate(-40deg); opacity:0; } 55% { transform:scale(1.35) rotate(8deg); opacity:1; } 100% { transform:scale(1) rotate(0); opacity:1; } }
 @keyframes copy-draw { to { stroke-dashoffset:0; } }
-@media (prefers-reduced-motion:reduce) { button.is-copied .copy-check, button.is-copied .copy-check path { animation:none; stroke-dashoffset:0; } }
+@keyframes copy-ring { 0% { transform:scale(.7); opacity:.9; } 100% { transform:scale(1.9); opacity:0; } }
+@keyframes copy-glow { 0% { box-shadow:0 0 0 0 color-mix(in srgb, var(--ok) 55%, transparent); } 100% { box-shadow:0 0 0 12px transparent; } }
+@keyframes copy-spark { 0% { opacity:1; transform:rotate(var(--a)) translateX(4px) scale(1); } 100% { opacity:0; transform:rotate(var(--a)) translateX(22px) scale(.3); } }
+@media (prefers-reduced-motion:reduce) { button.is-copied, button.is-copied::before, .copy-burst i, button.is-copied .copy-check, button.is-copied .copy-check path { animation:none; } button.is-copied::before, .copy-burst { display:none; } button.is-copied .copy-check path { stroke-dashoffset:0; } }
 /* Hover rules (accent colour) must not win over the confirmation colour. */
 button.is-copied, button.is-copied:hover, button.is-copied:focus-visible, button.is-copied:disabled { color:var(--ok) !important; }
 .gen-copy.is-copied, .gen-copy.is-copied:hover, .gen-copy.is-copied:focus-visible { background:var(--ok) !important; border-color:var(--ok) !important; }

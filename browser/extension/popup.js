@@ -556,7 +556,12 @@ function flashCopied(trigger, text) {
   trigger._copyOriginal = original;
   const check = icon("check"); check.classList.add("copy-check");
   current.replaceWith(check); trigger.classList.add("is-copied");
-  trigger._copiedTimer = setTimeout(() => { check.replaceWith(original); trigger.classList.remove("is-copied"); delete trigger._copyOriginal; }, 1500);
+  // A ring and a ring of sparks burst out from the button (purely decorative).
+  trigger.querySelector(".copy-burst")?.remove();
+  const burst = element("span", null, "copy-burst"); burst.setAttribute("aria-hidden", "true");
+  for (let i = 0; i < 8; i++) { const spark = element("i"); spark.style.setProperty("--a", `${i * 45 + 22}deg`); burst.append(spark); }
+  trigger.append(burst);
+  trigger._copiedTimer = setTimeout(() => { burst.remove(); check.replaceWith(original); trigger.classList.remove("is-copied"); delete trigger._copyOriginal; }, 1500);
 }
 async function copyField(item, field, allowFallback = false, trigger = null) {
   try {
