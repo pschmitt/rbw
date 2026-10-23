@@ -277,7 +277,7 @@ function renderAccountStates(primary) {
   list.replaceChildren(...accountStates.map(account => {
     const row = element("li", null, account.unlocked ? "is-unlocked" : "is-locked");
     const nameLabel = element("span", account.name === primary ? `${account.name} *` : account.name); nameLabel.style.setProperty("--account-color", colorOf(account.name)); nameLabel.classList.add("account-name");
-    const status = element("small", account.excluded ? "Excluded from search" : account.unlocked ? "Unlocked" : "Locked"); status.dataset.state = account.unlocked ? "unlocked" : "locked";
+    const status = element("small", account.excluded ? "Excluded from search" : account.unlocked ? "Unlocked" : "Locked"); status.dataset.state = account.excluded ? "excluded" : account.unlocked ? "unlocked" : "locked";
     row.append(element("div", null, "account-info"));
     row.firstChild.append(nameLabel, status);
     if (!account.unlocked) {
