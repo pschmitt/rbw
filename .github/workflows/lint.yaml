@@ -1,0 +1,42 @@
+name: lint
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+env:
+  SOURCE_DATE_EPOCH: 0
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev libgtk-4-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: cargo-bins/cargo-binstall@main
+      # --force: rust-cache restores binstall's install manifest but not the
+      # binary itself, so without it binstall skips the (missing) install
+      - run: cargo binstall --no-confirm --force cargo-deny
+      - run: cargo clippy --all-targets --all-features -- -Dwarnings
+      - run: cargo fmt --check
+      - run: cargo deny --all-features check
+  lint-extension:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: browser
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: browser/package-lock.json
+      - run: npm ci
+      - run: npm run lint

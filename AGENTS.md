@@ -22,7 +22,7 @@ and leave release and deployment actions pending.
 
 Never release a version with failing CI. Before publishing a version tag or
 release, updating the consumer's flake pin, or deploying that version, verify
-that every release CI workflow (`build`, `test`, and `docker`) has completed
+that every release CI workflow (`build`, `lint`, `test`, and `docker`) has completed
 successfully for the exact commit being released. Pending, running, cancelled,
 or missing checks do not count as green. A version-bump commit may be pushed
 to trigger CI; fix failures and wait for green checks before releasing it.

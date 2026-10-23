@@ -90,7 +90,7 @@ tag() {
     die "HEAD ${commit:0:7} is not on origin/main; push it first"
     return 1
   fi
-  for workflow in build test docker
+  for workflow in build lint test docker
   do
     wait_for_workflow "$commit" "$workflow" || return 1
   done
