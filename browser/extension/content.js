@@ -31,12 +31,29 @@ function rbwConnectFrame(state, onTimeout) {
   state.retry = setInterval(handoff, 250);
   state.readyTimer = setTimeout(() => { if (state.shownAt == null) onTimeout(); }, 4000);
 }
-function rbwReleaseFrame(state) { clearInterval(state.retry); clearTimeout(state.readyTimer); state.host.remove(); }
+// The window slides/fades in and out. The animated element is the box (or the
+// iframe) inside the shadow root: the host's own styles stay pinned by
+// rbwHardenCss, and clicks only count 500 ms after it was shown anyway.
+const rbwMotion = () => !matchMedia("(prefers-reduced-motion: reduce)").matches;
+function rbwAnimate(state, keyframes, options) {
+  try { return (state.box || state.frame)?.animate(keyframes, options) || null; } catch (_) { return null; }
+}
+function rbwReleaseFrame(state) {
+  clearInterval(state.retry); clearTimeout(state.readyTimer);
+  const gone = () => state.host.remove();
+  // Only what was visible animates out; it can't be clicked meanwhile.
+  const out = state.shownAt != null && state.host.isConnected && rbwMotion()
+    ? (state.host.style.setProperty("pointer-events", "none", "important"),
+      rbwAnimate(state, [{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(-6px) scale(.98)" }], { duration: 140, easing: "ease-in", fill: "forwards" }))
+    : null;
+  if (!out) { gone(); return; }
+  out.onfinish = gone; out.oncancel = gone; setTimeout(gone, 400);
+}
 // Handles frame plumbing messages; returns true when handled.
 function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }) {
   if (message.action === "rbw_inline_size") {
     state.frame.style.setProperty("height", `${Math.max(0, Math.min(Number(message.height) || 0, 600))}px`, "important");
-    if (state.shownAt == null) { clearInterval(state.retry); clearTimeout(state.readyTimer); state.host.style.setProperty("visibility", "visible", "important"); state.shownAt = performance.now(); }
+    if (state.shownAt == null) { clearInterval(state.retry); clearTimeout(state.readyTimer); state.host.style.setProperty("visibility", "visible", "important"); state.shownAt = performance.now(); if (rbwMotion()) rbwAnimate(state, [{ opacity: 0, transform: "translateY(-8px) scale(.98)" }, { opacity: 1, transform: "none" }], { duration: 190, easing: "cubic-bezier(.2,.8,.2,1)" }); }
     onSize?.();
   } else if (message.action === "rbw_inline_close") onClose();
   else if (message.action === "rbw_inline_verify") respond({ ok: rbwVerifyFrame(state, message.x, message.y) });

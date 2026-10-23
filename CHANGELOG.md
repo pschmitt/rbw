@@ -4,6 +4,8 @@
 
 ### Added
 
+* Browser extension: the autofill suggestion window and the save-login prompt
+  injected into pages slide and fade in and out (not with reduced motion).
 * Accounts have a `color` (`rbw account set NAME --color #rrggbb` or
   `--clear-color`; `accounts.<name>.color` in the Nix module). The native host
   reports it and the extension uses it as the default badge color, so the
