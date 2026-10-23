@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+* browser-daemon's live view gets its vault popover and passkey prompt from
+  here (`browser/browser-daemon`): a live-view extension in the browser
+  extension's look (its theme, icons and logo). `browser/build.py` writes it to
+  `browser/dist/browser-daemon`, the flake exports it as
+  `browser-daemon-extension`. The signed browser packages do not change.
+
 ## [2.28.0] - 2026-10-23
 
 ### Added

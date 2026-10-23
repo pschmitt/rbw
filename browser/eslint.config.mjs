@@ -29,6 +29,20 @@ export default [
     },
   },
   {
+    // browser-daemon's live-view extension: classic scripts too; bridge.js
+    // gives the others bd, $, esc, ico, header and warning.
+    files: ["browser-daemon/**/*.js"],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: "script",
+      globals: { ...globals.browser, icon: "readonly", bd: "readonly", $: "readonly", esc: "readonly", ico: "readonly", header: "readonly", warning: "readonly" },
+    },
+    rules: {
+      "no-unused-vars": ["error", { vars: "local", args: "none", caughtErrors: "none" }],
+      "no-redeclare": ["error", { builtinGlobals: false }],
+    },
+  },
+  {
     files: ["tests/**/*.mjs"],
     languageOptions: { ecmaVersion: 2023, sourceType: "module", globals: globals.node },
   },

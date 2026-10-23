@@ -52,6 +52,14 @@ browser/tests/e2e/run.sh firefox|chromium   # end-to-end tests (run on a scratch
 Releases go through `tools/release.sh` (`just release-prepare X.Y.Z`, then
 `just release-tag`); the tag's release workflow signs the packages.
 
+## browser-daemon
+
+[browser-daemon](https://github.com/pschmitt/browser-daemon)'s live view
+fills from rbw too. Its vault popover and passkey prompt live in
+[`browser-daemon/`](browser-daemon/README.md), share this extension's
+`theme.css`, `icons.js` and logo, and are built with it (`build.py`, flake
+package `browser-daemon-extension`); they are not in the signed packages.
+
 ## More
 
 - [Reference](../docs/browser.md): permissions and data flow, limits, setup

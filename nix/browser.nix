@@ -43,6 +43,28 @@ in
         ln -s "$out/${firefoxId}.xpi" "$out/share/mozilla/extensions/${firefoxAppId}/${firefoxId}.xpi"
       '';
 
+  # browser-daemon's live-view extension (browser/browser-daemon): the vault
+  # popover and passkey prompt of its live view, in this extension's look.
+  browser-daemon-extension =
+    pkgs.runCommand "rbw-browser-daemon-extension-${version}"
+      {
+        nativeBuildInputs = [ pkgs.python3 ];
+        src = pkgs.lib.fileset.toSource {
+          root = ../.;
+          fileset = pkgs.lib.fileset.unions [
+            ../Cargo.toml
+            ../browser/build.py
+            ../browser/browser-daemon
+            ../browser/extension/theme.css
+            ../browser/extension/icons.js
+            ../browser/extension/icons/rbw-48.png
+          ];
+        };
+      }
+      ''
+        python3 "$src/browser/build.py" --browser-daemon "$out"
+      '';
+
   chromium-addon =
     pkgs.runCommand "rbw-chromium-addon-${version}"
       {

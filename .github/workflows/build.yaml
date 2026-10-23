@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Check extension scripts
         run: |
-          for script in browser/extension/*.js
+          for script in browser/extension/*.js browser/browser-daemon/*.js
           do
             node --check "$script"
           done

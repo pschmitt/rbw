@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Package the shared extension without a JS toolchain or dependencies."""
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -11,6 +12,35 @@ ROOT = Path(__file__).resolve().parent
 # The extension shares rbw's version: one release ships the CLI, native host
 # and both browser packages.
 VERSION = tomllib.loads((ROOT.parent / "Cargo.toml").read_text())["package"]["version"]
+# What browser-daemon's live-view extension (browser-daemon/) takes from this
+# one, so both look alike.
+SHARED = ["theme.css", "icons.js", "icons/rbw-48.png"]
+
+
+def browser_daemon(dest):
+    """browser-daemon's live-view extension: its pages, the shared files and
+    rbw's version. Not part of the signed browser packages."""
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    for source in (ROOT / "browser-daemon").iterdir():
+        if source.is_file() and source.name not in {"manifest.json", "README.md"}:
+            shutil.copy2(source, dest / source.name)
+    for name in SHARED:
+        (dest / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / "extension" / name, dest / name)
+    manifest = json.loads((ROOT / "browser-daemon" / "manifest.json").read_text())
+    manifest["version"] = VERSION
+    (dest / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    print(dest)
+
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--browser-daemon", type=Path, metavar="DIR", help="build only browser-daemon's live-view extension, into DIR")
+args = parser.parse_args()
+if args.browser_daemon:
+    browser_daemon(args.browser_daemon)
+    raise SystemExit
 for target in ("firefox", "chromium"):
     dest = ROOT / "dist" / target
     if dest.exists():
@@ -71,3 +101,4 @@ for target in ("firefox", "chromium"):
             if source.is_file():
                 archive.write(source, source.relative_to(dest))
     print(dest)
+browser_daemon(ROOT / "dist" / "browser-daemon")

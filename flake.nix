@@ -333,6 +333,9 @@
                 touch "$out"
               '';
         }
+        // {
+          inherit (self.packages.${system}) browser-daemon-extension;
+        }
         // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           # Evaluates (without building rbw) a NixOS system enabling
           # `services.rbw-unlockd` and checks the units it renders.
