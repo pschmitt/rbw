@@ -812,19 +812,7 @@ fn cascade_unlock(unlocked: &str) {
     let Ok(config) = rbw::config::Config::load() else {
         return;
     };
-    let followers: Vec<String> = config
-        .accounts()
-        .iter()
-        .filter(|account| {
-            account.unlock.policy != rbw::config::UnlockPolicy::Never
-                && account
-                    .unlock
-                    .credentials
-                    .as_ref()
-                    .is_some_and(|source| source.account == unlocked)
-        })
-        .map(|account| account.name.clone())
-        .collect();
+    let followers = config.credential_followers(unlocked);
     if followers.is_empty() {
         return;
     }

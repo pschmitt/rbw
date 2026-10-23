@@ -1079,6 +1079,23 @@ impl Config {
 
     // ---- credential_source resolution ---------------------------------------
 
+    // The accounts whose master password lives in `source`'s vault
+    // (`unlock.credentials.account == source`) and that may be unlocked
+    // without being asked to (`unlock.policy` isn't `never`). Only direct
+    // followers: unlocking one of them is what finds its own followers.
+    pub fn credential_followers(&self, source: &str) -> Vec<String> {
+        self.accounts()
+            .iter()
+            .filter(|account| {
+                account.unlock.policy != UnlockPolicy::Never
+                    && account.unlock.credentials.as_ref().is_some_and(
+                        |credentials| credentials.account == source,
+                    )
+            })
+            .map(|account| account.name.clone())
+            .collect()
+    }
+
     // Walk the `credential_source` chain starting at account `start`,
     // returning the ordered list of account names visited (starting with
     // `start` itself) up to the first account that has no `credential_source`
@@ -1305,7 +1322,7 @@ pub async fn device_id(config: &Config) -> Result<String> {
 mod test {
     use super::{
         parse_config, Account, ClipboardMechanism, Config, CredentialSource,
-        Error, ExcludeContext, ItemAlias, SecretString,
+        Error, ExcludeContext, ItemAlias, SecretString, UnlockPolicy,
     };
 
     fn named(name: &str, email: &str) -> Account {
@@ -1401,6 +1418,44 @@ mod test {
         // Idempotent: a second call adds nothing.
         c.migrate_legacy();
         assert_eq!(c.accounts.len(), 1);
+    }
+
+    // The accounts that follow an unlocked one are the ones whose credential
+    // source names it, in config order, without those that opt out.
+    #[test]
+    fn credential_followers_are_direct_followers_that_may_be_unlocked() {
+        let follow = |name: &str, source: &str, policy: UnlockPolicy| {
+            let mut account = named(name, &format!("{name}@x.com"));
+            account.unlock.credentials = Some(CredentialSource {
+                account: source.to_string(),
+                item: None,
+            });
+            account.unlock.policy = policy;
+            account
+        };
+        let mut c = Config::new();
+        c.accounts = vec![
+            named("personal", "a@x.com"),
+            follow("work", "personal", UnlockPolicy::OnDemand),
+            follow("shared", "personal", UnlockPolicy::Always),
+            follow("private", "personal", UnlockPolicy::Never),
+            follow("nested", "work", UnlockPolicy::OnDemand),
+            named("standalone", "s@x.com"),
+        ];
+        assert_eq!(
+            c.credential_followers("personal"),
+            vec!["work".to_string(), "shared".to_string()]
+        );
+        assert_eq!(
+            c.credential_followers("work"),
+            vec!["nested".to_string()]
+        );
+        assert_eq!(c.credential_followers("nested"), Vec::<String>::new());
+        assert_eq!(
+            c.credential_followers("standalone"),
+            Vec::<String>::new()
+        );
+        assert_eq!(c.credential_followers("unknown"), Vec::<String>::new());
     }
 
     // A chain with no `credential_source` at all is just the start account.

@@ -906,3 +906,52 @@ $NEW_PASSWORD_1"
     save PASSWORD "$NEW_PASSWORD_2"
     [ "$(vault_digest)" = "$DIGEST" ]
 }
+
+# Unlocking an account must also unlock the accounts whose master password is
+# stored in its vault (`unlock.credentials`): the agent starts a background
+# `rbw unlock --credentials-only` for each, so this goes through the real
+# agent -> CLI -> agent round trip rather than a mock.
+wait_for_unlocked() {
+    local account="$1" attempt
+    for attempt in $(seq 1 30); do
+        "$RBW" --account "$account" unlocked >/dev/null 2>&1 && return 0
+        sleep 1
+    done
+    return 1
+}
+
+@test "unlocking an account must unlock the accounts that follow it, unless they opt out" {
+    FOLLOWER_EMAIL="follower@example.com"
+    FOLLOWER_PASSWORD="FollowerPassword123!"
+    "$REPO_ROOT/target/debug/examples/e2e_register_account" \
+        --base-url "$BASE_URL" --email "$FOLLOWER_EMAIL" \
+        --password "$FOLLOWER_PASSWORD" --name "rbw e2e follower"
+    "$RBW" account add follower --email "$FOLLOWER_EMAIL" --base-url "$BASE_URL"
+    echo "$FOLLOWER_PASSWORD" | "$RBW" --account follower login --stdin
+
+    # The follower's master password lives in the primary account's vault.
+    "$RBW" --account e2e generate e2e-follower-login follower --length 12 >/dev/null
+    "$RBW" --account e2e sync
+    ID="$("$RBW" --account e2e list e2e-follower-login --fields id | head -1)"
+    "$RBW" --account e2e set -y --password "$FOLLOWER_PASSWORD" "$ID"
+    "$RBW" --account e2e sync
+    "$RBW" account set follower \
+        --credential-source-account e2e \
+        --credential-source-item e2e-follower-login
+
+    "$RBW" lock
+    run "$RBW" --account follower unlocked
+    [ "$status" -ne 0 ]
+
+    echo "$PASSWORD" | "$RBW" unlock --stdin
+    wait_for_unlocked follower
+
+    # An account that opted out of being unlocked on its own stays locked.
+    "$RBW" lock
+    "$RBW" account set follower --unlock never
+    echo "$PASSWORD" | "$RBW" unlock --stdin
+    sleep 8
+    run "$RBW" --account follower unlocked
+    [ "$status" -ne 0 ]
+    "$RBW" account set follower --unlock on-demand
+}
