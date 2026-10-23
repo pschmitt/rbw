@@ -181,7 +181,7 @@ async function settings() {
 }
 async function refreshVaultLockState(preferences = null) {
   try {
-    const prefs = preferences || await settings();
+    if (!preferences) await settings();
     const status = await native({ action: "status", account: null });
     noteStatus(status);
   } catch (_) { /* The toolbar badge is cosmetic; the popup reports connection errors. */ }
@@ -797,13 +797,14 @@ async function handle(message) {
     }
     case "sync": case "audit":
       return native({ action: message.action, account });
-    case "lock":
+    case "lock": {
       fillCycles.clear(); popupNotices.clear(); popupStates.clear(); editDraft = null; unsavedLogins = [];
       for (const id of [...pending.keys()]) finish(id, { error: "Vault locked." });
       for (const offer of offers.values()) clearTimeout(offer.timer); offers.clear();
       const result = await native({ action: "lock", account });
       setVaultUnlocked(false);
       return result;
+    }
     case "export": return native({ action: "export", account, format: message.format, password: message.password || null, attachments: !!message.attachments });
     case "import": return native({ action: "import", account, token: message.token, password: message.password || null, overwrite: !!message.overwrite });
     case "agent_settings": return native({ action: "agent_settings", account });

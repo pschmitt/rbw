@@ -11,3 +11,6 @@
 # Python packaging helpers
 __pycache__/
 REPORT.md
+
+# Extension lint tooling
+node_modules/
