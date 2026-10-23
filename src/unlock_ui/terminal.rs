@@ -319,11 +319,11 @@ fn status_text(view: &View<'_>) -> String {
         "◎"
     };
     if view.success {
-        "✓  Unlocked".to_string()
+        "✓ Unlocked".to_string()
     } else if view.checking {
-        format!("{indicator}  Checking master password…")
+        format!("{indicator} Checking master password…")
     } else {
-        format!("{indicator}  {}", view.fingerprint.text())
+        format!("{indicator} {}", view.fingerprint.text())
     }
 }
 
@@ -456,19 +456,6 @@ fn draw_compact(
         Rect::new(x, y, width, 1),
     );
     y += 1;
-    if status_rows > 0 {
-        frame.render_widget(
-            Paragraph::new(status)
-                .style(Style::default().fg(if view.success {
-                    Color::Rgb(134, 239, 172)
-                } else {
-                    CYAN
-                }))
-                .wrap(Wrap { trim: true }),
-            Rect::new(x, y, width, status_rows),
-        );
-        y += status_rows;
-    }
     let border = if view.success {
         Color::Rgb(134, 239, 172)
     } else if view.checking {
@@ -519,6 +506,19 @@ fn draw_compact(
         );
     }
     y += field_rows;
+    if status_rows > 0 {
+        frame.render_widget(
+            Paragraph::new(status)
+                .style(Style::default().fg(if view.success {
+                    Color::Rgb(134, 239, 172)
+                } else {
+                    CYAN
+                }))
+                .wrap(Wrap { trim: true }),
+            Rect::new(x, y, width, status_rows),
+        );
+        y += status_rows;
+    }
     if hint_rows > 0 {
         frame.render_widget(
             Paragraph::new(hint)

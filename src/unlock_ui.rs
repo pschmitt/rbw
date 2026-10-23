@@ -131,9 +131,7 @@ impl FingerprintStatus {
 
     pub const fn text(self) -> &'static str {
         match self {
-            Self::Disabled => {
-                "Fingerprint not configured. Use your master password"
-            }
+            Self::Disabled => "Fingerprint not configured.",
             Self::Starting => "Connecting to fingerprint reader…",
             Self::Ready => "Touch the reader with any enrolled finger",
             Self::Selected(message) => message,
@@ -141,9 +139,7 @@ impl FingerprintStatus {
             Self::NoMatch => "Not recognized. Try your finger again",
             Self::Checking => "Fingerprint matched. Checking vault access…",
             Self::Accepted => "Fingerprint verified",
-            Self::Unavailable => {
-                "Fingerprint unavailable. Use your master password"
-            }
+            Self::Unavailable => "Fingerprint unavailable.",
         }
     }
 }
