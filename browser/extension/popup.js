@@ -174,7 +174,9 @@ function element(tag, text, cls) { const el = document.createElement(tag); if (t
 function button(label, action, cls) { const el = element("button", label, cls); el.type = "button"; el.onclick = () => attempt(async () => { el.disabled = true; try { await action(); } finally { el.disabled = false; } }); return el; }
 function actionButton(label, name, action, cls) {
   const el = button("", action, cls); el.append(icon(name));
-  if (name === "copy") el.onclick = () => attempt(action); // never disabled: spamming replays the confirmation if (label && !cls?.split(" ").includes("icon")) el.append(element("span", label)); el.title = label; el.setAttribute("aria-label", label); return el;
+  // Copy buttons are never disabled while copying: spamming replays the confirmation.
+  if (name === "copy") el.onclick = () => attempt(action);
+  if (label && !cls?.split(" ").includes("icon")) el.append(element("span", label)); el.title = label; el.setAttribute("aria-label", label); return el;
 }
 function pretty(value) { return value.replaceAll("_", " ").replace(/^./, c => c.toUpperCase()); }
 function countVisibleTabs() {
