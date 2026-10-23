@@ -18,22 +18,31 @@ function showPolicy(policy) {
 // ticked here (two or more are merged). The legacy single `account`
 // preference counts as a selection of one.
 function chosenAccounts(prefs) { return Array.isArray(prefs.accounts) ? prefs.accounts : []; }
-let accountTarget = null;
+let accountTarget = null, accountPrefs = {};
+async function saveAccountColor(name, value) {
+  const prefs = await request("set_preferences", { preferences: { accountColors: { ...(accountPrefs.accountColors || {}), [name]: value } } });
+  renderAccountChoices(await status(), prefs); $("message").textContent = "Color saved.";
+}
 $("account").onchange = () => { accountTarget = $("account").value; };
 function renderAccountChoices(state, prefs) {
   const names = state.accounts || [], chosen = chosenAccounts(prefs).filter(name => names.includes(name));
   $("accounts-section").hidden = names.length < 2;
   $("accounts-cli").checked = !chosen.length;
-  const list = $("accounts-list"); list.hidden = !chosen.length && $("accounts-cli").checked;
+  accountPrefs = prefs;
+  // Always listed: lock state and colors matter even when the CLI picks the accounts.
+  const list = $("accounts-list"); list.hidden = false;
   list.replaceChildren(...names.map(name => {
-    const label = document.createElement("label"); label.className = "switch-row";
+    const label = document.createElement("div"); label.className = "switch-row";
+    const color = document.createElement("input"); color.type = "color"; color.className = "account-color"; color.value = accountColor(name, names, prefs.accountColors); color.title = `Color for ${name}`; color.setAttribute("aria-label", `Color for ${name}`);
+    color.onchange = () => attempt(() => saveAccountColor(name, color.value));
     const text = document.createElement("span"); text.textContent = state.primary === name ? `${name} (primary)` : name;
     // Locked accounts can't be searched or autofilled until unlocked.
     const lock = (state.accountStates || []).find(s => s.name === name);
     if (lock && !lock.unlocked) { const hint = document.createElement("small"); hint.textContent = `Locked: run rbw -a ${name} unlock, or unlock it in the popup`; text.append(hint); }
     else if (lock) { const hint = document.createElement("small"); hint.textContent = "Unlocked"; text.append(hint); }
     const input = document.createElement("input"); input.type = "checkbox"; input.className = "switch"; input.value = name; input.checked = chosen.includes(name); input.disabled = $("accounts-cli").checked;
-    label.append(text, input); return label;
+    text.onclick = () => { if (!input.disabled) input.click(); };
+    label.append(color, text, input); return label;
   }));
   const picked = chosen.length ? chosen : names;
   $("account-target-row").hidden = names.length < 2;

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+* Browser extension: each account has a color (picker in the settings page's
+  Accounts section, distinct defaults from a palette) used for its badge in the
+  item list and item view and for its name in the account menu. The Accounts
+  section is always listed now, so lock state and colors are visible even when
+  the rbw command line picks the accounts.
 ### Fixed
 
 * `rbw account unlock enroll` (desktop keyring) asks for the master password in

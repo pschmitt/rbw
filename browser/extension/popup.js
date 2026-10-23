@@ -36,7 +36,8 @@ function stopTotp() { clearTimeout(totpTimer); }
 const initialSearch = new URLSearchParams(location.search).get("search");
 const initialSettings = new URLSearchParams(location.search).get("settings") === "1";
 let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
-let accountNames = [], accountStates = [];
+let accountNames = [], accountStates = [], allAccounts = [];
+const colorOf = name => accountColor(name, allAccounts, preference.accountColors);
 const needsPassword = new Set(); // locked accounts whose row shows a password field
 let loadingRequests = 0, loadingTimer, notificationTimer, notificationLeaving, stateTimer, ready = false;
 const filterIds = ["query", "kind", "folder", "collection", "view"];
@@ -257,6 +258,7 @@ function selectOptions(id, values, label) {
 // With several accounts the empty value means "All accounts" (the default);
 // with one, the account is always named.
 function renderAccounts(accounts, primary, chosen, states = []) {
+  allAccounts = accounts.slice(); // every configured account: default colors go by this list
   // Only the accounts picked in the settings (if any) are on offer.
   const picked = Array.isArray(preference.accounts) ? preference.accounts.filter(name => accounts.includes(name)) : [];
   if (picked.length) accounts = picked;
@@ -274,7 +276,7 @@ function renderAccountStates(primary) {
   list.hidden = $("account").value !== "" || accountStates.length < 2;
   list.replaceChildren(...accountStates.map(account => {
     const row = element("li", null, account.unlocked ? "is-unlocked" : "is-locked");
-    row.append(element("span", account.name === primary ? `${account.name} *` : account.name), element("small", account.excluded ? "excluded from search" : account.unlocked ? "unlocked" : "locked"));
+    const nameLabel = element("span", account.name === primary ? `${account.name} *` : account.name); nameLabel.style.setProperty("--account-color", colorOf(account.name)); nameLabel.classList.add("account-name"); row.append(nameLabel, element("small", account.excluded ? "excluded from search" : account.unlocked ? "unlocked" : "locked"));
     if (!account.unlocked) {
       // Unlock tries the account's own policy first (as `rbw unlock` does: a
       // credential source, a phone approval, chained unlocking); the key
@@ -457,7 +459,7 @@ function itemRow(item) {
   const title = element("div", null, "item-title");
   if (item.favorite) { const star = icon("star"); star.classList.add("favorite-icon"); title.append(star); }
   title.append(element("strong", item.name));
-  if (item.account && accountNames.length > 1) title.append(element("small", item.account, "item-account"));
+  if (item.account && accountNames.length > 1) { const badge = element("small", item.account, "item-account"); badge.style.setProperty("--account-color", colorOf(item.account)); title.append(badge); }
   main.append(title, element("small", item.username || labels[item.type])); row.append(main);
   const autofillExcluded = Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(item.id);
   if (autofillExcluded) title.append(element("small", "Autofill off", "item-autofill-disabled"));
@@ -691,7 +693,7 @@ async function openDetail(item, trashed = false) {
   const meta = [["folder", "Folder", detail.cipher.folder], ["vault", "Account", accountNames.length > 1 ? detail.account : null], ["collections", collectionNames.length === 1 ? "Collection" : "Collections", collectionNames.join(", ")]].filter(([, , value]) => value);
   if (meta.length) {
     const row = element("div", null, "detail-meta");
-    for (const [name, label, value] of meta) { const chip = element("span", null, "meta-chip"); chip.title = `${label}: ${value}`; chip.append(icon(name), element("small", label), element("strong", value)); row.append(chip); }
+    for (const [name, label, value] of meta) { const chip = element("span", null, "meta-chip"); if (label === "Account") chip.style.setProperty("--account-color", colorOf(value)); chip.title = `${label}: ${value}`; chip.append(icon(name), element("small", label), element("strong", value)); row.append(chip); }
     content.append(row);
   }
   if (preference.favicons && firstUri) {

@@ -753,3 +753,13 @@ details.history-section[open] > summary svg { transform:rotate(180deg); }
 #message.popup-notification.is-leaving { animation:banner-out 320ms ease-in both; }
 #message.popup-notification { --pulse-color:var(--notice-color); }
 .collection-picker .switch-row { padding:7px 0; }
+/* Per-account colors (set on the settings page; defaults from a palette). */
+.item-title .item-account, .meta-chip[style*="--account-color"] { color:var(--account-color, var(--muted)); border-color:color-mix(in srgb, var(--account-color, var(--line)) 55%, transparent); background:color-mix(in srgb, var(--account-color, transparent) 14%, transparent); }
+.meta-chip[style*="--account-color"] small { color:inherit; opacity:.75; }
+.account-states li span.account-name { color:var(--account-color); }
+.account-states li span.account-name::before { content:""; display:inline-block; width:8px; height:8px; margin-right:6px; border-radius:50%; background:var(--account-color); }
+input[type=color].account-color { appearance:none; flex:none; width:24px; height:24px; padding:0; border:2px solid var(--line); border-radius:50%; background:none; cursor:pointer; overflow:hidden; }
+input[type=color].account-color::-webkit-color-swatch-wrapper { padding:0; }
+input[type=color].account-color::-webkit-color-swatch { border:0; border-radius:50%; }
+input[type=color].account-color::-moz-color-swatch { border:0; border-radius:50%; }
+input[type=color].account-color:hover, input[type=color].account-color:focus-visible { border-color:var(--accent); outline:none; }

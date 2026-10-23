@@ -127,7 +127,7 @@ async function fetchFavicon(origin) {
   const value = await iconDataUrl(origin + "/favicon.ico");
   if (generation === metadataEpoch) cacheFor(faviconCache, origin, value, 5 * 60 * 1000, 128); return value;
 }
-const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, allowHttpFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", copyTotp: false, autofillTotp: false, theme: "dark", popupAccount: "", accounts: [], showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true, uriMatchDefault: "" };
+const defaults = { passkeys: true, savePrompts: true, inlineSuggestions: true, autoFill: false, allowHttpFill: false, autofillBlocklist: "", autofillExcludedItems: [], animations: "on", animationSpeed: "normal", cardSecurityCode: "off", copyTotp: false, autofillTotp: false, theme: "dark", popupAccount: "", accounts: [], accountColors: {}, showGenerator: true, showSend: false, showHealth: false, showSettings: true, favicons: true, uriMatchDefault: "" };
 // Empty means "use rbw's defaultUriMatch"; otherwise an override for this browser.
 const URI_MATCH_TYPES = ["domain", "base_domain", "host", "starts_with", "exact", "regular_expression", "never"];
 let uriMatchOverride = null;
@@ -849,6 +849,7 @@ async function handle(message) {
       const old = await settings();
       const next = { ...old, ...Object.fromEntries(Object.entries(message.preferences || {}).filter(([k, v]) => (k in defaults) && typeof v === typeof defaults[k])) };
       next.autofillBlocklist = String(next.autofillBlocklist || "").slice(0, 16384);
+      next.accountColors = Object.fromEntries(Object.entries(next.accountColors && typeof next.accountColors === "object" ? next.accountColors : {}).filter(([name, color]) => name.length <= 256 && /^#[0-9a-f]{6}$/i.test(color)).slice(0, 64));
       next.accounts = Array.isArray(next.accounts) ? [...new Set(next.accounts.filter(name => typeof name === "string" && name.length <= 256))].slice(0, 64) : [];
       next.autofillExcludedItems = Array.isArray(next.autofillExcludedItems) ? [...new Set(next.autofillExcludedItems.filter(item => typeof item === "string" && item.length > 0 && item.length <= 128))].slice(0, 10000) : [];
       if (!["off", "on", "plaid"].includes(next.animations)) next.animations = "on";
