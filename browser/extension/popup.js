@@ -199,6 +199,7 @@ function show(page) {
   if (page === "vault") requestAnimationFrame(() => { if (currentPage === "vault" && !$("vault").hidden && document.activeElement?.closest?.("#vault") == null) $("query").focus({ preventScroll: true }); });
   // Resume and discard prompts only make sense inside the editor.
   if (currentPage === "editor" && page !== "editor") { forgetEditDraft(); if (!$("message-action").hidden) message(""); }
+  if (currentPage !== page) { $("account-menu").hidden = true; $("account-details").open = false; }
   remember();
   currentPage = page; document.documentElement.dataset.page = page;
   if (page === "generator") { if (!generatedValue) regenerateSoon(); renderGeneratorSite().catch(() => {}); }
@@ -300,10 +301,10 @@ function renderAccountStates(primary) {
       submit.type = "submit"; form.append(input, submit); form.hidden = !needsPassword.has(account.name);
       form.onsubmit = event => {
         event.preventDefault(); const password = input.value; input.value = "";
-        attempt(async () => { message("Unlocking…"); await request("unlock", { account: account.name, password }); needsPassword.delete(account.name); await refresh(); });
+        attempt(async () => { message("Unlocking…"); await request("unlock", { account: account.name, password }); needsPassword.delete(account.name); await refresh(); if (accountStates.every(a => a.unlocked || a.excluded)) { $("account-menu").hidden = true; $("account-details").open = false; } });
       };
       const unlock = actionButton("Unlock", "unlock", async () => {
-        try { await request("unlock", { account: account.name }); needsPassword.delete(account.name); await refresh(); }
+        try { await request("unlock", { account: account.name }); needsPassword.delete(account.name); await refresh(); if (accountStates.every(a => a.unlocked || a.excluded)) { $("account-menu").hidden = true; $("account-details").open = false; } }
         catch (_) { needsPassword.add(account.name); form.hidden = false; input.focus(); message(`${account.name} needs its master password.`); }
       }, "primary");
       unlock.title = `Unlock ${account.name} with its configured unlock method`;
@@ -375,7 +376,7 @@ async function unlockAccounts(names) {
     try { await request("unlock", { account: name }); needsPassword.delete(name); } catch (_) { failed.push(name); needsPassword.add(name); }
   }
   await refresh();
-  if (failed.length) $("account-menu").hidden = false; // their rows now ask for a password
+  $("account-menu").hidden = !failed.length; // their rows now ask for a password
   message(failed.length ? `${failed.join(", ")} need${failed.length === 1 ? "s" : ""} a master password: enter it in the account menu.` : "", failed.length > 0);
 }
 // Accounts an item could be saved or moved to.
@@ -1354,7 +1355,9 @@ async function fingerprintUnlock(account = null) {
     await attempt(async () => {
       try { await request("unlock", account ? { fingerprint: true, account } : { fingerprint: true }); }
       catch (error) { if (fingerprintCancelled) return; throw error; }
-      lockedSeen = null; await refresh(); message("Vault unlocked.");
+      lockedSeen = null; await refresh();
+      if (accountStates.every(a => a.unlocked || a.excluded)) { $("account-menu").hidden = true; $("account-details").open = false; }
+      message("Vault unlocked.");
     });
   } finally { fingerprintPort.disconnect(); fingerprintPort = null; if (!account) fingerprintScanning(false); }
 }
