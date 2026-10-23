@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.27.3] - 2026-10-23
+
 ### Added
 
 * Unlocking an account now also unlocks the accounts whose master password is
