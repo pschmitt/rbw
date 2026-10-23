@@ -576,6 +576,13 @@ enum Opt {
         all: bool,
         #[arg(
             long,
+            help = "Replace an unlock already in progress (stopping it) and \
+                prompt even if the account is already unlocked",
+            conflicts_with_all = ["credentials_only", "stdin", "pinentry", "all"]
+        )]
+        force: bool,
+        #[arg(
+            long,
             hide = true,
             help = "Unlock only from the account's configured credential \
                 source, never prompting; do nothing without one (used by \
@@ -3986,9 +3993,11 @@ fn main() {
             pinentry,
             ui,
             no_echo,
+            force,
             credentials_only,
         } => {
             commands::set_unlock_ui(ui, no_echo);
+            commands::set_unlock_force(force);
             if credentials_only {
                 commands::unlock_from_credential_source().map(|_| ())
             } else if pinentry {

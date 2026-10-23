@@ -1284,10 +1284,22 @@ $("cancel-passkey").onclick = () => attempt(async () => {
   }
 });
 for (const action of ["lock", "sync"]) $(action).onclick = () => attempt(async () => { if (action === "lock" && !await confirmLock()) return; message("Working…"); await request(action); message(""); await refresh(); });
+// The master password is tried on every locked account when "All accounts" is
+// selected (accounts with a different password just stay locked); with one
+// account chosen it unlocks that one.
+async function unlockWithPassword(password) {
+  const targets = $("account").value === "" ? accountStates.filter(account => !account.unlocked && !account.excluded).map(account => account.name) : [];
+  if (targets.length < 2) { await request("unlock", { password }); return; }
+  let unlockedAny = false, lastError;
+  for (const name of targets) {
+    try { await request("unlock", { password, account: name }); unlockedAny = true; } catch (error) { lastError = error; }
+  }
+  if (!unlockedAny) throw lastError;
+}
 $("unlock-form").onsubmit = event => {
   event.preventDefault();
   const password = $("unlock-password").value; $("unlock-password").value = "";
-  attempt(async () => { await cancelFingerprint(); message("Unlocking…"); await request("unlock", { password }); lockedSeen = null; await refresh(); message("Vault unlocked."); });
+  attempt(async () => { await cancelFingerprint(); message("Unlocking…"); await unlockWithPassword(password); lockedSeen = null; await refresh(); message("Vault unlocked."); });
 };
 // Fingerprint unlock runs in rbw-browser (fprintd, then the enrolled keyring
 // password); the popup only sees the outcome. The "rbw-fingerprint" port lets

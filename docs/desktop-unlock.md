@@ -103,6 +103,10 @@ rbw unlock --no-echo
 rbw config set unlockNoEcho true
 # Password-only recovery with the existing configured pinentry:
 rbw unlock --pinentry
+
+# Stop an unlock dialog that is already open and show a new one (also when
+# already unlocked):
+rbw unlock --force
 ```
 
 `unlockUi` accepts `auto` (default), `terminal`, `gtk`, and `pinentry` and is

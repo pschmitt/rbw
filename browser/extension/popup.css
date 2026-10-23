@@ -806,3 +806,8 @@ input[type=color].account-color:hover, input[type=color].account-color:focus-vis
 .account-details .account-states { margin-top:2px; }
 .account-bulk { margin:6px 0 4px; }
 .account-bulk button { width:100%; justify-content:center; padding:9px 12px; }
+
+/* Locked: one way to unlock up front (the password field); the accounts
+   are a collapsed summary below it, not a second set of buttons. */
+html[data-page=locked] #account-menu { order:3; border-bottom:0; border-top:1px solid var(--line); }
+html[data-page=locked] #account-menu > label, html[data-page=locked] #state, html[data-page=locked] #account-bulk, html[data-page=locked] #account-menu .actions { display:none; }

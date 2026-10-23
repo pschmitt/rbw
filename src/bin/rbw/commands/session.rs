@@ -76,8 +76,12 @@ pub(super) fn unlock_impl(
     visited: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     ensure_agent()?;
+    let force = UNLOCK_FORCE.load(std::sync::atomic::Ordering::Relaxed);
+    if force {
+        stop_running_unlock()?;
+    }
     let _unlocking = lock_unlocking()?;
-    if password.is_none() && crate::actions::unlocked().is_ok() {
+    if !force && password.is_none() && crate::actions::unlocked().is_ok() {
         return Ok(());
     }
     let (password, totp) = password.map_or_else(
@@ -108,10 +112,8 @@ pub(super) fn unlock_impl(
 // of logging in a second time with the same TOTP code. The lock is released
 // when the returned file is dropped.
 pub(super) fn lock_unlocking() -> anyhow::Result<std::fs::File> {
-    let name = active_account()?.name;
-    let path = rbw::dirs::pid_file()
-        .with_file_name(format!("unlock-{}.lock", name.replace('/', "_")));
-    let file = std::fs::OpenOptions::new()
+    let path = unlocking_lock_path()?;
+    let mut file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
@@ -119,7 +121,50 @@ pub(super) fn lock_unlocking() -> anyhow::Result<std::fs::File> {
         .with_context(|| format!("failed to open {}", path.display()))?;
     rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive)
         .context("failed to lock the unlock of this account")?;
+    // Record who holds the lock so `unlock --force` can replace it.
+    file.set_len(0)?;
+    std::io::Write::write_all(
+        &mut file,
+        std::process::id().to_string().as_bytes(),
+    )?;
     Ok(file)
+}
+
+fn unlocking_lock_path() -> anyhow::Result<std::path::PathBuf> {
+    let name = active_account()?.name;
+    Ok(rbw::dirs::pid_file()
+        .with_file_name(format!("unlock-{}.lock", name.replace('/', "_"))))
+}
+
+// Stops the `rbw unlock` that currently holds this account's unlock lock (and
+// so owns its dialog), then waits for the lock to be released.
+fn stop_running_unlock() -> anyhow::Result<()> {
+    let Ok(text) = std::fs::read_to_string(unlocking_lock_path()?) else {
+        return Ok(());
+    };
+    let Some(pid) = text
+        .trim()
+        .parse::<i32>()
+        .ok()
+        .filter(|pid| *pid != 0)
+        .filter(|pid| u32::try_from(*pid) != Ok(std::process::id()))
+        .and_then(rustix::process::Pid::from_raw)
+    else {
+        return Ok(());
+    };
+    if rustix::process::test_kill_process(pid).is_ok() {
+        eprintln!("Stopping the unlock already in progress (pid {pid:?}).");
+        let _ =
+            rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+    }
+    Ok(())
+}
+
+pub static UNLOCK_FORCE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_unlock_force(force: bool) {
+    UNLOCK_FORCE.store(force, std::sync::atomic::Ordering::Relaxed);
 }
 
 // Unlocks the active account from its `credential_source` alone and never

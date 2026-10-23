@@ -18,93 +18,9 @@ pub(super) struct GtkDialog {
     spinner: gtk::Spinner,
     cancel_button: gtk::Button,
     busy: bool,
-    logo: gtk::DrawingArea,
-    animation: Rc<Cell<LogoAnimation>>,
     submit: Rc<Cell<bool>>,
     cancel: Rc<Cell<bool>>,
     issue: Option<&'static str>,
-}
-
-#[derive(Clone, Copy, Default)]
-struct LogoAnimation {
-    tick: u64,
-    success: bool,
-    active: bool,
-}
-
-// The same dotted crab the terminal dialog draws, one dot per cell.
-const CRAB: [&str; 20] = [
-    "........................................................",
-    "....#..#..#......................................#..#..#......",
-    "..#..#..#..#....#..............................#....#..#..#..#....",
-    "..#..#..#..#..#..#..............................#..#..#..#..#..#....",
-    "..#..#..#..#..#..#..............................#..#..#..#..#..#....",
-    "..#..#..#..#..#..#..............................#..#..#..#..#..#....",
-    "....#..#..#..#..........#..#..#..#..#..#..#..#..........#..#..#..#......",
-    "........#..#....#..#..#..#..#..#..#..#..#..#..#..#..#..#....#..#..........",
-    "..........#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#............",
-    "..........#..#..#..#..#....#..#..#..#..#..#....#..#..#..#..#............",
-    "..........#..#..#..#........#..#..#..#........#..#..#..#............",
-    "........#..#..#..#..#..#....#..#..#..#..#..#....#..#..#..#..#..#..........",
-    "..........#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#............",
-    "..........#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#............",
-    "............#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..............",
-    "......#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..........",
-    "........#..#..#..#......#..#..#..#..#..#..#..#....#..#..#..#............",
-    "......#....#..#............................#..#....#..........",
-    "........#....................................#............",
-    "......#........................................#..........",
-];
-
-fn logo(animation: Rc<Cell<LogoAnimation>>) -> gtk::DrawingArea {
-    let icon = gtk::DrawingArea::builder()
-        .content_width(112)
-        .content_height(80)
-        .valign(gtk::Align::Center)
-        .build();
-    let animate = gtk::Settings::default().is_none_or(|settings| {
-        settings.property::<bool>("gtk-enable-animations")
-    });
-    icon.set_draw_func(move |_, context, width, height| {
-        let animation = animation.get();
-        let pitch = f64::from(width) / 28.0;
-        let top = (f64::from(height) - pitch * 20.0) / 2.0;
-        let time =
-            f64::from(u32::try_from(animation.tick % 1000).unwrap_or(0));
-        for (y, row) in (0_u32..).zip(CRAB) {
-            let pending = animation.success
-                && animate
-                && u64::from(y) > animation.tick / 2;
-            for (x, cell) in (0_u32..).zip(row.bytes()) {
-                if cell != b'#' {
-                    continue;
-                }
-                let (fx, fy) = (f64::from(x), f64::from(y));
-                if animation.success && !pending {
-                    context.set_source_rgb(0.18, 0.76, 0.49);
-                } else if animation.active && animate {
-                    let phase = (time / 8.0 + (fx + fy) / 6.0).sin().abs();
-                    context.set_source_rgba(
-                        0.61,
-                        0.45,
-                        0.90,
-                        0.35_f64.mul_add(phase, 0.65),
-                    );
-                } else {
-                    context.set_source_rgb(0.61, 0.45, 0.90);
-                }
-                context.arc(
-                    (fx + 0.5) * pitch,
-                    (fy + 0.5).mul_add(pitch, top),
-                    pitch * 0.36,
-                    0.0,
-                    std::f64::consts::TAU,
-                );
-                let _ = context.fill();
-            }
-        }
-    });
-    icon
 }
 
 impl GtkDialog {
@@ -148,8 +64,13 @@ impl GtkDialog {
         button.set_child(Some(&button_content));
         header.pack_end(&button);
         window.set_titlebar(Some(&header));
-        let animation = Rc::new(Cell::new(LogoAnimation::default()));
-        let logo = logo(animation.clone());
+        let logo = gtk::gdk_pixbuf::Pixbuf::from_read(std::io::Cursor::new(
+            include_bytes!("assets/rbw.png").as_slice(),
+        ))
+        .context("could not load rbw logo")?;
+        let logo = gtk::Image::from_pixbuf(Some(&logo));
+        logo.set_pixel_size(96);
+        logo.set_valign(gtk::Align::Center);
         // GtkPasswordEntry uses GtkPasswordEntryBuffer, backed by GTK's secure
         // allocator. No reveal button, undo history, or app clipboard actions.
         let entry = gtk::PasswordEntry::builder()
@@ -233,8 +154,6 @@ impl GtkDialog {
             spinner,
             cancel_button,
             busy: false,
-            logo,
-            animation,
             submit,
             cancel,
             issue: None,
@@ -286,16 +205,6 @@ impl Frontend for GtkDialog {
     }
     fn render(&mut self, view: &View<'_>) -> anyhow::Result<()> {
         self.title.set_label(view.title);
-        self.animation.set(LogoAnimation {
-            tick: view.tick,
-            success: view.success,
-            active: !matches!(
-                view.fingerprint,
-                super::FingerprintStatus::Disabled
-                    | super::FingerprintStatus::Unavailable
-            ),
-        });
-        self.logo.queue_draw();
         self.status.set_label(if view.success {
             "✓ Unlocked"
         } else {
