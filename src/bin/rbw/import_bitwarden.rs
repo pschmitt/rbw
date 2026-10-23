@@ -12,8 +12,8 @@
 //   the decrypted attachment files under `attachments/<item id>/...`.
 //
 // This module only turns any of those into a `BwVault` (or, for the
-// encrypted/zip cases, into the inputs `commands.rs` needs to do so); the
-// actual `BwVault` -> `ImportedEntry` conversion stays in `commands.rs`,
+// encrypted/zip cases, into the inputs `commands` needs to do so); the
+// actual `BwVault` -> `ImportedEntry` conversion stays in `commands/import_types.rs`,
 // since that's where the (private) `Imported*` types live.
 
 use std::io::{Read as _, Write as _};

@@ -94,7 +94,7 @@ mod test {
 
     // Serializes tests that mutate `$TMUX`/`$STY`, since env vars are
     // process-global and `cargo test` runs tests in parallel by default.
-    // Mirrors the same pattern used in `commands.rs`'s env-var tests.
+    // Mirrors the same pattern used in `commands/test.rs`'s env-var tests.
     static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
         std::sync::OnceLock::new();
 
