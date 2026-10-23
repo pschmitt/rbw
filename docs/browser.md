@@ -50,6 +50,12 @@ and lock cover exactly those accounts (even ones `exclude_from` hides from
 the CLI), and the popup picker offers only them; with one, the extension
 behaves as a single-account setup.
 
+Each account has a color for its badge in the list and item view. By default
+it comes from the rbw config (`rbw account set NAME --color #rrggbb`, or
+`accounts.<name>.color` in the Nix module), else the extension picks a
+distinct one from a palette. A color picked on the settings page overrides
+the config's; its reset button goes back to following it.
+
 ## Permissions and data flow
 
 Only this extension's popup and options pages can call the native API. Isolated

@@ -4,6 +4,11 @@
 
 ### Added
 
+* Accounts have a `color` (`rbw account set NAME --color #rrggbb` or
+  `--clear-color`; `accounts.<name>.color` in the Nix module). The native host
+  reports it and the extension uses it as the default badge color, so the
+  "use the rbw command line's accounts" setting covers colors too; a color
+  picked in the extension overrides it, with a reset button.
 * Browser extension: each account has a color (picker in the settings page's
   Accounts section, distinct defaults from a palette) used for its badge in the
   item list and item view and for its name in the account menu. The Accounts

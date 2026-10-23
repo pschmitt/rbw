@@ -20,7 +20,9 @@ function showPolicy(policy) {
 function chosenAccounts(prefs) { return Array.isArray(prefs.accounts) ? prefs.accounts : []; }
 let accountTarget = null, accountPrefs = {};
 async function saveAccountColor(name, value) {
-  const prefs = await request("set_preferences", { preferences: { accountColors: { ...(accountPrefs.accountColors || {}), [name]: value } } });
+  const colors = { ...(accountPrefs.accountColors || {}), [name]: value };
+  if (value === null) delete colors[name];
+  const prefs = await request("set_preferences", { preferences: { accountColors: colors } });
   renderAccountChoices(await status(), prefs); $("message").textContent = "Color saved.";
 }
 $("account").onchange = () => { accountTarget = $("account").value; };
@@ -33,7 +35,7 @@ function renderAccountChoices(state, prefs) {
   const list = $("accounts-list"); list.hidden = false;
   list.replaceChildren(...names.map(name => {
     const label = document.createElement("div"); label.className = "switch-row";
-    const color = document.createElement("input"); color.type = "color"; color.className = "account-color"; color.value = accountColor(name, names, prefs.accountColors); color.title = `Color for ${name}`; color.setAttribute("aria-label", `Color for ${name}`);
+    const color = document.createElement("input"); color.type = "color"; color.className = "account-color"; color.value = accountColor(name, names, prefs.accountColors, state.accountColors); color.title = `Color for ${name}`; color.setAttribute("aria-label", `Color for ${name}`);
     color.onchange = () => attempt(() => saveAccountColor(name, color.value));
     const text = document.createElement("span"); text.textContent = state.primary === name ? `${name} (primary)` : name;
     // Locked accounts can't be searched or autofilled until unlocked.
@@ -42,7 +44,11 @@ function renderAccountChoices(state, prefs) {
     else if (lock) { const hint = document.createElement("small"); hint.textContent = "Unlocked"; text.append(hint); }
     const input = document.createElement("input"); input.type = "checkbox"; input.className = "switch"; input.value = name; input.checked = chosen.includes(name); input.disabled = $("accounts-cli").checked;
     text.onclick = () => { if (!input.disabled) input.click(); };
-    label.append(color, text, input); return label;
+    // A color picked here overrides the rbw config's; reset follows it again.
+    const reset = document.createElement("button"); reset.type = "button"; reset.className = "icon account-color-reset"; reset.append(icon("undo"));
+    reset.title = "Use the color from the rbw config (or the default)"; reset.setAttribute("aria-label", reset.title);
+    reset.hidden = !prefs.accountColors?.[name]; reset.onclick = () => attempt(() => saveAccountColor(name, null));
+    label.append(color, text, reset, input); return label;
   }));
   const picked = chosen.length ? chosen : names;
   $("account-target-row").hidden = names.length < 2;

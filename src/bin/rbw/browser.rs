@@ -579,6 +579,15 @@ fn merged_lookup(
     Ok(merged)
 }
 
+// The colors set in the rbw config (`rbw account set --color`), by account.
+fn account_colors(config: &rbw::config::Config) -> Value {
+    json!(config
+        .accounts()
+        .iter()
+        .filter_map(|a| a.color.as_ref().map(|c| (a.name.clone(), c.clone())))
+        .collect::<std::collections::BTreeMap<_, _>>())
+}
+
 // Status for the merged view: every configured account with its lock
 // state, plus the single-account fields (for the primary) older code reads.
 fn merged_status(
@@ -601,6 +610,7 @@ fn merged_status(
         "fingerprint": fingerprint,
         "fingerprint_auto_start": fingerprint && config.browser.fingerprint_auto_start,
         "accounts": config.accounts().iter().map(|a| &a.name).collect::<Vec<_>>(),
+        "accountColors": account_colors(&config),
         "accountStates": states.iter().map(|s| json!({"name": s.name, "primary": s.primary, "unlocked": agent_ok && s.unlocked, "excluded": s.excluded, "policy": s.policy, "fingerprint": fingerprint_unlock(&config, Some(&s.name)).is_some()})).collect::<Vec<_>>(),
         "primary": primary}))
 }
@@ -687,6 +697,7 @@ fn dispatch(
                 "fingerprint": fingerprint,
                 "fingerprint_auto_start": fingerprint && config.browser.fingerprint_auto_start,
                 "accounts": config.accounts().iter().map(|a| &a.name).collect::<Vec<_>>(),
+                "accountColors": account_colors(&config),
                 "primary": config.primary_account_name()}))
         }
         Operation::Unlock {

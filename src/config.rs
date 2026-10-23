@@ -673,6 +673,18 @@ pub struct Account {
     // See `ExcludeContext`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude_from: Vec<ExcludeContext>,
+    // A `#rrggbb` color that tells this account's entries apart in the
+    // browser extension (and other UIs); unset means the UI picks one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+/// Whether `value` is a `#rrggbb` color.
+#[must_use]
+pub fn is_hex_color(value: &str) -> bool {
+    value.len() == 7
+        && value.starts_with('#')
+        && value[1..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// Native messaging is disabled until a browser and extension are enrolled.
@@ -950,6 +962,7 @@ impl Config {
                 client_cert_path: self.client_cert_path.clone(),
                 unlock: UnlockConfig::default(),
                 exclude_from: Vec::new(),
+                color: None,
             }];
         }
         Vec::new()
@@ -1042,6 +1055,7 @@ impl Config {
             client_cert_path: self.client_cert_path.take(),
             unlock: UnlockConfig::default(),
             exclude_from: Vec::new(),
+            color: None,
         });
         if self.primary_account.is_none() {
             self.primary_account = Some(name);

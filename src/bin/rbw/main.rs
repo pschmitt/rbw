@@ -2699,6 +2699,16 @@ enum AccountCmd {
         clear_exclude_from: bool,
         #[arg(
             long,
+            value_name = "#RRGGBB",
+            conflicts_with = "clear_color",
+            help = "Color that tells this account's entries apart in the \
+                browser extension"
+        )]
+        color: Option<String>,
+        #[arg(long, help = "Remove this account's color (the UI picks one)")]
+        clear_color: bool,
+        #[arg(
+            long,
             help = "Name of another configured account whose vault holds \
                 this account's master password; optionally combine with \
                 --credential-source-item to name the Login item explicitly, \
@@ -3899,6 +3909,8 @@ fn main() {
                 unlock,
                 exclude_from,
                 clear_exclude_from,
+                color,
+                clear_color,
                 credential_source_account,
                 credential_source_item,
                 clear_credential_source,
@@ -3910,6 +3922,8 @@ fn main() {
                 credential_source_account,
                 credential_source_item,
                 clear_credential_source,
+                color,
+                clear_color,
             ),
         },
         Opt::SecretService { secret_service } => {

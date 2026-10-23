@@ -9,7 +9,7 @@ The main sections are:
 * `accounts` and `primaryAccount`: account connection settings use keys such
   as `ssoId`, `baseUrl`, `identityUrl`, `uiUrl`, `notificationsUrl`, and
   `clientCertPath`. Per-account unlock settings live under `unlock`, and
-  account exclusions under `excludeFrom`.
+  account exclusions under `excludeFrom`, and the account's `color`.
 * `agent`: `syncInterval` controls background synchronization and
   `lockTimeout` controls how long unlocked keys remain in memory.
 * `pinentry`: `command` selects the pinentry executable and `timeout` sets

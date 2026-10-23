@@ -65,7 +65,7 @@ This writes `~/.config/rbw/config.yaml` (or `$XDG_CONFIG_HOME/rbw/config.yaml`);
 unset options are left out instead of being written as `null`. See the
 module's option documentation (`home-manager option programs.rbw.declarative`
 or your editor's Nix LSP) for every setting, including
-`accounts.<name>.unlock`, `accounts.<name>.excludeFrom`, `tui.keys` and
+`accounts.<name>.unlock`, `accounts.<name>.excludeFrom`, `accounts.<name>.color`, `tui.keys` and
 `browser.clients`. `programs.rbw.declarative.package` selects the rbw package.
 
 The options live under `programs.rbw.declarative` because Home Manager's own

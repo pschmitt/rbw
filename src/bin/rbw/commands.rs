@@ -3805,6 +3805,7 @@ pub fn account_add(
         client_cert_path: None,
         unlock: rbw::config::UnlockConfig::default(),
         exclude_from: Vec::new(),
+        color: None,
     });
     // The first account is always primary; otherwise only if asked.
     if primary || first {
@@ -3876,7 +3877,7 @@ pub fn account_set_primary(name: &str) -> anyhow::Result<()> {
 // Change one or more per-account settings (currently `unlock.policy`,
 // `exclude_from`, and `unlock.credentials` — see `rbw::config::Account`).
 // Leaves a setting unchanged when its argument is `None`/empty/`false`.
-#[allow(clippy::fn_params_excessive_bools)]
+#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
 pub fn account_set(
     name: &str,
     unlock: Option<rbw::config::UnlockPolicy>,
@@ -3885,19 +3886,29 @@ pub fn account_set(
     credential_source_account: Option<String>,
     credential_source_item: Option<String>,
     clear_credential_source: bool,
+    color: Option<String>,
+    clear_color: bool,
 ) -> anyhow::Result<()> {
+    if let Some(color) = &color {
+        anyhow::ensure!(
+            rbw::config::is_hex_color(color),
+            "--color must be a #rrggbb hex color, got '{color}'"
+        );
+    }
     if unlock.is_none()
         && exclude_from.is_empty()
         && !clear_exclude_from
         && credential_source_account.is_none()
         && credential_source_item.is_none()
         && !clear_credential_source
+        && color.is_none()
+        && !clear_color
     {
         anyhow::bail!(
             "nothing to change: pass --unlock, --exclude-from (repeatable) \
             or --clear-exclude-from, --credential-source-account and \
             optionally --credential-source-item, or \
-            --clear-credential-source"
+            --clear-credential-source, or --color/--clear-color"
         );
     }
     if clear_exclude_from && !exclude_from.is_empty() {
@@ -3929,6 +3940,11 @@ pub fn account_set(
         account.exclude_from = Vec::new();
     } else if !exclude_from.is_empty() {
         account.exclude_from = exclude_from;
+    }
+    if clear_color {
+        account.color = None;
+    } else if let Some(color) = color {
+        account.color = Some(color.to_lowercase());
     }
     if clear_credential_source {
         account.unlock.credentials = None;
@@ -20747,6 +20763,7 @@ pub fn tui_account_add(
         client_cert_path: None,
         unlock: rbw::config::UnlockConfig::default(),
         exclude_from: Vec::new(),
+        color: None,
     });
     if first {
         config.primary_account = Some(name.to_string());

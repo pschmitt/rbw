@@ -287,6 +287,17 @@ let
             password comes from. Mirrors `UnlockConfig` in `src/config.rs`.
           '';
         };
+        # `color` in `src/config.rs`.
+        color = mkOption {
+          type = types.nullOr (types.strMatching "#[0-9a-fA-F]{6}");
+          default = null;
+          example = "#6d9cff";
+          description = ''
+            A `#rrggbb` color that tells this account's entries apart in the
+            browser extension (badges in the list and item view). Unset means
+            the extension picks a distinct default per account.
+          '';
+        };
         # See `ExcludeContext` in `src/config.rs`.
         excludeFrom = mkOption {
           type = types.listOf (

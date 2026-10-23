@@ -36,8 +36,8 @@ function stopTotp() { clearTimeout(totpTimer); }
 const initialSearch = new URLSearchParams(location.search).get("search");
 const initialSettings = new URLSearchParams(location.search).get("settings") === "1";
 let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
-let accountNames = [], accountStates = [], allAccounts = [];
-const colorOf = name => accountColor(name, allAccounts, preference.accountColors);
+let accountNames = [], accountStates = [], allAccounts = [], cliAccountColors = {};
+const colorOf = name => accountColor(name, allAccounts, preference.accountColors, cliAccountColors);
 const needsPassword = new Set(); // locked accounts whose row shows a password field
 let loadingRequests = 0, loadingTimer, notificationTimer, notificationLeaving, stateTimer, ready = false;
 const filterIds = ["query", "kind", "folder", "collection", "view"];
@@ -257,7 +257,8 @@ function selectOptions(id, values, label) {
 }
 // With several accounts the empty value means "All accounts" (the default);
 // with one, the account is always named.
-function renderAccounts(accounts, primary, chosen, states = []) {
+function renderAccounts(accounts, primary, chosen, states = [], cliColors = {}) {
+  cliAccountColors = cliColors || {};
   allAccounts = accounts.slice(); // every configured account: default colors go by this list
   // Only the accounts picked in the settings (if any) are on offer.
   const picked = Array.isArray(preference.accounts) ? preference.accounts.filter(name => accounts.includes(name)) : [];
@@ -389,7 +390,7 @@ async function refresh(knownStatus = null, skipList = false) {
   try {
   clearVault();
   const status = knownStatus || await request("status"); unlocked = status.unlocked;
-  renderAccounts(status.accounts || [], status.primary, preference.popupAccount, status.accountStates || []);
+  renderAccounts(status.accounts || [], status.primary, preference.popupAccount, status.accountStates || [], status.accountColors);
   $("state").textContent = unlocked ? (status.merged ? `${status.accountStates.filter(a => a.unlocked).length} of ${status.accountStates.length} accounts unlocked · shared rbw-agent` : "Unlocked · shared rbw-agent") : "Locked";
   $("unlock").disabled = unlocked; $("lock").disabled = !unlocked;
   $("header-lock").disabled = !unlocked;
@@ -1555,7 +1556,7 @@ attempt(async () => {
     $("setting-passkeys").checked = preference.passkeys; $("setting-copy-totp").checked = preference.copyTotp === true; $("setting-autofill-totp").checked = preference.autofillTotp === true; $("setting-save").checked = preference.savePrompts; $("theme").value = preference.theme; $("setting-favicons").checked = preference.favicons;
     if (!approvalId) approvalId = await activeApproval();
     const status = initial.status;
-    renderAccounts(status.accounts || [], status.primary, preference.popupAccount, status.accountStates || []);
+    renderAccounts(status.accounts || [], status.primary, preference.popupAccount, status.accountStates || [], status.accountColors);
     const saved = status.unlocked && !approvalId && !initialSearch ? initial.saved : null;
     if (initialSearch) {
       $("view").value = "vault";
