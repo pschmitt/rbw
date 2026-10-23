@@ -5,6 +5,9 @@
 ### Added
 
 * Browser extension: the clipboard marker in the autofill notice wiggles once.
+* Browser extension: the editor's URIs have more room between them, show the
+  site's favicon (the Android icon for androidapp://; it follows what you type),
+  and "Match for all" is now "Bulk edit match detection".
 * Browser extension: the editor's URI list is redesigned: each URI is a card with
   the URI on the full width and its match detection and remove button on a line
   below, instead of three cramped columns.

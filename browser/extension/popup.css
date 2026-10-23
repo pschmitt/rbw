@@ -527,9 +527,10 @@ input:not([type=checkbox]):focus,select:focus,textarea:focus {
   }
 }
 /* Per-URI rows: address, match detection, remove. */
-.uri-editor { display:grid; gap:6px; margin:10px 0; }
+.uri-editor { display:grid; gap:12px; margin:16px 0; }
+#edit-uris { display:grid; gap:16px; }
 .uri-editor > span { font-size:13px; }
-.uri-row { display:grid; gap:8px; padding:8px; border:1px solid var(--line); border-radius:10px; background:var(--panel); }
+.uri-row { display:grid; gap:12px; padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--panel); }
 .uri-row .uri-input { width:100%; }
 .uri-meta { display:flex; align-items:center; gap:8px; }
 .uri-meta-label { flex:none; color:var(--muted); font-size:12px; }
@@ -767,3 +768,9 @@ input[type=color].account-color:hover, input[type=color].account-color:focus-vis
 .item-lead { position:relative; flex-shrink:0; display:grid; }
 .account-emblem { position:absolute; top:-7px; left:-7px; box-sizing:border-box; min-width:16px; height:16px; padding:0 3px; border-radius:999px; background:var(--account-color); color:var(--emblem-text, #111); font-size:8px; font-weight:800; line-height:16px; letter-spacing:.02em; text-align:center; pointer-events:none; box-shadow:0 0 0 2px var(--panel); }
 .uri-row .uri-input, .uri-row select { background:var(--bg); }
+.uri-top { display:flex; align-items:center; gap:10px; }
+.uri-top .uri-input { flex:1; width:auto; }
+.uri-edit-icon { flex:none; width:24px; height:24px; display:grid; place-items:center; }
+.uri-edit-icon .uri-icon { width:22px; height:22px; }
+.uri-edit-icon svg { width:20px; height:20px; }
+.uri-tools { margin-top:4px; }

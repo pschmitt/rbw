@@ -849,10 +849,21 @@ function uriMatchSelect(value = "") {
 function addUri(uri = {}) {
   const row = element("div", null, "uri-row");
   const input = element("input", null, "uri-input"); input.value = uri.uri || ""; input.placeholder = "https://example.com"; input.spellcheck = false; input.setAttribute("aria-label", "Website URI");
-  // The URI gets the full width; match detection and remove sit on a line below it.
+  // The site's favicon (or the Android icon for androidapp://) leads the URI; it follows what's typed.
+  const lead = element("span", null, "uri-edit-icon"); let iconTimer, iconToken = 0;
+  const refreshIcon = () => {
+    const token = ++iconToken; lead.replaceChildren();
+    const value = input.value.trim();
+    if (value.startsWith("androidapp:") || preference.favicons) uriIcon(value, lead, () => token === iconToken);
+    if (!lead.childElementCount) { const globe = element("span", null, "uri-icon uri-icon-placeholder"); globe.append(icon("globe")); lead.append(globe); }
+  };
+  input.addEventListener("input", () => { clearTimeout(iconTimer); iconTimer = setTimeout(refreshIcon, 400); });
+  refreshIcon();
+  const top = element("div", null, "uri-top"); top.append(lead, input);
+  // Match detection and remove sit on a line below the URI.
   const meta = element("div", null, "uri-meta");
   meta.append(element("span", "Match detection", "uri-meta-label"), uriMatchSelect(uri.match_type || ""), actionButton("Remove URI", "trash", () => row.remove(), "icon danger"));
-  row.append(input, meta);
+  row.append(top, meta);
   $("edit-uris").append(row);
   return input;
 }
