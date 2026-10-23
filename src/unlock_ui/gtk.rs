@@ -18,88 +18,90 @@ pub(super) struct GtkDialog {
     spinner: gtk::Spinner,
     cancel_button: gtk::Button,
     busy: bool,
-    fingerprint_icon: gtk::DrawingArea,
-    animation: Rc<Cell<FingerprintAnimation>>,
+    logo: gtk::DrawingArea,
+    animation: Rc<Cell<LogoAnimation>>,
     submit: Rc<Cell<bool>>,
     cancel: Rc<Cell<bool>>,
     issue: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Default)]
-struct FingerprintAnimation {
+struct LogoAnimation {
     tick: u64,
     success: bool,
     active: bool,
 }
 
-fn fingerprint_icon(
-    animation: Rc<Cell<FingerprintAnimation>>,
-) -> gtk::DrawingArea {
+// The same dotted crab the terminal dialog draws, one dot per cell.
+const CRAB: [&str; 20] = [
+    "........................................................",
+    "....#..#..#......................................#..#..#......",
+    "..#..#..#..#....#..............................#....#..#..#..#....",
+    "..#..#..#..#..#..#..............................#..#..#..#..#..#....",
+    "..#..#..#..#..#..#..............................#..#..#..#..#..#....",
+    "..#..#..#..#..#..#..............................#..#..#..#..#..#....",
+    "....#..#..#..#..........#..#..#..#..#..#..#..#..........#..#..#..#......",
+    "........#..#....#..#..#..#..#..#..#..#..#..#..#..#..#..#....#..#..........",
+    "..........#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#............",
+    "..........#..#..#..#..#....#..#..#..#..#..#....#..#..#..#..#............",
+    "..........#..#..#..#........#..#..#..#........#..#..#..#............",
+    "........#..#..#..#..#..#....#..#..#..#..#..#....#..#..#..#..#..#..........",
+    "..........#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#............",
+    "..........#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#............",
+    "............#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..............",
+    "......#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..#..........",
+    "........#..#..#..#......#..#..#..#..#..#..#..#....#..#..#..#............",
+    "......#....#..#............................#..#....#..........",
+    "........#....................................#............",
+    "......#........................................#..........",
+];
+
+fn logo(animation: Rc<Cell<LogoAnimation>>) -> gtk::DrawingArea {
     let icon = gtk::DrawingArea::builder()
-        .content_width(64)
-        .content_height(64)
+        .content_width(112)
+        .content_height(80)
+        .valign(gtk::Align::Center)
         .build();
     let animate = gtk::Settings::default().is_none_or(|settings| {
         settings.property::<bool>("gtk-enable-animations")
     });
     icon.set_draw_func(move |_, context, width, height| {
         let animation = animation.get();
-        let scale = f64::from(width.min(height)) / 64.0;
-        context.scale(scale, scale);
-        if animation.success {
-            context.set_source_rgb(0.53, 0.94, 0.67);
-        } else {
-            context.set_source_rgb(0.44, 0.86, 0.90);
-        }
-        context.set_line_width(2.5);
-        context.set_line_cap(gtk::cairo::LineCap::Round);
-        for (start, controls) in [
-            ((7.0, 29.0), [10.0, 1.0, 54.0, 1.0, 57.0, 29.0]),
-            ((7.0, 37.0), [7.0, 18.0, 17.0, 13.0, 28.0, 12.0]),
-            ((36.0, 12.0), [55.0, 13.0, 57.0, 33.0, 53.0, 45.0]),
-            ((14.0, 44.0), [5.0, 10.0, 51.0, 8.0, 49.0, 34.0]),
-            ((21.0, 49.0), [9.0, 20.0, 40.0, 11.0, 43.0, 30.0]),
-            ((31.0, 56.0), [16.0, 40.0, 19.0, 24.0, 29.0, 24.0]),
-            ((35.0, 26.0), [43.0, 32.0, 31.0, 42.0, 46.0, 52.0]),
-            ((29.0, 32.0), [26.0, 42.0, 32.0, 49.0, 38.0, 55.0]),
-        ] {
-            context.move_to(start.0, start.1);
-            context.curve_to(
-                controls[0],
-                controls[1],
-                controls[2],
-                controls[3],
-                controls[4],
-                controls[5],
-            );
-            let _ = context.stroke();
-        }
-        if animation.success {
-            let progress = if animate {
-                f64::from(u32::try_from(animation.tick.min(20)).unwrap_or(20))
-                    / 20.0
-            } else {
-                1.0
-            };
-            context.set_line_width(2.0);
-            context.arc(
-                32.0,
-                32.0,
-                30.0,
-                -std::f64::consts::FRAC_PI_2,
-                std::f64::consts::TAU
-                    .mul_add(progress, -std::f64::consts::FRAC_PI_2),
-            );
-            let _ = context.stroke();
-        } else if animate && animation.active {
-            let y =
-                f64::from(u32::try_from(animation.tick % 90).unwrap_or(0))
-                    .mul_add(0.6, 5.0);
-            context.set_source_rgba(0.71, 0.60, 1.0, 0.8);
-            context.set_line_width(1.5);
-            context.move_to(6.0, y);
-            context.line_to(58.0, y);
-            let _ = context.stroke();
+        let pitch = f64::from(width) / 28.0;
+        let top = (f64::from(height) - pitch * 20.0) / 2.0;
+        let time =
+            f64::from(u32::try_from(animation.tick % 1000).unwrap_or(0));
+        for (y, row) in (0_u32..).zip(CRAB) {
+            let pending = animation.success
+                && animate
+                && u64::from(y) > animation.tick / 2;
+            for (x, cell) in (0_u32..).zip(row.bytes()) {
+                if cell != b'#' {
+                    continue;
+                }
+                let (fx, fy) = (f64::from(x), f64::from(y));
+                if animation.success && !pending {
+                    context.set_source_rgb(0.18, 0.76, 0.49);
+                } else if animation.active && animate {
+                    let phase = (time / 8.0 + (fx + fy) / 6.0).sin().abs();
+                    context.set_source_rgba(
+                        0.61,
+                        0.45,
+                        0.90,
+                        0.35_f64.mul_add(phase, 0.65),
+                    );
+                } else {
+                    context.set_source_rgb(0.61, 0.45, 0.90);
+                }
+                context.arc(
+                    (fx + 0.5) * pitch,
+                    (fy + 0.5).mul_add(pitch, top),
+                    pitch * 0.36,
+                    0.0,
+                    std::f64::consts::TAU,
+                );
+                let _ = context.fill();
+            }
         }
     });
     icon
@@ -108,30 +110,6 @@ fn fingerprint_icon(
 impl GtkDialog {
     pub fn new(no_echo: bool) -> anyhow::Result<Self> {
         gtk::init().context("could not open GTK unlock window")?;
-        let provider = gtk::CssProvider::new();
-        provider.load_from_data(r"
-            window.rbw-unlock { background: #0d111b; color: #e8eef9; }
-            .rbw-card { background: #151b2a; border: 1px solid #2d394f; border-radius: 24px; padding: 34px; margin: 24px; }
-            .rbw-brand { color: #b59aff; font-weight: 800; letter-spacing: 3px; font-size: 12px; }
-            .rbw-title { font-size: 30px; font-weight: 800; margin-top: 12px; }
-            .rbw-subtitle { color: #95a3bb; font-size: 14px; }
-            .rbw-status { color: #71dce5; background: #182e39; border-radius: 14px; padding: 16px; margin-top: 12px; margin-bottom: 10px; }
-            .rbw-unlock passwordentry { background: #0d111b; color: #e8eef9; border: 1px solid #b59aff; border-radius: 12px; padding: 14px; caret-color: #b59aff; }
-            .rbw-error { color: #ff9aa6; font-size: 12px; }
-            .rbw-primary { transition: background-color 180ms ease-in-out, color 180ms ease-in-out, opacity 120ms ease-in-out; background: #b59aff; color: #161120; font-weight: 700; border-radius: 12px; padding: 12px 20px; border: none; }
-            .rbw-primary:disabled { opacity: 0.55; }
-            .rbw-primary.rbw-confirmed { background: #86efac; color: #10241b; opacity: 1; }
-            .rbw-verified { color: #86efac; }
-            .rbw-secondary { color: #95a3bb; background: transparent; border: none; }
-            .rbw-footer { color: #95a3bb; font-size: 11px; margin-top: 8px; }
-        ");
-        let display = gtk::gdk::Display::default()
-            .context("no display available for GTK unlock")?;
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
         let application = gtk::Application::builder()
             .application_id("org.rbw.Unlock")
             .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
@@ -144,46 +122,40 @@ impl GtkDialog {
             .modal(true)
             .resizable(false)
             .title("Unlock rbw")
-            .default_width(500)
-            .default_height(510)
+            .default_width(540)
             .build();
         window.set_icon_name(Some("rbw"));
-        window.add_css_class("rbw-unlock");
-        let card = gtk::Box::new(gtk::Orientation::Vertical, 14);
-        card.add_css_class("rbw-card");
-        let brand = gtk::Label::new(Some("◇  RBW  ·  YOUR VAULT"));
-        brand.add_css_class("rbw-brand");
-        brand.set_xalign(0.0);
-        let app_icon = gtk::gdk_pixbuf::Pixbuf::from_read(
-            std::io::Cursor::new(include_bytes!("assets/rbw.png").as_slice()),
-        )
-        .context("could not load rbw app icon")?;
-        let app_icon = gtk::Image::from_pixbuf(Some(&app_icon));
-        app_icon.set_pixel_size(48);
-        let branding = gtk::Box::new(gtk::Orientation::Horizontal, 14);
-        branding.append(&app_icon);
-        branding.append(&brand);
-        let heading = gtk::Label::new(Some("Welcome back"));
-        heading.add_css_class("rbw-title");
-        heading.set_xalign(0.0);
+        // Standard GNOME dialog layout: Cancel and the suggested action live
+        // in the header bar; the body follows the system light/dark theme.
+        let header = gtk::HeaderBar::new();
+        header.set_show_title_buttons(false);
         let title = gtk::Label::new(None);
-        title.add_css_class("rbw-subtitle");
-        title.set_xalign(0.0);
-        title.set_wrap(true);
-        let status = gtk::Label::new(None);
-        let fingerprint = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-        fingerprint.add_css_class("rbw-status");
-        let animation = Rc::new(Cell::new(FingerprintAnimation::default()));
-        let fingerprint_icon = fingerprint_icon(animation.clone());
-        fingerprint.append(&fingerprint_icon);
-        fingerprint.append(&status);
-        status.set_wrap(true);
-        status.set_xalign(0.0);
+        title.add_css_class("title");
+        header.set_title_widget(Some(&title));
+        let cancel_button = gtk::Button::with_label("Cancel");
+        header.pack_start(&cancel_button);
+        let button = gtk::Button::new();
+        button.add_css_class("suggested-action");
+        let button_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let button_icon =
+            gtk::Image::from_icon_name("changes-allow-symbolic");
+        let button_label = gtk::Label::new(Some("Unlock"));
+        let spinner = gtk::Spinner::new();
+        spinner.set_visible(false);
+        button_content.append(&spinner);
+        button_content.append(&button_icon);
+        button_content.append(&button_label);
+        button.set_child(Some(&button_content));
+        header.pack_end(&button);
+        window.set_titlebar(Some(&header));
+        let animation = Rc::new(Cell::new(LogoAnimation::default()));
+        let logo = logo(animation.clone());
         // GtkPasswordEntry uses GtkPasswordEntryBuffer, backed by GTK's secure
         // allocator. No reveal button, undo history, or app clipboard actions.
         let entry = gtk::PasswordEntry::builder()
             .placeholder_text("Master password")
             .show_peek_icon(false)
+            .hexpand(true)
             .build();
         entry.set_enable_undo(false);
         if no_echo {
@@ -195,40 +167,30 @@ impl GtkDialog {
                 )?;
             text.set_invisible_char('\0');
         }
+        let status = gtk::Label::new(None);
+        status.add_css_class("dim-label");
+        status.add_css_class("caption");
+        status.set_wrap(true);
+        status.set_xalign(0.0);
         let error = gtk::Label::new(None);
-        error.add_css_class("rbw-error");
+        error.add_css_class("error");
+        error.add_css_class("caption");
         error.set_wrap(true);
         error.set_xalign(0.0);
-        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        actions.set_halign(gtk::Align::End);
-        let cancel_button = gtk::Button::with_label("Cancel");
-        cancel_button.add_css_class("rbw-secondary");
-        let button = gtk::Button::new();
-        button.set_width_request(176);
-        let button_content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let button_icon =
-            gtk::Image::from_icon_name("changes-allow-symbolic");
-        let button_label = gtk::Label::new(Some("Unlock vault"));
-        let spinner = gtk::Spinner::new();
-        spinner.set_visible(false);
-        button_content.append(&spinner);
-        button_content.append(&button_icon);
-        button_content.append(&button_label);
-        button.set_child(Some(&button_content));
-        button.add_css_class("rbw-primary");
-        actions.append(&cancel_button);
-        actions.append(&button);
-        let footer = gtk::Label::new(Some("Enter to unlock · Esc to cancel"));
-        footer.add_css_class("rbw-footer");
-        card.append(&branding);
-        card.append(&heading);
-        card.append(&title);
-        card.append(&fingerprint);
-        card.append(&entry);
-        card.append(&error);
-        card.append(&actions);
-        card.append(&footer);
-        window.set_child(Some(&card));
+        let form = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        form.set_valign(gtk::Align::Center);
+        form.set_hexpand(true);
+        form.append(&entry);
+        form.append(&status);
+        form.append(&error);
+        let body = gtk::Box::new(gtk::Orientation::Horizontal, 24);
+        body.set_margin_top(24);
+        body.set_margin_bottom(24);
+        body.set_margin_start(24);
+        body.set_margin_end(24);
+        body.append(&logo);
+        body.append(&form);
+        window.set_child(Some(&body));
         let submit = Rc::new(Cell::new(false));
         let cancel = Rc::new(Cell::new(false));
         let signal = submit.clone();
@@ -271,7 +233,7 @@ impl GtkDialog {
             spinner,
             cancel_button,
             busy: false,
-            fingerprint_icon,
+            logo,
             animation,
             submit,
             cancel,
@@ -324,7 +286,7 @@ impl Frontend for GtkDialog {
     }
     fn render(&mut self, view: &View<'_>) -> anyhow::Result<()> {
         self.title.set_label(view.title);
-        self.animation.set(FingerprintAnimation {
+        self.animation.set(LogoAnimation {
             tick: view.tick,
             success: view.success,
             active: !matches!(
@@ -333,15 +295,16 @@ impl Frontend for GtkDialog {
                     | super::FingerprintStatus::Unavailable
             ),
         });
-        self.fingerprint_icon.queue_draw();
+        self.logo.queue_draw();
         self.status.set_label(if view.success {
             "✓ Unlocked"
         } else {
             view.fingerprint.text()
         });
         if view.success {
-            self.status.add_css_class("rbw-verified");
-            self.button.add_css_class("rbw-confirmed");
+            self.status.remove_css_class("dim-label");
+            self.status.add_css_class("success");
+            self.button.remove_css_class("suggested-action");
         }
         self.busy = view.checking || view.success;
         self.button_label.set_label(if view.success {
@@ -349,7 +312,7 @@ impl Frontend for GtkDialog {
         } else if view.checking {
             "Checking…"
         } else {
-            "Unlock vault"
+            "Unlock"
         });
         self.spinner.set_visible(view.checking);
         if view.checking {
