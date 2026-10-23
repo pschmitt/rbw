@@ -10,9 +10,23 @@ async function request(action, values = {}) {
 async function attempt(fn) { $("message").classList.remove("is-error"); $("message").setAttribute("role", "status"); try { await fn(); } catch (error) { $("message").textContent = error.message; $("message").classList.add("is-error"); $("message").setAttribute("role", "alert"); } }
 function theme(value) { document.documentElement.dataset.theme = value === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : value; }
 const uriMatchNames = { domain: "Domain and subdomains", base_domain: "Base domain", host: "Host", starts_with: "Starts with", exact: "Exact", regular_expression: "Regular expression", never: "Never" };
+// 86400 -> "24 hours", 3600 -> "1 hour", 90 -> "90 seconds".
+function duration(seconds) {
+  const units = [[86400, "day"], [3600, "hour"], [60, "minute"]];
+  for (const [size, name] of units) if (seconds >= size && seconds % size === 0) { const n = seconds / size; return `${n} ${name}${n === 1 ? "" : "s"}`; }
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
+}
 function showPolicy(policy) {
-  $("agent-policy").textContent = `Automatic lock: ${policy.lockTimeout} seconds. Sync: every ${policy.syncInterval} seconds. Clipboard: ${policy.clipboard}. Generator default length: ${policy.passwordGen.length || 20}. URI matching: ${uriMatchNames[policy.defaultUriMatch] || uriMatchNames.domain}.`;
-  $("uri-match").options[0].textContent = `Use rbw default (${uriMatchNames[policy.defaultUriMatch] || uriMatchNames.domain})`;
+  const match = uriMatchNames[policy.defaultUriMatch] || uriMatchNames.domain;
+  // One setting per line.
+  $("agent-policy").replaceChildren(...[
+    ["Automatic lock", duration(policy.lockTimeout)],
+    ["Sync", `every ${duration(policy.syncInterval)}`],
+    ["Clipboard", policy.clipboard],
+    ["Generator default length", policy.passwordGen.length || 20],
+    ["URI matching", match],
+  ].map(([name, value]) => { const line = document.createElement("div"); const label = document.createElement("span"); label.className = "policy-name"; label.textContent = `${name}: `; line.append(label, String(value)); return line; }));
+  $("uri-match").options[0].textContent = `Use rbw default (${match})`;
 }
 // Which accounts the extension covers: the rbw CLI's choice, or the ones
 // ticked here (two or more are merged). The legacy single `account`

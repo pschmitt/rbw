@@ -760,3 +760,5 @@ input[type=color].account-color::-webkit-color-swatch { border:0; border-radius:
 input[type=color].account-color::-moz-color-swatch { border:0; border-radius:50%; }
 input[type=color].account-color:hover, input[type=color].account-color:focus-visible { border-color:var(--accent); outline:none; }
 .account-color-reset { flex:none; margin-left:auto; }
+#agent-policy .policy-name { color:var(--muted); }
+#agent-policy > div { margin:2px 0; }

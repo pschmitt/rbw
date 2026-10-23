@@ -5,6 +5,8 @@
 ### Added
 
 * Browser extension: the clipboard marker in the autofill notice wiggles once.
+* Browser extension settings: the Agent policy lists one setting per line, with
+  durations in readable units ("24 hours" instead of "86400 seconds").
 * Browser extension: an item's collections are edited in the editor (switches,
   saved with the item), not in the read-only item view, which just shows them as
   a chip; the editor's "Authenticator key" field is called "TOTP".
