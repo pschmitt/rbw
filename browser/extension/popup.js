@@ -499,7 +499,7 @@ function itemRow(item) {
   else {
     if (!autofillExcluded && (item.matched || ["card", "identity"].includes(item.type))) { const fill = actionButton("Fill", "fill", async () => { const n = await request("fill", { item: item.id, type: item.type }); message(`Filled ${n} fields. Submit the form when ready.`); }); fill.title = "Fill"; fill.classList.add("item-fill"); fill.setAttribute("aria-label", `Fill ${item.name}`); actions.append(fill); }
     const field = item.type === "login" ? "password" : item.type === "card" ? "number" : item.type === "identity" ? "email" : item.type === "ssh_key" ? "public_key" : "notes";
-    const copy = actionButton("Copy", "copy", () => copyField(item.id, field, true)); copy.title = "Copy"; copy.setAttribute("aria-label", `Copy ${field}`); actions.append(copy);
+    const copy = actionButton("Copy", "copy", () => copyField(item.id, field, true, copy)); copy.title = "Copy"; copy.setAttribute("aria-label", `Copy ${field}`); actions.append(copy);
     const menu = element("details", null, "menu"); const summary = element("summary"); summary.append(icon("more")); summary.setAttribute("aria-label", `Actions for ${item.name}`); menu.append(summary);
     const entries = element("div");
     menu.addEventListener("toggle", () => {
@@ -545,23 +545,35 @@ function itemRow(item) {
 }
 if (typeof window !== "undefined") window.itemRow = itemRow;
 const copyNames = { password: "password", username: "username", totp: "TOTP", number: "card number", email: "email", public_key: "public key", notes: "notes" };
-async function copyField(item, field, allowFallback = false) {
+// A copy button confirms by swapping its icon for an animated check (a toast
+// is only used where there is no button to change, like the row's menu).
+function flashCopied(trigger, text) {
+  if (!trigger?.isConnected) { message(text); return; }
+  const original = trigger.querySelector(".svg-icon:not(.copy-check)");
+  if (!original) { message(text); return; }
+  trigger.classList.add("is-copied");
+  const check = icon("check"); check.classList.add("copy-check");
+  original.hidden = true; original.after(check);
+  clearTimeout(trigger._copiedTimer);
+  trigger._copiedTimer = setTimeout(() => { check.remove(); original.hidden = false; trigger.classList.remove("is-copied"); }, 1500);
+}
+async function copyField(item, field, allowFallback = false, trigger = null) {
   try {
     await request("copy", { item, field });
-    message(`Copied ${copyNames[field] || "field"}`);
+    flashCopied(trigger, `Copied ${copyNames[field] || "field"}`);
   } catch (err) {
     if (!allowFallback) throw err;
     if (field === "notes") {
       try {
         await request("copy", { item, field: "custom/0" });
-        message("Copied field");
+        flashCopied(trigger, "Copied field");
         return;
       } catch (_) {}
     } else if (field === "password") {
       for (const alt of ["totp", "username", "custom/0"]) {
         try {
           await request("copy", { item, field: alt });
-          message(`Copied ${copyNames[alt] || "field"}`);
+          flashCopied(trigger, `Copied ${copyNames[alt] || "field"}`);
           return;
         } catch (_) {}
       }
@@ -620,7 +632,7 @@ function detailField(label, value, item, field, hidden = false, isUrl = false) {
     actions.append(visitBtn);
   }
   if (field) {
-    const copyBtn = actionButton("Copy", "copy", () => copyField(item, field), "icon");
+    const copyBtn = actionButton("Copy", "copy", () => copyField(item, field, false, copyBtn), "icon");
     actions.append(copyBtn);
   }
   row.append(actions); section.append(row); return section;
@@ -641,13 +653,13 @@ function noteField(text, item) {
     content.replaceChildren(fragment);
   };
   const toggle = actionButton("Plain text", "note", async () => { raw = !raw; toggle.replaceChildren(icon("note"), element("span", raw ? "Markdown" : "Plain text")); render(); });
-  toolbar.append(toggle, actionButton("Copy", "copy", () => copyField(item, "notes"))); section.append(toolbar, content); render(); return section;
+  const copyNotes = actionButton("Copy", "copy", () => copyField(item, "notes", false, copyNotes)); toolbar.append(toggle, copyNotes); section.append(toolbar, content); render(); return section;
 }
 function totpField(item) {
   const section = element("div", null, "field totp-field"); section.append(element("span", "TOTP"));
   const row = element("div", null, "field-value"); const code = element("div", "••• •••", "totp-code");
   const actions = element("div", null, "field-actions");
-  const copy = actionButton("Copy TOTP", "copy", () => copyField(item, "totp"), "icon"); copy.disabled = true;
+  const copy = actionButton("Copy TOTP", "copy", () => copyField(item, "totp", false, copy), "icon"); copy.disabled = true;
   actions.append(copy); row.append(code, actions);
   const countdown = element("small", "Generating code…", "hint");
   // A continuously shrinking bar, like the inline dialogs' auto-close progress.

@@ -822,3 +822,11 @@ html[data-page=locked] #account-menu > label, html[data-page=locked] #state, htm
    the logo where it is, but highlight only the logo on hover. */
 #account-toggle:has(#back[hidden]):hover, #account-toggle:has(#back[hidden]):focus-visible { background:transparent; }
 #account-toggle:has(#back[hidden]):hover img { border-radius:8px; box-shadow:0 0 0 2px var(--raised); background:var(--raised); }
+
+/* Copy buttons confirm in place: the icon turns into a check that pops in. */
+button.is-copied { color:var(--ok); }
+button.is-copied .copy-check { animation:copy-pop 380ms cubic-bezier(.2,1.4,.4,1) both; }
+button.is-copied .copy-check path { stroke-dasharray:30; stroke-dashoffset:30; animation:copy-draw 320ms ease-out 60ms forwards; }
+@keyframes copy-pop { from { transform:scale(.4); opacity:0; } to { transform:scale(1); opacity:1; } }
+@keyframes copy-draw { to { stroke-dashoffset:0; } }
+@media (prefers-reduced-motion:reduce) { button.is-copied .copy-check, button.is-copied .copy-check path { animation:none; stroke-dashoffset:0; } }
