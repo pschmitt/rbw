@@ -102,6 +102,10 @@ def main():
 
     try:
         fresh(); page.click("#pass"); opened = host()
+        if opened is None:
+            # The first page load can beat the extension's service worker
+            # start in Chromium; try once more now that it is up.
+            fresh(); page.click("#pass"); opened = host(timeout=8.0)
         check("login chooser opens in extension frame", opened is not None)
         if opened: shoot("chooser", opened)
         if opened:

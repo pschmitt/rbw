@@ -38,6 +38,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-features
+  # The browser extension in a real Chromium and Firefox against a stub
+  # native host (browser/tests/e2e): the inline autofill UI, its clickjacking
+  # defences and the save prompts, with trusted input events. The page.html
+  # run is the plain case, csp.html the same page under a strict CSP.
+  test-extension:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox]
+        page: [page.html, csp.html]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - run: browser/tests/e2e/run.sh ${{ matrix.browser }} ${{ matrix.page }}
   # Real-server tests, distinct from `test`'s mocked-HTTP unit tests: these
   # register an actual account on a throwaway Vaultwarden container and
   # drive the built `rbw` binary against it over the real wire protocol,
