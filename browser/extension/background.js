@@ -680,8 +680,11 @@ async function pageMessage(message, sender, respond) {
 // Writes `text` to the system clipboard from the page's isolated world (a
 // background worker has no clipboard access). The textarea fallback lives in
 // a closed shadow root so the page can't read the value from the DOM.
-async function copyToClipboard(tabId, text) {
-  const [result] = await api.scripting.executeScript({ target: { tabId }, args: [text], func: async value => {
+async function copyToClipboard(tab, token, documentId, text) {
+  const target = documentId ? { tabId: tab.id, documentIds: [documentId] } : { tabId: tab.id, frameIds: [0] };
+  const [result] = await api.scripting.executeScript({ target, args: [tab.url, token, text], func: async (expectedUrl, fillToken, value) => {
+    if (location.href !== expectedUrl || globalThis.__rbwClipboardFillToken !== fillToken) return false;
+    delete globalThis.__rbwClipboardFillToken;
     try { await navigator.clipboard.writeText(value); return true; } catch (_) { /* Fall back to execCommand. */ }
     const host = document.createElement("div"); host.style.cssText = "position:fixed;top:-1000px;opacity:0";
     const area = document.createElement("textarea"); area.value = value; area.setAttribute("readonly", "");
@@ -722,6 +725,8 @@ async function fill(message, account) {
     if (current.id !== tab.id || current.url !== tab.url) throw new Error("Page changed. Choose Fill again.");
     const frames = await api.webNavigation.getAllFrames({ tabId: tab.id });
     const filledFrames = [];
+    let topDocumentId;
+    let topDocumentReady = false;
     const cardSecurityCode = ["fill", "clipboard"].includes(prefs.cardSecurityCode) ? prefs.cardSecurityCode : "off";
     const fillOptions = { automatic: message.automatic === true, animations: prefs.animations, animationSpeed: prefs.animationSpeed, icon: prefs.animations === "plaid" ? await getNotificationIcon() : null, cardSecurityCode };
     for (const frame of frames.filter(f => { try { return new URL(f.url).origin === new URL(tab.url).origin; } catch (_) { return false; } })) {
@@ -732,6 +737,7 @@ async function fill(message, account) {
         count += filled;
         securityCodeFieldPresent ||= result.securityCodeFieldPresent === true;
         if (filled) filledFrames.push({ frameId: frame.frameId, url: frame.url });
+        if (frame.frameId === 0 && results[0]?.result) { topDocumentReady = true; topDocumentId = results[0]?.documentId; }
       } catch (error) { if (frame.frameId === 0 && frames.length === 1) throw error; }
     }
     if (!count) throw new Error("No supported fields found on this page.");
@@ -752,7 +758,11 @@ async function fill(message, account) {
     if (credential.type === "login" && credential.hasTotp === true && prefs.copyTotp) {
       // Copied by the extension itself, not the agent: the agent may have no
       // clipboard (no display), and then reported success without copying.
-      try { await copyToClipboard(tab.id, totpCode || (await native({ action: "totp", account, item: message.item })).code); copiedTotp = true; }
+      try {
+        if (!topDocumentReady) throw new Error("The requesting document changed.");
+        await copyToClipboard(tab, token, topDocumentId, totpCode || (await native({ action: "totp", account, item: message.item })).code);
+        copiedTotp = true;
+      }
       catch (_) { totpCopyFailed = true; }
     }
     clearTimeout(fillUndos.get(tab.id)?.timer);

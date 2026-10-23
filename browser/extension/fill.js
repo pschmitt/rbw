@@ -323,6 +323,10 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     globalThis.__rbwUndoFill?.clear(); globalThis.__rbwUndoFill = undo;
     setTimeout(() => { undo.clear(); if (globalThis.__rbwUndoFill === undo) delete globalThis.__rbwUndoFill; }, 10000);
   }
+  // A separate document-local capability also covers forms in same-origin
+  // subframes. A replacement document at the same URL cannot inherit it.
+  globalThis.__rbwClipboardFillToken = fillToken;
+  setTimeout(() => { if (globalThis.__rbwClipboardFillToken === fillToken) delete globalThis.__rbwClipboardFillToken; }, 120000);
   return { count, securityCodeFieldPresent };
 }
 

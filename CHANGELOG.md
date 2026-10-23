@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* The browser extension pins TOTP clipboard copies to the original filled
+  document, including on browsers without document IDs, so a redirect or reload
+  cannot receive the operation.
+
 ## [2.27.5] - 2026-10-23
 
 ### Added
