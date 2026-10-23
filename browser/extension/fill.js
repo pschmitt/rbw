@@ -407,14 +407,16 @@ function showFillNotice(expectedUrl, notice) {
   if (typeof notice.clipboard === "string") {
     // Something was put on the clipboard: a clipboard icon says so.
     const clip = document.createElementNS(closeIcon.namespaceURI, "svg"); clip.setAttribute("viewBox", "0 0 24 24"); clip.setAttribute("role", "img");
-    clip.setAttribute("aria-label", notice.clipboard.slice(0, 64)); clip.style.cssText = "width:22px;height:22px;flex:none;opacity:.85";
+    // Small, tinted and inline with the item's name, so it reads as a status
+    // marker and not as one of the buttons.
+    clip.setAttribute("aria-label", notice.clipboard.slice(0, 64)); clip.style.cssText = "display:inline-block;width:14px;height:14px;margin-right:6px;vertical-align:-2px;color:#8ab4f8;pointer-events:auto";
     const clipTitle = document.createElementNS(closeIcon.namespaceURI, "title"); clipTitle.textContent = notice.clipboard.slice(0, 64); clip.append(clipTitle);
     for (const [tag, attributes] of [["rect", { x: 8, y: 3, width: 8, height: 4, rx: 1 }], ["path", { d: "M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" }]]) {
       const part = document.createElementNS(closeIcon.namespaceURI, tag);
       for (const [name, value] of Object.entries({ fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", ...attributes })) part.setAttribute(name, value);
       clip.append(part);
     }
-    box.append(clip);
+    account.prepend(clip);
   }
   if (notice.settingsAction) {
     const settings = document.createElement("button"); settings.type = "button"; settings.className = "settings"; settings.textContent = "Settings";
