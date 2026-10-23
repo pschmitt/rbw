@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.27.4] - 2026-10-23
+
 ### Changed
 
 * Browser extension: with several accounts, the locked state is tidier. Each
