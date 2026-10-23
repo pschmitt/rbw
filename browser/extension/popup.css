@@ -685,7 +685,6 @@ dialog.confirm-dialog::backdrop { background:#0007; backdrop-filter:blur(2px); }
 button.danger-solid { background:var(--danger); border-color:var(--danger); color:var(--bg); }
 button.danger-solid:hover { background:color-mix(in srgb, var(--danger) 85%, var(--text)); }
 @media (prefers-reduced-motion:reduce) { dialog.confirm-dialog[open] { animation:none; } }
-.item-title .item-account { color:var(--muted); font-size:10px; font-weight:600; border:1px solid var(--line); border-radius:999px; padding:0 6px; white-space:nowrap; }
 .account-states { list-style:none; margin:4px 0; padding:0; display:grid; gap:4px; }
 .account-states li { display:flex; align-items:center; gap:8px; }
 .account-states li span { font-weight:600; }
@@ -750,7 +749,7 @@ details.history-section[open] > summary svg { transform:rotate(180deg); }
 #message.popup-notification.is-leaving { animation:banner-out 320ms ease-in both; }
 #message.popup-notification { --pulse-color:var(--notice-color); }
 /* Per-account colors (set on the settings page; defaults from a palette). */
-.item-title .item-account, .meta-chip[style*="--account-color"] { color:var(--account-color, var(--muted)); border-color:color-mix(in srgb, var(--account-color, var(--line)) 55%, transparent); background:color-mix(in srgb, var(--account-color, transparent) 14%, transparent); }
+.meta-chip[style*="--account-color"] { color:var(--account-color, var(--muted)); border-color:color-mix(in srgb, var(--account-color, var(--line)) 55%, transparent); background:color-mix(in srgb, var(--account-color, transparent) 14%, transparent); }
 .meta-chip[style*="--account-color"] small { color:inherit; opacity:.75; }
 .account-states li span.account-name { color:var(--account-color); }
 .account-states li span.account-name::before { content:""; display:inline-block; width:8px; height:8px; margin-right:6px; border-radius:50%; background:var(--account-color); }
@@ -762,3 +761,5 @@ input[type=color].account-color:hover, input[type=color].account-color:focus-vis
 .account-color-reset { flex:none; margin-left:auto; }
 #agent-policy .policy-name { color:var(--muted); }
 #agent-policy > div { margin:2px 0; }
+.item-lead { position:relative; flex-shrink:0; display:grid; }
+.account-emblem { position:absolute; top:-7px; left:-7px; box-sizing:border-box; min-width:16px; height:16px; padding:0 3px; border-radius:999px; background:var(--account-color); color:var(--emblem-text, #111); font-size:8px; font-weight:800; line-height:16px; letter-spacing:.02em; text-align:center; pointer-events:none; box-shadow:0 0 0 2px var(--panel); }

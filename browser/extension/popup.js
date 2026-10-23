@@ -454,13 +454,20 @@ function itemRow(item) {
   const fallback = item.type === "card"
     ? getCardBrandIcon(item.brand || item.username?.split(",")?.[0], item.name)
     : (item.passkeys ? "key" : (icons[item.type] || "note"));
-  image.dataset.fallback = fallback; image.append(icon(fallback)); row.append(image);
+  image.dataset.fallback = fallback; image.append(icon(fallback));
+  // With several accounts, an emblem on the icon's corner says which one holds the item.
+  const lead = element("span", null, "item-lead"); lead.append(image);
+  if (item.account && accountNames.length > 1) {
+    const emblem = element("span", item.account.slice(0, 2).toUpperCase(), "account-emblem"); const color = colorOf(item.account);
+    emblem.style.setProperty("--account-color", color); emblem.style.setProperty("--emblem-text", accountTextColor(color)); emblem.title = item.account; emblem.setAttribute("aria-label", `Account ${item.account}`);
+    lead.append(emblem);
+  }
+  row.append(lead);
   if (preference.favicons && item.iconOrigin) { image.dataset.origin = item.iconOrigin; faviconObserver.observe(image); }
   const main = button("", async () => { await openDetail(item.id, item.deleted); }, "item-main");
   const title = element("div", null, "item-title");
   if (item.favorite) { const star = icon("star"); star.classList.add("favorite-icon"); title.append(star); }
   title.append(element("strong", item.name));
-  if (item.account && accountNames.length > 1) { const badge = element("small", item.account, "item-account"); badge.style.setProperty("--account-color", colorOf(item.account)); title.append(badge); }
   main.append(title, element("small", item.username || labels[item.type])); row.append(main);
   const autofillExcluded = Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(item.id);
   if (autofillExcluded) title.append(element("small", "Autofill off", "item-autofill-disabled"));

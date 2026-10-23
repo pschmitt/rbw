@@ -10,3 +10,8 @@ function accountColor(name, allNames, colors, cliColors) {
   const index = Math.max(0, [...allNames || []].sort().indexOf(name));
   return ACCOUNT_PALETTE[index % ACCOUNT_PALETTE.length];
 }
+// Black or white, whichever reads better on `hex`.
+function accountTextColor(hex) {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 150 ? "#111" : "#fff";
+}
