@@ -844,3 +844,5 @@ button.is-copied:not(.gen-copy), button.is-copied:not(.gen-copy):hover, button.i
 .gen-copy.is-copied { animation:gen-copy-pop 460ms cubic-bezier(.2,1.5,.4,1); }
 @keyframes gen-copy-pop { 0% { transform:scale(.94); box-shadow:0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); } 50% { transform:scale(1.03); } 100% { transform:scale(1); box-shadow:0 0 0 14px transparent; } }
 @media (prefers-reduced-motion:reduce) { .gen-copy.is-copied { animation:none; } }
+/* A failed fill flashes the same animation in the error colour. */
+button.is-copied[data-flash=error] { --ok:var(--danger); }

@@ -500,7 +500,7 @@ function itemRow(item) {
     actionButton("Restore", "undo", async () => { await restoreItem(item.id); await search(); }),
     actionButton("Delete permanently", "trash", async () => { if (await purgeItem(item.id, item.name)) await search(); }, "danger"));
   else {
-    if (!autofillExcluded && (item.matched || ["card", "identity"].includes(item.type))) { const fill = actionButton("Fill", "fill", async () => { const n = await request("fill", { item: item.id, type: item.type }); message(`Filled ${n} fields. Submit the form when ready.`); }); fill.title = "Fill"; fill.classList.add("item-fill"); fill.setAttribute("aria-label", `Fill ${item.name}`); actions.append(fill); }
+    if (!autofillExcluded && (item.matched || ["card", "identity"].includes(item.type))) { const fill = actionButton("Fill", "fill", async () => { try { await request("fill", { item: item.id, type: item.type }); flashCopied(fill, "", "ok"); } catch (_) { flashCopied(fill, "", "error"); } }); fill.title = "Fill"; fill.classList.add("item-fill"); fill.setAttribute("aria-label", `Fill ${item.name}`); actions.append(fill); }
     const field = item.type === "login" ? "password" : item.type === "card" ? "number" : item.type === "identity" ? "email" : item.type === "ssh_key" ? "public_key" : "notes";
     const copy = actionButton("Copy", "copy", () => copyField(item.id, field, true, copy)); copy.title = "Copy"; copy.setAttribute("aria-label", `Copy ${field}`); actions.append(copy);
     const menu = element("details", null, "menu"); const summary = element("summary"); summary.append(icon("more")); summary.setAttribute("aria-label", `Actions for ${item.name}`); menu.append(summary);
@@ -551,7 +551,7 @@ const copyNames = { password: "password", username: "username", totp: "TOTP", nu
 // A copy button confirms in place: its own icon turns into a check (same box,
 // so nothing shifts) with a pop. A toast is only used where there is no button
 // to change, like the row's menu.
-function flashCopied(trigger, text) {
+function flashCopied(trigger, text, kind = "ok") {
   const current = trigger?.isConnected && trigger.querySelector(".svg-icon");
   if (!current) { message(text); return; }
   clearTimeout(trigger._copiedTimer);
@@ -559,8 +559,9 @@ function flashCopied(trigger, text) {
   trigger._copyOriginal = original;
   // Every copy replays the whole animation, even while the last one still runs.
   trigger.classList.remove("is-copied"); trigger.querySelector(".copy-burst")?.remove();
-  const check = icon("check"); check.classList.add("copy-check");
+  const check = icon(kind === "error" ? "close" : "check"); check.classList.add("copy-check");
   current.replaceWith(check);
+  if (kind === "error") trigger.dataset.flash = "error"; else delete trigger.dataset.flash;
   // A ring and a ring of sparks burst out from the button (purely decorative).
   const burst = element("span", null, "copy-burst"); burst.setAttribute("aria-hidden", "true");
   for (let i = 0; i < 8; i++) { const spark = element("i"); spark.style.setProperty("--a", `${i * 45 + 22}deg`); burst.append(spark); }
@@ -568,7 +569,7 @@ function flashCopied(trigger, text) {
   void trigger.offsetWidth; trigger.classList.add("is-copied");
   trigger._copiedTimer = setTimeout(() => {
     trigger.querySelector(".copy-burst")?.remove(); trigger.querySelector(".copy-check")?.replaceWith(original);
-    trigger.classList.remove("is-copied"); delete trigger._copyOriginal;
+    trigger.classList.remove("is-copied"); delete trigger._copyOriginal; delete trigger.dataset.flash;
   }, 1500);
 }
 async function copyField(item, field, allowFallback = false, trigger = null) {
