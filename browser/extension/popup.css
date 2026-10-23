@@ -811,3 +811,9 @@ input[type=color].account-color:hover, input[type=color].account-color:focus-vis
    are a collapsed summary below it, not a second set of buttons. */
 html[data-page=locked] #account-menu { order:3; border-bottom:0; border-top:1px solid var(--line); }
 html[data-page=locked] #account-menu > label, html[data-page=locked] #state, html[data-page=locked] #account-bulk, html[data-page=locked] #account-menu .actions { display:none; }
+
+/* Auto-dismiss countdown on notices, like the one on in-page notifications. */
+#message.popup-notification { position:relative; }
+#message.popup-notification.is-timed::after { content:""; position:absolute; left:0; right:0; bottom:0; height:3px; background:var(--notice-color, var(--accent)); transform-origin:left center; animation:notification-countdown 4500ms linear forwards; pointer-events:none; }
+@keyframes notification-countdown { from { transform:scaleX(1); } to { transform:scaleX(0); } }
+@media (prefers-reduced-motion:reduce) { #message.popup-notification.is-timed::after { animation:none; display:none; } }

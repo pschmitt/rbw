@@ -102,7 +102,9 @@ function message(text, error = false, action = null) {
   notification.hidden = false;
   notification.classList.remove("is-entering", "is-swapping");
   if (bannerAnimated()) { void notification.offsetWidth; notification.classList.add(appearing ? "is-entering" : "is-swapping"); }
-  if (!error && !action) notificationTimer = setTimeout(hideNotification, 4500);
+  // The bar under the notice counts down the time it has left.
+  notification.classList.remove("is-timed"); void notification.offsetWidth;
+  if (!error && !action) { notification.classList.add("is-timed"); notificationTimer = setTimeout(hideNotification, 4500); }
 }
 // Notices are banners (like the locked-accounts one): they slide out when done.
 function hideNotification() {
