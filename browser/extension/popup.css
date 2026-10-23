@@ -818,7 +818,7 @@ html[data-page=locked] #account-menu > label, html[data-page=locked] #state, htm
 @keyframes notification-countdown { from { transform:scaleX(1); } to { transform:scaleX(0); } }
 @media (prefers-reduced-motion:reduce) { #message.popup-notification.is-timed::after { animation:none; display:none; } }
 
-/* Without the back chevron there is nothing to reserve room for on the left,
-   so the hover highlight hugs the logo. */
-button.avatar:has(#back[hidden]) { width:36px; grid-template-columns:32px; }
-button.avatar:has(#back[hidden]) img { grid-column:1; }
+/* Without the back chevron the reserved space on the left stays empty: keep
+   the logo where it is, but highlight only the logo on hover. */
+#account-toggle:has(#back[hidden]):hover, #account-toggle:has(#back[hidden]):focus-visible { background:transparent; }
+#account-toggle:has(#back[hidden]):hover img { border-radius:8px; box-shadow:0 0 0 2px var(--raised); background:var(--raised); }
