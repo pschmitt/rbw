@@ -548,27 +548,28 @@ function itemRow(item) {
 }
 if (typeof window !== "undefined") window.itemRow = itemRow;
 const copyNames = { password: "password", username: "username", totp: "TOTP", number: "card number", email: "email", public_key: "public key", notes: "notes" };
-// A copy button confirms in place: its own icon turns into a check (same box,
-// so nothing shifts) with a pop. A toast is only used where there is no button
-// to change, like the row's menu.
+// A copy button confirms in place: its icon slides out and the result slides
+// in (same box, so nothing shifts). With animations off the result simply
+// replaces the icon. A toast is only used where there is no button to change,
+// like the row's menu.
 function flashCopied(trigger, text, kind = "ok") {
-  const current = trigger?.isConnected && trigger.querySelector(".svg-icon");
-  if (!current) { message(text); return; }
+  const original = trigger?.isConnected && (trigger._copyOriginal || trigger.querySelector(".svg-icon"));
+  if (!original) { message(text); return; }
   clearTimeout(trigger._copiedTimer);
-  const original = trigger._copyOriginal || current;
   trigger._copyOriginal = original;
-  // Every copy replays the whole animation, even while the last one still runs.
-  trigger.classList.remove("is-copied"); trigger.querySelector(".copy-burst")?.remove();
+  // Every copy replays the animation, even while the last one still runs.
+  trigger.classList.remove("is-copied"); trigger.querySelector(".copy-check")?.remove();
   const check = icon(kind === "error" ? "close" : "check"); check.classList.add("copy-check");
-  current.replaceWith(check);
+  const box = original.getBoundingClientRect();
+  if (box.width) { check.style.width = `${box.width}px`; check.style.height = `${box.height}px`; }
+  original.after(check);
+  trigger.classList.add("copy-btn");
+  trigger.dataset.motion = bannerAnimated() ? "on" : "off";
+  trigger.style.setProperty("--copy-speed", { slow: 1.6, fast: 0.65 }[preference.animationSpeed] || 1);
   if (kind === "error") trigger.dataset.flash = "error"; else delete trigger.dataset.flash;
-  // A ring and a ring of sparks burst out from the button (purely decorative).
-  const burst = element("span", null, "copy-burst"); burst.setAttribute("aria-hidden", "true");
-  for (let i = 0; i < 8; i++) { const spark = element("i"); spark.style.setProperty("--a", `${i * 45 + 22}deg`); burst.append(spark); }
-  trigger.append(burst);
   void trigger.offsetWidth; trigger.classList.add("is-copied");
   trigger._copiedTimer = setTimeout(() => {
-    trigger.querySelector(".copy-burst")?.remove(); trigger.querySelector(".copy-check")?.replaceWith(original);
+    trigger.querySelector(".copy-check")?.remove();
     trigger.classList.remove("is-copied"); delete trigger._copyOriginal; delete trigger.dataset.flash;
   }, 1500);
 }
@@ -1647,7 +1648,7 @@ $("gen-picker-query").oninput = () => { clearTimeout(pickerTimer); pickerTimer =
 $("copy-generated").onclick = () => attempt(async () => {
   if (!generatedValue) throw new Error("Generate a value first.");
   await request("copy_text", { text: generatedValue });
-  clearTimeout(copiedTimer); $("copy-generated").classList.remove("is-copied"); void $("copy-generated").offsetWidth; $("copy-generated").classList.add("is-copied"); $("copy-generated-label").textContent = "Copied";
+  clearTimeout(copiedTimer); $("copy-generated").classList.remove("is-copied"); $("copy-generated").dataset.motion = bannerAnimated() ? "on" : "off"; void $("copy-generated").offsetWidth; $("copy-generated").classList.add("is-copied"); $("copy-generated-label").textContent = "Copied";
   copiedTimer = setTimeout(() => { $("copy-generated").classList.remove("is-copied"); $("copy-generated-label").textContent = "Copy"; }, 1600);
 });
 $("audit").onclick = () => attempt(async () => {
