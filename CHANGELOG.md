@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.27.6] - 2026-10-23
+
 ### Fixed
 
 * The browser extension pins TOTP clipboard copies to the original filled
