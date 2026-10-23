@@ -53,6 +53,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: DeterminateSystems/nix-installer-action@v23
+      # run.sh takes its Python environment and browsers from the nixpkgs in
+      # the flake registry, which would otherwise be whatever is newest on the
+      # day; pin it to the flake's own revision so runs match and the cache
+      # below stays valid.
+      - run: nix registry pin nixpkgs "github:NixOS/nixpkgs/$(jq -r .nodes.nixpkgs.locked.rev flake.lock)"
+      # Keep the Nix store (the browser and the Python environment) between
+      # runs, per browser.
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-e2e-${{ matrix.browser }}-${{ runner.os }}-${{ hashFiles('flake.lock', 'browser/tests/e2e/run.sh') }}
+          restore-prefixes-first-match: nix-e2e-${{ matrix.browser }}-${{ runner.os }}-
+          gc-max-store-size-linux: 4G
       - run: browser/tests/e2e/run.sh ${{ matrix.browser }} ${{ matrix.page }}
   # Real-server tests, distinct from `test`'s mocked-HTTP unit tests: these
   # register an actual account on a throwaway Vaultwarden container and
