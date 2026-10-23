@@ -1,7 +1,5 @@
-/* rbw's palette and type, imported by popup.css. browser-daemon's live view
-   (pschmitt/browser-daemon, tools/rbw-theme.mjs) derives its vault styles from
-   this file, so keep it to these two rules: light on :root, dark on
-   :root[data-theme=dark], custom properties plus font and color-scheme. */
+/* rbw's palette and type, imported by popup.css and shared with
+   browser-daemon's live view (browser/browser-daemon). */
 :root {
   --bg: #f6f7f9;
   --panel: #ffffff;

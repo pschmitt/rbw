@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent
 VERSION = tomllib.loads((ROOT.parent / "Cargo.toml").read_text())["package"]["version"]
 # What browser-daemon's live-view extension (browser-daemon/) takes from this
 # one, so both look alike.
-SHARED = ["theme.css", "icons.js", "icons/rbw-48.png"]
+SHARED = ["theme.css", "icons.js", "feedback.css", "feedback.js", "icons/rbw-48.png"]
 
 
 def browser_daemon(dest):

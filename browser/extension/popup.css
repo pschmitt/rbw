@@ -823,26 +823,7 @@ html[data-page=locked] #account-menu > label, html[data-page=locked] #state, htm
 #account-toggle:has(#back[hidden]):hover, #account-toggle:has(#back[hidden]):focus-visible { background:transparent; }
 #account-toggle:has(#back[hidden]):hover img { border-radius:8px; box-shadow:0 0 0 2px var(--raised); background:var(--raised); }
 
-/* Copy/fill buttons confirm in place (when animations are on): the result is
-   stamped onto the button from large to small, then the button shakes and a
-   pressure ring goes off. */
-button.copy-btn { position:relative; }
-button.copy-btn > .svg-icon:not(.copy-check) { transition:opacity calc(120ms * var(--copy-speed,1)); }
-button.is-copied > .svg-icon:not(.copy-check) { opacity:0; }
-button.copy-btn > .copy-check { position:absolute; inset:0; margin:auto; animation:copy-stamp calc(380ms * var(--copy-speed,1)) cubic-bezier(.5,0,.9,.4) both; }
-button.copy-btn > .copy-check path { stroke-width:3; }
-button.copy-btn.is-copied:not([data-motion=off]) { animation:copy-shake calc(420ms * var(--copy-speed,1)) calc(180ms * var(--copy-speed,1)) both; }
-button.copy-btn.is-copied:not([data-motion=off])::after { content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none; animation:copy-impact calc(520ms * var(--copy-speed,1)) ease-out calc(200ms * var(--copy-speed,1)) both; }
-@keyframes copy-stamp { 0% { transform:scale(3.2); opacity:0; } 70% { transform:scale(.9); opacity:1; } 100% { transform:scale(1); opacity:1; } }
-@keyframes copy-shake { 0%, 100% { transform:translate(0); } 20% { transform:translate(-3px, 1px); } 40% { transform:translate(3px, -1px); } 60% { transform:translate(-2px, 1px); } 80% { transform:translate(1px, 0); } }
-@keyframes copy-impact { 0% { box-shadow:0 0 0 0 color-mix(in srgb, var(--ok) 70%, transparent); } 100% { box-shadow:0 0 0 16px transparent; } }
-/* Animations off (setting or reduced motion): the result just replaces the icon. */
-button.copy-btn[data-motion=off], button.copy-btn[data-motion=off] > .svg-icon, button.copy-btn[data-motion=off] > .copy-check { transition:none; animation:none; }
-/* Hover rules (accent colour) must not win over the confirmation colour. */
-button.is-copied:not(.gen-copy), button.is-copied:not(.gen-copy):hover, button.is-copied:not(.gen-copy):focus-visible, button.is-copied:not(.gen-copy):disabled { color:var(--ok) !important; }
 .gen-copy.is-copied, .gen-copy.is-copied:hover, .gen-copy.is-copied:focus-visible { background:var(--ok) !important; border-color:var(--ok) !important; }
 .gen-copy.is-copied:not([data-motion=off]) { animation:gen-copy-pop 460ms cubic-bezier(.2,1.5,.4,1); }
 @keyframes gen-copy-pop { 0% { transform:scale(.94); box-shadow:0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); } 50% { transform:scale(1.03); } 100% { transform:scale(1); box-shadow:0 0 0 14px transparent; } }
 @media (prefers-reduced-motion:reduce) { .gen-copy.is-copied { animation:none; } }
-/* A failed fill flashes the same animation in the error colour. */
-button.is-copied[data-flash=error] { --ok:var(--danger); }

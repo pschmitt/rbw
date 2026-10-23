@@ -549,30 +549,11 @@ function itemRow(item) {
 }
 if (typeof window !== "undefined") window.itemRow = itemRow;
 const copyNames = { password: "password", username: "username", totp: "TOTP", number: "card number", email: "email", public_key: "public key", notes: "notes" };
-// A copy button confirms in place: its icon slides out and the result slides
-// in (same box, so nothing shifts). With animations off the result simply
-// replaces the icon. A toast is only used where there is no button to change,
-// like the row's menu.
+// A copy button confirms in place (feedback.js); a toast is only used where
+// there is no button to change, like the row's menu.
 function flashCopied(trigger, text, kind = "ok") {
-  const original = trigger?.isConnected && (trigger._copyOriginal || trigger.querySelector(".svg-icon"));
-  if (!original) { message(text); return; }
-  clearTimeout(trigger._copiedTimer);
-  trigger._copyOriginal = original;
-  // Every copy replays the animation, even while the last one still runs.
-  trigger.classList.remove("is-copied"); trigger.querySelector(".copy-check")?.remove();
-  const check = icon(kind === "error" ? "close" : "check"); check.classList.add("copy-check");
-  const box = original.getBoundingClientRect();
-  if (box.width) { check.style.width = `${box.width}px`; check.style.height = `${box.height}px`; }
-  original.after(check);
-  trigger.classList.add("copy-btn");
-  trigger.dataset.motion = bannerAnimated() ? "on" : "off";
-  trigger.style.setProperty("--copy-speed", { slow: 1.6, fast: 0.65 }[preference.animationSpeed] || 1);
-  if (kind === "error") trigger.dataset.flash = "error"; else delete trigger.dataset.flash;
-  void trigger.offsetWidth; trigger.classList.add("is-copied");
-  trigger._copiedTimer = setTimeout(() => {
-    trigger.querySelector(".copy-check")?.remove();
-    trigger.classList.remove("is-copied"); delete trigger._copyOriginal; delete trigger.dataset.flash;
-  }, 1500);
+  const speed = { slow: 1.6, fast: 0.65 }[preference.animationSpeed] || 1;
+  if (!stampResult(trigger, { kind, motion: bannerAnimated(), speed })) message(text);
 }
 async function copyField(item, field, allowFallback = false, trigger = null) {
   try {

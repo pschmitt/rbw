@@ -6,7 +6,7 @@ import globals from "globals";
 // Top-level functions shared between the scripts one page loads together
 // (see the <script> tags in the .html files and background.scripts).
 const shared = Object.fromEntries(
-  ["icon", "accountColor", "accountTextColor", "confirmDialog", "confirmLock", "lockManagedControls",
+  ["icon", "stampResult", "accountColor", "accountTextColor", "confirmDialog", "confirmLock", "lockManagedControls",
    "fillPage", "undoPageFill", "showFillNotice", "marked", "DOMPurify", "importScripts"].map(name => [name, "readonly"]),
 );
 
@@ -35,7 +35,7 @@ export default [
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: "script",
-      globals: { ...globals.browser, icon: "readonly", bd: "readonly", $: "readonly", esc: "readonly", ico: "readonly", header: "readonly", warning: "readonly" },
+      globals: { ...globals.browser, icon: "readonly", stampResult: "readonly", bd: "readonly", $: "readonly", esc: "readonly", ico: "readonly", header: "readonly", warning: "readonly" },
     },
     rules: {
       "no-unused-vars": ["error", { vars: "local", args: "none", caughtErrors: "none" }],

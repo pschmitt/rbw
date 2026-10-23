@@ -1,0 +1,20 @@
+/* Buttons confirm what they did in place (feedback.js): copy and fill in the
+   popup, fill in browser-daemon's live view (browser/browser-daemon). The
+   result is stamped onto the button from large to small, then the button
+   shakes and a pressure ring goes off. */
+button.copy-btn { position:relative; }
+button.copy-btn > .svg-icon:not(.copy-check) { transition:opacity calc(120ms * var(--copy-speed,1)); }
+button.is-copied > .svg-icon:not(.copy-check) { opacity:0; }
+button.copy-btn > .copy-check { position:absolute; inset:0; margin:auto; animation:copy-stamp calc(380ms * var(--copy-speed,1)) cubic-bezier(.5,0,.9,.4) both; }
+button.copy-btn > .copy-check path { stroke-width:3; }
+button.copy-btn.is-copied:not([data-motion=off]) { animation:copy-shake calc(420ms * var(--copy-speed,1)) calc(180ms * var(--copy-speed,1)) both; }
+button.copy-btn.is-copied:not([data-motion=off])::after { content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none; animation:copy-impact calc(520ms * var(--copy-speed,1)) ease-out calc(200ms * var(--copy-speed,1)) both; }
+@keyframes copy-stamp { 0% { transform:scale(3.2); opacity:0; } 70% { transform:scale(.9); opacity:1; } 100% { transform:scale(1); opacity:1; } }
+@keyframes copy-shake { 0%, 100% { transform:translate(0); } 20% { transform:translate(-3px, 1px); } 40% { transform:translate(3px, -1px); } 60% { transform:translate(-2px, 1px); } 80% { transform:translate(1px, 0); } }
+@keyframes copy-impact { 0% { box-shadow:0 0 0 0 color-mix(in srgb, var(--ok) 70%, transparent); } 100% { box-shadow:0 0 0 16px transparent; } }
+/* Animations off (setting or reduced motion): the result just replaces the icon. */
+button.copy-btn[data-motion=off], button.copy-btn[data-motion=off] > .svg-icon, button.copy-btn[data-motion=off] > .copy-check { transition:none; animation:none; }
+/* Hover rules (accent colour) must not win over the confirmation colour. */
+button.is-copied:not(.gen-copy), button.is-copied:not(.gen-copy):hover, button.is-copied:not(.gen-copy):focus-visible, button.is-copied:not(.gen-copy):disabled { color:var(--ok) !important; }
+/* A failed fill flashes the same animation in the error colour. */
+button.is-copied[data-flash=error] { --ok:var(--danger); }

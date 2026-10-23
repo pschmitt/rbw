@@ -57,6 +57,8 @@ in
             ../browser/browser-daemon
             ../browser/extension/theme.css
             ../browser/extension/icons.js
+            ../browser/extension/feedback.css
+            ../browser/extension/feedback.js
             ../browser/extension/icons/rbw-48.png
           ];
         };

@@ -119,7 +119,8 @@ function render(found, site, query, partial = false) {
     const other = e.site === false;
     return `<div class="vp-row"><button class="vp-entry${other ? " other" : ""}" data-i="${i}" title="${other ? `Not saved for ${esc(site)}` : "Fill this login"}">`
       + `<span class="sp-eng">${ico("key")}</span>`
-      + `<span class="sp-t"><b>${esc(e.name || "?")}</b><span>${esc(e.user || "no username")}${e.folder ? " · " + esc(e.folder) : ""}</span></span><span class="vp-tool vp-fill" aria-hidden="true">${ico("fill")}</span></button>`
+      + `<span class="sp-t"><b>${esc(e.name || "?")}</b><span>${esc(e.user || "no username")}${e.folder ? " · " + esc(e.folder) : ""}</span></span></button>`
+      + `<button class="vp-tool vp-fill" data-i="${i}" title="Fill this login" aria-label="Fill ${esc(e.name || "login")}">${ico("fill")}</button>`
       + (e.totp ? `<button class="vp-tool vp-totp" data-i="${i}" title="Fill only the one-time code" aria-label="Fill one-time code">${ico("generator")}</button>` : "") + "</div>";
   };
   const firstOther = found.findIndex((e) => e.site === false);
@@ -129,9 +130,11 @@ function render(found, site, query, partial = false) {
     + '<div class="vp-note">Select a login to fill this page</div>';
   // A login saved for another site fills only after a second click (it may be a
   // phishing page asking for it): the first one says so.
+  // The row's fill button (or its one-time code one) shows how the fill went.
   const pick = (b, fields) => {
     const e = found[+b.dataset.i];
-    if (e.site !== false) return fill(e, fields);
+    const stampOn = b.classList.contains("vp-entry") ? b.closest(".vp-row").querySelector(".vp-fill") : b;
+    if (e.site !== false) return fill(e, fields, false, stampOn);
     const entryBtn = b.closest(".vp-row").querySelector(".vp-entry");
     if (!entryBtn.classList.contains("armed")) {
       list.querySelectorAll(".vp-entry.armed").forEach((x) => { x.classList.remove("armed"); x.querySelector(".sp-t span").textContent = x.dataset.sub; });
@@ -141,21 +144,36 @@ function render(found, site, query, partial = false) {
       sub.textContent = `Not saved for ${site}: click again to fill`;
       return;
     }
-    fill(e, fields, true);
+    fill(e, fields, true, stampOn);
   };
-  list.querySelectorAll(".vp-entry").forEach((b) => { b.onclick = () => pick(b, ["username", "password", "totp"]); });
+  list.querySelectorAll(".vp-entry, .vp-fill").forEach((b) => { b.onclick = () => pick(b, ["username", "password", "totp"]); });
   list.querySelectorAll(".vp-totp").forEach((b) => { b.onclick = () => pick(b, ["totp"]); });
 }
-async function fill(entry, fields, anySite = false) {
-  bd.close("view");
-  bd.toast(`Filling ${entry.name || "the login"}…`, 0);
+// Like the rbw popup's fill: the button confirms in place (feedback.js), a
+// check and then the popover closes, or a red cross and the error. Notes on
+// the way (a phone unlock) show at the bottom of the view.
+const motion = () => !matchMedia("(prefers-reduced-motion: reduce)").matches;
+async function fill(entry, fields, anySite, stampOn) {
+  const row = stampOn.closest(".vp-row");
+  row.classList.add("busy");
+  stampOn.classList.add("is-pending");
   let shownNote = "";
   try {
     const res = await bd.request("fill", { entry: entry.id, fields, any_site: anySite },
       { onNote: (note) => { if (note !== shownNote) { shownNote = note; bd.toast(note, 0); } } });
-    const names = (res?.filled || []).map((f) => (f === "totp" ? "one-time code" : f === "custom" ? "custom fields" : f));
-    bd.toast(`Filled ${names.join(" and ") || "the login"}`, 2000);
+    stampOn.classList.remove("is-pending");
+    stampResult(stampOn, { motion: motion() });
+    // A note is still up: replace it with the outcome.
+    if (shownNote) {
+      const names = (res?.filled || []).map((f) => (f === "totp" ? "one-time code" : f === "custom" ? "custom fields" : f));
+      bd.toast(`Filled ${names.join(" and ") || "the login"}`, 2000);
+    }
+    setTimeout(() => { if (shown) bd.close("view"); }, motion() ? 650 : 250);
   } catch (err) {
+    stampOn.classList.remove("is-pending");
+    stampResult(stampOn, { kind: "error", motion: motion() });
     bd.toast(`Not filled: ${err.message}`, 5000);
+  } finally {
+    row.classList.remove("busy");
   }
 }

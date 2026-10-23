@@ -8,7 +8,14 @@
   here (`browser/browser-daemon`): a live-view extension in the browser
   extension's look (its theme, icons and logo). `browser/build.py` writes it to
   `browser/dist/browser-daemon`, the flake exports it as
-  `browser-daemon-extension`. The signed browser packages do not change.
+  `browser-daemon-extension`. Its fills confirm in place like the popup's
+  (the stamped check, red cross on a failure).
+
+### Changed
+
+* Browser extension: the stamped confirmation of copy and fill buttons moved
+  out of the popup into `feedback.css` and `feedback.js`, shared with
+  browser-daemon's live view. It looks and behaves as before.
 
 ## [2.28.0] - 2026-10-23
 
