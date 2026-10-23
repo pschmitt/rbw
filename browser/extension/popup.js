@@ -503,6 +503,11 @@ function itemRow(item) {
     entries.addEventListener("click", event => {
       if (event.target.closest("button")) menu.open = false;
     });
+    // Fill the active page from here; "and save" also adds the page's URL to the login.
+    if (!autofillExcluded && ["login", "card", "identity"].includes(item.type)) {
+      entries.append(actionButton("Autofill", "fill", () => autofillItem(item.id, item.type)));
+      if (item.type === "login") entries.append(actionButton("Autofill and save", "plus", async () => { if (await autofillAndSave(item.id)) await search(); }));
+    }
     entries.append(actionButton("View item", "note", () => openDetail(item.id)), actionButton("Edit", "edit", async () => { await openDetail(item.id); editItem(); }));
     if (item.type === "login") {
       entries.append(
@@ -1360,27 +1365,33 @@ $("header-archive").onclick = () => attempt(async () => {
   await request("mutate", { item: currentItem, mutation: "archive" });
   await openDetail(currentItem);
 });
-// Fills the active page with the open item.
-$("header-autofill").onclick = () => attempt(async () => {
-  $("detail-menu").removeAttribute("open");
-  const n = await request("fill", { item: currentItem, type: currentDetail.cipher.data.type });
+// Fills the active page with an item.
+async function autofillItem(item, type) {
+  const n = await request("fill", { item, type });
   message(`Filled ${n} fields`);
-});
-// Like Autofill, but first adds the page's URL (without query and fragment) to
-// the login when it has no URI for that site yet, so it matches from now on.
-$("header-autofill-save").onclick = () => attempt(async () => {
-  $("detail-menu").removeAttribute("open");
+}
+// Like autofillItem, but first adds the page's URL (without query and
+// fragment) to the login when it has no URI for that site yet, so it matches
+// from now on. Returns whether a URI was added.
+async function autofillAndSave(item, knownDetail = null) {
   const [tab] = await api.tabs.query({ active: true, currentWindow: true });
   let url; try { url = new URL(tab?.url || ""); } catch (_) { throw new Error("Open an HTTP or HTTPS page first."); }
   if (!["http:", "https:"].includes(url.protocol)) throw new Error("Open an HTTP or HTTPS page first.");
-  const data = currentDetail.cipher.data, uris = data.uris || [];
+  const detail = knownDetail || await request("detail", { item });
+  const data = detail.cipher.data, uris = data.uris || [];
   const known = uris.some(entry => { try { return new URL(entry.uri).hostname === url.hostname; } catch (_) { return false; } });
-  if (!known) {
-    await request("save", { item: currentItem, revision: currentDetail.revision, cipher: { ...currentDetail.cipher, data: { ...data, uris: [...uris, { uri: `${url.origin}${url.pathname}` }] } } });
-  }
-  const n = await request("fill", { item: currentItem, type: data.type });
+  if (!known) await request("save", { item, revision: detail.revision, cipher: { ...detail.cipher, data: { ...data, uris: [...uris, { uri: `${url.origin}${url.pathname}` }] } } });
+  const n = await request("fill", { item, type: data.type });
   message(known ? `Filled ${n} fields` : `Added ${url.hostname}; filled ${n} fields`);
-  if (!known) await openDetail(currentItem);
+  return !known;
+}
+$("header-autofill").onclick = () => attempt(async () => {
+  $("detail-menu").removeAttribute("open");
+  await autofillItem(currentItem, currentDetail.cipher.data.type);
+});
+$("header-autofill-save").onclick = () => attempt(async () => {
+  $("detail-menu").removeAttribute("open");
+  if (await autofillAndSave(currentItem, currentDetail)) await openDetail(currentItem);
 });
 $("header-move").onclick = () => attempt(async () => {
   $("detail-menu").removeAttribute("open");
