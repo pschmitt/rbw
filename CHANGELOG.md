@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.27.2] - 2026-10-23
+
 ### Added
 
 * Browser extension: the clipboard marker in the autofill notice wiggles once.
