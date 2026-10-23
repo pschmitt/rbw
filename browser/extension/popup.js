@@ -1340,19 +1340,6 @@ $("vault").addEventListener("keydown", event => {
   if (currentPage !== "vault" || event.altKey || event.ctrlKey || event.metaKey) return;
   const inSearch = event.target === $("query"), row = event.target.closest?.("#items article");
   if (!inSearch && !row) return;
-  // With a row focused: c copies its password (card number, ...), u the
-  // username, t the TOTP, e opens the editor. In the search field they type.
-  if (row && !event.shiftKey && ["c", "u", "t", "e"].includes(event.key)) {
-    const press = label => [...row.querySelectorAll("button")].find(button => button.textContent.trim() === label)?.click();
-    event.preventDefault();
-    if (event.key === "c") row.querySelector('button[aria-label^="Copy "]')?.click();
-    else if (event.key === "u") press("Copy username");
-    else if (event.key === "t") press("Copy TOTP");
-    else press("Edit");
-    return;
-  }
-  // Tab from the search field moves to the highlighted row, so these keys work.
-  if (inSearch && event.key === "Tab" && !event.shiftKey && activeRow >= 0) { event.preventDefault(); highlightRow(activeRow, true); return; }
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
     // In the search field the highlight moves while typing continues; in the
