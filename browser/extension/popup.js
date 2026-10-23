@@ -545,17 +545,18 @@ function itemRow(item) {
 }
 if (typeof window !== "undefined") window.itemRow = itemRow;
 const copyNames = { password: "password", username: "username", totp: "TOTP", number: "card number", email: "email", public_key: "public key", notes: "notes" };
-// A copy button confirms by swapping its icon for an animated check (a toast
-// is only used where there is no button to change, like the row's menu).
+// A copy button confirms in place: its own icon turns into a check (same box,
+// so nothing shifts) with a pop. A toast is only used where there is no button
+// to change, like the row's menu.
 function flashCopied(trigger, text) {
-  if (!trigger?.isConnected) { message(text); return; }
-  const original = trigger.querySelector(".svg-icon:not(.copy-check)");
-  if (!original) { message(text); return; }
-  trigger.classList.add("is-copied");
-  const check = icon("check"); check.classList.add("copy-check");
-  original.hidden = true; original.after(check);
+  const current = trigger?.isConnected && trigger.querySelector(".svg-icon");
+  if (!current) { message(text); return; }
   clearTimeout(trigger._copiedTimer);
-  trigger._copiedTimer = setTimeout(() => { check.remove(); original.hidden = false; trigger.classList.remove("is-copied"); }, 1500);
+  const original = trigger._copyOriginal || current;
+  trigger._copyOriginal = original;
+  const check = icon("check"); check.classList.add("copy-check");
+  current.replaceWith(check); trigger.classList.add("is-copied");
+  trigger._copiedTimer = setTimeout(() => { check.replaceWith(original); trigger.classList.remove("is-copied"); delete trigger._copyOriginal; }, 1500);
 }
 async function copyField(item, field, allowFallback = false, trigger = null) {
   try {
