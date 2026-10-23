@@ -1785,3 +1785,37 @@ $("send-form").onsubmit = event => { event.preventDefault(); attempt(async () =>
     $("send-text").value = ""; $("send-notes").value = ""; $("send-file").value = ""; await loadSends(); message("Send saved.");
   } finally { if (token) await request("upload_cancel", { token }).catch(() => {}); }
 }); };
+
+// Hovering an entry for a couple of seconds scrolls the names and subtitles
+// that the row cuts off with an ellipsis, so the rest can be read; leaving
+// puts them back.
+const MARQUEE_DELAY = 2000, MARQUEE_PAUSE = 900, MARQUEE_SPEED = 45; // ms, ms, px/s
+let marqueeRow = null, marqueeTimer = 0, marqueeFrame = 0, marqueeTexts = [];
+function stopMarquee() {
+  clearTimeout(marqueeTimer); cancelAnimationFrame(marqueeFrame);
+  for (const text of marqueeTexts) { text.scrollLeft = 0; text.style.textOverflow = ""; }
+  marqueeTexts = [];
+}
+function startMarquee(row) {
+  marqueeTexts = [...row.querySelectorAll("strong, small")].filter(text => text.scrollWidth > text.clientWidth);
+  if (!marqueeTexts.length) return;
+  for (const text of marqueeTexts) text.style.textOverflow = "clip";
+  const distances = marqueeTexts.map(text => text.scrollWidth - text.clientWidth);
+  const scrolling = Math.max(...distances) / MARQUEE_SPEED * 1000, period = MARQUEE_PAUSE + scrolling + MARQUEE_PAUSE;
+  let begin = null;
+  const step = now => {
+    if (!row.isConnected) { stopMarquee(); return; }
+    begin ??= now;
+    const t = (now - begin) % period, progress = Math.min(1, Math.max(0, (t - MARQUEE_PAUSE) / scrolling));
+    marqueeTexts.forEach((text, index) => { text.scrollLeft = distances[index] * progress; });
+    marqueeFrame = requestAnimationFrame(step);
+  };
+  marqueeFrame = requestAnimationFrame(step);
+}
+document.addEventListener("mouseover", event => {
+  const row = event.target.closest?.(".item-main") || null;
+  if (row === marqueeRow) return;
+  stopMarquee(); marqueeRow = row;
+  if (row && !matchMedia("(prefers-reduced-motion: reduce)").matches) marqueeTimer = setTimeout(() => startMarquee(row), MARQUEE_DELAY);
+});
+document.addEventListener("mouseleave", () => { stopMarquee(); marqueeRow = null; });

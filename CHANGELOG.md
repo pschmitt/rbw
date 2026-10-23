@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+* Browser extension: hovering an entry in the list for two seconds scrolls its
+  name and subtitle when they are cut off by an ellipsis, so the rest can be
+  read. Leaving the entry puts them back; reduced-motion settings turn it off.
+
 ## [2.27.4] - 2026-10-23
 
 ### Changed
