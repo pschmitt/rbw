@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.27.5] - 2026-10-23
+
 ### Added
 
 * `rbw passkey counter --reset` sets a passkey's counter back to 0, as
