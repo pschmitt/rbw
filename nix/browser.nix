@@ -4,6 +4,16 @@ let
   # The extension shares rbw's version (see browser/build.py).
   inherit (rbw) version;
   metadata = builtins.fromJSON (builtins.readFile ../browser/packages/metadata.json);
+  # The signed packages are release assets, pinned by hash in metadata.json
+  # (the release workflow updates it after signing).
+  releaseAsset =
+    file: sha256:
+    pkgs.fetchurl {
+      url = "https://github.com/pschmitt/rbw/releases/download/v${metadata.version}/${file}";
+      inherit sha256;
+    };
+  firefoxXpi = releaseAsset "rbw-browser-${metadata.version}-firefox.xpi" metadata.firefoxSha256;
+  chromiumCrx = releaseAsset "rbw-browser-${metadata.version}-chromium.crx" metadata.chromiumSha256;
   firefoxId = "rbw-browser@pschmitt.dev";
   firefoxAppId = "{ec8030f7-c20a-464f-9b0e-13a3a9e97384}";
   hostName = "org.rbw.browser";
@@ -30,7 +40,7 @@ in
   '';
 
   firefox-addon =
-    pkgs.runCommand "rbw-firefox-addon-${version}"
+    pkgs.runCommand "rbw-firefox-addon-${metadata.version}"
       {
         passthru = {
           addonId = firefoxId;
@@ -39,7 +49,7 @@ in
       }
       ''
         mkdir -p "$out/share/mozilla/extensions/${firefoxAppId}"
-        cp ${../browser/packages/rbw-firefox.xpi} "$out/${firefoxId}.xpi"
+        cp ${firefoxXpi} "$out/${firefoxId}.xpi"
         ln -s "$out/${firefoxId}.xpi" "$out/share/mozilla/extensions/${firefoxAppId}/${firefoxId}.xpi"
       '';
 
@@ -70,15 +80,15 @@ in
       '';
 
   chromium-addon =
-    pkgs.runCommand "rbw-chromium-addon-${version}"
+    pkgs.runCommand "rbw-chromium-addon-${metadata.version}"
       {
         passthru = {
           extensionId = metadata.chromiumId;
-          inherit version;
+          inherit (metadata) version;
         };
       }
       ''
         mkdir -p "$out"
-        cp ${../browser/packages/rbw-chromium.crx} "$out/rbw.crx"
+        cp ${chromiumCrx} "$out/rbw.crx"
       '';
 }

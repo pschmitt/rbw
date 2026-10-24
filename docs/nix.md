@@ -9,8 +9,8 @@ inputs.rbw.url = "github:pschmitt/rbw/release";
 ```
 
 `main` (`github:pschmitt/rbw`) also works, but carries unreleased changes, and
-its checked-in browser packages are those of the last release, which may lag
-behind its extension source.
+its pinned browser packages (release assets, fetched by hash) are those of the
+last release, which may lag behind its extension source.
 
 ## Flake outputs
 

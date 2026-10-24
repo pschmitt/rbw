@@ -156,15 +156,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Check whether the checked-in packages already match
-        id: package-check
-        continue-on-error: true
-        run: python3 browser/release.py --output dist
-      - name: Refuse to sign outside a version tag
-        if: steps.package-check.outcome == 'failure' && !startsWith(github.ref, 'refs/tags/')
+      # Pushes and pull requests: the packages that browser/packages/metadata.json
+      # pins (what the Nix package fetches) must still match their tag's source.
+      - name: Verify the pinned release packages
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "::error::Checked-in browser packages do not match the source; only version tags sign new ones."
-          exit 1
+          version=$(jq -r .version browser/packages/metadata.json)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git fetch --depth=1 origin "refs/tags/v$version:refs/tags/v$version"
+          previous=$(mktemp -d)
+          signed=$(mktemp -d)
+          trap 'rm -rf "$previous" "$signed"' EXIT
+          gh release download "v$version" --dir "$signed" --pattern 'rbw-browser-*'
+          echo "$(jq -r .firefoxSha256 browser/packages/metadata.json)  $signed/rbw-browser-$version-firefox.xpi" | sha256sum --check
+          echo "$(jq -r .chromiumSha256 browser/packages/metadata.json)  $signed/rbw-browser-$version-chromium.crx" | sha256sum --check
+          mv "$signed/rbw-browser-$version-firefox.xpi" "$signed/rbw-firefox.xpi"
+          mv "$signed/rbw-browser-$version-chromium.crx" "$signed/rbw-chromium.crx"
+          git archive "v$version" | tar -x -C "$previous"
+          python3 browser/release.py --source "$previous" --packages "$signed" --output "$PWD/dist"
+      # AMO signs a version once, so a rerun of a tag reuses its release assets.
+      - name: Reuse the signed packages of this tag's release
+        id: package-check
+        if: startsWith(github.ref, 'refs/tags/')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reused=$(mktemp -d)
+          gh release download "$GITHUB_REF_NAME" --dir "$reused" --pattern 'rbw-browser-*'
+          mkdir -p browser/dist/signed
+          cp "$reused"/rbw-browser-*-firefox.xpi browser/dist/signed/rbw-firefox.xpi
+          cp "$reused"/rbw-browser-*-chromium.crx browser/dist/signed/rbw-chromium.crx
+          python3 browser/release.py --output dist
       - name: Sign Firefox package with AMO
         if: steps.package-check.outcome == 'failure'
         run: |
@@ -173,7 +198,8 @@ jobs:
             --channel=unlisted \
             --source-dir=browser/dist/firefox \
             --artifacts-dir=browser/dist/signed-firefox
-          cp browser/dist/signed-firefox/*.xpi browser/packages/rbw-firefox.xpi
+          mkdir -p browser/dist/signed
+          cp browser/dist/signed-firefox/*.xpi browser/dist/signed/rbw-firefox.xpi
         env:
           WEB_EXT_API_KEY: ${{ secrets.RBW_AMO_API_KEY }}
           WEB_EXT_API_SECRET: ${{ secrets.RBW_AMO_API_SECRET }}
@@ -193,9 +219,10 @@ jobs:
             --disable-gpu \
             --pack-extension="$GITHUB_WORKSPACE/browser/dist/chromium" \
             --pack-extension-key="$key_file"
-          cp browser/dist/chromium.crx browser/packages/rbw-chromium.crx
+          cp browser/dist/chromium.crx browser/dist/signed/rbw-chromium.crx
           rm -f "$key_file"
       - name: Verify signed browser packages
+        if: startsWith(github.ref, 'refs/tags/')
         run: python3 browser/release.py --output dist
       - uses: actions/upload-artifact@v7
         with:
@@ -203,13 +230,6 @@ jobs:
           path: |
             dist/*.xpi
             dist/*.crx
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v7
-        with:
-          name: browser-packages
-          path: |
-            browser/packages/rbw-firefox.xpi
-            browser/packages/rbw-chromium.crx
           if-no-files-found: error
   release:
     needs: [build, browser]
@@ -260,15 +280,16 @@ jobs:
           body_path: RELEASE_NOTES.md
           generate_release_notes: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-  # The Nix package installs the checked-in signed packages. Commit the ones
-  # signed for this tag on top of the tag itself, so the commit always
-  # matches its source whatever has landed on main since. The `release`
-  # branch points at that commit (consumers follow it to get the latest
-  # release), and it is merged into main so main ships the latest signed
-  # packages too. Only this job writes browser/packages, so the merge
-  # cannot conflict; a concurrent push to main just means another try.
+  # The Nix package fetches the signed packages from the release by the hashes
+  # pinned in browser/packages/metadata.json. Commit the pin for this tag on top
+  # of the tag itself, so the commit always matches its source whatever has
+  # landed on main since. The `release` branch points at that commit (consumers
+  # follow it to get the latest release), and it is merged into main so main
+  # pins the latest signed packages too. Only this job writes
+  # browser/packages/metadata.json's pin, so the merge cannot conflict; a
+  # concurrent push to main just means another try.
   packages:
-    name: Commit signed browser packages
+    name: Pin signed browser packages
     needs: [release]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
@@ -280,17 +301,23 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
-          name: browser-packages
-          path: browser/packages
+          name: browser-extensions
+          path: dist
       - name: Commit on top of the tag
         id: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          python3 browser/release.py --output "$RUNNER_TEMP/verify"
+          version="${GITHUB_REF_NAME#v}"
+          firefox=$(sha256sum "dist/rbw-browser-$version-firefox.xpi" | cut -d' ' -f1)
+          chromium=$(sha256sum "dist/rbw-browser-$version-chromium.crx" | cut -d' ' -f1)
+          jq --arg version "$version" --arg firefox "$firefox" --arg chromium "$chromium" \
+            '.version = $version | .firefoxSha256 = $firefox | .chromiumSha256 = $chromium' \
+            browser/packages/metadata.json > "$RUNNER_TEMP/metadata.json"
+          cp "$RUNNER_TEMP/metadata.json" browser/packages/metadata.json
           if ! git diff --quiet -- browser/packages
           then
-            git commit -m "release: package signed browser extension ${GITHUB_REF_NAME}" -- browser/packages/rbw-firefox.xpi browser/packages/rbw-chromium.crx
+            git commit -m "release: pin signed browser extension ${GITHUB_REF_NAME}" -- browser/packages/metadata.json
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Point the release branch at it
@@ -306,12 +333,12 @@ jobs:
             git checkout -B main origin/main
             if git merge-base --is-ancestor "$RELEASE_SHA" HEAD
             then
-              echo "Signed packages for ${GITHUB_REF_NAME} are already on main."
+              echo "The pin for ${GITHUB_REF_NAME} is already on main."
               exit 0
             fi
-            if ! git merge --no-ff -m "Merge signed browser packages ${GITHUB_REF_NAME}" "$RELEASE_SHA"
+            if ! git merge --no-ff -m "Merge signed browser package pin ${GITHUB_REF_NAME}" "$RELEASE_SHA"
             then
-              echo "::error::merging the signed packages into main conflicted; browser/packages was changed outside the release workflow."
+              echo "::error::merging the pin into main conflicted; browser/packages/metadata.json was changed outside the release workflow."
               exit 1
             fi
             if git push origin HEAD:main

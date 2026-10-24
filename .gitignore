@@ -6,6 +6,8 @@
 
 # Browser development packages
 /browser/dist/
+/browser/packages/*.xpi
+/browser/packages/*.crx
 /dist/
 
 # Python packaging helpers

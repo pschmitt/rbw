@@ -31,8 +31,9 @@ The browser extension shares rbw's version (from `Cargo.toml`). Release with
 `just release-prepare X.Y.Z`, then `just release-tag` (see
 `tools/release.sh`); the tag must be GPG-signed, so unlock GPG first. The
 tag's release workflow signs the extension (AMO, CRX), publishes it,
-commits the signed packages on top of the tag, points the `release` branch
-at that commit and merges it into `main`. Commits landing on `main` in the
+commits the hashes of the signed packages (`browser/packages/metadata.json`;
+the packages themselves are only release assets) on top of the tag, points the
+`release` branch at that commit and merges it into `main`. Commits landing on `main` in the
 meantime don't matter. Any extension source change needs a new version,
 because AMO signs each version only once.
 

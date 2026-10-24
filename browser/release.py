@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare the checked-in, signed browser packages for a GitHub release."""
+"""Verify the signed browser packages against the source and name them for a GitHub release."""
 import argparse
 import json
 from pathlib import Path
@@ -44,13 +44,18 @@ def verify(package, source):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("dist"))
+    parser.add_argument("--source", type=Path, default=ROOT.parent,
+                        help="checkout whose extension source the packages must match")
+    parser.add_argument("--packages", type=Path, default=ROOT / "dist/signed",
+                        help="directory with rbw-firefox.xpi and rbw-chromium.crx")
     args = parser.parse_args()
-    subprocess.run([sys.executable, str(ROOT / "build.py")], check=True)
+    source = args.source / "browser"
+    subprocess.run([sys.executable, str(source / "build.py")], check=True)
 
-    firefox = ROOT / "packages/rbw-firefox.xpi"
-    chromium = ROOT / "packages/rbw-chromium.crx"
-    ff_manifest, entries = verify(firefox, ROOT / "dist/firefox")
-    chrome_manifest, _ = verify(chromium, ROOT / "dist/chromium")
+    firefox = args.packages / "rbw-firefox.xpi"
+    chromium = args.packages / "rbw-chromium.crx"
+    ff_manifest, entries = verify(firefox, source / "dist/firefox")
+    chrome_manifest, _ = verify(chromium, source / "dist/chromium")
     version = ff_manifest["version"]
     if version != chrome_manifest["version"]:
         raise RuntimeError("Firefox and Chromium versions differ")

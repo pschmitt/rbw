@@ -132,14 +132,14 @@ NixOS or Home Manager is described in [nix.md](nix.md).
 Firefox's XPI must be AMO-signed (unlisted is sufficient); Chromium uses a CRX3
 package with the existing signing identity.
 
-`browser/packages/` holds signed distribution artifacts and the public Chromium
-identity. Never put private signing keys or AMO credentials in the repository.
+`browser/packages/metadata.json` holds the public Chromium identity and pins the
+signed packages (release assets) by version and SHA-256. Never put private signing keys or AMO credentials in the repository.
 The extension shares rbw's version: `build.py` and `nix/browser.nix` read it
 from `Cargo.toml`, so there is nothing to bump separately. The release workflow
 signs the tagged source through AMO and with the existing Chromium key,
-publishes the packages with the release, commits them on top of the tag and
-merges that commit into `main` (the Nix package installs the checked-in
-ones). The `release` branch points at the latest such commit, so following
+publishes the packages with the release, commits their pin on top of the tag
+and merges that commit into `main` (the Nix package fetches the pinned release
+assets). The `release` branch points at the latest such commit, so following
 `github:pschmitt/rbw/release` gets the latest release with matching signed
 packages. Commits that land on `main` while a release runs don't affect it. Pushes and pull requests only build
 unsigned ZIPs. Signing reads
@@ -154,7 +154,7 @@ with
    commits and pushes.
 2. `tag` waits for green build, test and docker runs on that commit and pushes
    a GPG-signed `vX.Y.Z` tag; the release workflow signs and publishes
-   everything, then commits the signed packages on top of the tag, moves
+   everything, then commits the package pin on top of the tag, moves
    `release` there and merges it into `main`.
 The logo is the blue ninja crab in `browser/icon-source.png`: the `rbw-*`
 icons in `browser/extension/icons/` and the unlock dialogs' logo
@@ -190,14 +190,15 @@ alone does not cover these executables.
 
 ## Release assets
 
-Tagged CLI releases include the checked-in Mozilla-signed Firefox XPI and signed
+Tagged CLI releases include the Mozilla-signed Firefox XPI and signed
 Chromium CRX, named `rbw-browser-VERSION-firefox.xpi` and
 `rbw-browser-VERSION-chromium.crx`. They are included in `SHA256SUMS` and the
 release provenance attestation. Since 2.22.0 the extension version
 matches the CLI version (earlier extension releases were `browser-v0.2.x`). Main-branch build artifacts also include both extension packages.
 
-`python3 browser/release.py --output dist` verifies that both signed packages
-match the shared extension source and generated manifests before preparing
+`python3 browser/release.py [--source CHECKOUT] --packages DIR --output dist` verifies that both
+signed packages in `DIR` (`rbw-firefox.xpi`, `rbw-chromium.crx`; default
+`browser/dist/signed`) match the shared extension source and generated manifests before preparing
 release assets.
 
 ## Feature history (0.2.x)
