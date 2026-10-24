@@ -27,6 +27,12 @@ successfully for the exact commit being released. Pending, running, cancelled,
 or missing checks do not count as green. A version-bump commit may be pushed
 to trigger CI; fix failures and wait for green checks before releasing it.
 
+Before every release, try to land the open dependency PRs (Renovate,
+Dependabot): `gh pr list`, merge those whose checks are green (Renovate
+rebases the ones that conflict; wait for it), and let CI finish on the
+resulting `main` before tagging. Leave out PRs with failing checks or major
+bumps that need real work, and say which.
+
 The browser extension shares rbw's version (from `Cargo.toml`). Release with
 `just release-prepare X.Y.Z`, then `just release-tag` (see
 `tools/release.sh`); the tag must be GPG-signed, so unlock GPG first. The
