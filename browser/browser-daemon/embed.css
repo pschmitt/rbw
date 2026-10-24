@@ -1,0 +1,43 @@
+/* The extension's own popup.css, adapted to a frame in browser-daemon's live
+   view: the frame takes the content's height (up to the view's limit, then it
+   scrolls with header and search staying put), and there is no "Add" button
+   to leave room for. Everything else looks as in the popup. */
+html, body { width: auto; height: auto; max-height: none; overflow: visible; }
+body { display: block; }
+header { position: sticky; top: 0; z-index: 20; }
+header .logo { display: block; width: 32px; height: 32px; margin: 0 4px 0 2px; flex: none; }
+main { overflow: visible; padding: 0 10px 10px; }
+.search-row { top: 48px; }
+#items > h3:first-child { margin-top: 8px; }
+.item-main { cursor: pointer; }
+.empty.locked { color: var(--warn); }
+.empty.bad { color: var(--danger); }
+
+/* An entry saved for another site fills after a second click. */
+article.armed { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--panel)); }
+article.armed .item-main small { color: var(--warn); }
+
+/* A fill or copy on its way: the row waits, its button pulses (then stamps
+   the result, feedback.css). */
+article.busy { pointer-events: none; }
+.item-actions .is-pending { color: var(--accent); }
+.item-actions .is-pending .svg-icon { animation: rbw-pending 1s ease-in-out infinite; }
+@keyframes rbw-pending { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .item-actions .is-pending .svg-icon { animation: none; } }
+
+/* Looking things up. */
+.checking::before { content: ""; display: inline-block; width: 11px; height: 11px; margin-right: 8px; vertical-align: -1px;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: rbw-spin .8s linear infinite; }
+@keyframes rbw-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .checking::before { animation: none; } }
+
+/* The session is shared publicly: a fill or passkey may not be your doing. */
+.pub-warn { margin: 10px 0 4px; padding: 9px 11px; border-radius: 10px; font-size: 12.5px; line-height: 1.45; color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 13%, transparent); border-left: 3px solid var(--warn); }
+.pub-warn.watch { color: var(--accent); background: var(--accent-soft); border-left-color: var(--accent); }
+.pub-warn[hidden] { display: none; }
+
+/* Passkey prompt: the popup's approval page. */
+body.passkey .passkey-intro { margin-top: 18px; }
+.passkey-locked { width: 100%; justify-content: center; margin: 0 0 14px; }
+.passkey-emblem img { width: 30px; height: 30px; border-radius: 6px; object-fit: contain; }

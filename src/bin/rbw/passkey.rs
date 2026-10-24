@@ -106,6 +106,77 @@ fn candidates(
     Ok(found)
 }
 
+/// The live logins holding a passkey for `rp_id`, described for a prompt (id,
+/// name, user, the passkey's rp id and user). Decrypts only those, all in one
+/// batch, and never syncs: picking an entry needs no fresh counter, signing
+/// does (and `select` syncs first).
+fn listing(db: &rbw::db::Db, rp_id: &str) -> anyhow::Result<Vec<Value>> {
+    let mut requests = Vec::new();
+    let mut push = |value: &str, entry: &rbw::db::Entry| {
+        requests.push(rbw::protocol::DecryptRequest {
+            cipherstring: value.to_owned(),
+            entry_key: entry.key.clone(),
+            org_id: entry.org_id.clone(),
+        });
+        requests.len() - 1
+    };
+    let mut plans = Vec::new();
+    for entry in &db.entries {
+        let rbw::db::EntryData::Login {
+            username,
+            fido2_credentials,
+            ..
+        } = &entry.data
+        else {
+            continue;
+        };
+        if entry.deleted || entry.archived || fido2_credentials.is_empty() {
+            continue;
+        }
+        let name = push(&entry.name, entry);
+        let user = username.as_deref().map(|u| push(u, entry));
+        let credentials: Vec<_> = fido2_credentials
+            .iter()
+            .map(|c| {
+                (
+                    c.rp_id.as_deref().map(|v| push(v, entry)),
+                    c.user_name
+                        .as_deref()
+                        .or(c.user_display_name.as_deref())
+                        .map(|v| push(v, entry)),
+                )
+            })
+            .collect();
+        plans.push((entry, name, user, credentials));
+    }
+    if requests.is_empty() {
+        return Ok(Vec::new());
+    }
+    let results = actions::decrypt_batch(requests)?;
+    let text = |index: Option<usize>| match index.map(|i| &results[i]) {
+        Some(rbw::protocol::DecryptResult::Success { plaintext }) => {
+            Some(plaintext.clone())
+        }
+        _ => None,
+    };
+    Ok(plans
+        .into_iter()
+        .filter_map(|(entry, name, user, credentials)| {
+            let passkey_user =
+                credentials.into_iter().find_map(|(rp, user)| {
+                    (text(rp).as_deref() == Some(rp_id)).then(|| text(user))
+                })?;
+            Some(json!({
+                "id": entry.id,
+                "name": text(Some(name)).unwrap_or_default(),
+                "user": text(user),
+                "rp_id": rp_id,
+                "passkey_user": passkey_user,
+            }))
+        })
+        .collect())
+}
+
 /// The one live login holding a passkey for `rp_id`.
 fn find_by_rp_id(
     db: &rbw::db::Db,
@@ -261,26 +332,7 @@ pub fn find(args: &FindArgs, rp_id: Option<&str>) -> anyhow::Result<()> {
         };
     let list: Vec<Value> = match rp_id {
         Some(rp) if args.needles.is_empty() => {
-            actions::sync()?;
-            let db = commands::load_db()?;
-            candidates(&db, rp)?
-                .iter()
-                .map(|(entry, d)| {
-                    let (user, creds) = match &d.data {
-                        commands::DecryptedData::Login {
-                            username,
-                            fido2_credentials,
-                            ..
-                        } => {
-                            (username.as_ref(), fido2_credentials.as_slice())
-                        }
-                        _ => (None, &[][..]),
-                    };
-                    let c =
-                        creds.iter().find(|c| c.rp_id.as_deref() == Some(rp));
-                    describe(&entry.id, &d.name, user, c)
-                })
-                .collect()
+            listing(&commands::load_db()?, rp)?
         }
         _ => {
             let s = select(args, rp_id)?;

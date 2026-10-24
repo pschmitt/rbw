@@ -542,3 +542,206 @@ pub fn code(
 
     Ok(())
 }
+
+/// One login found by `search --url`: what it is, never a secret.
+#[derive(Debug, serde::Serialize)]
+struct UrlMatch {
+    id: String,
+    name: String,
+    user: Option<String>,
+    folder: Option<String>,
+    uris: Vec<String>,
+    /// Saved for the URL, by rbw's URI matching.
+    site: bool,
+    has_password: bool,
+    has_totp: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account: Option<String>,
+}
+
+/// `search --url`: the logins saved for `url`, by rbw's URI matching (the
+/// browser extension's), or with a `term` every login whose name, user,
+/// folder or URIs contain each of its words, those for `url` first. Like the
+/// extension's search it never looks at notes, custom fields or secrets, and
+/// its structured output carries metadata only (URIs, and whether there is a
+/// password or a TOTP), so it can answer a web page's search box.
+pub fn search_url(
+    term: &str,
+    url: &str,
+    folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
+    output: OutputMode,
+    all: bool,
+    archived_filter: ArchivedFilter,
+    trash_filter: TrashFilter,
+) -> anyhow::Result<()> {
+    let url = url::Url::parse(url).context("invalid --url")?;
+    anyhow::ensure!(
+        matches!(url.scheme(), "http" | "https") && url.host_str().is_some(),
+        "--url must be an http or https URL"
+    );
+    let default = rbw::config::Config::load()
+        .map(|config| config.default_uri_match)
+        .unwrap_or_default();
+    let words: Vec<String> = term
+        .to_lowercase()
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+
+    let target_accounts =
+        list_target_accounts(all, rbw::config::ExcludeContext::Search, true)?;
+    let tag_account = target_accounts.len() > 1;
+    let mut found: Vec<UrlMatch> = Vec::new();
+    for account in &target_accounts {
+        crate::actions::set_active_account(Some(account.clone()))?;
+        let db = load_db()?;
+        let Ok((collection_id, org_id)) =
+            resolve_entry_scope(&db, collection, org)
+        else {
+            continue;
+        };
+        // One batch for the whole vault: names, users, folders and URIs.
+        let mut requests = BatchRequests::new();
+        let plans: Vec<_> = db
+            .entries
+            .iter()
+            .filter(|entry| {
+                archived_filter.matches(entry.archived)
+                    && trash_filter.matches(entry.deleted)
+                    && entry_in_collection_org_scope(
+                        entry,
+                        collection_id.as_deref(),
+                        org_id.as_deref(),
+                    )
+            })
+            .filter_map(|entry| {
+                let rbw::db::EntryData::Login { username, uris, .. } =
+                    &entry.data
+                else {
+                    return None;
+                };
+                let key = entry.key.as_deref();
+                let org = entry.org_id.as_deref();
+                Some((
+                    entry,
+                    requests.push(&entry.name, key, org),
+                    username.as_ref().map(|u| requests.push(u, key, org)),
+                    // Folders are the user's own: decrypted with the local key.
+                    entry
+                        .folder
+                        .as_ref()
+                        .map(|f| requests.push(f, None, None)),
+                    uris.iter()
+                        .map(|u| {
+                            (requests.push(&u.uri, key, org), u.match_type)
+                        })
+                        .collect::<Vec<_>>(),
+                ))
+            })
+            .collect();
+        let results = if requests.is_empty() {
+            Vec::new()
+        } else {
+            crate::actions::decrypt_batch(requests.into_vec())?
+        };
+        for (entry, name, user, folder_index, uris) in plans {
+            let Ok(name) = strict_result(&results[name]) else {
+                log::warn!("failed to decrypt entry {}", entry.id);
+                continue;
+            };
+            let user = user
+                .and_then(|i| lenient_result(&results[i], Field::Username));
+            let entry_folder = folder_index
+                .map(|i| strict_result(&results[i]))
+                .transpose()
+                .ok()
+                .flatten();
+            if folder.is_some_and(|f| entry_folder.as_deref() != Some(f)) {
+                continue;
+            }
+            let uris: Vec<(String, Option<rbw::api::UriMatchType>)> = uris
+                .into_iter()
+                .filter_map(|(i, match_type)| {
+                    Some((
+                        lenient_result(&results[i], Field::Uris)?,
+                        match_type,
+                    ))
+                })
+                .collect();
+            let site = uris.iter().any(|(value, match_type)| {
+                !skip_insecure_uri(&url, value)
+                    && matches_url(value, *match_type, &url, default)
+            });
+            let wanted = if words.is_empty() {
+                site
+            } else {
+                let haystack = [
+                    name.as_str(),
+                    user.as_deref().unwrap_or_default(),
+                    entry_folder.as_deref().unwrap_or_default(),
+                ]
+                .into_iter()
+                .chain(uris.iter().map(|(value, _)| value.as_str()))
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase();
+                words.iter().all(|word| haystack.contains(word.as_str()))
+            };
+            if !wanted {
+                continue;
+            }
+            let rbw::db::EntryData::Login { password, totp, .. } =
+                &entry.data
+            else {
+                continue;
+            };
+            found.push(UrlMatch {
+                id: entry.id.clone(),
+                name,
+                user,
+                folder: entry_folder,
+                uris: uris.into_iter().map(|(value, _)| value).collect(),
+                site,
+                has_password: password.is_some(),
+                has_totp: totp.is_some(),
+                account: tag_account.then(|| account.clone()),
+            });
+        }
+    }
+    found.sort_by_cached_key(|m| (!m.site, m.name.to_lowercase()));
+
+    if found.is_empty() {
+        let c = std::io::stderr().is_terminal()
+            && std::env::var_os("NO_COLOR").is_none();
+        let msg = if term.trim().is_empty() {
+            format!("no entries found for '{url}'")
+        } else {
+            format!("no entries found matching '{term}'")
+        };
+        eprintln!("{}", style::warning(&msg, c));
+        std::process::exit(1);
+    }
+    if output_is_structured(output) {
+        return write_serialized_pretty(
+            &found,
+            output,
+            "failed to write entries to stdout",
+        );
+    }
+    for m in &found {
+        if output == OutputMode::Name {
+            println!("{}", m.name);
+        } else {
+            println!(
+                "{}\t{}\t{}\t{}",
+                m.id,
+                m.name,
+                m.user.as_deref().unwrap_or_default(),
+                if m.site { "site" } else { "" }
+            );
+        }
+    }
+    Ok(())
+}

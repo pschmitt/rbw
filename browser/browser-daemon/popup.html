@@ -4,18 +4,26 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rbw vault</title>
-<link rel="stylesheet" href="theme.css">
-<link rel="stylesheet" href="vault.css">
+<link rel="stylesheet" href="popup.css">
 <link rel="stylesheet" href="feedback.css">
+<link rel="stylesheet" href="embed.css">
 <script src="icons.js"></script>
 <script src="feedback.js"></script>
 <script src="bridge.js"></script>
 <script src="popup.js" defer></script>
 </head>
-<body class="popup">
-<div class="rbw-head" id="head"></div>
+<body class="vault">
+<header>
+<img class="logo" src="icons/rbw-64.png" width="32" height="32" alt="rbw">
+<div class="heading"><h1>Vault</h1><span class="version" data-extension-version></span></div>
+<div id="header-actions"><button id="close" class="icon" title="Close" aria-label="Close vault"><span data-icon="close"></span></button></div>
+</header>
+<main>
 <div class="pub-warn" id="public" role="alert" hidden></div>
-<label class="vp-search-wrap" id="searchWrap"><input class="vp-search" id="search" type="search" placeholder="Search vault" autocomplete="off" spellcheck="false" aria-label="Search vault"></label>
-<div id="list" aria-live="polite"></div>
+<div class="search-row"><div class="search"><span data-icon="search"></span><input id="query" type="search" autocomplete="off" spellcheck="false" placeholder="Search vault" aria-label="Search vault"><button id="filter-toggle" class="icon filter-toggle-btn" aria-label="Toggle filters" aria-expanded="false" aria-controls="filters" title="Filters"><span data-icon="filters"></span></button></div>
+<div id="filters" class="filters" hidden><select id="folder" aria-label="Folder"><option value="">Folder</option></select></div>
+</div>
+<div id="items" aria-live="polite"></div>
+</main>
 </body>
 </html>

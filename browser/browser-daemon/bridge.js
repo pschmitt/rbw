@@ -26,11 +26,18 @@ const bd = (() => {
       return;
     }
     if (m.type === "note") { pending.get(m.id)?.onNote?.(m.note); return; }
-    if (m.type === "init") { theme = m.theme || null; applyTheme(); }
+    if (m.type === "init") {
+      theme = m.theme || null;
+      applyTheme();
+      // The bundle's version (rbw's), where the popup shows its own.
+      for (const el of document.querySelectorAll("[data-extension-version]")) el.textContent = m.version ? `v${m.version}` : "rbw";
+    }
     handlers[m.type]?.(m);
   });
   // The view sizes the frame to the content (up to its limit; beyond, this scrolls).
   addEventListener("DOMContentLoaded", () => {
+    // Icons as in the popup: <span data-icon="name">.
+    for (const el of document.querySelectorAll("[data-icon]")) el.replaceChildren(icon(el.dataset.icon));
     new ResizeObserver(() => post("size", { height: Math.ceil(document.body.getBoundingClientRect().height) })).observe(document.body);
     post("ready");
   });
@@ -54,7 +61,9 @@ const bd = (() => {
     badge: (text) => post("badge", { text: text || null }),
     close: (focus = "button") => post("close", { focus }),
     toast: (text, ms) => post("toast", { text, ms }),
-    answerPasskey: (id, use, entry = null) => post("passkey.answer", { id, use, entry }),
+    // use: sign in with the vault (entry: the account picked, or null to let
+    // rbw pick or unlock first); device: let the browser ask its own way.
+    answerPasskey: (id, use, entry = null, device = false) => post("passkey.answer", { id, use, entry, device }),
   };
 })();
 
@@ -62,12 +71,6 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 // rbw's icons (icons.js, the extension's), as markup.
 const ico = (name) => icon(name).outerHTML;
-// The header both surfaces share: rbw's mark, a title and a close button.
-function header(title, subtitle, closeLabel) {
-  return '<img class="rbw-ic" alt="" src="icons/rbw-48.png">'
-    + `<div class="rbw-heading"><strong>${esc(title)}</strong><small>${esc(subtitle)}</small></div>`
-    + `<button type="button" class="rbw-close" aria-label="${esc(closeLabel)}">${ico("close")}</button>`;
-}
 // The view's note that the session is shared publicly ({text, watch}, or null).
 function warning(el, w) {
   el.hidden = !w;
@@ -75,3 +78,5 @@ function warning(el, w) {
   el.textContent = w.text;
   el.classList.toggle("watch", !!w.watch);
 }
+// Respect reduced motion, as the popup's animations setting does.
+const motion = () => !matchMedia("(prefers-reduced-motion: reduce)").matches;

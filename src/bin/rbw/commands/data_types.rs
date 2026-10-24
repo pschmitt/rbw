@@ -325,6 +325,18 @@ pub(super) fn matches_host_or_subdomain(
     url == given_host_port || given_host_port.ends_with(&format!(".{url}"))
 }
 
+/// On a plain-HTTP page (other than loopback) only URIs that are explicitly
+/// `http:` may match; `https:` and scheme-less values are skipped, so a
+/// credential saved for HTTPS never goes to an HTTP page.
+pub fn skip_insecure_uri(url: &url::Url, value: &str) -> bool {
+    url.scheme() == "http"
+        && !matches!(
+            url.host_str(),
+            Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+        )
+        && !value.trim_start().to_ascii_lowercase().starts_with("http:")
+}
+
 pub fn matches_url(
     url: &str,
     match_type: Option<rbw::api::UriMatchType>,

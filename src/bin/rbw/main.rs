@@ -1145,8 +1145,23 @@ enum Opt {
 
     #[command(about = "Search for entries")]
     Search {
-        #[arg(help = "Search term to locate entries")]
-        term: String,
+        #[arg(
+            help = "Search term to locate entries",
+            required_unless_present = "url"
+        )]
+        term: Option<String>,
+        #[arg(
+            long,
+            value_name = "URL",
+            conflicts_with_all = ["from_file", "insecure", "with_attachments"],
+            help = "Logins for this page, by rbw's URI matching (the browser \
+                extension's): those saved for it, or with a term every login \
+                whose name, user, folder or URIs contain each of its words, \
+                these first. Never matches notes, custom fields or secrets; \
+                --json prints metadata only (id, name, user, folder, uris, \
+                site, has_password, has_totp)"
+        )]
+        url: Option<String>,
         #[arg(
             long,
             help = "Fields to display. \
@@ -4450,6 +4465,7 @@ fn main() {
         })(),
         Opt::Search {
             term,
+            url,
             fields,
             folder,
             collection,
@@ -4471,6 +4487,20 @@ fn main() {
             let archived_filter =
                 resolve_archived_filter(archived, include_archived);
             let trash_filter = resolve_trash_filter(trashed, include_trashed);
+            let term = term.unwrap_or_default();
+            if let Some(url) = url {
+                return commands::search_url(
+                    &term,
+                    &url,
+                    folder.as_deref(),
+                    collection.as_deref(),
+                    org.as_deref(),
+                    output,
+                    all,
+                    archived_filter,
+                    trash_filter,
+                );
+            }
             commands::search(
                 &term,
                 &fields,
@@ -5438,6 +5468,39 @@ mod test {
         };
         assert_eq!(collection.as_deref(), Some("Infra"));
         assert_eq!(org.as_deref(), Some("acme"));
+
+        // `--url` makes the term optional; without it, it stays required.
+        let cli = parse(&["rbw", "search", "--url", "https://example.org/a"]);
+        let Opt::Search { term, url, .. } = cli.command else {
+            panic!("expected Opt::Search");
+        };
+        assert_eq!(
+            (term, url.as_deref()),
+            (None, Some("https://example.org/a"))
+        );
+        let cli = parse(&[
+            "rbw",
+            "search",
+            "--url",
+            "https://example.org",
+            "two words",
+        ]);
+        let Opt::Search { term, .. } = cli.command else {
+            panic!("expected Opt::Search");
+        };
+        assert_eq!(term.as_deref(), Some("two words"));
+        assert!(
+            <Cli as clap::Parser>::try_parse_from(["rbw", "search"]).is_err()
+        );
+        assert!(<Cli as clap::Parser>::try_parse_from([
+            "rbw",
+            "search",
+            "--url",
+            "https://example.org",
+            "--insecure",
+            "x",
+        ])
+        .is_err());
 
         let cli = parse(&[
             "rbw",

@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Added
+
+* `rbw search --url URL [TERM]`: the logins saved for a page by rbw's URI
+  matching (the browser extension's), or with a term every login whose name,
+  user, folder or URIs contain each word, the page's first. One batched
+  decrypt; never matches notes, custom fields or secrets, and `--json` prints
+  metadata only (id, name, user, folder, uris, site, has_password, has_totp).
+  browser-daemon's secret agent uses it instead of an index of its own.
+
+### Changed
+
+* browser-daemon's vault popover and passkey prompt (`browser/browser-daemon`)
+  now use the extension's own `popup.css` and markup: the header with rbw's
+  version, the slim search with a folder filter, favicons, fill, copy and the
+  ⋮ menu, and the approval page's account choices ("Use another
+  authenticator").
+* `rbw passkey find --rp-id` answers in milliseconds: it decrypts only names,
+  users and the passkeys' sites, in one batch, and no longer syncs first
+  (signing still does, for fresh counters). It no longer decrypts the passkeys'
+  keys just to list them.
+
 ## [2.29.0] - 2026-10-24
 
 ### Added

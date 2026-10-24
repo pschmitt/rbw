@@ -4,23 +4,27 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign in with a passkey</title>
-<link rel="stylesheet" href="theme.css">
-<link rel="stylesheet" href="vault.css">
+<link rel="stylesheet" href="popup.css">
+<link rel="stylesheet" href="embed.css">
 <script src="icons.js"></script>
 <script src="bridge.js"></script>
 <script src="passkey.js" defer></script>
 </head>
 <body class="passkey">
-<div class="rbw-head" id="head"></div>
-<div class="pk-body">
-  <div class="pk-intro"><span class="pk-emblem" id="emblem" aria-hidden="true"></span><div><h1 id="title">Sign in with a passkey</h1><span id="rp"></span></div></div>
-  <div class="pub-warn" id="public" role="alert" hidden></div>
-  <p id="info" class="pk-info" role="status" aria-live="polite"></p>
-  <div id="entries" role="group" aria-label="Choose an account"></div>
-  <div class="pk-actions">
-    <button type="button" id="use">Use passkey</button>
-    <button type="button" id="cancel">Cancel request</button>
-  </div>
+<header>
+<img class="logo" src="icons/rbw-64.png" width="32" height="32" alt="rbw">
+<div class="heading"><h1>Vault</h1><span class="version" data-extension-version></span></div>
+<div id="header-actions"><button id="close" class="icon" title="Cancel request" aria-label="Cancel passkey request"><span data-icon="close"></span></button></div>
+</header>
+<main>
+<div class="passkey-intro"><span class="passkey-emblem" data-icon="key"></span><div><h2 id="approval-title">Sign in with a passkey</h2><p id="approval-origin"></p></div></div>
+<div class="pub-warn" id="public" role="alert" hidden></div>
+<p id="approval-description" class="hint" role="status" aria-live="polite"></p>
+<div id="approval-items" class="passkey-choices" role="group" aria-label="Choose an account"></div>
+<div class="passkey-alternatives">
+  <button id="use-device"><span data-icon="key"></span>Use another authenticator</button>
+  <button id="cancel-passkey"><span data-icon="close"></span>Cancel request</button>
 </div>
+</main>
 </body>
 </html>

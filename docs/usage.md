@@ -154,6 +154,15 @@ in place of the password, TOTP seed, card number and CVV, SSN, SSH private
 key and hidden custom fields (text output only). `CLICOLOR_FORCE` forces colors in any rbw
 command whose output isn't a terminal, and `NO_COLOR` still disables them.
 
+`rbw search --url URL [TERM]` answers what the browser extension offers for a
+page: the logins saved for `URL` by rbw's URI matching (`defaultUriMatch`, the
+entries' match types, never an HTTPS login for an HTTP page), or with a term
+every login whose name, user, folder or URIs contain each word, those for the
+page first. It decrypts in one batch, never looks at notes, custom fields or
+secrets, and `--json` prints metadata only (`id`, `name`, `user`, `folder`,
+`uris`, `site`, `has_password`, `has_totp`), so a program can show it in a
+search box (browser-daemon's live view does).
+
 `rbw list` also accepts an optional search term (`rbw list google`) to show only
 matching entries, and `rbw list --with-attachments` restricts the results to
 items that have attachments. Interactive table-style output uses uppercase
