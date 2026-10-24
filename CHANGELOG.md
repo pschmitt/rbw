@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.31.1] - 2026-10-24
+
 ### Added
 
 * Browser extension: a "Duplicate" action in the item list and item menus
