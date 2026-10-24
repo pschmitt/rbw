@@ -109,11 +109,13 @@ pub fn status(json: bool) -> anyhow::Result<()> {
         .unwrap_or_else(|_| rbw::config::Config::new());
     let primary = config.primary_account_name();
     let pid = agent_pid_if_running();
-    let accounts = config
+    let mut accounts = config
         .accounts()
         .iter()
         .map(|account| account_status(account, &primary))
         .collect::<Vec<_>>();
+    // Primary first; the sort is stable, so the rest keep their config order.
+    accounts.sort_by_key(|a| !a.primary);
 
     if json {
         let accounts = accounts
