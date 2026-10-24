@@ -5,6 +5,7 @@ use super::*;
 struct AccountStatus {
     name: String,
     primary: bool,
+    color: Option<String>,
     email: Option<String>,
     server: Option<String>,
     unlocked: bool,
@@ -53,6 +54,7 @@ fn account_status(
     let mut status = AccountStatus {
         name: account.name.clone(),
         primary: account.name == primary,
+        color: account.color.clone(),
         email: email.clone(),
         server: server.clone(),
         unlocked,
@@ -98,6 +100,25 @@ fn account_status(
     status
 }
 
+// The account name in bold, in the account's configured `#rrggbb` color
+// (truecolor) when it has a valid one.
+fn account_name(account: &AccountStatus, c: bool) -> String {
+    let rgb = account
+        .color
+        .as_deref()
+        .filter(|color| rbw::config::is_hex_color(color))
+        .and_then(|color| {
+            let channel = |i: usize| u8::from_str_radix(&color[i..i + 2], 16);
+            Some((channel(1).ok()?, channel(3).ok()?, channel(5).ok()?))
+        });
+    match rgb {
+        Some((r, g, b)) => {
+            style::paint_raw(&account.name, &format!("1;38;2;{r};{g};{b}"), c)
+        }
+        None => style::name(&account.name, c),
+    }
+}
+
 fn ago(time: std::time::SystemTime) -> String {
     let elapsed = time.elapsed().unwrap_or_default();
     let elapsed = std::time::Duration::from_secs(elapsed.as_secs());
@@ -124,6 +145,7 @@ pub fn status(json: bool) -> anyhow::Result<()> {
                 serde_json::json!({
                     "name": a.name,
                     "primary": a.primary,
+                    "color": a.color,
                     "email": a.email,
                     "server": a.server,
                     "unlocked": a.unlocked,
@@ -226,7 +248,7 @@ pub fn status(json: bool) -> anyhow::Result<()> {
         } else {
             String::new()
         };
-        println!("{}{marker}", style::name(&a.name, c));
+        println!("{}{marker}", account_name(a, c));
         let i = "  ";
         row(
             i,
