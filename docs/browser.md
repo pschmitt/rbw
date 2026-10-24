@@ -156,10 +156,11 @@ with
    a GPG-signed `vX.Y.Z` tag; the release workflow signs and publishes
    everything, then commits the signed packages on top of the tag, moves
    `release` there and merges it into `main`.
-The generated icon source is `browser/icon-source.png`; prompt provenance is
-recorded in `browser/icon-prompt.txt`, with sized toolbar assets in
-`browser/extension/icons/`. The `rbw-*` icons are the white crab of the source
-image cut out of the shield and recoloured `#6394e2` (no shield anywhere).
+The logo is the blue ninja crab in `browser/icon-source.png`: the `rbw-*`
+icons in `browser/extension/icons/` and the unlock dialogs' logo
+(`src/unlock_ui/assets/rbw.png`) are its Lanczos resizes. The toolbar button
+uses only its face, made round, from `browser/toolbar-icon-source.png`
+(`toolbar-*`), so it stays legible at 16px.
 
 ## Native messaging allowlist
 

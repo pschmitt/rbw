@@ -4,6 +4,10 @@
 
 ### Changed
 
+* New logo: a blue ninja crab replaces the shield crab in the browser
+  extension, its toolbar button (the crab's round face) and the unlock
+  dialogs.
+
 * Browser extension: the vault filters are chips that open a styled menu
   instead of native selects. They name the current view, light up while set
   and stay visible while a filter is active, with a "Clear" link. A new

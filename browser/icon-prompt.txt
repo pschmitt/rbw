@@ -1,6 +1,0 @@
-Generated with the built-in image_gen tool, using the previous crab/shield as a brand reference.
-
-Prompt:
-Optimize for a tiny 16px browser toolbar: a single bold filled steel-blue shield with no inset frame or double outline. Large white crab pictogram, wide solid body, two massive pincers, two thick legs per side, generous negative gaps. No tiny facial details, segmented limbs, lettering, shadows or texture. Muted blue palette, transparent outside, minimal margin, strong contrast on light and dark toolbars.
-
-Export: ImageMagick trim plus centered aspect-preserving Lanczos resizes, preserving alpha. Explicit toolbar sizes: 16, 19, 24, 32, 38, 48, 64.
