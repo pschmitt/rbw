@@ -38,6 +38,13 @@ ignore = [
     # quick-xml ^0.39; drop these once it moves to >= 0.41.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # (2026-10-24) crypto-bigint constant-time issues, fixed in 0.7.6 (our
+    # crypto-bigint 0.7 is updated). The 0.5.5 copy is only pulled in by the
+    # RustCrypto 0.13 generation (p256/ecdsa 0.13 via authenticator's `fido2`
+    # feature and ssh-key 0.6 via ssh-agent-lib), and no 0.5.x fix exists.
+    # It's a local timing side channel; drop this once those move to the
+    # 0.14 generation.
+    "RUSTSEC-2026-0387",
 ]
 
 [bans]
