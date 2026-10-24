@@ -284,7 +284,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
         "Account and server",
         &[
             "config", "account", "register", "login", "unlock", "unlocked",
-            "sync", "lock", "security",
+            "status", "sync", "lock", "security",
         ],
     ),
     (
@@ -594,6 +594,14 @@ enum Opt {
 
     #[command(about = "Check if the local Bitwarden database is unlocked")]
     Unlocked,
+
+    #[command(
+        about = "Show information about rbw, its agent and the accounts"
+    )]
+    Status {
+        #[arg(long, help = "Display output as JSON")]
+        json: bool,
+    },
 
     #[command(about = "Update the local copy of the Bitwarden database")]
     Sync {
@@ -2287,6 +2295,7 @@ impl Opt {
             Self::Version => "version".to_string(),
             Self::Unlock { .. } => "unlock".to_string(),
             Self::Unlocked => "unlocked".to_string(),
+            Self::Status { .. } => "status".to_string(),
             Self::Sync { .. } => "sync".to_string(),
             Self::Tui { .. } => "tui".to_string(),
             Self::Export { .. } => "export".to_string(),
@@ -4010,6 +4019,7 @@ fn main() {
             }
         }
         Opt::Unlocked => commands::unlocked(),
+        Opt::Status { json } => commands::status(json),
         Opt::Sync { all } => commands::sync(all),
         Opt::Tui {
             term,

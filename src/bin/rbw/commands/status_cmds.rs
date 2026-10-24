@@ -1,0 +1,237 @@
+use super::*;
+
+// What we know about one account without prompting for anything: config,
+// whether the agent holds its keys, and a summary of the local database.
+struct AccountStatus {
+    name: String,
+    primary: bool,
+    email: Option<String>,
+    server: Option<String>,
+    unlocked: bool,
+    unlock_policy: String,
+    logged_in: bool,
+    synced_at: Option<std::time::SystemTime>,
+    items: Option<usize>,
+    items_by_type: std::collections::BTreeMap<&'static str, usize>,
+    trashed_items: usize,
+    folders: usize,
+    collections: usize,
+    organizations: usize,
+}
+
+fn agent_pid_if_running() -> Option<u32> {
+    let pid = std::fs::read_to_string(rbw::dirs::pid_file()).ok()?;
+    let pid: i32 = pid.trim().parse().ok()?;
+    let raw = rustix::process::Pid::from_raw(pid)?;
+    rustix::process::test_kill_process(raw)
+        .is_ok()
+        .then_some(pid.unsigned_abs())
+}
+
+fn entry_type_name(data: &rbw::db::EntryData) -> &'static str {
+    match data {
+        rbw::db::EntryData::Login { .. } => "login",
+        rbw::db::EntryData::Card { .. } => "card",
+        rbw::db::EntryData::Identity { .. } => "identity",
+        rbw::db::EntryData::SecureNote => "note",
+        rbw::db::EntryData::SshKey { .. } => "ssh-key",
+    }
+}
+
+fn account_status(
+    account: &rbw::config::Account,
+    primary: &str,
+) -> AccountStatus {
+    let email = account.email.as_ref().and_then(|v| v.resolve().ok());
+    let server = account.server_name().ok();
+    let unlocked = matches!(tui_account_unlocked(&account.name), Ok(true));
+    let unlock_policy = serde_json::to_value(account.unlock.policy)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+
+    let mut status = AccountStatus {
+        name: account.name.clone(),
+        primary: account.name == primary,
+        email: email.clone(),
+        server: server.clone(),
+        unlocked,
+        unlock_policy,
+        logged_in: false,
+        synced_at: None,
+        items: None,
+        items_by_type: std::collections::BTreeMap::new(),
+        trashed_items: 0,
+        folders: 0,
+        collections: 0,
+        organizations: 0,
+    };
+
+    let (Some(server), Some(email)) = (server, email) else {
+        return status;
+    };
+    // The db file is only written by a login/sync, so its mtime is the
+    // closest thing to a "last synced" time.
+    status.synced_at = std::fs::metadata(rbw::dirs::db_file(&server, &email))
+        .and_then(|m| m.modified())
+        .ok();
+    if let Ok(db) = rbw::db::Db::load(&server, &email) {
+        status.logged_in = db.access_token.is_some();
+        status.items = Some(db.entries.len());
+        let mut folders = std::collections::HashSet::new();
+        for entry in &db.entries {
+            *status
+                .items_by_type
+                .entry(entry_type_name(&entry.data))
+                .or_default() += 1;
+            if entry.deleted {
+                status.trashed_items += 1;
+            }
+            if let Some(folder) = &entry.folder_id {
+                folders.insert(folder.clone());
+            }
+        }
+        status.folders = folders.len();
+        status.collections = db.collections.len();
+        status.organizations = db.organizations.len();
+    }
+    status
+}
+
+fn ago(time: std::time::SystemTime) -> String {
+    let elapsed = time.elapsed().unwrap_or_default();
+    let elapsed = std::time::Duration::from_secs(elapsed.as_secs());
+    format!("{} ago", humantime::format_duration(elapsed))
+}
+
+pub fn status(json: bool) -> anyhow::Result<()> {
+    let config = rbw::config::Config::load()
+        .unwrap_or_else(|_| rbw::config::Config::new());
+    let primary = config.primary_account_name();
+    let pid = agent_pid_if_running();
+    let accounts = config
+        .accounts()
+        .iter()
+        .map(|account| account_status(account, &primary))
+        .collect::<Vec<_>>();
+
+    if json {
+        let accounts = accounts
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "name": a.name,
+                    "primary": a.primary,
+                    "email": a.email,
+                    "server": a.server,
+                    "unlocked": a.unlocked,
+                    "unlock_policy": a.unlock_policy,
+                    "logged_in": a.logged_in,
+                    "last_synced": a.synced_at.map(|t| {
+                        humantime::format_rfc3339_seconds(t).to_string()
+                    }),
+                    "items": a.items,
+                    "items_by_type": a.items_by_type,
+                    "trashed_items": a.trashed_items,
+                    "folders": a.folders,
+                    "collections": a.collections,
+                    "organizations": a.organizations,
+                })
+            })
+            .collect::<Vec<_>>();
+        let out = serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "profile": rbw::dirs::profile(),
+            "config_file": rbw::dirs::config_file(),
+            "agent": {
+                "running": pid.is_some(),
+                "pid": pid,
+                "socket": rbw::dirs::socket_file(),
+                "lock_timeout": config.agent.lock_timeout,
+                "sync_interval": config.agent.sync_interval,
+            },
+            "primary_account": primary,
+            "accounts": accounts,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+
+    let c = stdout_supports_color();
+    println!("rbw {}", env!("CARGO_PKG_VERSION"));
+    println!("profile:       {}", rbw::dirs::profile());
+    println!("config:        {}", rbw::dirs::config_file().display());
+    match pid {
+        Some(pid) => println!("agent:         running (pid {pid})"),
+        None => println!("agent:         not running"),
+    }
+    println!("socket:        {}", rbw::dirs::socket_file().display());
+    println!(
+        "lock timeout:  {}",
+        humantime::format_duration(std::time::Duration::from_secs(
+            config.agent.lock_timeout
+        ))
+    );
+    println!(
+        "sync interval: {}",
+        if config.agent.sync_interval == 0 {
+            "disabled".to_string()
+        } else {
+            humantime::format_duration(std::time::Duration::from_secs(
+                config.agent.sync_interval,
+            ))
+            .to_string()
+        }
+    );
+
+    if accounts.is_empty() {
+        println!("\nno accounts configured");
+        return Ok(());
+    }
+    for a in &accounts {
+        println!();
+        let marker = if a.primary { " (primary)" } else { "" };
+        println!("{}{marker}", style::name(&a.name, c));
+        let state = if a.unlocked {
+            style::success("unlocked", c)
+        } else {
+            "locked".to_string()
+        };
+        println!("  state:        {state}");
+        println!("  email:        {}", a.email.as_deref().unwrap_or("N/A"));
+        println!("  server:       {}", a.server.as_deref().unwrap_or("N/A"));
+        println!("  unlock:       {}", a.unlock_policy);
+        println!(
+            "  logged in:    {}",
+            if a.logged_in { "yes" } else { "no" }
+        );
+        println!(
+            "  last synced:  {}",
+            a.synced_at.map_or_else(|| "never".to_string(), ago)
+        );
+        let Some(items) = a.items else {
+            continue;
+        };
+        let by_type = a
+            .items_by_type
+            .iter()
+            .map(|(ty, n)| format!("{n} {ty}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let trashed = if a.trashed_items > 0 {
+            format!(", {} in trash", a.trashed_items)
+        } else {
+            String::new()
+        };
+        let by_type = if by_type.is_empty() {
+            String::new()
+        } else {
+            format!(" ({by_type})")
+        };
+        println!("  items:        {items}{by_type}{trashed}");
+        println!("  folders:      {}", a.folders);
+        println!("  collections:  {}", a.collections);
+        println!("  orgs:         {}", a.organizations);
+    }
+    Ok(())
+}

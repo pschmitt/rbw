@@ -172,6 +172,12 @@ pub use native_unlock_cmds::*;
 )]
 mod account_cmds;
 pub use account_cmds::*;
+#[allow(
+    clippy::wildcard_imports,
+    reason = "the command modules share one namespace, as they did in a single file"
+)]
+mod status_cmds;
+pub use status_cmds::*;
 
 #[allow(
     clippy::wildcard_imports,
