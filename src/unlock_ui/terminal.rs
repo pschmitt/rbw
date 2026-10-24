@@ -470,7 +470,17 @@ fn draw_compact(
         ACCENT
     };
     let short = width < 30;
-    if boxed {
+    if view.success {
+        // Unlocked: the status takes the password field's place.
+        frame.render_widget(
+            Paragraph::new(status.as_str()).style(
+                Style::default()
+                    .fg(Color::Rgb(134, 239, 172))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Rect::new(x, y + field_rows / 2, width, 1),
+        );
+    } else if boxed {
         let field = Block::default()
             .title(match (mask.is_none(), short) {
                 (true, true) => " Password (no echo) ",
@@ -512,7 +522,7 @@ fn draw_compact(
         );
     }
     y += field_rows;
-    if status_rows > 0 {
+    if status_rows > 0 && !view.success {
         frame.render_widget(
             Paragraph::new(status)
                 .style(Style::default().fg(if view.success {
@@ -627,45 +637,67 @@ fn draw_full(
             Rect::new(card.right() - 17, card.y + 1, 14, 5),
         );
     }
-    let field = Block::default()
-        .title(if mask.is_none() {
-            " Master password (no echo) "
-        } else {
-            " Master password "
-        })
-        .borders(Borders::ALL)
-        .padding(Padding::horizontal(1))
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if view.success {
-            verified_color
-        } else if view.checking {
-            BORDER
-        } else {
-            ACCENT
-        }));
-    // Only a mask reaches Ratatui buffers, never the password. No-echo mode
-    // renders an empty field regardless of whether any input is present.
-    frame.render_widget(
-        Paragraph::new(mask_text(
-            view,
-            mask,
-            usize::from(row(card, 6, 3).width.saturating_sub(4)),
-            false,
-        ))
-        .style(Style::default().fg(if mask == Some(0) { MUTED } else { INK }))
-        .block(field),
-        row(card, 6, 3),
-    );
-    frame.render_widget(
-        Paragraph::new(status_text(view))
-            .style(Style::default().fg(if view.success {
-                Color::Rgb(134, 239, 172)
+    if view.success {
+        // Unlocked: the status takes the password field's place.
+        let slot = row(card, 6, 3);
+        frame.render_widget(
+            Paragraph::new(status_text(view)).style(
+                Style::default()
+                    .fg(Color::Rgb(134, 239, 172))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Rect::new(
+                slot.x + 1,
+                slot.y + 1,
+                slot.width.saturating_sub(2),
+                1,
+            ),
+        );
+    } else {
+        let field = Block::default()
+            .title(if mask.is_none() {
+                " Master password (no echo) "
             } else {
-                CYAN
+                " Master password "
+            })
+            .borders(Borders::ALL)
+            .padding(Padding::horizontal(1))
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(if view.success {
+                verified_color
+            } else if view.checking {
+                BORDER
+            } else {
+                ACCENT
+            }));
+        // Only a mask reaches Ratatui buffers, never the password. No-echo mode
+        // renders an empty field regardless of whether any input is present.
+        frame.render_widget(
+            Paragraph::new(mask_text(
+                view,
+                mask,
+                usize::from(row(card, 6, 3).width.saturating_sub(4)),
+                false,
+            ))
+            .style(Style::default().fg(if mask == Some(0) {
+                MUTED
+            } else {
+                INK
             }))
-            .wrap(Wrap { trim: true }),
-        row(card, 10, 2),
-    );
+            .block(field),
+            row(card, 6, 3),
+        );
+        frame.render_widget(
+            Paragraph::new(status_text(view))
+                .style(Style::default().fg(if view.success {
+                    Color::Rgb(134, 239, 172)
+                } else {
+                    CYAN
+                }))
+                .wrap(Wrap { trim: true }),
+            row(card, 10, 2),
+        );
+    }
     let message = issue.or(view.error).unwrap_or_else(|| {
         if view.success {
             ""
