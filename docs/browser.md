@@ -159,7 +159,7 @@ with
 The logo is the blue ninja crab in `browser/icon-source.png`: the `rbw-*`
 icons in `browser/extension/icons/` and the unlock dialogs' logo
 (`src/unlock_ui/assets/rbw.png`) are its Lanczos resizes. The toolbar button
-uses only its face, made round, from `browser/toolbar-icon-source.png`
+uses only its face, made round and outline-free, from `browser/toolbar-icon-source.png`
 (`toolbar-*`), so it stays legible at 16px.
 
 ## Native messaging allowlist

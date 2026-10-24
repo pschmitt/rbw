@@ -42,8 +42,8 @@ button:hover { background:var(--raised); } button:disabled { opacity:.45; cursor
 button.primary { background:var(--accent); color:var(--bg); border-color:var(--accent); font-weight:600; }
 button.danger { color:var(--danger); }
 button.icon { border:0; font-size:20px; padding:4px 6px; background:transparent; display:inline-flex; align-items:center; justify-content:center; }
-button.avatar { flex-shrink:0; background:transparent; border:0; border-radius:8px; width:48px; height:32px; padding:0 2px; display:grid; grid-template-columns:12px 32px; align-items:center; justify-content:end; gap:0; }
-button.avatar img { display:block; grid-column:2; grid-row:1; width:32px; height:32px; }
+button.avatar { flex-shrink:0; background:transparent; border:0; border-radius:8px; width:56px; height:40px; padding:0 2px; display:grid; grid-template-columns:12px 40px; align-items:center; justify-content:end; gap:0; }
+button.avatar img { display:block; grid-column:2; grid-row:1; width:40px; height:40px; }
 button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
 input:not([type=checkbox]),select,textarea { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px; width:100%; }
 textarea { resize:vertical; }
