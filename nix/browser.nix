@@ -9,7 +9,7 @@ let
   releaseAsset =
     file: sha256:
     pkgs.fetchurl {
-      url = "https://github.com/pschmitt/rbw/releases/download/v${metadata.version}/${file}";
+      url = "https://github.com/pschmitt/rbw/releases/download/${metadata.tag}/${file}";
       inherit sha256;
     };
   firefoxXpi = releaseAsset "rbw-browser-${metadata.version}-firefox.xpi" metadata.firefoxSha256;

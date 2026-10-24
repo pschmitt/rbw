@@ -119,3 +119,8 @@ jobs:
           # Fail a hung test (e.g. one waiting on stdin) instead of the job.
           BATS_TEST_TIMEOUT: "300"
           VAULTWARDEN_URL: http://localhost:8000
+  pin:
+    uses: pschmitt/ci-workflows/.github/workflows/verify-pin.yaml@main
+    with:
+      firefox-asset: rbw-browser-{version}-firefox.xpi
+      chromium-asset: rbw-browser-{version}-chromium.crx
