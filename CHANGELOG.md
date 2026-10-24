@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+
 * `rbw status`: the rbw version, agent state and config, and per account the
   lock state, server, unlock policy, last sync and the local database's
   contents (item counts by type, folders, collections, organizations), the
@@ -16,6 +17,7 @@
   browser-daemon's secret agent uses it instead of an index of its own.
 
 ### Changed
+
 * Browser extension: the locked popup focuses the master password, shows a
   plain "Vault locked" with a lock icon, and centers the multi-account view.
 * browser-daemon's vault popover and passkey prompt (`browser/browser-daemon`)
@@ -29,6 +31,7 @@
   keys just to list them.
 
 ### Fixed
+
 * crypto-bigint 0.7.6 (RUSTSEC-2026-0387, a timing side channel); the 0.5.5
   copy pulled in by `authenticator` and `ssh-key` has no fix and is ignored.
 
