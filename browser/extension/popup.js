@@ -419,13 +419,14 @@ async function refresh(knownStatus = null, skipList = false) {
   const several = accountStates.length > 1;
   $("unlock").hidden = several; $("lock").hidden = !unlocked; $("state").hidden = several;
   $("locked").classList.toggle("is-multi", several && !unlocked);
-  if (several && !unlocked) {
-    const count = accountStates.filter(account => !account.excluded).length;
-    $("locked").querySelector("h2").textContent = `${count} accounts locked`;
-  } else {
-    $("locked").querySelector("h2").textContent = "Vault locked";
+  $("locked").querySelector("h2").textContent = "Vault locked";
+  if (!unlocked) {
+    show("locked"); if (several) $("account-menu").hidden = false;
+    // The master password is what the popup is for; leave focus alone only if
+    // it's already in an account row's own password field.
+    if (!document.activeElement?.closest?.("#account-states")) $("unlock-password").focus();
+    return;
   }
-  if (!unlocked) { show("locked"); if (several) $("account-menu").hidden = false; return; }
   vaultListed = !skipList;
   show("vault"); if (!skipList) { await search(); await suggestions(); }
   remember();
