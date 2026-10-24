@@ -158,56 +158,110 @@ pub fn status(json: bool) -> anyhow::Result<()> {
     }
 
     let c = stdout_supports_color();
-    println!("rbw {}", env!("CARGO_PKG_VERSION"));
-    println!("profile:       {}", rbw::dirs::profile());
-    println!("config:        {}", rbw::dirs::config_file().display());
-    match pid {
-        Some(pid) => println!("agent:         running (pid {pid})"),
-        None => println!("agent:         not running"),
-    }
-    println!("socket:        {}", rbw::dirs::socket_file().display());
-    println!(
-        "lock timeout:  {}",
-        humantime::format_duration(std::time::Duration::from_secs(
-            config.agent.lock_timeout
-        ))
-    );
-    println!(
-        "sync interval: {}",
-        if config.agent.sync_interval == 0 {
-            "disabled".to_string()
-        } else {
-            humantime::format_duration(std::time::Duration::from_secs(
-                config.agent.sync_interval,
-            ))
+    // Labels are padded before they are painted so the escape codes don't
+    // throw off the alignment.
+    let row = |indent: &str, label: &str, value: String| {
+        println!(
+            "{indent}{} {value}",
+            style::label(&format!("{label:<14}"), c)
+        );
+    };
+    let na = || style::empty("N/A", c);
+    let duration = |secs: u64| {
+        humantime::format_duration(std::time::Duration::from_secs(secs))
             .to_string()
-        }
+    };
+
+    println!(
+        "{} {}",
+        style::name("rbw", c),
+        style::new_val(env!("CARGO_PKG_VERSION"), c)
+    );
+    row("", "profile:", rbw::dirs::profile());
+    row(
+        "",
+        "config:",
+        style::uri(&rbw::dirs::config_file().display().to_string(), c),
+    );
+    row(
+        "",
+        "agent:",
+        pid.map_or_else(
+            || style::danger("not running", c),
+            |pid| {
+                format!(
+                    "{} {}",
+                    style::success("running", c),
+                    style::dim(&format!("(pid {pid})"), c)
+                )
+            },
+        ),
+    );
+    row(
+        "",
+        "socket:",
+        style::uri(&rbw::dirs::socket_file().display().to_string(), c),
+    );
+    row("", "lock timeout:", duration(config.agent.lock_timeout));
+    row(
+        "",
+        "sync interval:",
+        if config.agent.sync_interval == 0 {
+            style::empty("disabled", c)
+        } else {
+            duration(config.agent.sync_interval)
+        },
     );
 
     if accounts.is_empty() {
-        println!("\nno accounts configured");
+        println!("\n{}", style::empty("no accounts configured", c));
         return Ok(());
     }
     for a in &accounts {
         println!();
-        let marker = if a.primary { " (primary)" } else { "" };
-        println!("{}{marker}", style::name(&a.name, c));
-        let state = if a.unlocked {
-            style::success("unlocked", c)
+        let marker = if a.primary {
+            format!(" {}", style::dim("(primary)", c))
         } else {
-            "locked".to_string()
+            String::new()
         };
-        println!("  state:        {state}");
-        println!("  email:        {}", a.email.as_deref().unwrap_or("N/A"));
-        println!("  server:       {}", a.server.as_deref().unwrap_or("N/A"));
-        println!("  unlock:       {}", a.unlock_policy);
-        println!(
-            "  logged in:    {}",
-            if a.logged_in { "yes" } else { "no" }
+        println!("{}{marker}", style::name(&a.name, c));
+        let i = "  ";
+        row(
+            i,
+            "state:",
+            if a.unlocked {
+                style::success("unlocked", c)
+            } else {
+                style::danger("locked", c)
+            },
         );
-        println!(
-            "  last synced:  {}",
-            a.synced_at.map_or_else(|| "never".to_string(), ago)
+        row(
+            i,
+            "email:",
+            a.email.as_deref().map_or_else(na, |e| style::user(e, c)),
+        );
+        row(
+            i,
+            "server:",
+            a.server.as_deref().map_or_else(na, |s| style::uri(s, c)),
+        );
+        row(i, "unlock:", a.unlock_policy.clone());
+        row(
+            i,
+            "logged in:",
+            if a.logged_in {
+                style::new_val("yes", c)
+            } else {
+                style::warning("no", c)
+            },
+        );
+        row(
+            i,
+            "last synced:",
+            a.synced_at.map_or_else(
+                || style::warning("never", c),
+                |t| style::dim(&ago(t), c),
+            ),
         );
         let Some(items) = a.items else {
             continue;
@@ -215,23 +269,33 @@ pub fn status(json: bool) -> anyhow::Result<()> {
         let by_type = a
             .items_by_type
             .iter()
-            .map(|(ty, n)| format!("{n} {ty}"))
+            .map(|(ty, n)| format!("{n} {}", style::entry_type(ty, c)))
             .collect::<Vec<_>>()
             .join(", ");
-        let trashed = if a.trashed_items > 0 {
-            format!(", {} in trash", a.trashed_items)
-        } else {
-            String::new()
-        };
         let by_type = if by_type.is_empty() {
             String::new()
         } else {
             format!(" ({by_type})")
         };
-        println!("  items:        {items}{by_type}{trashed}");
-        println!("  folders:      {}", a.folders);
-        println!("  collections:  {}", a.collections);
-        println!("  orgs:         {}", a.organizations);
+        let trashed = if a.trashed_items > 0 {
+            format!(
+                ", {}",
+                style::old_val(&format!("{} in trash", a.trashed_items), c)
+            )
+        } else {
+            String::new()
+        };
+        row(
+            i,
+            "items:",
+            format!(
+                "{}{by_type}{trashed}",
+                style::name(&items.to_string(), c)
+            ),
+        );
+        row(i, "folders:", style::folder(&a.folders.to_string(), c));
+        row(i, "collections:", a.collections.to_string());
+        row(i, "orgs:", a.organizations.to_string());
     }
     Ok(())
 }
