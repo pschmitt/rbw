@@ -5,8 +5,12 @@
 ### Changed
 
 * The ninja crab logo is back to the original artwork with its full outline in
-  the READMEs, the extension and the unlock dialogs. The toolbar button keeps
-  the round face (the new round logo).
+  the READMEs, the extension and the unlock dialogs, and it is larger in the
+  popup header. The toolbar button shows the crab's round face, without an
+  outline and with bolder eyes, so it holds up at 16px.
+
+* The terminal unlock prompt shows "✓ Unlocked" where the master password
+  field was.
 
 ## [2.31.1] - 2026-10-24
 

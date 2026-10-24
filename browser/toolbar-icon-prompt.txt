@@ -1,1 +1,0 @@
-Toolbar-specific rbw mark: bold filled blue crab silhouette, central shield-shaped body, large claws and simple legs. Transparent background; no containing badge, letters, eyes or fine interior details. Steel/periwinkle blue palette. Designed to remain recognizable at 16 CSS pixels. Keep the richer shield/crab app icon inside the UI.
