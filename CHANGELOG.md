@@ -6,7 +6,7 @@
 
 * The ninja crab logo is back to the original artwork with its full outline in
   the READMEs, the extension and the unlock dialogs. The toolbar button keeps
-  the round face.
+  the round face (the new round logo).
 
 ## [2.31.1] - 2026-10-24
 
