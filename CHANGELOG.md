@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+* The terminal unlock prompt draws the ninja crab instead of the shield crab.
+
 ## [2.31.2] - 2026-10-24
 
 ### Changed
