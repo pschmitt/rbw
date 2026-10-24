@@ -31,6 +31,8 @@
   users and the passkeys' sites, in one batch, and no longer syncs first
   (signing still does, for fresh counters). It no longer decrypts the passkeys'
   keys just to list them.
+* The unlock dialogs (terminal, GTK, extension popup) show the rbw version;
+  `rbw status` shows it muted.
 
 ### Fixed
 
