@@ -3,7 +3,11 @@
 ## [Unreleased]
 
 ### Added
-
+* `rbw status`: the rbw version, agent state and config, and per account the
+  lock state, server, unlock policy, last sync and the local database's
+  contents (item counts by type, folders, collections, organizations), the
+  primary account first, in color (account names in their configured color).
+  `--json` for scripts.
 * `rbw search --url URL [TERM]`: the logins saved for a page by rbw's URI
   matching (the browser extension's), or with a term every login whose name,
   user, folder or URIs contain each word, the page's first. One batched
@@ -12,7 +16,8 @@
   browser-daemon's secret agent uses it instead of an index of its own.
 
 ### Changed
-
+* Browser extension: the locked popup focuses the master password, shows a
+  plain "Vault locked" with a lock icon, and centers the multi-account view.
 * browser-daemon's vault popover and passkey prompt (`browser/browser-daemon`)
   now use the extension's own `popup.css` and markup: the header with rbw's
   version, the slim search with a folder filter, favicons, fill, copy and the
@@ -22,6 +27,10 @@
   users and the passkeys' sites, in one batch, and no longer syncs first
   (signing still does, for fresh counters). It no longer decrypts the passkeys'
   keys just to list them.
+
+### Fixed
+* crypto-bigint 0.7.6 (RUSTSEC-2026-0387, a timing side channel); the 0.5.5
+  copy pulled in by `authenticator` and `ssh-key` has no fix and is ignored.
 
 ## [2.29.0] - 2026-10-24
 
