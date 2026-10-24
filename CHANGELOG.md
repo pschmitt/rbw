@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.31.2] - 2026-10-24
+
 ### Changed
 
 * The ninja crab logo is back to the original artwork with its full outline in
