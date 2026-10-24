@@ -156,6 +156,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Build the extension packages
+        run: python3 browser/build.py
       # Pushes and pull requests: the packages that browser/packages/metadata.json
       # pins (what the Nix package fetches) must still match their tag's source.
       - name: Verify the pinned release packages
