@@ -79,11 +79,3 @@ rest. On bitwarden.com, run `rbw register` first
 | [Desktop unlock](docs/desktop-unlock.md) | Secret Service and fingerprint confirmation |
 | [Browser extension](browser/README.md) | Firefox and Chromium |
 | [Changelog](CHANGELOG.md) | |
-
-## Related projects
-
-- [rofi-rbw](https://github.com/fdw/rofi-rbw), a rofi frontend
-- [bw-ssh](https://framagit.org/Glandos/bw-ssh/), SSH key passphrases in Bitwarden
-- [rbw-menu](https://github.com/rbuchberger/rbw-menu), a tiny menu picker
-- [ulauncher-rbw](https://0xacab.org/varac-projects/ulauncher-rbw), an [Ulauncher](https://ulauncher.io/) extension
-- [fuzzel-rbw](https://github.com/sammhansen/fuzzel-rbw), a fuzzel frontend
