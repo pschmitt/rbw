@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.30.0] - 2026-10-24
+
 ### Added
 
 * `rbw status`: the rbw version, agent state and config, and per account the
