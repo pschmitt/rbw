@@ -37,7 +37,7 @@ impl GtkDialog {
             .application(&application)
             .modal(true)
             .resizable(false)
-            .title("Unlock rbw")
+            .title(concat!("Unlock rbw ", env!("CARGO_PKG_VERSION")))
             .default_width(540)
             .build();
         window.set_icon_name(Some("rbw"));

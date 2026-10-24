@@ -446,10 +446,16 @@ fn draw_compact(
     let total = 1 + status_rows + field_rows + hint_rows;
     let mut y = area.y + (area.height - total) / 2;
 
-    let mut header = vec![Span::styled(
-        "◇ RBW ",
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-    )];
+    let mut header = vec![
+        Span::styled(
+            "◇ RBW",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            concat!(" ", env!("CARGO_PKG_VERSION"), "  "),
+            Style::default().fg(MUTED).add_modifier(Modifier::DIM),
+        ),
+    ];
     header.push(Span::styled(view.title, Style::default().fg(MUTED)));
     frame.render_widget(
         Paragraph::new(Line::from(header)),
@@ -568,10 +574,16 @@ fn draw_full(
         card,
     );
     frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            "◇  RBW",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        )])),
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "◇  RBW",
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                concat!(" ", env!("CARGO_PKG_VERSION")),
+                Style::default().fg(MUTED).add_modifier(Modifier::DIM),
+            ),
+        ])),
         row(card, 1, 1),
     );
     frame.render_widget(

@@ -199,7 +199,7 @@ pub fn status(json: bool) -> anyhow::Result<()> {
     println!(
         "{} {}",
         style::name("rbw", c),
-        style::new_val(env!("CARGO_PKG_VERSION"), c)
+        style::dim(env!("CARGO_PKG_VERSION"), c)
     );
     row("", "profile:", rbw::dirs::profile());
     row(
