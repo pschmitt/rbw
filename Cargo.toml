@@ -1,6 +1,6 @@
 [package]
 name = "rbw"
-version = "2.30.0"
+version = "2.31.0"
 authors = ["Philipp Schmitt <philipp@schmitt.co>", "Jesse Luehrs <doy@tozt.net>"]
 edition = "2021"
 rust-version = "1.92.0"

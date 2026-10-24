@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.31.0] - 2026-10-24
+
 ### Changed
 
 * New logo: a blue ninja crab replaces the shield crab in the browser
