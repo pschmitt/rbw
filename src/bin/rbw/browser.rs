@@ -892,6 +892,7 @@ fn dispatch(
                     for entry in &db.entries {
                         let in_view = match view.as_deref().unwrap_or("vault")
                         {
+                            "all" => true,
                             "trash" => entry.deleted,
                             "archive" => entry.archived && !entry.deleted,
                             "favorites" => {
@@ -1633,6 +1634,7 @@ fn search_metadata(
     };
     for entry in entries {
         let in_view = match view.unwrap_or("vault") {
+            "all" => true,
             "trash" => entry.deleted,
             "archive" => entry.archived && !entry.deleted,
             "favorites" => {

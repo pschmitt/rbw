@@ -86,7 +86,7 @@ function message(text, error = false, action = null) {
   clearTimeout(notificationTimer);
   if (!error && /^(Working|Unlocking|Waiting for rbw|Checking vault locally|Loading Sends|Uploading)/.test(text)) return;
   const kind = error ? "error"
-    : /^(Vault unlocked|Vault synced|Copied\b|Filled \d+ fields|Saved\b|Updated\b|Collections updated|Attachment uploaded|Generated password (added|filled)|New password filled|Send link copied|Resumed your unsaved edit|Restarted from the current vault state)/i.test(text) ? "success"
+    : /^(Vault unlocked|Vault synced|Copied\b|Filled \d+ fields|Saved\b|Updated\b|Archived|Unarchived|Added to favorites|Removed from favorites|Moved to trash|Restored|Deleted|Collections updated|Attachment uploaded|Generated password (added|filled)|New password filled|Send link copied|Resumed your unsaved edit|Restarted from the current vault state)/i.test(text) ? "success"
       : /^(Vault locked|This item changed|Your unsaved edit|Passkey request expired)/i.test(text) ? "warning" : "info";
   const notification = $("message");
   notification.dataset.kind = kind;
@@ -257,6 +257,7 @@ function clearVault() {
 }
 // The filters are chips that open a menu. What a menu offers depends on the
 // others: the account narrows the folders and collections to its own.
+const VIEW_ICONS = { home: "home", vault: "grid", favorites: "star", archive: "archive", trash: "trash" };
 const VIEWS = [["home", "Favorites + suggestions"], ["vault", "All items"], ["favorites", "Favorites"], ["archive", "Archive"], ["trash", "Trash"]];
 const KINDS = [["", "All types"], ["login", "Login"], ["passkey", "Passkey"], ["card", "Card"], ["identity", "Identity"], ["secure_note", "Secure note"], ["ssh_key", "SSH key"]];
 const filterInput = { view: "view", account: "account-filter", collection: "collection", folder: "folder", kind: "kind" };
@@ -305,6 +306,7 @@ function syncChips() {
   for (const chip of document.querySelectorAll("#filters .chip")) {
     const filter = chip.dataset.filter, value = $(filterInput[filter]).value, set = value !== filterDefaults[filter];
     chip.querySelector(".chip-text").textContent = filterLabel(filter);
+    if (filter === "view" && chip.dataset.icon !== value) { chip.dataset.icon = value; chip.firstElementChild.replaceWith(icon(VIEW_ICONS[value] || "star")); }
     chip.classList.toggle("is-set", filter === "view" ? value !== "vault" : set); // any view but "All items" narrows the list if (set && filter !== "view") active++;
     const account = filter === "account" ? value : filter === "collection" ? facets.collections.find(c => c.id === value)?.account : null;
     if (set && account && several()) { chip.style.setProperty("--account-color", colorOf(account)); chip.classList.add("has-account"); }
@@ -330,6 +332,7 @@ function showMenu(chip) {
     const selected = entry.value === current; item.setAttribute("aria-selected", String(selected)); item.classList.toggle("is-selected", selected);
     if (entry.indent) item.style.paddingLeft = `${8 + entry.indent * 14}px`;
     if (entry.color) { const dot = element("span", null, "dot"); dot.style.setProperty("--account-color", entry.color); item.append(dot); }
+    if (filter === "view") item.append(icon(VIEW_ICONS[entry.value] || "star"));
     item.append(element("span", entry.label, "filter-menu-label"));
     for (const color of entry.dots || []) { const dot = element("span", null, "dot small"); dot.style.setProperty("--account-color", color); item.append(dot); }
     item.append(selected ? icon("check") : element("span", null, "filter-menu-check"));
@@ -356,7 +359,7 @@ async function loadFacets(result) {
     facets = { folders: result.folders.map(name => ({ name, accounts: [] })), collections: result.collections };
     return;
   }
-  const base = { query: $("query").value, kind: $("kind").value, view: $("view").value === "home" ? "vault" : $("view").value };
+  const base = { query: $("query").value, kind: $("kind").value, view: ({ home: "vault", vault: "all" })[$("view").value] || $("view").value };
   const parts = await Promise.all(accounts.map(account => request("search", { ...base, account }).then(r => [account, r], () => null)));
   const folders = new Map(), collections = [];
   for (const part of parts) {
@@ -549,7 +552,7 @@ async function refresh(knownStatus = null, skipList = false) {
 }
 async function search(retry = false) {
   const current = ++epoch;
-  const filters = { query: $("query").value, kind: $("kind").value, folder: $("folder").value, collection: $("collection").value, view: $("view").value };
+  const filters = { query: $("query").value, kind: $("kind").value, folder: $("folder").value, collection: $("collection").value, view: $("view").value === "vault" ? "all" : $("view").value };
   const snapshot = await request("search", { ...filters, snapshot: true });
   if (current !== epoch) return;
   if (snapshot) renderSearch(snapshot);
@@ -624,6 +627,12 @@ function itemRow(item) {
   const title = element("div", null, "item-title");
   if (item.favorite) { const star = icon("star"); star.classList.add("favorite-icon"); title.append(star); }
   title.append(element("strong", item.name));
+  // Archived and trashed items can show up beside live ones (search, the trash view).
+  const status = item.deleted ? ["Trash", "trash"] : item.archived ? ["Archived", "archive"] : null;
+  if (status) {
+    const badge = element("span", null, "item-status"); badge.dataset.status = status[1]; badge.append(icon(status[1]), status[0]);
+    title.append(badge); row.classList.add("is-inactive");
+  }
   main.append(title, element("small", item.username || labels[item.type])); row.append(main);
   const autofillExcluded = Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(item.id);
   if (autofillExcluded) title.append(element("small", "Autofill off", "item-autofill-disabled"));
@@ -664,6 +673,7 @@ function itemRow(item) {
       if (item.type === "login") entries.append(actionButton("Autofill and save", "plus", async () => { if (await autofillAndSave(item.id)) await search(); }));
     }
     entries.append(actionButton("View item", "note", () => openDetail(item.id)), actionButton("Edit", "edit", async () => { await openDetail(item.id); editItem(); }));
+    entries.append(actionButton("Duplicate", "copy", () => duplicateItem(item.id)));
     if (item.type === "login") {
       entries.append(
         actionButton("Copy username", "identity", () => copyField(item.id, "username")),
@@ -671,9 +681,9 @@ function itemRow(item) {
         actionButton("Copy TOTP", "generator", () => copyField(item.id, "totp"))
       );
     }
-    entries.append(actionButton(item.favorite ? "Remove favorite" : "Favorite", "star", async () => { await request("mutate", { item: item.id, mutation: "favorite" }); await search(); }),
-      actionButton(item.archived ? "Unarchive" : "Archive", "archive", async () => { await request("mutate", { item: item.id, mutation: "archive" }); await search(); }),
-      actionButton("Move to trash", "trash", async () => { if (!await confirmDialog({ title: `Move “${item.name}” to trash?`, text: "You can restore it from the Trash view.", confirm: "Move to trash", danger: true })) return; await request("mutate", { item: item.id, mutation: "delete" }); await search(); }, "danger"));
+    entries.append(actionButton(item.favorite ? "Remove favorite" : "Favorite", "star", async () => { await mutateItem(item.id, "favorite", item.favorite); await search(); }),
+      actionButton(item.archived ? "Unarchive" : "Archive", "archive", async () => { await mutateItem(item.id, "archive", item.archived, row); await search(); }),
+      actionButton("Move to trash", "trash", async () => { if (!await confirmDialog({ title: `Move “${item.name}” to trash?`, text: "You can restore it from the Trash view.", confirm: "Move to trash", danger: true })) return; await mutateItem(item.id, "delete", false, row); await search(); }, "danger"));
     menu.append(entries); actions.append(menu);
   }
   row.append(actions); return row;
@@ -828,6 +838,30 @@ function revealButton(input) {
     toggle.replaceChildren(icon(reveal ? "eye-off" : "eye"));
     toggle.title = reveal ? "Hide" : "Show"; toggle.setAttribute("aria-label", toggle.title); toggle.setAttribute("aria-pressed", String(reveal));
   }, "icon reveal-secret"); toggle.setAttribute("aria-controls", input.id); toggle.setAttribute("aria-pressed", "false"); return toggle;
+}
+// Archive, favorite and trash changes: say what happened, offer Undo where it
+// hides the item, and slide the row out of the list when it leaves the view.
+const MUTATION_NOTICES = {
+  favorite: wasSet => wasSet ? "Removed from favorites." : "Added to favorites.",
+  archive: wasSet => wasSet ? "Unarchived." : "Archived.",
+  delete: () => "Moved to trash."
+};
+async function mutateItem(item, mutation, wasSet, row = null) {
+  await request("mutate", { item, mutation });
+  const undo = mutation === "favorite" ? null : { label: "Undo", run: async () => {
+    await request("mutate", { item, mutation: mutation === "delete" ? "restore" : mutation });
+    message(mutation === "delete" ? "Restored from the trash." : wasSet ? "Archived." : "Unarchived.");
+    await refresh();
+  } };
+  message(MUTATION_NOTICES[mutation](wasSet), false, undo);
+  // Rows leave the list when the change takes the item out of the current view.
+  const view = $("view").value;
+  const leaves = mutation === "delete" ? view !== "vault"
+    : mutation === "archive" && (wasSet ? view === "archive" : ["home", "favorites"].includes(view));
+  if (row && leaves && bannerAnimated()) {
+    row.style.height = `${row.offsetHeight}px`; void row.offsetHeight; row.classList.add("is-leaving");
+    await new Promise(resolve => setTimeout(resolve, 260));
+  }
 }
 // Trash actions: restore, or delete for good after confirming.
 async function restoreItem(item) {
@@ -1214,6 +1248,9 @@ let editSaving = false;
 function setEditSaving(active) {
   editSaving = active;
   const save = $("header-save-edit");
+  // Keep the button's width, so "Saving…" does not make the header jump.
+  if (active) save.style.minWidth = `${save.offsetWidth}px`; else save.style.minWidth = "";
+  save.classList.toggle("is-saving", active);
   save.disabled = active || attachmentBusy; $("header-cancel-edit").disabled = active;
   save.replaceChildren(...(active ? [element("span", null, "spinner"), " Saving…"] : [icon("check"), " Save"]));
   $("editor").classList.toggle("is-saving", active); $("editor").inert = active;
@@ -1541,14 +1578,25 @@ document.addEventListener("keydown", event => {
 }, true);
 $("add").onclick = () => { if (currentPage === "send") editSend(); else editItem(true); };
 $("header-edit").onclick = () => editItem();
+// A duplicate is a new item prefilled from the original; it exists once saved.
+// Attachments and passkeys stay with the original.
+async function duplicateItem(item) {
+  const detail = await request("detail", { item });
+  const cipher = { ...detail.cipher, name: `${detail.cipher.name} (copy)` };
+  editItem(true, { account: detail.account, revision: null, noAutofill: false, cipher });
+}
+$("header-duplicate").onclick = () => attempt(async () => {
+  $("detail-menu").removeAttribute("open");
+  await duplicateItem(currentItem);
+});
 $("header-favorite").onclick = () => attempt(async () => {
   $("detail-menu").removeAttribute("open");
-  await request("mutate", { item: currentItem, mutation: "favorite" });
+  await mutateItem(currentItem, "favorite", currentDetail.favorite);
   await openDetail(currentItem);
 });
 $("header-archive").onclick = () => attempt(async () => {
   $("detail-menu").removeAttribute("open");
-  await request("mutate", { item: currentItem, mutation: "archive" });
+  await mutateItem(currentItem, "archive", currentDetail.archived);
   await openDetail(currentItem);
 });
 // Fills the active page with an item.
@@ -1592,7 +1640,7 @@ $("header-move").onclick = () => attempt(async () => {
 $("header-delete").onclick = () => attempt(async () => {
   $("detail-menu").removeAttribute("open");
   if (!await confirmDialog({ title: "Move this item to trash?", text: "You can restore it from the Trash view.", confirm: "Move to trash", danger: true })) return;
-  await request("mutate", { item: currentItem, mutation: "delete" });
+  await mutateItem(currentItem, "delete", false);
   await refresh();
 });
 $("header-cancel-edit").onclick = () => attempt(() => leaveEditor(async () => {

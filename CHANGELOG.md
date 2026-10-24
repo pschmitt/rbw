@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+* Browser extension: a "Duplicate" action in the item list and item menus
+  opens a new item prefilled from the original.
+
+* Browser extension: archiving, trashing and favoriting show a notice (with
+  Undo for archive and trash), and a row that leaves the list slides out.
+  Archived and trashed items carry a pill in the list, and every view of the
+  filter has its own icon.
+
+### Fixed
+
+* Browser extension: "All items" now lists archived and trashed items too.
+
+* Browser extension: secret fields in the editor no longer draw a second focus
+  frame, and the Save button keeps its width and stays legible while saving.
+
 ## [2.31.0] - 2026-10-24
 
 ### Changed

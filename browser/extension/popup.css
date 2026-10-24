@@ -98,6 +98,8 @@ main { overflow-x:hidden; overflow-y:auto; scrollbar-gutter:stable; flex:1; min-
 article { display:flex; align-items:center; border:1px solid var(--line); background:var(--panel); border-radius:8px; margin:5px 0; min-height:60px; padding:8px; gap:9px; }
 article:hover, article:focus-within, article.is-active { background:var(--raised); }
 article.is-active { border-color:var(--accent); }
+article { transition:height .26s ease, opacity .2s ease, transform .26s ease, margin .26s ease, padding .26s ease; }
+article.is-leaving { height:0!important; min-height:0; margin-top:0; margin-bottom:0; padding-top:0; padding-bottom:0; border-width:0; opacity:0; transform:translateX(24px); overflow:hidden; pointer-events:none; }
 article .item-main:hover { background:transparent; }
 .item-icon { width:28px; height:28px; display:grid; place-items:center; color:var(--accent); font-size:20px; flex-shrink:0; background:transparent; }
 .item-main { border:0; background:transparent; text-align:left; flex:1; min-width:0; padding:2px; }
@@ -214,6 +216,9 @@ div.switch-row { cursor:default; }
 .more-settings { display:flex; width:100%; justify-content:center; align-items:center; gap:8px; margin:10px 0; }
 @media (prefers-reduced-motion:reduce) { .spinner, #header-sync.is-syncing [data-icon] { animation:none; } }
 #editor.is-saving { opacity:.6; transition:opacity .15s; }
+#header-save-edit.is-saving:disabled { opacity:1; cursor:progress; }
+#header-save-edit { white-space:nowrap; }
+#header-save-edit .spinner { display:inline-block; box-sizing:border-box; width:14px; height:14px; margin-right:2px; }
 #header-save-edit .spinner { border-color:color-mix(in srgb, var(--bg) 40%, transparent); border-top-color:var(--bg); vertical-align:-2px; }
 .note-toolbar { display:flex; align-items:center; gap:6px; margin-bottom:10px; }
 .note-toolbar strong { flex:1; color:var(--muted); font-size:12px; }
@@ -380,7 +385,8 @@ input:not([type=checkbox]):focus,select:focus,textarea:focus {
   *, *::before, *::after { scroll-behavior:auto!important; transition-duration:.01ms!important; animation-duration:.01ms!important; animation-iteration-count:1!important; }
 }
 
-/* Avoid a second focus frame inside the search field and inline value controls. */
+/* Avoid a second focus frame inside the search field, inline value controls and
+   the editor's secret fields (the wrapper draws the frame). */
 .search input:not([type=checkbox]),
 .search input:not([type=checkbox]):focus {
   border:0!important;
@@ -389,7 +395,9 @@ input:not([type=checkbox]):focus,select:focus,textarea:focus {
   background:transparent!important;
 }
 .field-value input:not([type=checkbox]),
-.field-value input:not([type=checkbox]):focus {
+.field-value input:not([type=checkbox]):focus,
+.editor-secret input:not([type=checkbox]),
+.editor-secret input:not([type=checkbox]):focus {
   border:0!important;
   outline:0!important;
   box-shadow:none!important;
@@ -854,3 +862,9 @@ html[data-page=locked] #account-menu > label, html[data-page=locked] #state, htm
 
 div.empty { text-align:center; padding:18px 0; }
 div.empty p { margin:0 0 10px; color:var(--muted); }
+
+/* Archived and trashed items: a pill by the name, and a quieter row. */
+.item-status { display:inline-flex; align-items:center; gap:3px; margin-left:6px; padding:1px 7px 1px 5px; border-radius:999px; font-size:11px; font-weight:600; line-height:16px; color:var(--muted); background:var(--raised); border:1px solid var(--line); white-space:nowrap; }
+.item-status .svg-icon { width:11px; height:11px; }
+.item-status[data-status=trash] { color:var(--danger, #e5596b); border-color:color-mix(in srgb, var(--danger, #e5596b) 40%, var(--line)); background:color-mix(in srgb, var(--danger, #e5596b) 12%, var(--raised)); }
+article.is-inactive .item-lead, article.is-inactive .item-main strong { opacity:.65; }
