@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Browser extension: the vault filters are chips that open a styled menu
+  instead of native selects. They name the current view, light up while set
+  and stay visible while a filter is active, with a "Clear" link. A new
+  Account filter sits beside them, and folders and collections follow it:
+  collections are grouped by account, nested folders are indented. Items of
+  every account but the primary one carry the account emblem, also when one
+  account is chosen. An empty "Favorites + suggestions" offers "Show all
+  items".
+
 ## [2.30.0] - 2026-10-24
 
 ### Added

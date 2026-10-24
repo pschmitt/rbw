@@ -93,7 +93,15 @@
 </section>
 <section id="vault" hidden>
 <div class="search-row"><div class="search"><span data-icon="search"></span><input id="query" type="search" autocomplete="off" placeholder="Search vault" aria-label="Search vault"><button id="filter-toggle" class="icon filter-toggle-btn" aria-label="Toggle filters" aria-expanded="false" aria-controls="filters" title="Filters"><span data-icon="filters"></span></button></div>
-<div id="filters" class="filters" hidden><select id="view" aria-label="Vault view"><option value="home">Favorites + suggestions</option><option value="vault">All items</option><option value="favorites">☆ Favorites</option><option value="archive">Archive</option><option value="trash">Trash</option></select><select id="collection" aria-label="Collection"><option value="">Collection</option></select><select id="folder" aria-label="Folder"><option value="">Folder</option></select><select id="kind" aria-label="Type"><option value="">Type</option><option value="login">Login</option><option value="passkey">Passkey</option><option value="card">Card</option><option value="identity">Identity</option><option value="secure_note">Secure note</option><option value="ssh_key">SSH key</option></select></div>
+<div id="filters" class="filters" hidden>
+<button type="button" class="chip" data-filter="view" aria-haspopup="listbox" aria-expanded="false"><span data-icon="star"></span><span class="chip-text"></span></button>
+<button type="button" class="chip" data-filter="account" aria-haspopup="listbox" aria-expanded="false" hidden><span data-icon="vault"></span><span class="chip-text"></span></button>
+<button type="button" class="chip" data-filter="collection" aria-haspopup="listbox" aria-expanded="false"><span data-icon="collections"></span><span class="chip-text"></span></button>
+<button type="button" class="chip" data-filter="folder" aria-haspopup="listbox" aria-expanded="false"><span data-icon="folder"></span><span class="chip-text"></span></button>
+<button type="button" class="chip" data-filter="kind" aria-haspopup="listbox" aria-expanded="false"><span data-icon="filters"></span><span class="chip-text"></span></button>
+<button type="button" id="filters-clear" class="chip-clear" hidden>Clear</button>
+<input type="hidden" id="view" value="home"><input type="hidden" id="account-filter" value=""><input type="hidden" id="collection" value=""><input type="hidden" id="folder" value=""><input type="hidden" id="kind" value="">
+</div>
 </div>
 <div id="locked-accounts" class="locked-banner" role="status" hidden></div><div id="suggestions"></div><div id="items"></div><p id="count" class="hint"></p>
 </section>

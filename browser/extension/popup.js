@@ -255,10 +255,123 @@ function clearVault() {
   generatedValue = ""; $("generated").replaceChildren(); closeGeneratorPicker(); delete $("generated").closest(".gen-card").dataset.strength;
   for (const id of ["unlock-password", "approval-password", "edit-name", "edit-folder", "edit-notes", "send-name", "send-text", "send-notes", "send-password"]) $(id).value = "";
 }
-function selectOptions(id, values, label) {
-  const selected = $(id).value;
-  $(id).replaceChildren(new Option(label, ""), ...values.map(v => new Option(typeof v === "string" ? v : v.name, typeof v === "string" ? v : v.id)));
-  $(id).value = selected;
+// The filters are chips that open a menu. What a menu offers depends on the
+// others: the account narrows the folders and collections to its own.
+const VIEWS = [["home", "Favorites + suggestions"], ["vault", "All items"], ["favorites", "Favorites"], ["archive", "Archive"], ["trash", "Trash"]];
+const KINDS = [["", "All types"], ["login", "Login"], ["passkey", "Passkey"], ["card", "Card"], ["identity", "Identity"], ["secure_note", "Secure note"], ["ssh_key", "SSH key"]];
+const filterInput = { view: "view", account: "account-filter", collection: "collection", folder: "folder", kind: "kind" };
+const filterTitle = { view: "View", account: "Account", collection: "Collection", folder: "Folder", kind: "Type" };
+const filterDefaults = { view: "home", account: "", collection: "", folder: "", kind: "" };
+let facets = { folders: [], collections: [] }; // folders: {name, accounts}; collections: {id, name, account}
+let openMenu = null;
+const several = () => accountNames.length > 1;
+// Entries of a chip's menu: {value, label, group, color, dots, indent}.
+function menuEntries(filter) {
+  const all = label => ({ value: "", label });
+  if (filter === "view") return VIEWS.map(([value, label]) => ({ value, label }));
+  if (filter === "kind") return KINDS.map(([value, label]) => ({ value, label }));
+  if (filter === "account") return [all("All accounts"), ...accountNames.map(name => ({ value: name, label: name === primaryAccount ? `${name} *` : name, color: colorOf(name) }))];
+  const byAccount = several() && !$("account-filter").value;
+  if (filter === "folder") {
+    const names = new Set(facets.folders.map(f => f.name));
+    return [all("All folders"), ...[...facets.folders].sort((a, b) => a.name.localeCompare(b.name)).map(({ name, accounts }) => {
+      const parts = name.split("/"); let depth = 0;
+      for (let i = 1; i < parts.length; i++) if (names.has(parts.slice(0, i).join("/"))) depth = i;
+      return { value: name, label: parts.slice(depth).join("/"), indent: depth, dots: byAccount ? accounts.map(account => colorOf(account)) : [] };
+    })];
+  }
+  const sorted = [...facets.collections].sort((a, b) => a.name.localeCompare(b.name));
+  const entries = [all("All collections")];
+  const accounts = byAccount ? [...new Set(sorted.map(c => c.account))].sort() : [null];
+  for (const account of accounts) {
+    if (account) entries.push({ group: account, color: colorOf(account) });
+    for (const c of sorted) if (!account || c.account === account) entries.push({ value: c.id, label: c.name });
+  }
+  return entries;
+}
+function filterLabel(filter) {
+  const value = $(filterInput[filter]).value;
+  // The view always names itself: "Favorites + suggestions" is not "All items".
+  if (filter === "view") return VIEWS.find(([id]) => id === value)?.[1] || value;
+  if (value === filterDefaults[filter]) return filterTitle[filter];
+  if (filter === "collection") return facets.collections.find(c => c.id === value)?.name || filterTitle.collection;
+  return menuEntries(filter).find(entry => entry.value === value)?.label || value;
+}
+function showFilters(shown) {
+  $("filters").hidden = !shown; $("filter-toggle").setAttribute("aria-expanded", String(shown));
+}
+function syncChips() {
+  let active = 0;
+  for (const chip of document.querySelectorAll("#filters .chip")) {
+    const filter = chip.dataset.filter, value = $(filterInput[filter]).value, set = value !== filterDefaults[filter];
+    chip.querySelector(".chip-text").textContent = filterLabel(filter);
+    chip.classList.toggle("is-set", filter === "view" ? value !== "vault" : set); // any view but "All items" narrows the list if (set && filter !== "view") active++;
+    const account = filter === "account" ? value : filter === "collection" ? facets.collections.find(c => c.id === value)?.account : null;
+    if (set && account && several()) { chip.style.setProperty("--account-color", colorOf(account)); chip.classList.add("has-account"); }
+    else { chip.style.removeProperty("--account-color"); chip.classList.remove("has-account"); }
+  }
+  active += $("view").value !== "home" ? 1 : 0;
+  $("filters-clear").hidden = !active;
+  if (active) showFilters(true); // an active filter is never hidden
+  $("filter-toggle").classList.toggle("has-filters", active > 0);
+}
+function closeMenu() {
+  if (!openMenu) return;
+  openMenu.menu.remove(); openMenu.chip.setAttribute("aria-expanded", "false"); openMenu = null;
+}
+function showMenu(chip) {
+  const filter = chip.dataset.filter, again = openMenu?.chip === chip;
+  closeMenu(); if (again) return;
+  const menu = element("div", null, "filter-menu"); menu.setAttribute("role", "listbox"); menu.setAttribute("aria-label", filterTitle[filter]);
+  const current = $(filterInput[filter]).value;
+  for (const entry of menuEntries(filter)) {
+    if (entry.group) { const head = element("div", null, "filter-menu-group"); head.style.setProperty("--account-color", entry.color); head.append(element("span", null, "dot"), element("span", entry.group)); menu.append(head); continue; }
+    const item = element("button", null, "filter-menu-item"); item.type = "button"; item.setAttribute("role", "option");
+    const selected = entry.value === current; item.setAttribute("aria-selected", String(selected)); item.classList.toggle("is-selected", selected);
+    if (entry.indent) item.style.paddingLeft = `${8 + entry.indent * 14}px`;
+    if (entry.color) { const dot = element("span", null, "dot"); dot.style.setProperty("--account-color", entry.color); item.append(dot); }
+    item.append(element("span", entry.label, "filter-menu-label"));
+    for (const color of entry.dots || []) { const dot = element("span", null, "dot small"); dot.style.setProperty("--account-color", color); item.append(dot); }
+    item.append(selected ? icon("check") : element("span", null, "filter-menu-check"));
+    item.onclick = () => { closeMenu(); chooseFilter(filter, entry.value); };
+    menu.append(item);
+  }
+  document.body.append(menu);
+  const rect = chip.getBoundingClientRect();
+  menu.style.top = `${rect.bottom + 4}px`; menu.style.maxHeight = `${window.innerHeight - rect.bottom - 12}px`;
+  menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8))}px`;
+  chip.setAttribute("aria-expanded", "true"); openMenu = { chip, menu };
+  (menu.querySelector(".is-selected") || menu.querySelector("button"))?.focus();
+}
+function chooseFilter(filter, value) {
+  $(filterInput[filter]).value = value;
+  if (filter === "account") { $("collection").value = ""; $("folder").value = ""; $("account").value = value; $("account").onchange(); return; }
+  syncChips(); remember(); attempt(search);
+}
+// The folders and collections on offer: those of the chosen account (or each
+// one's), for the current search words, type and view.
+async function loadFacets(result) {
+  const filter = $("account-filter").value, accounts = filter ? [filter] : accountNames;
+  if (!several()) {
+    facets = { folders: result.folders.map(name => ({ name, accounts: [] })), collections: result.collections };
+    return;
+  }
+  const base = { query: $("query").value, kind: $("kind").value, view: $("view").value === "home" ? "vault" : $("view").value };
+  const parts = await Promise.all(accounts.map(account => request("search", { ...base, account }).then(r => [account, r], () => null)));
+  const folders = new Map(), collections = [];
+  for (const part of parts) {
+    if (!part) continue;
+    for (const name of part[1].folders) folders.set(name, [...(folders.get(name) || []), part[0]]);
+    for (const c of part[1].collections) collections.push({ ...c, account: part[0] });
+  }
+  facets = { folders: [...folders].map(([name, accounts]) => ({ name, accounts })), collections };
+}
+// A folder or collection the other filters leave out is dropped.
+function validFilters() {
+  let changed = false;
+  if ($("folder").value && !facets.folders.some(f => f.name === $("folder").value)) { $("folder").value = ""; changed = true; }
+  if ($("collection").value && !facets.collections.some(c => c.id === $("collection").value)) { $("collection").value = ""; changed = true; }
+  return !changed;
 }
 // With several accounts the empty value means "All accounts" (the default);
 // with one, the account is always named.
@@ -274,6 +387,8 @@ function renderAccounts(accounts, primary, chosen, states = [], cliColors = {}) 
   select.replaceChildren(...(multiple ? [new Option("All accounts", "")] : []), ...accounts.map(name => new Option(name === primary ? `${name} *` : name, name)));
   select.value = active;
   preference.popupAccount = select.value;
+  $("account-filter").value = select.value;
+  document.querySelector('#filters [data-filter="account"]').hidden = !multiple; syncChips();
   renderAccountStates(primary);
 }
 // Merged view: which accounts are locked, each with a way to unlock it.
@@ -432,7 +547,7 @@ async function refresh(knownStatus = null, skipList = false) {
   remember();
   } finally { loading(false); }
 }
-async function search() {
+async function search(retry = false) {
   const current = ++epoch;
   const filters = { query: $("query").value, kind: $("kind").value, folder: $("folder").value, collection: $("collection").value, view: $("view").value };
   const snapshot = await request("search", { ...filters, snapshot: true });
@@ -441,9 +556,13 @@ async function search() {
   const result = await request("search", filters);
   if (current !== epoch) return;
   renderSearch(result); remember();
+  // The menus follow after the list is shown.
+  await loadFacets(result); if (current !== epoch) return;
+  if (!validFilters() && !retry) { syncChips(); return search(true); }
+  syncChips();
 }
 function renderSearch(result) {
-  selectOptions("folder", result.folders, "Folder"); selectOptions("collection", result.collections, "Collection");
+  syncChips();
   $("folder-list").replaceChildren(...result.folders.map(f => new Option(f)));
   const favorites = $("view").value === "favorites" || ($("view").value === "home" && !$("query").value);
   const sections = [
@@ -459,7 +578,16 @@ function renderSearch(result) {
     $("items").append(element("h3", `${heading} · ${items.length}`));
     for (const item of items) $("items").append(itemRow(item));
   }
-  if (!result.items.length) $("items").append(element("p", "No items found.", "empty"));
+  if (!result.items.length) {
+    const empty = element("div", null, "empty");
+    // Favorites + suggestions is empty for an account without favorites: offer the rest.
+    if ($("view").value === "home" && !$("query").value) {
+      const all = element("button", "Show all items"); all.type = "button";
+      all.onclick = () => { $("view").value = "vault"; syncChips(); remember(); attempt(search); };
+      empty.append(element("p", "No favorites or suggestions."), all);
+    } else empty.append(element("p", "No items found."));
+    $("items").append(empty);
+  }
   $("count").textContent = result.total > result.limit ? `${result.limit} of ${result.total} items. Narrow your search to see more.` : `${result.total} items`;
 
 }
@@ -482,10 +610,12 @@ function itemRow(item) {
   image.dataset.fallback = fallback; image.append(icon(fallback));
   // With several accounts, an emblem on the icon's corner says which one holds the item.
   const lead = element("span", null, "item-lead"); lead.append(image);
-  // The primary account is the default one: its items carry no emblem.
-  if (item.account && accountNames.length > 1 && item.account !== primaryAccount) {
-    const emblem = element("span", item.account.slice(0, 2).toUpperCase(), "account-emblem"); const color = colorOf(item.account);
-    emblem.style.setProperty("--account-color", color); emblem.style.setProperty("--emblem-text", accountTextColor(color)); emblem.title = item.account; emblem.setAttribute("aria-label", `Account ${item.account}`);
+  // The primary account is the default one: its items carry no emblem. A search
+  // of a single account does not tag its items, so the chosen one stands in.
+  const account = item.account || $("account").value;
+  if (account && accountNames.length > 1 && account !== primaryAccount) {
+    const emblem = element("span", account.slice(0, 2).toUpperCase(), "account-emblem"); const color = colorOf(account);
+    emblem.style.setProperty("--account-color", color); emblem.style.setProperty("--emblem-text", accountTextColor(color)); emblem.title = account; emblem.setAttribute("aria-label", `Account ${account}`);
     lead.append(emblem);
   }
   row.append(lead);
@@ -1368,7 +1498,7 @@ $("account-toggle").ondblclick = () => {
   });
 };
 $("account").onchange = () => attempt(async () => { await request("set_preferences", { preferences: { popupAccount: $("account").value } }); await refresh(); });
-$("filter-toggle").onclick = () => { $("filters").hidden = !$("filters").hidden; $("filter-toggle").setAttribute("aria-expanded", String(!$("filters").hidden)); remember(); };
+$("filter-toggle").onclick = () => { showFilters($("filters").hidden || !$("filters-clear").hidden); remember(); };
 // Keyboard navigation: arrows move a highlight through the item cards (from
 // the search field or the list), Enter opens the highlighted item and
 // Shift+Enter fills it where filling is offered.
@@ -1398,7 +1528,17 @@ $("vault").addEventListener("keydown", event => {
   }
 });
 $("query").oninput = () => { remember(); clearTimeout(timer); ++epoch; timer = setTimeout(() => attempt(search), 180); };
-for (const id of ["kind", "view", "folder", "collection"]) $(id).onchange = () => { remember(); attempt(search); };
+for (const chip of document.querySelectorAll("#filters .chip")) chip.onclick = () => showMenu(chip);
+$("filters-clear").onclick = () => { for (const [id, value] of Object.entries({ view: "home", folder: "", collection: "", kind: "" })) $(id).value = value; syncChips(); remember(); attempt(search); };
+document.addEventListener("pointerdown", event => { if (openMenu && !openMenu.menu.contains(event.target) && !openMenu.chip.contains(event.target)) closeMenu(); });
+document.addEventListener("keydown", event => {
+  if (!openMenu) return;
+  if (event.key === "Escape") { event.stopPropagation(); openMenu.chip.focus(); closeMenu(); }
+  else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault(); const items = [...openMenu.menu.querySelectorAll("button")], at = items.indexOf(document.activeElement);
+    items[(at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
+  }
+}, true);
 $("add").onclick = () => { if (currentPage === "send") editSend(); else editItem(true); };
 $("header-edit").onclick = () => editItem();
 $("header-favorite").onclick = () => attempt(async () => {
@@ -1694,10 +1834,9 @@ attempt(async () => {
     if (saved) {
       for (const id of filterIds) {
         const value = saved.filters[id];
-        if (value && ["folder", "collection"].includes(id)) $(id).append(new Option(value, value));
         $(id).value = value || (id === "view" ? "home" : "");
       }
-      $("filters").hidden = !saved.expanded; $("filter-toggle").setAttribute("aria-expanded", String(saved.expanded));
+      showFilters(saved.expanded); syncChips();
     }
     await refresh(status, !!saved && saved.page !== "vault");
     if (initialSettings) show("settings");
