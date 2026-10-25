@@ -18,6 +18,14 @@ push or infer success from local checks, an older commit, or a few passing jobs.
 If CI cannot finish because of an external blocker, report the specific blocker
 and leave release and deployment actions pending.
 
+## Agent protocol
+
+`rbw`, `rbw-browser` and `rbw-agent` work together when they share
+`major.minor` (`rbw::protocol::compatible`): an agent from another patch
+release keeps running across an upgrade. So any change to the agent
+protocol (`src/protocol.rs`: actions, responses, their fields) needs at
+least a minor version bump, never just a patch release.
+
 ## Deploy
 
 Never release a version with failing CI. Before publishing a version tag or

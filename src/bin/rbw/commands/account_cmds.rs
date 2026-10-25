@@ -73,7 +73,7 @@ pub fn account_list() -> anyhow::Result<()> {
     // These states come from whatever agent is running, which may predate
     // an upgrade (see `rbw status`).
     if let Ok(version) = crate::actions::version() {
-        if version != rbw::protocol::VERSION {
+        if !rbw::protocol::compatible(version) {
             eprintln!(
                 "warning: rbw-agent is {}, not {}; run `rbw stop-agent` and unlock again",
                 rbw::protocol::version_string(version),

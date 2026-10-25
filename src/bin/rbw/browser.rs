@@ -633,14 +633,16 @@ fn account_colors(config: &rbw::config::Config) -> Value {
         .collect::<std::collections::BTreeMap<_, _>>())
 }
 
-// The running agent's protocol version. An agent older than this host (one
-// started before an upgrade keeps running) can't serve it, and the CLI would
-// replace it on its next command anyway, so it is replaced here too; that
-// locks every account. A newer agent is left alone: then this host is the
-// stale one (a browser still running the old one) and the extension says so.
+// The running agent's protocol version. An agent from an older major.minor
+// (one started before an upgrade keeps running; another patch release is
+// compatible) can't serve this host, and the CLI would replace it on its
+// next command anyway, so it is replaced here too; that locks every
+// account. A newer one is left alone: then this host is the stale one (a
+// browser still running the old one) and the extension says so.
 fn agent_version() -> Option<u32> {
     let version = actions::version().ok()?;
-    if version < rbw::protocol::VERSION {
+    if !rbw::protocol::compatible(version) && version < rbw::protocol::VERSION
+    {
         if let Err(error) = commands::restart_agent() {
             log::warn!("failed to replace rbw-agent {version}: {error:#}");
         }
@@ -649,10 +651,11 @@ fn agent_version() -> Option<u32> {
     Some(version)
 }
 
-// The agent's version when it isn't this host's, for the extension to show.
+// The agent's version when it can't serve this host, for the extension to
+// show.
 fn stale_agent(version: Option<u32>) -> Option<String> {
     version
-        .filter(|v| *v != rbw::protocol::VERSION)
+        .filter(|v| !rbw::protocol::compatible(*v))
         .map(rbw::protocol::version_string)
 }
 
@@ -683,7 +686,7 @@ fn merged_status(
     let config = rbw::config::Config::load()?;
     let version = agent_version();
     let stale = stale_agent(version);
-    let agent_ok = version == Some(rbw::protocol::VERSION);
+    let agent_ok = version.is_some_and(rbw::protocol::compatible);
     let states = scoped_states(scope)?;
     let unlocked =
         agent_ok && states.iter().any(|s| s.unlocked && !s.excluded);
@@ -775,7 +778,7 @@ fn dispatch(
             let config = rbw::config::Config::load()?;
             let version = agent_version();
             let stale = stale_agent(version);
-            let unlocked = version == Some(rbw::protocol::VERSION)
+            let unlocked = version.is_some_and(rbw::protocol::compatible)
                 && actions::unlocked().is_ok();
             if !unlocked {
                 transfers.clear();
@@ -875,7 +878,7 @@ fn dispatch(
         operation => {
             // New protocol operations must never reach an older agent.
             ensure!(
-                agent_version() == Some(rbw::protocol::VERSION),
+                agent_version().is_some_and(rbw::protocol::compatible),
                 "agent upgrade required"
             );
             // Passive check prevents searching/filling from implicitly unlocking.

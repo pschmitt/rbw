@@ -601,6 +601,11 @@ enum Opt {
     Status {
         #[arg(long, help = "Display output as JSON")]
         json: bool,
+        #[arg(
+            long,
+            help = "Show the full report: agent settings and each account's server, unlock policy and database contents (--json always has them)"
+        )]
+        full: bool,
     },
 
     #[command(about = "Update the local copy of the Bitwarden database")]
@@ -4034,7 +4039,7 @@ fn main() {
             }
         }
         Opt::Unlocked => commands::unlocked(),
-        Opt::Status { json } => commands::status(json),
+        Opt::Status { json, full } => commands::status(json, full),
         Opt::Sync { all } => commands::sync(all),
         Opt::Tui {
             term,

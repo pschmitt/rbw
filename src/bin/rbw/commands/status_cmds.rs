@@ -125,16 +125,99 @@ fn ago(time: std::time::SystemTime) -> String {
     format!("{} ago", humantime::format_duration(elapsed))
 }
 
-pub fn status(json: bool) -> anyhow::Result<()> {
+// `rbw status` without `--full`: rbw and its agent on one line, then one
+// line per account.
+fn print_short(
+    accounts: &[AccountStatus],
+    pid: Option<u32>,
+    stale_agent: Option<u32>,
+    c: bool,
+) {
+    let agent = match (pid, stale_agent) {
+        (None, _) => style::danger("agent not running", c),
+        (Some(_), Some(version)) => style::danger(
+            &format!(
+                "agent {} (run `rbw stop-agent`)",
+                rbw::protocol::version_string(version)
+            ),
+            c,
+        ),
+        (Some(pid), None) => format!(
+            "{} {}",
+            style::success("agent running", c),
+            style::dim(&format!("(pid {pid})"), c)
+        ),
+    };
+    println!(
+        "{} {} {} {agent}",
+        style::name("rbw", c),
+        style::dim(env!("CARGO_PKG_VERSION"), c),
+        style::dim("·", c)
+    );
+    if accounts.is_empty() {
+        println!("{}", style::empty("no accounts configured", c));
+        return;
+    }
+    // Columns are padded before they are painted, so the escape codes don't
+    // throw off the alignment.
+    let width = |text: &str| text.chars().count();
+    let name_width = accounts
+        .iter()
+        .map(|a| width(&a.name) + usize::from(a.primary))
+        .max()
+        .unwrap_or(0);
+    let email_width = accounts
+        .iter()
+        .map(|a| a.email.as_deref().map_or(3, width))
+        .max()
+        .unwrap_or(0);
+    for a in accounts {
+        let marker = if a.primary { "*" } else { "" };
+        let name_pad = " ".repeat(name_width - width(&a.name) - marker.len());
+        let state = if a.unlocked {
+            style::success("unlocked", c)
+        } else {
+            style::danger(&format!("{:<8}", "locked"), c)
+        };
+        let email = a.email.as_deref().unwrap_or("N/A");
+        let email_pad = " ".repeat(email_width - width(email));
+        let email = if a.email.is_some() {
+            style::user(email, c)
+        } else {
+            style::empty(email, c)
+        };
+        let vault = if a.logged_in {
+            let items = a.items.unwrap_or_default();
+            let synced = a.synced_at.map_or_else(
+                || style::warning("never synced", c),
+                |t| style::dim(&format!("synced {}", ago(t)), c),
+            );
+            format!(
+                "{} {} {synced}",
+                style::name(&items.to_string(), c),
+                style::dim(if items == 1 { "item ·" } else { "items ·" }, c)
+            )
+        } else {
+            style::warning("not logged in", c)
+        };
+        println!(
+            "{}{marker}{name_pad}  {state}  {email}{email_pad}  {vault}",
+            account_name(a, c)
+        );
+    }
+}
+
+pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
     let config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());
     let primary = config.primary_account_name();
     let pid = agent_pid_if_running();
-    // An agent started by an older (or newer) rbw keeps running across an
-    // upgrade; the CLI replaces it on its next command, but the browser
-    // host only reports it, so every account looks locked there.
+    // An agent from another major.minor (one that outlived an upgrade)
+    // can't serve this rbw: shown in red so it's clear why commands
+    // replace it, or why the browser extension says it's out of date.
     let agent_version = pid.and_then(|_| crate::actions::version().ok());
-    let stale_agent = agent_version.filter(|v| *v != rbw::protocol::VERSION);
+    let stale_agent =
+        agent_version.filter(|v| !rbw::protocol::compatible(*v));
     let mut accounts = config
         .accounts()
         .iter()
@@ -189,6 +272,10 @@ pub fn status(json: bool) -> anyhow::Result<()> {
     }
 
     let c = stdout_supports_color();
+    if !full {
+        print_short(&accounts, pid, stale_agent, c);
+        return Ok(());
+    }
     // Labels are padded before they are painted so the escape codes don't
     // throw off the alignment.
     let row = |indent: &str, label: &str, value: String| {

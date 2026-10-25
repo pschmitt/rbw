@@ -129,12 +129,14 @@ pub(super) fn check_config() -> anyhow::Result<()> {
 }
 
 pub(super) fn check_agent_version() -> anyhow::Result<()> {
-    let client_version = rbw::protocol::VERSION;
     let agent_version = version_or_quit()?;
-    if agent_version != client_version {
+    // Another patch release of the same major.minor speaks this protocol.
+    if !rbw::protocol::compatible(agent_version) {
         crate::actions::quit()?;
         return Err(anyhow::anyhow!(
-            "client protocol version is {client_version} but agent protocol version is {agent_version}"
+            "client protocol version is {} but agent protocol version is {}",
+            env!("CARGO_PKG_VERSION"),
+            rbw::protocol::version_string(agent_version)
         ));
     }
     Ok(())

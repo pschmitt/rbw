@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Changed
+
+* rbw, the browser host and rbw-agent of the same `major.minor` work
+  together: an agent from another patch release is no longer replaced (and
+  every account locked) by the CLI's next command, nor reported as out of
+  date. Protocol changes now always come with a minor version bump.
+
+* `rbw status` is now a short report: rbw and its agent on one line, then one
+  line per account (lock state, email, item count, last sync). The previous
+  report moved to `rbw status --full`; `--json` is unchanged.
+
 ### Fixed
 
 * Browser extension: unlocking an account no longer flashes the "locked"

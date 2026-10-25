@@ -17,6 +17,15 @@ pub const VERSION: u32 = {
         + unwrap(&u32::from_str_radix(patch, 10))
 };
 
+/// Whether an agent reporting `version` speaks this build's protocol.
+///
+/// The protocol only changes in minor (or major) releases, so every patch
+/// release of one `major.minor` works with every other: a change to the
+/// protocol needs at least a minor version bump.
+pub const fn compatible(version: u32) -> bool {
+    version / 1_000 == VERSION / 1_000
+}
+
 /// A protocol version (`VERSION`, or the one an agent reports) as
 /// `major.minor.patch`.
 pub fn version_string(version: u32) -> String {
@@ -411,4 +420,7 @@ fn test_version_encoding() {
     assert_eq!(VERSION % 1_000, patch);
     assert_eq!(version_string(VERSION), env!("CARGO_PKG_VERSION"));
     assert_eq!(version_string(2_031_002), "2.31.2");
+    let minor = VERSION / 1_000 * 1_000;
+    assert!(compatible(minor) && compatible(minor + 999));
+    assert!(!compatible(minor - 1) && !compatible(minor + 1_000));
 }

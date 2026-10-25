@@ -14,12 +14,13 @@ out by running `rbw purge`, and you can explicitly lock the database by running
 `rbw lock` or `rbw agent stop` (`rbw stop-agent` remains as a compatibility
 alias). If the agent is unresponsive, use `rbw agent stop --kill`.
 
-`rbw status` shows the rbw version, whether the agent is running, its lock
-timeout and sync interval, and for every configured account: lock state,
-email, server, unlock policy, last sync time and the contents of the local
+`rbw status` shows the rbw version, whether the agent is running, and one
+line per configured account: lock state, email, item count and last sync
+time. `rbw status --full` adds the agent's lock timeout and sync interval and,
+for every account, its server, unlock policy and the contents of the local
 database (item count by type, folders, collections, organizations). It never
 prompts, never starts the agent and never unlocks anything. `--json` prints
-the same data as JSON.
+the full data as JSON.
 
 With several accounts, an account can take its master password from a login
 item in another account's vault (`unlock.credentials`). Unlocking the source
