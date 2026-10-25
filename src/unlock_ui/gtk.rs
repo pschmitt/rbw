@@ -65,7 +65,7 @@ impl GtkDialog {
         header.pack_end(&button);
         window.set_titlebar(Some(&header));
         let logo = gtk::gdk_pixbuf::Pixbuf::from_read(std::io::Cursor::new(
-            include_bytes!("assets/rbw.png").as_slice(),
+            include_bytes!("../../assets/rbw.png").as_slice(),
         ))
         .context("could not load rbw logo")?;
         let logo = gtk::Image::from_pixbuf(Some(&logo));

@@ -36,6 +36,7 @@
           ./Cargo.lock
           ./src
           ./bin
+          ./assets/rbw.png
           ./LICENSE
           ./README.md
           ./CHANGELOG.md
@@ -210,7 +211,7 @@
               buildInputs = craneArgs.buildInputs ++ [ pkgs.gtk4 ];
               doCheck = true;
               postInstall = rbw.postInstall + ''
-                install -Dm644 src/unlock_ui/assets/rbw.png "$out/share/icons/hicolor/128x128/apps/rbw.png"
+                install -Dm644 assets/rbw.png "$out/share/icons/hicolor/128x128/apps/rbw.png"
                 install -Dm644 ${
                   pkgs.makeDesktopItem {
                     name = "org.rbw.Unlock";

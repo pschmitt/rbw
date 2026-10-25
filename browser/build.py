@@ -9,12 +9,13 @@ import tomllib
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
+ICONS = ROOT.parent / "assets" / "icons"
 # The extension shares rbw's version: one release ships the CLI, native host
 # and both browser packages.
 VERSION = tomllib.loads((ROOT.parent / "Cargo.toml").read_text())["package"]["version"]
 # What browser-daemon's live-view extension (browser-daemon/) takes from this
 # one, so both look alike.
-SHARED = ["theme.css", "popup.css", "icons.js", "feedback.css", "feedback.js", "icons/rbw-48.png", "icons/rbw-64.png"]
+SHARED = ["theme.css", "popup.css", "icons.js", "feedback.css", "feedback.js", "icons/rbw-48.png", "icons/rbw-64.png"]  # icons/ lives in ../assets
 
 
 def browser_daemon(dest):
@@ -28,7 +29,8 @@ def browser_daemon(dest):
             shutil.copy2(source, dest / source.name)
     for name in SHARED:
         (dest / name).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / "extension" / name, dest / name)
+        source = ICONS / name.removeprefix("icons/") if name.startswith("icons/") else ROOT / "extension" / name
+        shutil.copy2(source, dest / name)
     manifest = json.loads((ROOT / "browser-daemon" / "manifest.json").read_text())
     manifest["version"] = VERSION
     (dest / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -51,9 +53,10 @@ for target in ("firefox", "chromium"):
             shutil.copytree(source, dest / source.name, dirs_exist_ok=True)
         else:
             shutil.copy2(source, dest / source.name)
+    shutil.copytree(ICONS, dest / "icons")
     toolbar_icons = {}
     for size in [16, 19, 24, 32, 38, 48, 64]:
-        source = ROOT / "extension" / "icons" / f"toolbar-{size}.png"
+        source = ICONS / f"toolbar-{size}.png"
         digest = hashlib.sha256(source.read_bytes()).hexdigest()[:12]
         name = f"icons/toolbar-{size}-{digest}.png"
         shutil.copy2(source, dest / name)

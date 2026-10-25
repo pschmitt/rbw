@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="extension/icons/rbw-256.png" width="128" alt="rbw">
+  <img src="../assets/icons/rbw-256.png" width="128" alt="rbw">
 </p>
 
 <h1 align="center">rbw for the browser</h1>

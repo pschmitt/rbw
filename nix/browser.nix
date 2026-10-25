@@ -70,8 +70,8 @@ in
             ../browser/extension/feedback.css
             ../browser/extension/feedback.js
             ../browser/extension/popup.css
-            ../browser/extension/icons/rbw-64.png
-            ../browser/extension/icons/rbw-48.png
+            ../assets/icons/rbw-64.png
+            ../assets/icons/rbw-48.png
           ];
         };
       }
