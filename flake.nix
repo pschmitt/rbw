@@ -88,7 +88,8 @@
             touch $out/src/lib.rs
           '';
           rbwDeps = craneLib.buildDepsOnly (
-            craneArgs
+            # dummySrc replaces src; passing both makes crane warn.
+            builtins.removeAttrs craneArgs [ "src" ]
             // {
               pname = "rbw-deps";
               version = "0";
