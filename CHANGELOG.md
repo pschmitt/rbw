@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.31.6] - 2026-10-25
+
 ### Changed
 
 * The GTK unlock dialog: Unlock sits next to the password field instead of in
