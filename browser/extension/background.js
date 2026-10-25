@@ -5,7 +5,16 @@ let serial = 0;
 let queue = Promise.resolve();
 const pending = new Map();
 const offers = new Map();
+// The login last filled (or submitted) in each tab. It outlives navigation
+// for a while, so a later step of the same sign-in (the password page, the
+// 2FA code) uses that login rather than the first match.
 const fillCycles = new Map();
+const LOGIN_FLOW_MS = 10 * 60 * 1000;
+function rememberFill(tabId, account, item, url = null) { fillCycles.set(tabId, { url, account, item, at: Date.now() }); }
+function lastFill(tabId) {
+  const entry = fillCycles.get(tabId);
+  return entry && Date.now() - entry.at < LOGIN_FLOW_MS ? entry : null;
+}
 const fillUndos = new Map();
 const suggestionCounts = new Map();
 const badgeRequests = new Map();
@@ -306,10 +315,6 @@ async function fingerprintUnlock(account) {
   finally { fingerprintScans--; }
 }
 
-function reportPasskeyProgress(request, step, retry = false) {
-  api.runtime.sendMessage({ action: "passkey_progress", request, step, retry }).catch(() => {});
-}
-
 async function activeTab() {
   const [tab] = await api.tabs.query({ active: true, currentWindow: true });
   if (!tab?.url || !/^https?:\/\//.test(tab.url)) throw new Error("Open an HTTP or HTTPS page first.");
@@ -506,7 +511,7 @@ async function classifySaveOffer(account, url, username, password) {
     if (item.protected) return { saved: true, update: null };
     let stored;
     try { stored = await native({ action: "credential", account, item: item.id, url }); } catch (_) { continue; }
-    if (stored.password === password) return { saved: true, update: null };
+    if (stored.password === password) return { saved: true, update: null, item: item.id };
     if (user && !update) update = { id: item.id, name: item.name, username: item.username || "" };
   }
   return { saved: false, update };
@@ -605,11 +610,11 @@ async function pageMessage(message, sender, respond) {
     const results = await cachedSearch({ account: null, url: sender.url, site_only: true, kind: "login" });
     const eligible = results.items.filter(item => !item.protected && !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems));
     if (!eligible.length) return respond({ result: false });
+    const last = lastFill(sender.tab.id)?.item;
     if (message.otp) {
       // A 2FA step: fill the code of the login last filled here, else of the
       // first matching login that has an authenticator key.
       if (!prefs.autofillTotp) return respond({ result: false });
-      const last = fillCycles.get(sender.tab.id)?.item;
       for (const item of [...eligible].sort((a, b) => (b.id === last) - (a.id === last)).slice(0, 5)) {
         try {
           if ((await native({ action: "credential", account: null, item: item.id, url: sender.url })).hasTotp !== true) continue;
@@ -618,7 +623,8 @@ async function pageMessage(message, sender, respond) {
       }
       return respond({ result: false });
     }
-    return respond({ result: await fill({ item: eligible[0].id, automatic: true, cycleIndex: 1, cycleCount: eligible.length, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, null) });
+    const index = Math.max(0, eligible.findIndex(item => item.id === last));
+    return respond({ result: await fill({ item: eligible[index].id, automatic: true, cycleIndex: index + 1, cycleCount: eligible.length, expectedTab: sender.tab.id, expectedUrl: sender.tab.url }, null) });
   }
   if (message.action === "inline_open") {
     if (!prefs.inlineSuggestions || autofillBlocked) return respond({ result: null });
@@ -633,6 +639,9 @@ async function pageMessage(message, sender, respond) {
         : { account: null, url: sender.url, site_only: true, kind: "login" });
       const eligible = result.items.filter(v => !v.protected && !isItemAutofillExcluded(v.id, prefs.autofillExcludedItems));
       if (!eligible.length) return respond({ result: null });
+      // The login of this sign-in so far comes first.
+      const last = kind === "login" ? lastFill(sender.tab.id)?.item : null;
+      eligible.sort((a, b) => (b.id === last) - (a.id === last));
       const items = eligible.slice(0, 5).map(v => ({ id: v.id, name: v.name, username: v.username, brand: kind === "card" ? String(v.username || "").split(",", 1)[0].trim() : null,
         favicon: kind === "login" && prefs.favicons ? faviconCache.get(v.iconOrigin)?.value || null : null }));
       const total = Math.max(eligible.length, (result.total ?? result.items.length) - (result.items.length - eligible.length));
@@ -649,10 +658,12 @@ async function pageMessage(message, sender, respond) {
     return respond({ result: await operation });
   }
   if (message.action === "save_offer") {
-    if (!prefs.savePrompts || typeof message.username !== "string" || typeof message.password !== "string" || message.password.length > 4096 || message.username.length > 1024) return respond({ result: false });
+    if (!(prefs.savePrompts || prefs.autoFill) || typeof message.username !== "string" || typeof message.password !== "string" || message.password.length > 4096 || message.username.length > 1024) return respond({ result: false });
     const tabId = sender.tab.id;
     const known = await classifySaveOffer(null, sender.url, message.username, message.password);
-    if (known.saved) return respond({ result: false });
+    // Typed in by hand: the next steps of this sign-in follow that login too.
+    if (known.item) rememberFill(tabId, null, known.item);
+    if (known.saved || !prefs.savePrompts) return respond({ result: false });
     const previous = offers.get(tabId); if (previous && (previous.origin !== url.origin || previous.username !== message.username)) rememberUnsaved(previous); else if (previous) clearTimeout(previous.timer);
     const offer = { origin: url.origin, url: sender.url, username: message.username, password: message.password, update: known.update, timer: setTimeout(() => { rememberUnsaved(offers.get(tabId)); offers.delete(tabId); badge(); api.tabs.sendMessage(tabId, { action: "rbw_save_offer_clear" }).catch(() => {}); }, 120000) };
     offers.set(tabId, offer);
@@ -743,7 +754,7 @@ async function fill(message, account) {
     if (!count) throw new Error("No supported fields found on this page.");
     // Automatic, inline and popup fills all establish the shortcut's position.
     // Remember the item rather than its index: matching order can change.
-    if (credential.type === "login") fillCycles.set(tab.id, { url: tab.url, account, item: message.item });
+    if (credential.type === "login") rememberFill(tab.id, account, message.item, tab.url);
     const hasSecurityCode = credential.type === "card" && typeof credential.code === "string" && credential.code.length > 0;
     let copiedSecurityCode = false;
     let securityCodeCopyFailed = false;
@@ -936,7 +947,6 @@ async function handle(message) {
       if (p.method === "get") {
         if (!pending.has(p.id)) throw new Error("The request was cancelled.");
         await checkDocument(p);
-        reportPasskeyProgress(p.id, "signing");
         // The agent side does the rest: it syncs when its copy is stale, and
         // confirms the new counter after answering (see `passkeySyncFailure`).
         result = await native({ action: "passkey_get", account, item: message.item || null, password: typeof message.password === "string" ? message.password : null, origin: p.origin, options: p.options });
@@ -1005,7 +1015,9 @@ api.tabs.onActivated.addListener(({ tabId }) => { updateSuggestionsBadge(tabId).
 api.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (change.url || change.status === "loading") {
     suggestionCounts.delete(tabId); badgeRequests.delete(tabId); badge(tabId);
-    fillCycles.delete(tabId); popupNotices.delete(tabId);
+    // Keep the login for the sign-in's next page, but not the cycle position.
+    const filled = fillCycles.get(tabId); if (filled) filled.url = null;
+    popupNotices.delete(tabId);
     for (const [id, p] of pending) if (p.tabId === tabId) finish(id, { error: "Page navigated." });
     closeTabInlineSessions(tabId);
   }
@@ -1057,9 +1069,11 @@ async function fillShortcut(tabId) {
       await notifyFill(tab, { title: "No matching logins", error: true, message: "No matching logins found for this page." }).catch(() => {});
       return;
     }
-    const previous = fillCycles.get(tab.id);
-    const previousIndex = previous?.url === tab.url && previous.account === account ? eligible.findIndex(item => item.id === previous.item) : -1;
-    const index = (previousIndex + 1) % eligible.length;
+    // On the page it filled, the shortcut moves on to the next login; on a
+    // later page of the same sign-in it starts with that login again.
+    const previous = lastFill(tab.id);
+    const previousIndex = previous?.account === account ? eligible.findIndex(item => item.id === previous.item) : -1;
+    const index = previousIndex < 0 ? 0 : previous.url === tab.url ? (previousIndex + 1) % eligible.length : previousIndex;
     await fill({ item: eligible[index].id, displayName: eligible[index].name, expectedTab: tab.id, expectedUrl: tab.url, cycleIndex: index + 1, cycleCount: eligible.length }, account);
     popupNotices.delete(tab.id);
   } catch (err) {

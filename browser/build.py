@@ -84,7 +84,7 @@ for target in ("firefox", "chromium"):
     }
     if target == "firefox":
         manifest["background"] = {"scripts": ["fill.js", "background.js"]}
-        manifest["sidebar_action"] = {"default_panel": "popup.html?surface=window", "default_title": "rbw", "default_icon": "icons/rbw-32.png"}
+        manifest["sidebar_action"] = {"default_panel": "popup.html?surface=window", "default_title": "rbw", "default_icon": toolbar_icons}
         manifest["browser_specific_settings"] = {"gecko": {
             "id": "rbw-browser@pschmitt.dev",
             "strict_min_version": "142.0",

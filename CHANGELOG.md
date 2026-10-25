@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Browser extension: a sign-in that spans several pages stays with one login.
+  For ten minutes, the tab's next pages (password, 2FA code) fill, list first
+  and start the fill shortcut with the login last filled there, or the saved
+  login that was typed in and submitted, instead of the first match. Picking
+  the second account no longer fills the first account's TOTP code.
+
+* Browser extension: a simpler passkey prompt. The site's header is centred
+  with a round emblem so it no longer looks like an account to click, and the
+  chosen account row shows the progress (spinner, then a checkmark) in place
+  of the old progress card. browser-daemon's passkey prompt shares the look.
+
+* The logo sources and icons moved to `assets/`.
+
+### Fixed
+
+* Browser extension: Firefox's sidebar uses the round toolbar icon instead of
+  the full crab.
+
 ## [2.31.3] - 2026-10-24
 
 ### Changed

@@ -40,4 +40,3 @@ article.busy { pointer-events: none; }
 /* Passkey prompt: the popup's approval page. */
 body.passkey .passkey-intro { margin-top: 18px; }
 .passkey-locked { width: 100%; justify-content: center; margin: 0 0 14px; }
-.passkey-emblem img { width: 30px; height: 30px; border-radius: 6px; object-fit: contain; }

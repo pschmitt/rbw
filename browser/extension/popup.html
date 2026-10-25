@@ -71,25 +71,17 @@
   <p class="hint">Check that <code>rbw-browser</code>, <code>rbw</code>, and <code>rbw-agent</code> are installed together, and that this extension is listed under <code>browser.clients</code>.</p>
 </section>
 <section id="approval" hidden>
-<div id="approval-intro" class="passkey-intro"><span class="passkey-emblem" data-icon="key"></span><div><h2 id="approval-title"></h2><p id="approval-origin"></p></div></div>
-<p id="approval-description" class="hint"></p>
-<div id="approval-progress" class="passkey-progress" hidden>
-  <span class="passkey-progress-emblem" data-icon="key"></span>
-  <div class="passkey-progress-account"><span id="approval-progress-icon" class="passkey-choice-icon" data-icon="key"></span><span><strong id="approval-progress-name"></strong><small id="approval-progress-username"></small></span></div>
-  <p id="approval-progress-text" class="passkey-progress-text">Signing in with passkey…</p>
-  <ol id="approval-progress-steps" class="passkey-progress-steps" aria-label="Passkey sign-in progress">
-    <li data-step="signing">Sign with the passkey</li>
-  </ol>
-</div>
-<div id="approval-items" class="passkey-choices"></div>
+<div id="approval-intro" class="passkey-intro"><span id="approval-emblem" class="passkey-emblem" data-icon="key"></span><div><h2 id="approval-title"></h2><p id="approval-origin"></p></div></div>
+<p id="approval-description" class="hint" role="status" aria-live="polite"></p>
+<div id="approval-items" class="passkey-choices" role="group" aria-label="Choose an account"></div>
 <form id="approval-verification" class="field" hidden>
-<h3>Verify your identity</h3><p class="hint">This site requires identity verification before using this passkey.</p>
+<p class="hint">This site asks you to verify it is you. Enter your master password to continue.</p>
 <label>Master password<div class="editor-secret"><input id="approval-password" type="password" autocomplete="off" maxlength="4096" spellcheck="false" required><button type="button" id="approval-reveal" class="icon" aria-label="Show" title="Show"><span data-icon="eye"></span></button></div></label>
 <div class="actions"><button type="submit" class="primary"><span data-icon="check"></span>Verify and continue</button><button type="button" id="approval-verify-back"><span data-icon="back"></span>Back</button></div>
 </form>
-<div class="passkey-alternatives">
-  <button id="use-device"><span data-icon="key"></span>Use another authenticator</button>
-  <button id="cancel-passkey"><span data-icon="close"></span>Cancel request</button>
+<div id="approval-alternatives" class="passkey-alternatives">
+  <button id="use-device"><span data-icon="key"></span>Another authenticator</button>
+  <button id="cancel-passkey"><span data-icon="close"></span>Cancel</button>
 </div>
 </section>
 <section id="vault" hidden>

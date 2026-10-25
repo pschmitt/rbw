@@ -20,9 +20,9 @@ only, and the item editor sets match detection per URI.
 
 With "Autofill TOTP codes" on, the extension fills the current code into a
 page's authenticator-code field: on 2FA pages when "Auto-fill on page load"
-is on (the code of the login last filled there, else of the first matching
-login with an authenticator key), and whenever you fill a login that has
-one. Fields are recognised by `autocomplete="one-time-code"` or an
+is on (the code of the login used for this sign-in, else of the first
+matching login with an authenticator key), and whenever you fill a login
+that has one. Fields are recognised by `autocomplete="one-time-code"` or an
 id/name/label such as `otp`, `totp`, `mfa`, `2fa`, `signInMFA`. "Copy TOTP
 after filling" puts the code on the clipboard, written by the extension;
 unlike rbw's own clipboard it isn't cleared by rbw-agent afterwards. Both
@@ -342,7 +342,11 @@ Security hardening following an internal review:
 - Explicit login/card/identity autofill; username-only flows, same-origin
   frames and open shadow roots; keyboard commands and a context menu.
   The fill shortcut fills the first match and cycles through matches when
-  repeated within 30 seconds; opening the vault has a separate shortcut. A brief
+  repeated within 30 seconds; opening the vault has a separate shortcut.
+  A sign-in that spans several pages stays with one login: for ten minutes,
+  the tab's next pages (password, 2FA code) fill, offer first and start the
+  shortcut with the login last filled there, or the saved login whose
+  username and password were typed in and submitted, not the first match. A brief
   page notification identifies the filled login and username, without passwords.
   Login/custom-field filling rechecks the URI in rbw and the current document.
   Forms are never submitted automatically. On-load filling is off by

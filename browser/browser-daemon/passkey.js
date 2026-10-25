@@ -70,7 +70,7 @@ bd.on("passkey", async (m) => {
   emblem.replaceChildren(icon("key"));
   withFavicon(emblem);
   warning($("public"), m.warning);
-  cancel.lastChild.textContent = "Cancel request";
+  cancel.lastChild.textContent = "Cancel";
   items.classList.remove("is-busy");
   items.replaceChildren();
   set("Checking the vault…", "checking");

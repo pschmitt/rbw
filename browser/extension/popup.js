@@ -153,23 +153,6 @@ $("diagnostic-copy").onclick = () => {
   $("diagnostic-copy-status").textContent = copied ? "Diagnostic trace copied." : "Copy failed. Select the trace above and copy it manually.";
 };
 $("diagnostic-retry").onclick = () => window.location.reload();
-const passkeyProgressLabels = {
-  signing: "Signing with your passkey…",
-  done: "Signed in.",
-};
-function updatePasskeyProgress(step, retry = false) {
-  if (!passkeyProgressLabels[step] || !$("approval-progress-steps")) return;
-  const order = ["signing"];
-  const active = step === "done" ? order.length : order.indexOf(step);
-  for (const [index, name] of order.entries()) {
-    const row = $("approval-progress-steps").querySelector(`[data-step="${name}"]`);
-    row.dataset.state = index < active ? "done" : index === active ? "active" : "pending";
-  }
-  $("approval-progress-text").textContent = retry ? `Retrying: ${passkeyProgressLabels[step]}` : passkeyProgressLabels[step];
-}
-api.runtime.onMessage.addListener(message => {
-  if (message?.action === "passkey_progress" && message.request === approvalId) updatePasskeyProgress(message.step, message.retry);
-});
 function element(tag, text, cls) { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; }
 function button(label, action, cls) { const el = element("button", label, cls); el.type = "button"; el.onclick = () => attempt(async () => { el.disabled = true; try { await action(); } finally { el.disabled = false; } }); return el; }
 function actionButton(label, name, action, cls) {
@@ -1292,118 +1275,78 @@ async function suggestions() {
     row.append(icon("key"), main, target, actions); area.append(row);
   }
 }
+// One page: the site, the matching accounts (a click signs in with that one,
+// after the master password when the site requires verification), another
+// authenticator, or cancel. The chosen row shows the progress.
+function setApprovalBusy(busy, text = null) {
+  $("approval-items").classList.toggle("is-busy", busy);
+  $("approval-alternatives").hidden = busy;
+  if (text != null) { $("approval-description").textContent = text; $("approval-description").classList.remove("is-done"); }
+}
 async function showApproval(id) {
   approvalId = id; show("approval"); $("approval-items").replaceChildren();
   const pending = (await request("pending")).find(p => p.id === id);
   if (!pending) { approvalId = null; message("Passkey request expired or completed."); show(unlocked ? "vault" : "locked"); return; }
-  const title = pending.method === "create" ? "Save a passkey" : "Sign in with a passkey";
-  $("title").textContent = pending.method === "create" ? "Passkey registration requested" : "Passkey login requested";
-  $("approval-title").textContent = title;
-  $("approval-origin").textContent = pending.origin;
-  $("approval-description").textContent = pending.method === "create" ? `Save a passkey for ${pending.user || "this account"} in your vault.` : "Choose an account to continue.";
-  $("approval-verification").hidden = true; $("approval-items").hidden = false; $("approval-password").value = ""; $("approval-password").type = "password";
+  const create = pending.method === "create";
+  const host = new URL(pending.origin).host;
+  $("title").textContent = create ? "Passkey registration requested" : "Passkey login requested";
+  $("approval-title").textContent = create ? "Save a passkey" : "Sign in with a passkey";
+  $("approval-origin").textContent = host;
+  $("approval-emblem").replaceChildren(icon("key"));
+  request("favicon", { origin: pending.origin }).then(favicon => {
+    if (!favicon || approvalId !== id) return;
+    const image = document.createElement("img"); image.src = favicon; image.alt = "";
+    $("approval-emblem").replaceChildren(image);
+  }).catch(() => {});
+  const intro = create ? `Save a passkey for ${pending.user || "this account"} in your vault.` : "Choose an account to continue.";
+  $("approval-verification").hidden = true; $("approval-items").classList.remove("is-verifying");
+  $("approval-password").value = ""; $("approval-password").type = "password";
   $("approval-reveal").replaceChildren(icon("eye")); $("approval-reveal").title = "Show"; $("approval-reveal").setAttribute("aria-label", "Show");
-  const setProgress = (text, selectedChoiceEl = null) => {
-    $("approval-progress-text").textContent = text;
-    $("approval-progress").hidden = false;
-    $("approval-intro").hidden = true;
-    $("approval-description").hidden = true;
-    $("approval-items").hidden = true;
-    $("approval-verification").hidden = true;
-    $("approval-progress-name").textContent = selectedChoiceEl?.dataset.name || pending.user || "New login";
-    $("approval-progress-username").textContent = selectedChoiceEl?.dataset.username || pending.origin;
-    $("approval-progress-steps").hidden = pending.method !== "get";
-    for (const row of $("approval-progress-steps").querySelectorAll("[data-step]")) row.dataset.state = "pending";
-    if (pending.method === "get") updatePasskeyProgress("signing");
-    $("approval-progress-icon").replaceChildren(icon("key"));
-    if (selectedChoiceEl?.dataset.iconOrigin) {
-      const origin = selectedChoiceEl.dataset.iconOrigin;
-      request("favicon", { origin }).then(favicon => {
-        if (!favicon || $("approval-progress").hidden || approvalId !== id) return;
-        const image = document.createElement("img"); image.src = favicon; image.alt = "";
-        $("approval-progress-icon").replaceChildren(image);
-      }).catch(() => {});
-    }
-    $("use-device").hidden = true;
-    $("cancel-passkey").hidden = true;
-    $("approval-items").classList.add("is-busy");
-    if (selectedChoiceEl) {
-      for (const btn of $("approval-items").querySelectorAll(".passkey-choice")) {
-        btn.classList.toggle("is-selected", btn === selectedChoiceEl);
-      }
-    }
-  };
-  const resetProgress = () => {
-    $("approval-progress").hidden = true;
-    $("approval-intro").hidden = false;
-    $("approval-description").hidden = false;
-    $("approval-items").hidden = false;
-    $("use-device").hidden = false;
-    $("cancel-passkey").hidden = false;
-    $("approval-items").classList.remove("is-busy");
-    $("approval-progress-steps").hidden = true;
-    for (const btn of $("approval-items").querySelectorAll(".passkey-choice")) {
-      btn.classList.remove("is-selected");
-    }
-    const submitBtn = $("approval-verification")?.querySelector("button[type=submit]");
-    if (submitBtn) submitBtn.disabled = false;
-  };
-  resetProgress();
+  setApprovalBusy(false, intro);
   if (!unlocked) { $("unlock-password").focus(); return; }
   const result = await request("passkey_choices", { request: id });
-  const complete = async (item, password = null) => {
-    await request("passkey_approve", { request: id, item, password });
-    // Let the completed steps show their checkmarks before the popup closes.
-    if (pending.method === "get") { updatePasskeyProgress("done"); await new Promise(resolve => setTimeout(resolve, 700)); }
+  const state = (row, content) => row.querySelector(".passkey-choice-state").replaceChildren(content);
+  const reset = row => {
+    row.classList.remove("is-selected"); state(row, icon("chevron-left"));
+    $("approval-items").classList.remove("is-verifying"); $("approval-verification").hidden = true;
+    setApprovalBusy(false, intro);
+  };
+  const complete = async (row, item, password = null) => {
+    $("approval-verification").hidden = true; $("approval-items").classList.remove("is-verifying");
+    row.classList.add("is-selected"); state(row, element("span", null, "spinner"));
+    setApprovalBusy(true, create ? "Saving the passkey to your vault…" : `Signing in${row.dataset.username ? ` as ${row.dataset.username}` : ""}…`);
+    try { await request("passkey_approve", { request: id, item, password }); }
+    catch (err) { reset(row); throw err; }
+    row.classList.add("is-done"); state(row, icon("check"));
+    $("approval-description").textContent = create ? "Passkey saved." : "Signed in."; $("approval-description").classList.add("is-done");
+    // Let the checkmark show before the popup closes.
+    await new Promise(resolve => setTimeout(resolve, 600));
     await finishApproval("Passkey request completed.");
   };
-  const actionText = pending.method === "create" ? "Saving passkey to vault…" : "Signing in with passkey…";
-  const approve = async (item, choiceEl) => {
-    if (pending.verification !== "required") {
-      setProgress(actionText, choiceEl);
-      try {
-        await complete(item);
-      } catch (err) {
-        resetProgress();
-        throw err;
-      }
-      return;
-    }
-    // Required WebAuthn verification is a separate step after account selection.
-    // An unlocked agent alone must never be reported as user verification.
-    $("approval-items").hidden = true; $("approval-verification").hidden = false;
+  const approve = async (item, row) => {
+    if (pending.verification !== "required") return complete(row, item);
+    // Required WebAuthn verification comes after choosing the account: an
+    // unlocked agent alone must never be reported as user verification.
+    row.classList.add("is-selected");
+    $("approval-items").classList.add("is-verifying"); $("approval-verification").hidden = false;
+    $("approval-description").textContent = `Verify it is you to use ${row.dataset.name}.`;
     $("approval-password").focus();
+    $("approval-verify-back").onclick = () => { $("approval-password").value = ""; reset(row); };
     $("approval-verification").onsubmit = event => {
       event.preventDefault(); const password = $("approval-password").value; $("approval-password").value = "";
-      attempt(async () => {
-        setProgress(actionText, choiceEl);
-        const submitBtn = $("approval-verification").querySelector("button[type=submit]");
-        if (submitBtn) submitBtn.disabled = true;
-        try {
-          await complete(item, password);
-        } catch (err) {
-          resetProgress();
-          throw err;
-        }
-      });
+      attempt(() => complete(row, item, password));
     };
   };
-  $("approval-verify-back").onclick = () => {
-    resetProgress();
-    $("approval-password").value = "";
-    $("approval-verification").hidden = true;
-    $("approval-items").hidden = false;
-  };
   $("approval-reveal").onclick = () => { const input = $("approval-password"); const reveal = input.type === "password"; input.type = reveal ? "text" : "password"; $("approval-reveal").replaceChildren(icon(reveal ? "eye-off" : "eye")); $("approval-reveal").title = reveal ? "Hide" : "Show"; $("approval-reveal").setAttribute("aria-label", $("approval-reveal").title); };
-  const choice = (name, username, item, create = false, iconOrigin = null) => {
+  const choice = (name, username, item, isNew = false, iconOrigin = null) => {
     let row;
     row = button("", () => approve(item, row), "passkey-choice");
     row.dataset.name = name;
     row.dataset.username = username || "";
-    row.dataset.iconOrigin = iconOrigin || "";
-    const emblem = element("span", null, "passkey-choice-icon"); emblem.append(icon(create ? "plus" : "key"));
+    const emblem = element("span", null, "passkey-choice-icon"); emblem.append(icon(isNew ? "plus" : "key"));
     const text = element("span", null, "passkey-choice-text"); text.append(element("strong", name)); if (username) text.append(element("small", username));
-    row.append(emblem, text, icon("fill"));
+    const trailing = element("span", null, "passkey-choice-state"); trailing.append(icon("chevron-left"));
+    row.append(emblem, text, trailing);
     if (iconOrigin) request("favicon", { origin: iconOrigin }).then(favicon => {
       if (!favicon || !row.isConnected) return;
       const image = document.createElement("img"); image.src = favicon; image.alt = "";
@@ -1411,58 +1354,22 @@ async function showApproval(id) {
     }).catch(() => {});
     return row;
   };
-  if (pending.method === "create") $("approval-items").append(choice("Create a new login", pending.user || "Save in your vault", null, true, new URL(pending.origin).origin));
-  for (const item of result.items) $("approval-items").append(choice(item.name, item.username || (pending.method === "create" ? "Add to this login" : "Saved passkey"), item.id, false, item.iconOrigin));
-  if (pending.method === "get" && !result.items.length) {
-    const empty = element("div", null, "passkey-empty"); empty.append(icon("key"), element("strong", "No saved passkey"), element("p", "Try another vault account or use a different authenticator.", "hint")); $("approval-items").append(empty);
+  if (create) $("approval-items").append(choice("Create a new login", pending.user || "Save in your vault", null, true, pending.origin));
+  for (const item of result.items) $("approval-items").append(choice(item.name, item.username || (create ? "Add to this login" : ""), item.id, false, item.iconOrigin));
+  if (!create && !result.items.length) {
+    $("approval-description").textContent = "";
+    const empty = element("div", null, "passkey-empty"); empty.append(icon("key"), element("strong", `No passkey for ${host}`), element("p", "Try another vault account or use a different authenticator.", "hint")); $("approval-items").append(empty);
   }
 }
-$("use-device").onclick = () => attempt(async () => {
-  $("approval-progress-text").textContent = "Switching to another authenticator…";
-  $("approval-progress-name").textContent = new URL($("approval-origin").textContent).hostname;
-  $("approval-progress-username").textContent = "Use another authenticator";
-  $("approval-progress-icon").replaceChildren(icon("key"));
-  $("approval-progress").hidden = false;
-  $("use-device").hidden = true;
-  $("cancel-passkey").hidden = true;
-  $("approval-items").classList.add("is-busy");
+async function declineApproval(fallback) {
+  setApprovalBusy(true, fallback ? "Switching to another authenticator…" : "Canceling the passkey request…");
   try {
-    $("approval-intro").hidden = true;
-    $("approval-description").hidden = true;
-    $("approval-items").hidden = true;
-    await request("passkey_decline", { request: approvalId, fallback: true });
+    await request("passkey_decline", { request: approvalId, ...(fallback ? { fallback: true } : {}) });
     await finishApproval("Passkey request declined.");
-  } catch (err) {
-    $("approval-progress").hidden = true;
-    $("approval-intro").hidden = false;
-    $("approval-description").hidden = false;
-    $("approval-items").hidden = false;
-    $("use-device").hidden = false;
-    $("cancel-passkey").hidden = false;
-    $("approval-items").classList.remove("is-busy");
-    throw err;
-  }
-});
-$("cancel-passkey").onclick = () => attempt(async () => {
-  $("approval-progress-text").textContent = "Canceling passkey request…";
-  $("approval-progress").hidden = false;
-  $("use-device").hidden = true;
-  $("cancel-passkey").hidden = true;
-  $("approval-items").classList.add("is-busy");
-  try {
-    await request("passkey_decline", { request: approvalId });
-    await finishApproval("Passkey request declined.");
-  } catch (err) {
-    $("approval-progress").hidden = true;
-    $("approval-intro").hidden = false;
-    $("approval-description").hidden = false;
-    $("approval-items").hidden = false;
-    $("use-device").hidden = false;
-    $("cancel-passkey").hidden = false;
-    $("approval-items").classList.remove("is-busy");
-    throw err;
-  }
-});
+  } catch (err) { setApprovalBusy(false, ""); throw err; }
+}
+$("use-device").onclick = () => attempt(() => declineApproval(true));
+$("cancel-passkey").onclick = () => attempt(() => declineApproval(false));
 for (const action of ["lock", "sync"]) $(action).onclick = () => attempt(async () => { if (action === "lock" && !await confirmLock()) return; message("Working…"); await request(action); message(""); await refresh(); });
 // The master password is tried on every locked account when "All accounts" is
 // selected (accounts with a different password just stay locked); with one
