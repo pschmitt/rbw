@@ -10,7 +10,7 @@
 
 ### Changed
 
-* `rbw account list` shows the primary account first.
+* `rbw account list` shows the primary account first, and the public Bitwarden server as `https://vault.bitwarden.com`.
 
 * rbw, the browser host and rbw-agent of the same `major.minor` work
   together: an agent from another patch release is no longer replaced (and

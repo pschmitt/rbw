@@ -61,7 +61,7 @@ pub fn account_list() -> anyhow::Result<()> {
                 .base_url
                 .as_ref()
                 .and_then(|v| v.resolve().ok())
-                .unwrap_or_else(|| "(public bitwarden.com)".to_string());
+                .unwrap_or_else(|| "https://vault.bitwarden.com".to_string());
             vec![
                 format!("{}{marker}", account.name),
                 status.to_string(),
