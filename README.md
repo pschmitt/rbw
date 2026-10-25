@@ -1,6 +1,4 @@
 <p align="center">
-
-[![nixbot](https://nixbot.brkn.lol/repos/github/pschmitt/rbw/badge.svg?branch=main)](https://nixbot.brkn.lol/repos/github/pschmitt/rbw)
   <img src="assets/icons/rbw-256.png" width="160" alt="rbw">
 </p>
 
@@ -9,6 +7,10 @@
 <p align="center">
   An unofficial <a href="https://bitwarden.com/">Bitwarden</a> client for the
   command line, the terminal and the browser.
+</p>
+
+<p align="center">
+  <a href="https://nixbot.brkn.lol/repos/github/pschmitt/rbw"><img src="https://nixbot.brkn.lol/repos/github/pschmitt/rbw/badge.svg?branch=main" alt="nixbot"></a>
 </p>
 
 Bitwarden's own CLI is stateless: you unlock it and pass session keys around
