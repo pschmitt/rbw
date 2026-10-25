@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.31.5] - 2026-10-25
+
 ### Fixed
 
 * An rbw-agent left running from an older rbw (one started before an
