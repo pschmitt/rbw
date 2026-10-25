@@ -65,6 +65,16 @@ up a new rbw build automatically, but re-run `rbw stop-agent` if a stale
 agent process seems to survive it. Commit the `nixos-config` flake.lock
 bump locally only — never push that repo unless separately asked.
 
+`browser-daemon` (`~/devel/private/pschmitt/browser-daemon.git`) has its
+own `rbw` flake input (rbw's `main`, for its live view's vault extension).
+After each release, bump it to the same pin commit: `nix flake lock
+--override-input rbw github:pschmitt/rbw/<pin commit>`, then set
+`.nodes.rbw.original` in its flake.lock back to
+`{"owner":"pschmitt","repo":"rbw","type":"github"}` (`nix flake lock` must
+then change nothing), commit and push. In `nixos-config`, browser-daemon
+and rbw-auto follow its own `rbw` input (`rbw.follows = "rbw"`), so there
+is only ever one rbw there.
+
 ## Ongoing TODOs
 
 - Every config.json option (accounts, `unlock` policy, `exclude_from_list`,
