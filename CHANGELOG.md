@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Changed
+
+* The GTK unlock dialog: Unlock sits next to the password field instead of in
+  the header bar. On submit the field gives way to a spinner, then to a green
+  "Unlocked", or comes back after a wrong password with a red message.
+  "Fingerprint not configured" is no longer shown.
+
+### Fixed
+
+* The GTK unlock dialog no longer hangs after the password is accepted, which
+  window managers reported as "not responding". Its window stayed on screen,
+  without handling events, while rbw went on to unlock and sync.
+
 ## [2.31.5] - 2026-10-25
 
 ### Fixed

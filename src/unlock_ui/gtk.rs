@@ -12,10 +12,12 @@ pub(super) struct GtkDialog {
     title: gtk::Label,
     status: gtk::Label,
     error: gtk::Label,
-    button: gtk::Button,
-    button_label: gtk::Label,
-    button_icon: gtk::Image,
+    error_row: gtk::Box,
+    // The form, a spinner while the password is checked, then the result:
+    // the input goes away on submit and comes back only after a failure.
+    pages: gtk::Stack,
     spinner: gtk::Spinner,
+    button: gtk::Button,
     cancel_button: gtk::Button,
     busy: bool,
     submit: Rc<Cell<bool>>,
@@ -41,8 +43,8 @@ impl GtkDialog {
             .default_width(540)
             .build();
         window.set_icon_name(Some("rbw"));
-        // Standard GNOME dialog layout: Cancel and the suggested action live
-        // in the header bar; the body follows the system light/dark theme.
+        // Cancel lives in the header bar, Unlock next to the password field;
+        // the body follows the system light/dark theme.
         let header = gtk::HeaderBar::new();
         header.set_show_title_buttons(false);
         let title = gtk::Label::new(None);
@@ -50,19 +52,6 @@ impl GtkDialog {
         header.set_title_widget(Some(&title));
         let cancel_button = gtk::Button::with_label("Cancel");
         header.pack_start(&cancel_button);
-        let button = gtk::Button::new();
-        button.add_css_class("suggested-action");
-        let button_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let button_icon =
-            gtk::Image::from_icon_name("changes-allow-symbolic");
-        let button_label = gtk::Label::new(Some("Unlock"));
-        let spinner = gtk::Spinner::new();
-        spinner.set_visible(false);
-        button_content.append(&spinner);
-        button_content.append(&button_icon);
-        button_content.append(&button_label);
-        button.set_child(Some(&button_content));
-        header.pack_end(&button);
         window.set_titlebar(Some(&header));
         let logo = gtk::gdk_pixbuf::Pixbuf::from_read(std::io::Cursor::new(
             include_bytes!("../../assets/rbw.png").as_slice(),
@@ -95,23 +84,54 @@ impl GtkDialog {
         status.set_xalign(0.0);
         let error = gtk::Label::new(None);
         error.add_css_class("error");
-        error.add_css_class("caption");
         error.set_wrap(true);
         error.set_xalign(0.0);
+        error.set_hexpand(true);
+        let error_icon = gtk::Image::from_icon_name("dialog-error-symbolic");
+        error_icon.add_css_class("error");
+        let error_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        error_row.append(&error_icon);
+        error_row.append(&error);
+        error_row.set_visible(false);
         let form = gtk::Box::new(gtk::Orientation::Vertical, 8);
         form.set_valign(gtk::Align::Center);
-        form.set_hexpand(true);
-        form.append(&entry);
+        let button = gtk::Button::with_label("Unlock");
+        button.add_css_class("suggested-action");
+        let input_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        input_row.append(&entry);
+        input_row.append(&button);
+        form.append(&input_row);
+        form.append(&error_row);
         form.append(&status);
-        form.append(&error);
+        let spinner = gtk::Spinner::new();
+        spinner.set_size_request(32, 32);
+        let checking = result_page(
+            spinner.upcast_ref(),
+            "Checking password…",
+            "dim-label",
+        );
+        let done = gtk::Image::from_icon_name("object-select-symbolic");
+        done.set_pixel_size(40);
+        let done = result_page(done.upcast_ref(), "Unlocked", "success");
+        let pages = gtk::Stack::builder()
+            .transition_type(gtk::StackTransitionType::Crossfade)
+            .transition_duration(150)
+            .hexpand(true)
+            .vhomogeneous(true)
+            .build();
+        pages.add_named(&form, Some("form"));
+        pages.add_named(&checking, Some("checking"));
+        pages.add_named(&done, Some("done"));
         let body = gtk::Box::new(gtk::Orientation::Horizontal, 24);
         body.set_margin_top(24);
         body.set_margin_bottom(24);
         body.set_margin_start(24);
         body.set_margin_end(24);
         body.append(&logo);
-        body.append(&form);
+        body.append(&pages);
         window.set_child(Some(&body));
+        // The red outline of a rejected password goes once the user types.
+        entry.connect_changed(|entry| entry.remove_css_class("error"));
         let submit = Rc::new(Cell::new(false));
         let cancel = Rc::new(Cell::new(false));
         let signal = submit.clone();
@@ -148,10 +168,10 @@ impl GtkDialog {
             title,
             status,
             error,
-            button,
-            button_label,
-            button_icon,
+            error_row,
+            pages,
             spinner,
+            button,
             cancel_button,
             busy: false,
             submit,
@@ -161,15 +181,37 @@ impl GtkDialog {
     }
 }
 
+// A centred icon (or spinner) above a short message, both styled with
+// `class` (themes color labels and icons, not their container).
+fn result_page(icon: &gtk::Widget, text: &str, class: &str) -> gtk::Box {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    page.set_valign(gtk::Align::Center);
+    page.set_halign(gtk::Align::Center);
+    icon.set_halign(gtk::Align::Center);
+    icon.add_css_class(class);
+    page.append(icon);
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("heading");
+    label.add_css_class(class);
+    page.append(&label);
+    page
+}
+
+// Runs whatever GTK has queued, including the Wayland/X11 requests that map,
+// redraw or remove the window, without blocking.
+fn pump() {
+    let context = gtk::glib::MainContext::default();
+    for _ in 0..32 {
+        if !context.pending() {
+            break;
+        }
+        context.iteration(false);
+    }
+}
+
 impl Frontend for GtkDialog {
     fn poll(&mut self) -> anyhow::Result<Option<Action>> {
-        let context = gtk::glib::MainContext::default();
-        for _ in 0..32 {
-            if !context.pending() {
-                break;
-            }
-            context.iteration(false);
-        }
+        pump();
         if self.cancel.get() {
             return Ok(Some(Action::Cancel));
         }
@@ -205,44 +247,38 @@ impl Frontend for GtkDialog {
     }
     fn render(&mut self, view: &View<'_>) -> anyhow::Result<()> {
         self.title.set_label(view.title);
-        self.status.set_label(if view.success {
-            "✓ Unlocked"
-        } else {
-            view.fingerprint.text()
-        });
-        if view.success {
-            self.status.remove_css_class("dim-label");
-            self.status.add_css_class("success");
-            self.button.remove_css_class("suggested-action");
-        }
+        self.status.set_label(view.fingerprint.text());
+        self.status.set_visible(
+            view.fingerprint != super::FingerprintStatus::Disabled,
+        );
         self.busy = view.checking || view.success;
-        self.button_label.set_label(if view.success {
-            "Unlocked"
+        let page = if view.success {
+            "done"
         } else if view.checking {
-            "Checking…"
+            "checking"
         } else {
-            "Unlock"
-        });
-        self.spinner.set_visible(view.checking);
-        if view.checking {
-            self.spinner.start();
-        } else {
-            self.spinner.stop();
-        }
-        self.button_icon.set_visible(!view.checking);
-        self.button_icon.set_icon_name(Some(if view.success {
-            "object-select-symbolic"
-        } else {
-            "changes-allow-symbolic"
-        }));
-        self.cancel_button.set_sensitive(!view.success);
-        self.error.set_label(self.issue.or(view.error).unwrap_or(
+            "form"
+        };
+        let previous = self.pages.visible_child_name();
+        if previous.as_deref() != Some(page) {
+            self.pages.set_visible_child_name(page);
             if view.checking {
-                "Checking password…"
+                self.spinner.start();
             } else {
-                ""
-            },
-        ));
+                self.spinner.stop();
+            }
+            if page == "form" {
+                // Back from checking: the password was refused.
+                if self.issue.or(view.error).is_some() {
+                    self.entry.add_css_class("error");
+                }
+                self.entry.grab_focus();
+            }
+        }
+        let error = self.issue.or(view.error);
+        self.error.set_label(error.unwrap_or_default());
+        self.error_row.set_visible(error.is_some());
+        self.cancel_button.set_sensitive(!view.success);
         self.entry.set_sensitive(!self.busy);
         self.button.set_sensitive(!self.busy);
         Ok(())
@@ -257,6 +293,13 @@ impl Drop for GtkDialog {
     fn drop(&mut self) {
         self.entry.set_text("");
         self.window.destroy();
+        // Hand the removal to the compositor now: the caller goes on to
+        // unlock and sync without running GTK, and a window left mapped
+        // meanwhile stops answering pings ("not responding").
+        pump();
+        if let Some(display) = gtk::gdk::Display::default() {
+            display.flush();
+        }
     }
 }
 
