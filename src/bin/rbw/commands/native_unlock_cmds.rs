@@ -239,6 +239,8 @@ pub(super) fn enroll_password(
                     mode,
                     no_echo: config.unlock_no_echo
                         || UNLOCK_NO_ECHO.with(std::cell::Cell::get),
+                    hide_fingerprint_notice: config
+                        .unlock_hide_fingerprint_notice,
                 },
                 &format!("Enroll desktop unlock for account {name}"),
                 config.pinentry.timeout,

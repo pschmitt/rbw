@@ -35,6 +35,9 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
         "agent.lockTimeout" => Some(config.agent.lock_timeout.to_string()),
         "agent.syncInterval" => Some(config.agent.sync_interval.to_string()),
         "unlockNoEcho" => Some(config.unlock_no_echo.to_string()),
+        "unlockHideFingerprintNotice" => {
+            Some(config.unlock_hide_fingerprint_notice.to_string())
+        }
         "passkeyCounter" => Some(config.passkey_counter.to_string()),
         "unlockUi" => Some(config.unlock_ui.as_str().to_string()),
         "pinentry.command" => Some(config.pinentry.command),
@@ -172,6 +175,11 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
                 .parse()
                 .context("unlockNoEcho must be true or false")?;
         }
+        "unlockHideFingerprintNotice" => {
+            config.unlock_hide_fingerprint_notice = value.parse().context(
+                "unlockHideFingerprintNotice must be true or false",
+            )?;
+        }
         "passkeyCounter" => {
             config.passkey_counter = value
                 .parse()
@@ -288,6 +296,9 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
             config.agent.sync_interval = rbw::config::default_sync_interval();
         }
         "unlockNoEcho" => config.unlock_no_echo = false,
+        "unlockHideFingerprintNotice" => {
+            config.unlock_hide_fingerprint_notice = false;
+        }
         "passkeyCounter" => config.passkey_counter = false,
         "unlockUi" => config.unlock_ui = rbw::config::UnlockUi::Auto,
         "pinentry.command" => {

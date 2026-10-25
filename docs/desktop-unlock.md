@@ -101,6 +101,8 @@ rbw config unset unlockUi
 # Optional: show no password input feedback (off by default):
 rbw unlock --no-echo
 rbw config set unlockNoEcho true
+# Optional: hide the "Fingerprint not configured." notice (shown by default):
+rbw config set unlockHideFingerprintNotice true
 # Password-only recovery with the existing configured pinentry:
 rbw unlock --pinentry
 

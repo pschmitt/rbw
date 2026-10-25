@@ -245,6 +245,8 @@ pub(super) fn resolve_unlock_credentials(
                             mode,
                             no_echo: config.unlock_no_echo
                                 || UNLOCK_NO_ECHO.with(std::cell::Cell::get),
+                            hide_fingerprint_notice: config
+                                .unlock_hide_fingerprint_notice,
                         },
                         &title,
                         config.pinentry.timeout,
@@ -294,6 +296,8 @@ pub(super) fn resolve_password_dialog() -> anyhow::Result<Option<String>> {
                     mode,
                     no_echo: config.unlock_no_echo
                         || UNLOCK_NO_ECHO.with(std::cell::Cell::get),
+                    hide_fingerprint_notice: config
+                        .unlock_hide_fingerprint_notice,
                 },
                 &title,
                 config.pinentry.timeout,

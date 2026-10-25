@@ -13,6 +13,7 @@ use tokio::sync::{oneshot, watch};
 pub struct Options {
     pub mode: crate::config::UnlockUi,
     pub no_echo: bool,
+    pub hide_fingerprint_notice: bool,
 }
 
 // Keep logging from any background task off the interactive display. The
@@ -202,6 +203,7 @@ pub(crate) enum Action {
 pub(crate) struct View<'a> {
     pub title: &'a str,
     pub fingerprint: FingerprintStatus,
+    pub hide_disabled: bool,
     pub checking: bool,
     pub success: bool,
     pub error: Option<&'static str>,
@@ -222,6 +224,7 @@ async fn show_confirmation(
     frontend: &mut dyn Frontend,
     title: &str,
     fingerprint: FingerprintStatus,
+    hide_disabled: bool,
 ) -> anyhow::Result<()> {
     frontend.clear_secret();
     let until = Instant::now() + Duration::from_millis(450);
@@ -230,6 +233,7 @@ async fn show_confirmation(
         frontend.render(&View {
             title,
             fingerprint,
+            hide_disabled,
             checking: false,
             success: true,
             error: None,
@@ -331,7 +335,7 @@ pub async fn prompt(
             _ = &mut cancel => {
                 let fingerprint = *status.borrow_and_update();
                 if fingerprint == FingerprintStatus::Accepted {
-                    show_confirmation(frontend.as_mut(), &title, fingerprint).await?;
+                    show_confirmation(frontend.as_mut(), &title, fingerprint, options.hide_fingerprint_notice).await?;
                 }
                 break Err(anyhow::anyhow!("unlock prompt cancelled"));
             },
@@ -346,7 +350,7 @@ pub async fn prompt(
             match result {
                 Ok(password) => {
                     let fingerprint = *status.borrow_and_update();
-                    show_confirmation(frontend.as_mut(), &title, fingerprint).await?;
+                    show_confirmation(frontend.as_mut(), &title, fingerprint, options.hide_fingerprint_notice).await?;
                     break std::str::from_utf8(password.password()).map(str::to_owned).map_err(|_| anyhow::anyhow!("master password is not UTF-8"));
                 },
                 Err(failure) if matches!(failure.downcast_ref::<crate::error::Error>(), Some(crate::error::Error::IncorrectPassword { .. })) => {
@@ -372,7 +376,7 @@ pub async fn prompt(
             }
             Some(Action::Submit(_)) | None => {},
         }
-        frontend.render(&View { title: &title, fingerprint: *status.borrow_and_update(), checking: worker.is_some(), success: false, error, tick })?;
+        frontend.render(&View { title: &title, fingerprint: *status.borrow_and_update(), hide_disabled: options.hide_fingerprint_notice, checking: worker.is_some(), success: false, error, tick })?;
         tick = tick.wrapping_add(1);
     }
     } .await;
@@ -409,6 +413,7 @@ mod tests {
                     mode: crate::config::UnlockUi::Terminal,
                     no_echo: std::env::var_os("RBW_TEST_UI_NO_ECHO")
                         .is_some(),
+                    hide_fingerprint_notice: false,
                 },
                 "Disposable UI test",
                 10,

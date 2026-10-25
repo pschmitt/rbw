@@ -295,6 +295,7 @@
               };
               unlockUi = "auto";
               unlockNoEcho = false;
+              unlockHideFingerprintNotice = false;
               primaryAccount = "personal";
               accounts = [
                 {

@@ -777,6 +777,10 @@ pub struct Config {
     pub unlock_ui: UnlockUi,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unlock_no_echo: bool,
+    // Don't show "Fingerprint not configured." in the unlock dialogs of
+    // accounts without fingerprint unlock. Off: the notice shows.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unlock_hide_fingerprint_notice: bool,
     // Let `rbw passkey` start tracking a signature counter on passkeys that
     // have none (counter 0). Off: counter 0 stays 0, like Bitwarden's own
     // clients, so every client can sign in. Passkeys that already carry a

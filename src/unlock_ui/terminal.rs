@@ -318,7 +318,13 @@ fn status_text(view: &View<'_>) -> String {
     } else {
         "◎"
     };
-    if view.success {
+    if view.hide_disabled
+        && view.fingerprint == FingerprintStatus::Disabled
+        && !view.success
+        && !view.checking
+    {
+        String::new()
+    } else if view.success {
         "✓ Unlocked".to_string()
     } else if view.checking {
         format!("{indicator} Checking master password…")
@@ -774,6 +780,7 @@ mod tests {
         let view = View {
             title: "Unlock demo vault",
             fingerprint: FingerprintStatus::Ready,
+            hide_disabled: false,
             checking: false,
             success: false,
             error: None,
@@ -802,6 +809,7 @@ mod tests {
                     &View {
                         title: "Demo",
                         fingerprint: FingerprintStatus::Disabled,
+                        hide_disabled: false,
                         checking: false,
                         success: false,
                         error: None,
@@ -850,6 +858,7 @@ mod tests {
     const DEMO: View<'static> = View {
         title: "Unlock account default",
         fingerprint: FingerprintStatus::Ready,
+        hide_disabled: false,
         checking: false,
         success: false,
         error: None,
@@ -900,6 +909,7 @@ mod tests {
                     &View {
                         title: "Demo",
                         fingerprint: FingerprintStatus::Disabled,
+                        hide_disabled: false,
                         checking: false,
                         success: false,
                         error: None,

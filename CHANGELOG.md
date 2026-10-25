@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+* `unlockHideFingerprintNotice` (`rbw config set`, `programs.rbw.declarative`
+  option of the same name) hides the "Fingerprint not configured." line in the
+  integrated unlock dialogs. Off by default: the notice still shows.
+
 ### Changed
 
 * rbw, the browser host and rbw-agent of the same `major.minor` work

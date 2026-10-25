@@ -433,6 +433,12 @@ let
         description = "Hide all password input feedback in integrated unlock dialogs.";
       };
 
+      unlockHideFingerprintNotice = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Hide the \"Fingerprint not configured.\" notice in integrated unlock dialogs.";
+      };
+
       passkeyCounter = mkOption {
         type = types.bool;
         default = false;

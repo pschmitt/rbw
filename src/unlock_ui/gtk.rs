@@ -249,7 +249,8 @@ impl Frontend for GtkDialog {
         self.title.set_label(view.title);
         self.status.set_label(view.fingerprint.text());
         self.status.set_visible(
-            view.fingerprint != super::FingerprintStatus::Disabled,
+            !(view.fingerprint == super::FingerprintStatus::Disabled
+                && view.hide_disabled),
         );
         self.busy = view.checking || view.success;
         let page = if view.success {
@@ -316,6 +317,7 @@ mod tests {
                 .render(&View {
                     title: "Disposable UI test",
                     fingerprint: super::super::FingerprintStatus::Ready,
+                    hide_disabled: false,
                     checking: false,
                     success: false,
                     error: None,
