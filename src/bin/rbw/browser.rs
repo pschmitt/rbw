@@ -38,6 +38,9 @@ enum Operation {
         fingerprint: bool,
     },
     Lock,
+    // Replace an agent left over from another rbw version (see
+    // `stale_agent`); this locks every account.
+    RestartAgent,
     Sync,
     Search {
         query: String,
@@ -633,6 +636,15 @@ fn account_colors(config: &rbw::config::Config) -> Value {
         .collect::<std::collections::BTreeMap<_, _>>())
 }
 
+// The running agent's version, when it isn't this build's: an agent started
+// before an upgrade keeps running, and the host can't use it, so the
+// extension says so (and offers a restart) instead of just "locked".
+fn stale_agent(version: Option<u32>) -> Option<String> {
+    version
+        .filter(|v| *v != rbw::protocol::VERSION)
+        .map(rbw::protocol::version_string)
+}
+
 // Status for the merged view: every configured account with its lock
 // state, plus the single-account fields (for the primary) older code reads.
 fn merged_status(
@@ -640,8 +652,9 @@ fn merged_status(
     transfers: &mut attachments::Transfers,
 ) -> anyhow::Result<Value> {
     let config = rbw::config::Config::load()?;
-    let agent_ok =
-        actions::version().is_ok_and(|v| v == rbw::protocol::VERSION);
+    let version = actions::version().ok();
+    let stale = stale_agent(version);
+    let agent_ok = version == Some(rbw::protocol::VERSION);
     let states = scoped_states(scope)?;
     let unlocked =
         agent_ok && states.iter().any(|s| s.unlocked && !s.excluded);
@@ -652,6 +665,8 @@ fn merged_status(
     let fingerprint = fingerprint_unlock(&config, Some(&primary)).is_some();
     Ok(json!({"unlocked": unlocked,
         "merged": true,
+        "staleAgent": stale,
+        "hostVersion": env!("CARGO_PKG_VERSION"),
         "fingerprint": fingerprint,
         "fingerprint_auto_start": fingerprint && config.browser.fingerprint_auto_start,
         "accounts": config.accounts().iter().map(|a| &a.name).collect::<Vec<_>>(),
@@ -729,8 +744,9 @@ fn dispatch(
     match request.operation {
         Operation::Status => {
             let config = rbw::config::Config::load()?;
-            let unlocked = actions::version()
-                .is_ok_and(|v| v == rbw::protocol::VERSION)
+            let version = actions::version().ok();
+            let stale = stale_agent(version);
+            let unlocked = version == Some(rbw::protocol::VERSION)
                 && actions::unlocked().is_ok();
             if !unlocked {
                 transfers.clear();
@@ -741,6 +757,8 @@ fn dispatch(
             )
             .is_some();
             Ok(json!({"unlocked": unlocked,
+                "staleAgent": stale,
+                "hostVersion": env!("CARGO_PKG_VERSION"),
                 "fingerprint": fingerprint,
                 "fingerprint_auto_start": fingerprint && config.browser.fingerprint_auto_start,
                 "accounts": config.accounts().iter().map(|a| &a.name).collect::<Vec<_>>(),
@@ -781,6 +799,11 @@ fn dispatch(
         Operation::Lock => {
             transfers.clear();
             commands::lock(false)?;
+            Ok(json!(true))
+        }
+        Operation::RestartAgent => {
+            transfers.clear();
+            commands::restart_agent()?;
             Ok(json!(true))
         }
         Operation::Move { item, to } => transfer::move_item(&item, &to),

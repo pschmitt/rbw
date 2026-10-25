@@ -69,7 +69,19 @@ pub fn account_list() -> anyhow::Result<()> {
         })
         .collect::<Vec<_>>();
 
-    print_table(&columns, &rows, "")
+    print_table(&columns, &rows, "")?;
+    // These states come from whatever agent is running, which may predate
+    // an upgrade (see `rbw status`).
+    if let Ok(version) = crate::actions::version() {
+        if version != rbw::protocol::VERSION {
+            eprintln!(
+                "warning: rbw-agent is {}, not {}; run `rbw stop-agent` and unlock again",
+                rbw::protocol::version_string(version),
+                env!("CARGO_PKG_VERSION")
+            );
+        }
+    }
+    Ok(())
 }
 
 pub fn account_add(

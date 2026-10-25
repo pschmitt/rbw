@@ -48,6 +48,14 @@ pub fn stop_agent() -> anyhow::Result<()> {
     Ok(())
 }
 
+// Replaces the running agent (which locks every account) with this build's.
+pub fn restart_agent() -> anyhow::Result<()> {
+    check_config()?;
+    crate::actions::quit()?;
+    run_agent()?;
+    check_agent_version()
+}
+
 pub fn kill_agent() -> anyhow::Result<()> {
     crate::actions::kill()?;
 

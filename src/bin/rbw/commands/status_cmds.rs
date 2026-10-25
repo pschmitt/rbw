@@ -130,6 +130,11 @@ pub fn status(json: bool) -> anyhow::Result<()> {
         .unwrap_or_else(|_| rbw::config::Config::new());
     let primary = config.primary_account_name();
     let pid = agent_pid_if_running();
+    // An agent started by an older (or newer) rbw keeps running across an
+    // upgrade; the CLI replaces it on its next command, but the browser
+    // host only reports it, so every account looks locked there.
+    let agent_version = pid.and_then(|_| crate::actions::version().ok());
+    let stale_agent = agent_version.filter(|v| *v != rbw::protocol::VERSION);
     let mut accounts = config
         .accounts()
         .iter()
@@ -170,6 +175,8 @@ pub fn status(json: bool) -> anyhow::Result<()> {
             "agent": {
                 "running": pid.is_some(),
                 "pid": pid,
+                "version": agent_version.map(rbw::protocol::version_string),
+                "version_mismatch": stale_agent.is_some(),
                 "socket": rbw::dirs::socket_file(),
                 "lock_timeout": config.agent.lock_timeout,
                 "sync_interval": config.agent.sync_interval,
@@ -221,6 +228,23 @@ pub fn status(json: bool) -> anyhow::Result<()> {
             },
         ),
     );
+    if let Some(version) = stale_agent {
+        row(
+            "",
+            "agent version:",
+            format!(
+                "{} {}",
+                style::danger(&rbw::protocol::version_string(version), c),
+                style::warning(
+                    &format!(
+                        "(not {}; run `rbw stop-agent` and unlock again)",
+                        env!("CARGO_PKG_VERSION")
+                    ),
+                    c
+                )
+            ),
+        );
+    }
     row(
         "",
         "socket:",

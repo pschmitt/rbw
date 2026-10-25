@@ -115,6 +115,7 @@ function hideNotification() {
   clearTimeout(notificationLeaving); notificationLeaving = setTimeout(() => { notification.hidden = true; notification.classList.remove("is-leaving"); }, 330);
 }
 $("dismiss-message").onclick = () => message("");
+$("restart-agent").onclick = () => attempt(async () => { message("Restarting rbw-agent…"); await request("restart_agent"); await refresh(); message("rbw-agent restarted. Unlock to continue."); });
 async function attempt(fn) { try { await fn(); } catch (error) {
   if (error.diagnostic) { showDiagnostic(error.diagnostic, error.message); return; }
   if (error.message.startsWith("Browser access denied.")) {
@@ -519,8 +520,16 @@ async function refresh(knownStatus = null, skipList = false) {
   // the (pointless while locked) Lock button go away and the hero shrinks.
   const several = accountStates.length > 1;
   $("unlock").hidden = several; $("lock").hidden = !unlocked; $("state").hidden = several;
-  $("locked").classList.toggle("is-multi", several && !unlocked);
-  $("locked").querySelector("h2").textContent = "Vault locked";
+  // An agent from another rbw version (one that outlived an upgrade) can't
+  // serve this host, whatever it holds unlocked: say so instead of "locked".
+  const stale = !unlocked && status.staleAgent;
+  $("locked").classList.toggle("is-multi", several && !unlocked && !stale);
+  $("locked").classList.toggle("is-stale", Boolean(stale));
+  $("locked").querySelector("h2").textContent = stale ? "rbw-agent out of date" : "Vault locked";
+  const staleNote = $("locked").querySelector("p");
+  staleNote.hidden = !stale;
+  staleNote.textContent = stale ? `The running rbw-agent is ${status.staleAgent}, not ${status.hostVersion}. Restart it, or unlock, which restarts it.` : "";
+  $("restart-agent").hidden = !stale;
   if (!unlocked) {
     show("locked"); if (several) $("account-menu").hidden = false;
     // The master password is what the popup is for; leave focus alone only if

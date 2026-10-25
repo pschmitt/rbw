@@ -790,7 +790,7 @@ async function fill(message, account) {
 }
 async function handle(message) {
   const account = message.account || null;
-  if (["lock", "sync", "save", "mutate", "set_collections", "folders", "import", "save_offer_apply", "unsaved_login_apply", "passkey_approve", "move"].includes(message.action)) clearMetadata();
+  if (["lock", "restart_agent", "sync", "save", "mutate", "set_collections", "folders", "import", "save_offer_apply", "unsaved_login_apply", "passkey_approve", "move"].includes(message.action)) clearMetadata();
   switch (message.action) {
     case "bootstrap": {
       const preferences = await settings();
@@ -823,6 +823,12 @@ async function handle(message) {
       for (const id of [...pending.keys()]) finish(id, { error: "Vault locked." });
       for (const offer of offers.values()) clearTimeout(offer.timer); offers.clear();
       const result = await native({ action: "lock", account });
+      setVaultUnlocked(false);
+      return result;
+    }
+    case "restart_agent": {
+      popupStates.clear(); editDraft = null; unsavedLogins = [];
+      const result = await native({ action: "restart_agent", account });
       setVaultUnlocked(false);
       return result;
     }

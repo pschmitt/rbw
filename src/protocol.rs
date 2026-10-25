@@ -17,6 +17,17 @@ pub const VERSION: u32 = {
         + unwrap(&u32::from_str_radix(patch, 10))
 };
 
+/// A protocol version (`VERSION`, or the one an agent reports) as
+/// `major.minor.patch`.
+pub fn version_string(version: u32) -> String {
+    format!(
+        "{}.{}.{}",
+        version / 1_000_000,
+        version / 1_000 % 1_000,
+        version % 1_000
+    )
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct Request {
     tty: Option<String>,
@@ -398,4 +409,6 @@ fn test_version_encoding() {
     assert_eq!(VERSION / 1_000_000, major);
     assert_eq!(VERSION / 1_000 % 1_000, minor);
     assert_eq!(VERSION % 1_000, patch);
+    assert_eq!(version_string(VERSION), env!("CARGO_PKG_VERSION"));
+    assert_eq!(version_string(2_031_002), "2.31.2");
 }

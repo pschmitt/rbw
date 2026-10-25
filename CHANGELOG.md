@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* An rbw-agent left running from another rbw version (one started before an
+  upgrade) no longer goes unnoticed. `rbw status` shows its version in red
+  and `rbw account list` warns, since the lock states they show come from
+  that agent. The browser extension, which can't use such an agent and showed
+  every account as locked, now says "rbw-agent out of date" with a red lock
+  and offers a "Restart rbw-agent" button (unlocking restarts it as well).
+
 ## [2.31.4] - 2026-10-25
 
 ### Changed
