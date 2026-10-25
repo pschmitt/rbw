@@ -4,11 +4,13 @@ pub fn account_list() -> anyhow::Result<()> {
     let config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());
     let primary = config.primary_account_name();
-    let accounts = config.accounts();
+    let mut accounts = config.accounts();
     if accounts.is_empty() {
         eprintln!("no accounts configured");
         return Ok(());
     }
+    // The primary account first; the rest keep their configured order.
+    accounts.sort_by_key(|account| account.name != primary);
 
     let columns = [
         TableColumn {

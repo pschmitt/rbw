@@ -10,6 +10,8 @@
 
 ### Changed
 
+* `rbw account list` shows the primary account first.
+
 * rbw, the browser host and rbw-agent of the same `major.minor` work
   together: an agent from another patch release is no longer replaced (and
   every account locked) by the CLI's next command, nor reported as out of
