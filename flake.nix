@@ -44,6 +44,15 @@
       };
     in
     {
+      # Linux package builds and checks run on the self-hosted nixbot.
+      hydraJobs = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
+        # The Android NDK used by rbw-termux only runs on x86_64 Linux.
+        packages = builtins.removeAttrs self.packages.${system} (
+          nixpkgs.lib.optional (system != "x86_64-linux") "rbw-termux"
+        );
+        checks = self.checks.${system} or { };
+      });
+
       packages = forAllSystems (
         system:
         let

@@ -1,4 +1,6 @@
 <p align="center">
+
+[![nixbot](https://nixbot.brkn.lol/repos/github/pschmitt/rbw/badge.svg?branch=main)](https://nixbot.brkn.lol/repos/github/pschmitt/rbw)
   <img src="assets/icons/rbw-256.png" width="160" alt="rbw">
 </p>
 
