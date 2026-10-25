@@ -811,7 +811,6 @@ input[type=color].account-color:hover, input[type=color].account-color:focus-vis
 #locked.is-multi p { margin:0; color:var(--muted); font-size:13px; }
 #locked.is-stale .lock-art { color:var(--danger); background:var(--danger-soft); }
 #locked.is-stale h2 { color:var(--danger); }
-#locked #restart-agent { margin-top:12px; }
 .account-details { margin:6px 0 4px; }
 .account-details > summary { display:flex; align-items:center; gap:6px; padding:6px 2px; cursor:pointer; list-style:none; user-select:none; color:var(--muted); font-size:13px; }
 .account-details > summary::-webkit-details-marker { display:none; }

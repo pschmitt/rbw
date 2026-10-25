@@ -4,12 +4,14 @@
 
 ### Fixed
 
-* An rbw-agent left running from another rbw version (one started before an
-  upgrade) no longer goes unnoticed. `rbw status` shows its version in red
-  and `rbw account list` warns, since the lock states they show come from
-  that agent. The browser extension, which can't use such an agent and showed
-  every account as locked, now says "rbw-agent out of date" with a red lock
-  and offers a "Restart rbw-agent" button (unlocking restarts it as well).
+* An rbw-agent left running from an older rbw (one started before an
+  upgrade) no longer makes the browser extension show every account as
+  locked while the CLI says they are unlocked. The browser host can't use
+  such an agent, so it now replaces it, as the CLI does on its next command,
+  and you unlock again. When the agent is newer than the browser's host (the
+  browser still runs the one from before the upgrade), the popup says so with
+  a red lock. `rbw status` shows an agent from another version in red and
+  `rbw account list` warns, since the lock states they show come from it.
 
 ## [2.31.4] - 2026-10-25
 
