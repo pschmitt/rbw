@@ -368,6 +368,7 @@ function renderAccounts(accounts, primary, chosen, states = [], cliColors = {}) 
   const picked = Array.isArray(preference.accounts) ? preference.accounts.filter(name => accounts.includes(name)) : [];
   if (picked.length) accounts = picked;
   const select = $("account"), multiple = accounts.length > 1;
+  trackFollowers(states);
   accountNames = accounts; accountStates = states.filter(state => accounts.includes(state.name));
   const active = multiple ? (chosen ?? preference.popupAccount ?? "") : (chosen || preference.popupAccount || primary || (accounts[0] || ""));
   select.replaceChildren(...(multiple ? [new Option("All accounts", "")] : []), ...accounts.map(name => new Option(name === primary ? `${name} *` : name, name)));
@@ -376,6 +377,34 @@ function renderAccounts(accounts, primary, chosen, states = [], cliColors = {}) 
   $("account-filter").value = select.value;
   document.querySelector('#filters [data-filter="account"]').hidden = !multiple; syncChips();
   renderAccountStates(primary);
+}
+// An account whose master password lives in another account's vault is
+// unlocked by rbw-agent in the background right after that one. When this
+// popup sees the source get unlocked, its locked followers show as
+// "Unlocking…" instead of locked for a while, so the locked warning doesn't
+// flash; one that is still locked after that gets the warning as usual.
+const followGrace = 15000;
+let followPending = new Map(), lockStatesSeen = null, followTimer;
+function trackFollowers(states) {
+  const before = lockStatesSeen, now = Date.now();
+  lockStatesSeen = new Map(states.map(state => [state.name, state.unlocked]));
+  for (const state of states) {
+    if (state.unlocked || !state.follows || !lockStatesSeen.get(state.follows) || (followPending.get(state.name) ?? Infinity) <= now) { followPending.delete(state.name); continue; }
+    if (!followPending.has(state.name) && before?.get(state.follows) === false) followPending.set(state.name, now + followGrace);
+  }
+  clearTimeout(followTimer);
+  if (followPending.size) followTimer = setTimeout(() => attempt(checkFollowers), 1000);
+}
+const isUnlocking = account => (followPending.get(account.name) ?? 0) > Date.now();
+// Lists the newly unlocked followers' items, or re-renders the account
+// states (the warning, once the grace is over) while they're still pending.
+async function checkFollowers() {
+  if (!unlocked || !followPending.size) return;
+  const status = await request("status");
+  if (!status.unlocked) return;
+  const pending = [...followPending.keys()];
+  if ((status.accountStates || []).some(state => pending.includes(state.name) && state.unlocked)) { await refresh(status); return; }
+  renderAccounts(status.accounts || [], status.primary, $("account").value, status.accountStates || [], status.accountColors);
 }
 // Merged view: which accounts are locked, each with a way to unlock it.
 function renderAccountStates(primary) {
@@ -390,7 +419,7 @@ function renderAccountStates(primary) {
   list.replaceChildren(...accountStates.map(account => {
     const row = element("li", null, account.unlocked ? "is-unlocked" : "is-locked");
     const nameLabel = element("span", account.name === primary ? `${account.name} *` : account.name); nameLabel.style.setProperty("--account-color", colorOf(account.name)); nameLabel.classList.add("account-name");
-    const status = element("small", account.excluded ? "Excluded from search" : account.unlocked ? "Unlocked" : "Locked"); status.dataset.state = account.excluded ? "excluded" : account.unlocked ? "unlocked" : "locked";
+    const status = element("small", account.excluded ? "Excluded from search" : account.unlocked ? "Unlocked" : isUnlocking(account) ? "Unlocking…" : "Locked"); status.dataset.state = account.excluded ? "excluded" : account.unlocked ? "unlocked" : isUnlocking(account) ? "unlocking" : "locked";
     row.append(element("div", null, "account-info"));
     row.firstChild.append(nameLabel, status);
     if (!account.unlocked) {
@@ -422,7 +451,7 @@ function renderAccountStates(primary) {
     }
     return row;
   }));
-  const locked = accountStates.filter(account => !account.unlocked && !account.excluded).map(account => account.name);
+  const locked = accountStates.filter(account => !account.unlocked && !account.excluded && !isUnlocking(account)).map(account => account.name);
   renderLockedBanner(locked);
   const bulk = $("account-bulk");
   bulk.hidden = details.hidden || locked.length < 2;

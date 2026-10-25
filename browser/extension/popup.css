@@ -798,6 +798,7 @@ input[type=color].account-color:hover, input[type=color].account-color:focus-vis
 .account-states li span.account-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .account-states li small { flex:none; padding:1px 8px; border-radius:999px; font-size:11px; font-weight:600; background:var(--panel); color:var(--muted); }
 .account-states li small[data-state=locked] { color:var(--danger, var(--muted)); background:color-mix(in srgb, var(--danger, var(--muted)) 14%, transparent); }
+.account-states li small[data-state=unlocking] { color:var(--accent); background:color-mix(in srgb, var(--accent) 14%, transparent); }
 .account-states li small[data-state=unlocked] { color:var(--ok, var(--muted)); background:color-mix(in srgb, var(--ok, var(--muted)) 16%, transparent); }
 .account-actions { display:flex; align-items:center; gap:4px; }
 .account-actions button { margin:0; }

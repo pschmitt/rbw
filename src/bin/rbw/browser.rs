@@ -656,6 +656,24 @@ fn stale_agent(version: Option<u32>) -> Option<String> {
         .map(rbw::protocol::version_string)
 }
 
+// The account whose vault holds this account's master password: rbw-agent
+// unlocks it in the background right after that one (see
+// `Config::credential_followers`).
+fn credential_source(
+    config: &rbw::config::Config,
+    name: &str,
+) -> Option<String> {
+    config
+        .accounts()
+        .iter()
+        .find(|account| account.name == name)
+        .filter(|account| {
+            account.unlock.policy != rbw::config::UnlockPolicy::Never
+        })
+        .and_then(|account| account.unlock.credentials.as_ref())
+        .map(|credentials| credentials.account.clone())
+}
+
 // Status for the merged view: every configured account with its lock
 // state, plus the single-account fields (for the primary) older code reads.
 fn merged_status(
@@ -683,7 +701,7 @@ fn merged_status(
         "accounts": config.accounts().iter().map(|a| &a.name).collect::<Vec<_>>(),
         "accountColors": account_colors(&config),
         "passkeySyncFailure": passkey_sync_failure(),
-        "accountStates": states.iter().map(|s| json!({"name": s.name, "primary": s.primary, "unlocked": agent_ok && s.unlocked, "excluded": s.excluded, "policy": s.policy, "fingerprint": fingerprint_unlock(&config, Some(&s.name)).is_some()})).collect::<Vec<_>>(),
+        "accountStates": states.iter().map(|s| json!({"name": s.name, "primary": s.primary, "unlocked": agent_ok && s.unlocked, "excluded": s.excluded, "policy": s.policy, "fingerprint": fingerprint_unlock(&config, Some(&s.name)).is_some(), "follows": credential_source(&config, &s.name)})).collect::<Vec<_>>(),
         "primary": primary}))
 }
 

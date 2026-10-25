@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Browser extension: unlocking an account no longer flashes the "locked"
+  warning for the accounts that rbw-agent unlocks right after it from its
+  vault (`unlock.credentials`). They show "Unlocking…" until they are
+  unlocked; one still locked after 15 seconds gets the warning as before.
+
 ## [2.31.6] - 2026-10-25
 
 ### Changed
