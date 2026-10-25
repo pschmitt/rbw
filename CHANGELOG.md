@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.31.4] - 2026-10-25
+
 ### Changed
 
 * Browser extension: a sign-in that spans several pages stays with one login.
