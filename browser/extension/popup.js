@@ -35,7 +35,7 @@ let totpTimer;
 function stopTotp() { clearTimeout(totpTimer); }
 const initialSearch = new URLSearchParams(location.search).get("search");
 const initialSettings = new URLSearchParams(location.search).get("settings") === "1";
-let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, detailFrom = null, healthScroll = 0, sendCount = 0, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
+let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, detailFrom = null, healthScroll = 0, sendCount = 0, healthState = "idle", healthRun = 0, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
 let accountNames = [], accountStates = [], allAccounts = [], cliAccountColors = {}, primaryAccount = "";
 const colorOf = name => accountColor(name, allAccounts, preference.accountColors, cliAccountColors);
 const needsPassword = new Set(); // locked accounts whose row shows a password field
@@ -204,6 +204,9 @@ function show(page) {
   $("edit-header-actions").hidden = page !== "editor";
   $("send-header-actions").hidden = page !== "send-editor";
   $("send-list-header-actions").hidden = page !== "send";
+  $("health-header-actions").hidden = page !== "health";
+  // The check runs when the view opens; going back from an item keeps its results.
+  if (page === "health" && healthState === "idle") attempt(runAudit);
   $("settings-header-actions").hidden = page !== "settings";
   if ($("title-menu").open) $("title-menu").open = false;
   const tab = ["detail", "editor", "approval", "locked", "diagnostic"].includes(page) ? "vault" : page === "send-editor" ? "send" : page;
@@ -233,7 +236,7 @@ api?.storage?.onChanged?.addListener((changes, area) => {
   applyTheme(preference.theme); applyTabs();
 });
 function clearVault() {
-  vaultListed = false; stopTotp(); sendCount = 0; document.documentElement.removeAttribute("data-send-empty");
+  vaultListed = false; stopTotp(); sendCount = 0; document.documentElement.removeAttribute("data-send-empty"); healthState = "idle"; ++healthRun;
   faviconObserver.disconnect();
   ++epoch; currentItem = null; currentDetail = null;
   for (const id of ["items", "suggestions", "detail-content", "edit-fields", "custom-fields", "edit-attachments", "edit-collections", "audit-results", "approval-items", "send-items"]) $(id).replaceChildren();
@@ -1825,11 +1828,29 @@ function renderAudit(result) {
   $("audit-results").replaceChildren(tiles, ...sections);
   const first = sections.find(section => section.tagName === "DETAILS"); if (first) first.open = true;
   $("audit-status").textContent = result.logins == null ? "Check finished" : `${result.logins} ${result.logins === 1 ? "login" : "logins"} checked locally`;
-  $("audit-label").textContent = "Check again";
 }
-$("audit").onclick = () => attempt(async () => {
-  message("Checking vault locally…"); renderAudit(await request("audit")); message("");
-});
+function renderAuditLoading() {
+  const box = element("div", null, "health-loading"), spin = element("span", null, "health-spinner"); spin.append(icon("refresh"));
+  box.append(spin, element("strong", "Checking your vault"), element("small", "Looking for reused and short passwords. This stays on this device."));
+  $("audit-results").replaceChildren(box);
+}
+async function runAudit() {
+  if (healthState === "loading") return;
+  healthState = "loading"; const run = healthRun;
+  // A re-check keeps the old results in view while it runs.
+  if (!$("audit-results").children.length) renderAuditLoading();
+  $("audit-status").textContent = "Checking your vault locally…";
+  $("audit").classList.add("is-syncing"); $("audit").disabled = true;
+  try {
+    const result = await request("audit");
+    if (run !== healthRun) return;
+    renderAudit(result); healthState = "done";
+  } catch (error) {
+    if (run === healthRun) { healthState = "idle"; $("audit-results").replaceChildren(); $("audit-status").textContent = "The check didn’t finish. Try again."; }
+    throw error;
+  } finally { $("audit").classList.remove("is-syncing"); $("audit").disabled = false; }
+}
+$("audit").onclick = () => attempt(runAudit);
 $("open-options").onclick = event => {
   if (event.ctrlKey || event.metaKey || event.shiftKey) api.runtime.openOptionsPage();
   else show("settings");
@@ -1916,6 +1937,10 @@ function relativeDays(date) {
   return days === 1 ? "in 1 day" : `in ${days} days`;
 }
 async function loadSends() {
+  const refresh = $("refresh-sends"); refresh.classList.add("is-syncing"); refresh.disabled = true;
+  try { await listSends(); } finally { refresh.classList.remove("is-syncing"); refresh.disabled = false; }
+}
+async function listSends() {
   show("send"); message("Loading Sends…");
   const items = await send("list"); $("send-items").replaceChildren();
   // With nothing to list, the empty state's own button is the way in, and the popup only needs its height.

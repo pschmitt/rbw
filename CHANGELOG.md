@@ -9,12 +9,15 @@
   passwords grouped, short passwords, logins without TOTP) as the vault's own
   item cards, which open the item; going back returns to the view. The native
   host's audit reply now carries the item fields a search result has (the old
-  name lists are still sent, and show without links).
+  name lists are still sent, and show without links). The check runs when the
+  view opens (with a loading state); a refresh button in the header re-runs it.
 * Browser extension: the Send list's refresh button moved into the header,
   next to the settings cog, and its duplicate "Sends" title is gone.
 * Browser extension: with no Sends yet, the Send view drops the floating Add
   button (the empty state has its own New Send button) and the popup shrinks to
   fit.
+* Browser extension: the Send and vault health refresh buttons spin while they
+  work, like the sync button.
 
 ## [2.32.1] - 2026-10-26
 

@@ -205,8 +205,8 @@ details.menu button .svg-icon { width:16px; height:16px; }
 .is-favorite .svg-icon { fill:currentColor; }
 .spinner { width:13px; height:13px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
-#header-sync.is-syncing [data-icon] { display:inline-flex; animation:spin .9s linear infinite; }
-#header-sync.is-syncing:disabled { opacity:1; color:var(--accent); }
+#header-sync.is-syncing [data-icon], #refresh-sends.is-syncing [data-icon], #audit.is-syncing [data-icon] { display:inline-flex; animation:spin .9s linear infinite; }
+#header-sync.is-syncing:disabled, #refresh-sends.is-syncing:disabled, #audit.is-syncing:disabled { opacity:1; color:var(--accent); }
 /* Settings: grouped cards of switch rows; selects and shortcuts sit where a switch would. */
 .settings-card { margin:0 0 6px; border:1px solid var(--line); border-radius:12px; background:var(--panel); }
 .switch-row > select { display:inline-block; width:auto; max-width:46%; margin:0; flex:none; padding:4px 8px; }
@@ -217,7 +217,7 @@ div.switch-row { cursor:default; }
 .switch-row small[hidden] { display:none; }
 .switch-row:has(> select:disabled) { opacity:.45; cursor:default; }
 .more-settings { display:flex; width:100%; justify-content:center; align-items:center; gap:8px; margin:10px 0; }
-@media (prefers-reduced-motion:reduce) { .spinner, #header-sync.is-syncing [data-icon] { animation:none; } }
+@media (prefers-reduced-motion:reduce) { .spinner, #header-sync.is-syncing [data-icon], #refresh-sends.is-syncing [data-icon], #audit.is-syncing [data-icon] { animation:none; } }
 #editor.is-saving { opacity:.6; transition:opacity .15s; }
 #header-save-edit.is-saving:disabled { opacity:1; cursor:progress; }
 #header-save-edit { white-space:nowrap; }
@@ -867,7 +867,13 @@ article.is-inactive .item-lead, article.is-inactive .item-main strong { opacity:
 }
 .health-hero strong { display:block; font-size:14px; font-weight:620; }
 .health-hero small { display:block; color:var(--muted); font-size:12px; }
-.health-hero #audit { grid-column:1 / -1; display:flex; align-items:center; justify-content:center; gap:8px; margin-top:8px; padding:9px 12px; border-radius:11px; }
+#health-header-actions button.icon { color:var(--muted); border-radius:8px; }
+#health-header-actions button.icon:hover { color:var(--text); background:var(--raised); }
+.health-loading { display:flex; flex-direction:column; align-items:center; gap:4px; padding:34px 20px; border:1px dashed var(--line); border-radius:16px; text-align:center; }
+.health-loading strong { font-size:14px; font-weight:620; }
+.health-loading small { max-width:260px; color:var(--muted); font-size:12px; }
+.health-spinner { display:grid; place-items:center; width:48px; height:48px; margin-bottom:6px; border-radius:16px; background:color-mix(in srgb, var(--accent) 14%, var(--raised)); color:var(--accent); }
+.health-spinner .svg-icon { width:24px; height:24px; animation:spin 1s linear infinite; }
 .health-badge { display:grid; place-items:center; flex:none; width:40px; height:40px; border-radius:13px; background:color-mix(in srgb, var(--accent) 14%, var(--raised)); color:var(--accent); }
 .health-badge .svg-icon { width:22px; height:22px; }
 .health-badge.small { width:32px; height:32px; border-radius:10px; }
