@@ -80,6 +80,46 @@ pub fn find_entry(
     Ok((entry, decrypted_entry))
 }
 
+// Points the rest of the process at the account that owns the entry the
+// needles name, so single-entry commands (`edit`, `set`, `remove`, ...) find
+// what `get` finds without `--account`. Call it only when no account was
+// chosen explicitly. It is best-effort: when nothing matches (`set` may be
+// about to create the entry) or the match is ambiguous, the active account
+// stays as it was and the command reports its own error.
+pub fn route_to_owning_account(
+    needles: &[Needle],
+    username: Option<&str>,
+    folder: Option<&str>,
+    collection: Option<&str>,
+    org: Option<&str>,
+    ignore_case: bool,
+    force_exact: bool,
+) -> anyhow::Result<()> {
+    if crate::actions::current_account().is_some() {
+        return Ok(());
+    }
+    let accounts =
+        list_target_accounts(false, rbw::config::ExcludeContext::Get, false)?;
+    if accounts.len() > 1 {
+        let found = find_entry_multi(
+            &accounts,
+            needles.to_vec(),
+            username,
+            folder,
+            collection,
+            org,
+            ignore_case,
+            force_exact,
+        );
+        if found.is_err() {
+            crate::actions::set_active_account(None)?;
+        }
+    } else {
+        crate::actions::set_active_account(None)?;
+    }
+    Ok(())
+}
+
 // Like `find_entry`, but resolves against every account in `target_accounts`
 // (see `list_target_accounts`) instead of a single db. With one target
 // account this is exactly `find_entry`. With several, every account's

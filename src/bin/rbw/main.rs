@@ -3889,6 +3889,70 @@ fn run_termux(termux: TermuxCmd) -> anyhow::Result<()> {
     }
 }
 
+fn route_to_entry_account(opt: &Opt) -> anyhow::Result<()> {
+    let route = |find_args: &FindArgs| {
+        // --fzf prompts while resolving; don't ask twice.
+        if find_args.fzf {
+            return Ok(());
+        }
+        commands::route_to_owning_account(
+            &find_args.needles,
+            find_args.user.as_deref(),
+            find_args.folder.as_deref(),
+            find_args.collection.as_deref(),
+            find_args.org.as_deref(),
+            find_args.ignorecase,
+            find_args.exact,
+        )
+    };
+    match opt {
+        Opt::Edit { find_args, .. }
+        | Opt::Remove { find_args, .. }
+        | Opt::History { find_args, .. }
+        | Opt::Attachment {
+            attachment:
+                Attachment::List { find_args, .. }
+                | Attachment::Get { find_args, .. }
+                | Attachment::Rm { find_args, .. },
+        }
+        | Opt::Set {
+            find_args,
+            bulk: false,
+            ..
+        }
+        | Opt::Archive {
+            find_args,
+            bulk: false,
+            ..
+        }
+        | Opt::Unarchive {
+            find_args,
+            bulk: false,
+            ..
+        } => route(find_args),
+        Opt::Attachment {
+            attachment:
+                Attachment::Create {
+                    needles,
+                    user,
+                    folder,
+                    ignorecase,
+                    exact,
+                    ..
+                },
+        } => commands::route_to_owning_account(
+            needles,
+            user.as_deref(),
+            folder.as_deref(),
+            None,
+            None,
+            *ignorecase,
+            *exact,
+        ),
+        _ => Ok(()),
+    }
+}
+
 fn main() {
     let cli = parse_cli();
     let opt = cli.command;
@@ -3938,6 +4002,14 @@ fn main() {
         }
     })
     .init();
+
+    // `get` looks in every account; the commands that act on one entry
+    // should find the same entry instead of only looking in the primary one.
+    if account.is_none() {
+        if let Err(e) = route_to_entry_account(&opt) {
+            log::debug!("couldn't pick the entry's account: {e:#}");
+        }
+    }
 
     let subcommand_name = opt.subcommand_name();
     let res = match opt {
