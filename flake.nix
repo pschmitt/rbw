@@ -326,6 +326,7 @@
               };
               passkeyCounter = false;
               clipboard = "auto";
+              redact = false;
               defaultUriMatch = "domain";
             }
             + "\n";
