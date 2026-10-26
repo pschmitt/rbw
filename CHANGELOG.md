@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.32.1] - 2026-10-26
+
 ### Fixed
 
 * `move`, `collection assign` and `collection unassign` find the entry in
