@@ -639,11 +639,10 @@ input.gen-range:focus-visible { outline:2px solid var(--accent); outline-offset:
 @media (prefers-reduced-motion:reduce) { .gen-value.is-fresh, .gen-regenerate.is-spinning .svg-icon { animation:none; } #gen-meter-fill { transition:none; } }
 
 /* Send list */
-.send-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:12px 0 6px; }
-.send-toolbar h2 { margin:0; font-size:18px; }
-.send-toolbar .hint { margin:2px 0 0; }
-.send-toolbar button.icon { color:var(--muted); border-radius:8px; }
-.send-toolbar button.icon:hover { color:var(--text); background:var(--raised); }
+.send-summary { margin:12px 0 6px; }
+.send-summary:empty { display:none; }
+#send-list-header-actions button.icon { color:var(--muted); border-radius:8px; }
+#send-list-header-actions button.icon:hover { color:var(--text); background:var(--raised); }
 article.send-row { align-items:flex-start; padding:10px; border-radius:12px; margin:8px 0; }
 article.send-row.is-disabled { opacity:.6; }
 .send-badge { display:grid; place-items:center; flex:none; width:38px; height:38px; border-radius:10px; background:var(--raised); color:var(--text); }
@@ -854,3 +853,60 @@ div.empty p { margin:0 0 10px; color:var(--muted); }
 .item-status .svg-icon { width:11px; height:11px; }
 .item-status[data-status=trash] { color:var(--danger, #e5596b); border-color:color-mix(in srgb, var(--danger, #e5596b) 40%, var(--line)); background:color-mix(in srgb, var(--danger, #e5596b) 12%, var(--raised)); }
 article.is-inactive .item-lead, article.is-inactive .item-main strong { opacity:.65; }
+
+/* Vault health */
+#health { padding-top:12px; }
+.health-hero {
+  display:grid; grid-template-columns:auto 1fr; align-items:center; gap:4px 12px; margin:0 0 12px; padding:14px;
+  border:1px solid color-mix(in srgb, var(--accent) 24%, var(--line)); border-radius:16px;
+  background:radial-gradient(140% 110% at 100% 0%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 52%), var(--panel);
+  box-shadow:0 8px 24px #18213a12;
+}
+.health-hero strong { display:block; font-size:14px; font-weight:620; }
+.health-hero small { display:block; color:var(--muted); font-size:12px; }
+.health-hero #audit { grid-column:1 / -1; display:flex; align-items:center; justify-content:center; gap:8px; margin-top:8px; padding:9px 12px; border-radius:11px; }
+.health-badge { display:grid; place-items:center; flex:none; width:40px; height:40px; border-radius:13px; background:color-mix(in srgb, var(--accent) 14%, var(--raised)); color:var(--accent); }
+.health-badge .svg-icon { width:22px; height:22px; }
+.health-badge.small { width:32px; height:32px; border-radius:10px; }
+.health-badge.small .svg-icon { width:18px; height:18px; }
+.health-tiles { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin:0 0 12px; }
+.health-tile { --tone:var(--muted); display:flex; flex-direction:column; align-items:flex-start; gap:1px; padding:10px 12px; border:1px solid var(--line); border-radius:12px; background:var(--panel); text-align:left; box-shadow:0 2px 8px #18213a08; }
+.health-tile + .health-tile { margin-left:0; }
+.health-tile strong { font-size:22px; font-weight:650; line-height:1.15; color:var(--tone); }
+.health-tile small { font-size:11px; color:var(--muted); }
+.health-tile:hover { background:var(--panel); border-color:color-mix(in srgb, var(--tone) 50%, var(--line)); }
+.health-section { --tone:var(--muted); margin:0 0 8px; border:1px solid var(--line); border-radius:14px; background:var(--panel); box-shadow:0 2px 8px #18213a08; overflow:hidden; }
+.health-section > summary, .health-head { display:flex; align-items:center; gap:10px; padding:10px 12px; }
+.health-section > summary { cursor:pointer; list-style:none; }
+.health-section > summary::-webkit-details-marker { display:none; }
+.health-section > summary:hover { background:var(--raised); }
+.health-section .health-badge { background:color-mix(in srgb, var(--tone) 14%, var(--raised)); color:var(--tone); }
+.health-section-title { flex:1; min-width:0; }
+.health-section-title strong, .health-section-title small { display:block; }
+.health-section-title strong { font-size:13px; font-weight:620; }
+.health-section-title small { color:var(--muted); font-size:11px; }
+.health-count { padding:1px 9px; border-radius:999px; font-size:12px; font-weight:600; color:var(--tone); background:color-mix(in srgb, var(--tone) 14%, transparent); }
+.health-chevron { display:inline-flex; color:var(--muted); transition:transform .2s ease; }
+.health-chevron .svg-icon { width:16px; height:16px; }
+.health-section[open] .health-chevron { transform:rotate(180deg); }
+.health-body { padding:10px; border-top:1px solid var(--line); }
+.health-group { margin:0 0 8px; border:1px solid var(--line); border-radius:12px; background:var(--bg); overflow:hidden; }
+.health-group:last-child { margin-bottom:0; }
+.health-group-head { padding:6px 12px; border-bottom:1px solid var(--line); font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); }
+.health-item { display:flex; align-items:center; gap:10px; width:100%; padding:8px 10px; border:0; border-radius:0; background:transparent; text-align:left; }
+.health-item + .health-item { margin-left:0; border-top:1px solid var(--line); }
+button.health-item:hover:not(:disabled) { background:var(--raised); }
+.health-item .item-icon { width:30px; height:30px; border-radius:9px; background:var(--raised); }
+.health-item .item-icon .svg-icon { width:17px; height:17px; }
+.health-item-text { flex:1; min-width:0; }
+.health-item-text strong, .health-item-text small { display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.health-item-text strong { font-size:13px; font-weight:560; }
+.health-item-text small { color:var(--muted); font-size:11px; }
+.health-go { display:inline-flex; flex:none; color:var(--muted); transform:rotate(-90deg); }
+.health-go .svg-icon { width:15px; height:15px; }
+button.health-item:hover .health-go { color:var(--accent); }
+.health-body .health-more, .health-group .health-more { display:block; width:100%; margin:0; padding:8px; border:0; border-top:1px dashed var(--line); border-radius:0; background:transparent; color:var(--accent); font-size:12px; font-weight:560; }
+.health-body > .health-more { margin-top:2px; border:1px dashed var(--line); border-radius:10px; }
+.tone-danger { --tone:var(--danger); }
+.tone-warn { --tone:var(--warn); }
+.tone-ok { --tone:var(--ok); }

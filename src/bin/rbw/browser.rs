@@ -1576,43 +1576,86 @@ fn dispatch(
                     overwrite,
                 ),
                 Operation::Audit => {
+                    // The same password under several names; `items` carry
+                    // what the popup needs to open each one. The plain name
+                    // lists stay for older extensions.
                     let mut passwords = std::collections::HashMap::<
                         String,
-                        Vec<String>,
+                        Vec<serde_json::Value>,
                     >::new();
-                    let mut missing_totp = 0;
+                    let mut without_totp = Vec::new();
+                    let mut logins = 0;
                     for entry in db.entries.iter().filter(|e| {
                         !e.deleted
                             && !e.archived
                             && !e.master_password_reprompt()
                     }) {
                         if let rbw::db::EntryData::Login {
+                            username,
                             password: Some(pw),
                             totp,
                             ..
                         } = &entry.data
                         {
+                            let item = json!({
+                                "id": entry.id,
+                                "name": decrypt(entry, &entry.name)?,
+                                "username": username
+                                    .as_ref()
+                                    .map(|u| decrypt(entry, u))
+                                    .transpose()?,
+                            });
+                            logins += 1;
+                            if totp.is_none() {
+                                without_totp.push(item.clone());
+                            }
                             passwords
                                 .entry(decrypt(entry, pw)?)
                                 .or_default()
-                                .push(decrypt(entry, &entry.name)?);
-                            if totp.is_none() {
-                                missing_totp += 1;
-                            }
+                                .push(item);
                         }
                     }
-                    let reused = passwords
+                    let by_name =
+                        |a: &serde_json::Value, b: &serde_json::Value| {
+                            a["name"].as_str().map(str::to_lowercase).cmp(
+                                &b["name"].as_str().map(str::to_lowercase),
+                            )
+                        };
+                    let mut reused = passwords
                         .values()
                         .filter(|v| v.len() > 1)
+                        .cloned()
                         .collect::<Vec<_>>();
-                    let weak = passwords
+                    for group in &mut reused {
+                        group.sort_by(by_name);
+                    }
+                    reused.sort_by(|a, b| {
+                        b.len()
+                            .cmp(&a.len())
+                            .then_with(|| by_name(&a[0], &b[0]))
+                    });
+                    let mut short = passwords
                         .iter()
                         .filter(|(pw, _)| pw.chars().count() < 12)
-                        .flat_map(|(_, names)| names)
+                        .flat_map(|(_, items)| items.clone())
                         .collect::<Vec<_>>();
-                    Ok(
-                        json!({"reused": reused, "short": weak, "without_totp": missing_totp}),
-                    )
+                    short.sort_by(by_name);
+                    without_totp.sort_by(by_name);
+                    let names = |items: &[serde_json::Value]| {
+                        items
+                            .iter()
+                            .map(|item| item["name"].clone())
+                            .collect::<Vec<_>>()
+                    };
+                    Ok(json!({
+                        "logins": logins,
+                        "reused_items": reused,
+                        "short_items": short,
+                        "without_totp_items": without_totp,
+                        "reused": reused.iter().map(|g| names(g)).collect::<Vec<_>>(),
+                        "short": names(&short),
+                        "without_totp": without_totp.len(),
+                    }))
                 }
                 _ => unreachable!(),
             }
