@@ -4,6 +4,11 @@
 
 ## [2.32.0] - 2026-10-26
 
+### Fixed
+
+* Passkey logins in the browser extension failed with "invalid challenge" for
+  relying parties that send WebAuthn challenges over 4 KiB (Google).
+
 ### Added
 
 * `--redact` (aliases `--mask`, `--no-secrets`; `RBW_REDACT`, the `redact`
