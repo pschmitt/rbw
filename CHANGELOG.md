@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* `move`, `collection assign` and `collection unassign` find the entry in
+  whichever account holds it, like `get`, instead of only the primary account
+  (they no longer need `-a`).
+
 ## [2.32.0] - 2026-10-26
 
 ### Fixed
