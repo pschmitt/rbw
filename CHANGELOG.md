@@ -12,6 +12,9 @@
   name lists are still sent, and show without links).
 * Browser extension: the Send list's refresh button moved into the header,
   next to the settings cog, and its duplicate "Sends" title is gone.
+* Browser extension: with no Sends yet, the Send view drops the floating Add
+  button (the empty state has its own New Send button) and the popup shrinks to
+  fit.
 
 ## [2.32.1] - 2026-10-26
 

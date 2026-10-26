@@ -1917,6 +1917,8 @@ function relativeDays(date) {
 async function loadSends() {
   show("send"); message("Loading Sends…");
   const items = await send("list"); $("send-items").replaceChildren();
+  // With nothing to list, the empty state's own button is the way in, and the popup only needs its height.
+  document.documentElement.toggleAttribute("data-send-empty", !items.length); $("add").hidden = !items.length;
   const files = items.filter(item => item.type === 1).length;
   $("send-summary").textContent = items.length ? `${items.length} active · ${files} ${files === 1 ? "file" : "files"}` : "";
   for (const item of items) {
