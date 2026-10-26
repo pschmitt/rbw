@@ -736,8 +736,15 @@ assert $COUNT in [v for v in info.values() if isinstance(v, int)], info
     [[ "$output" == *"fzf-1"* ]]
     [[ "$output" == *"••••••••"* ]]
     [[ "$output" != *"fzf-pass-1"* ]]
-    run "$RBW" show --mask --json --user fzf-1 e2e-fzf
+    # Structured output is masked the same way, and commands that exist to
+    # output a secret refuse.
+    output="$("$RBW" show --mask --json --user fzf-1 e2e-fzf)"
+    [[ "$output" == *"fzf-1"* ]]
+    [[ "$output" != *"fzf-pass-1"* ]]
+    run "$RBW" --no-secrets get --user fzf-1 e2e-fzf
     [ "$status" -ne 0 ]
+    [[ "$output" == *"--redact"* ]]
+    [ "$("$RBW" --redact get --field username --user fzf-1 e2e-fzf)" = "fzf-1" ]
 
     # Stand-in fzf: records how it was called, picks the candidate whose
     # username (fourth column) is $FAKE_FZF_USER, or exits like a cancel,
