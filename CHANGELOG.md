@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.32.0] - 2026-10-26
+
 ### Added
 
 * `--redact` (aliases `--mask`, `--no-secrets`; `RBW_REDACT`, the `redact`
