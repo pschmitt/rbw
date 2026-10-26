@@ -859,21 +859,7 @@ article.is-inactive .item-lead, article.is-inactive .item-main strong { opacity:
 
 /* Vault health */
 #health { padding-top:12px; }
-.health-hero {
-  display:grid; grid-template-columns:auto 1fr; align-items:center; gap:4px 12px; margin:0 0 12px; padding:14px;
-  border:1px solid color-mix(in srgb, var(--accent) 24%, var(--line)); border-radius:16px;
-  background:radial-gradient(140% 110% at 100% 0%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 52%), var(--panel);
-  box-shadow:0 8px 24px #18213a12;
-}
-.health-hero strong { display:block; font-size:14px; font-weight:620; }
-.health-hero small { display:block; color:var(--muted); font-size:12px; }
-#health-header-actions button.icon { color:var(--muted); border-radius:8px; }
-#health-header-actions button.icon:hover { color:var(--text); background:var(--raised); }
-.health-loading { display:flex; flex-direction:column; align-items:center; gap:4px; padding:34px 20px; border:1px dashed var(--line); border-radius:16px; text-align:center; }
-.health-loading strong { font-size:14px; font-weight:620; }
-.health-loading small { max-width:260px; color:var(--muted); font-size:12px; }
-.health-spinner { display:grid; place-items:center; width:48px; height:48px; margin-bottom:6px; border-radius:16px; background:color-mix(in srgb, var(--accent) 14%, var(--raised)); color:var(--accent); }
-.health-spinner .svg-icon { width:24px; height:24px; animation:spin 1s linear infinite; }
+.health-foot { margin:10px 4px 0; text-align:center; }
 .health-badge { display:grid; place-items:center; flex:none; width:40px; height:40px; border-radius:13px; background:color-mix(in srgb, var(--accent) 14%, var(--raised)); color:var(--accent); }
 .health-badge .svg-icon { width:22px; height:22px; }
 .health-badge.small { width:32px; height:32px; border-radius:10px; }

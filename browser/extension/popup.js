@@ -1825,9 +1825,9 @@ function renderAudit(result) {
     tile.onclick = () => { if (section.tagName === "DETAILS") section.open = true; section.scrollIntoView({ block: "start", behavior: "smooth" }); };
     tiles.append(tile);
   }
-  $("audit-results").replaceChildren(tiles, ...sections);
+  const note = result.logins == null ? "Checked locally." : `${result.logins} ${result.logins === 1 ? "login" : "logins"} checked locally.`;
+  $("audit-results").replaceChildren(tiles, ...sections, element("p", `${note} Passwords never leave rbw.`, "hint health-foot"));
   const first = sections.find(section => section.tagName === "DETAILS"); if (first) first.open = true;
-  $("audit-status").textContent = result.logins == null ? "Check finished" : `${result.logins} ${result.logins === 1 ? "login" : "logins"} checked locally`;
 }
 function renderAuditLoading() {
   const box = element("div", null, "health-loading"), spin = element("span", null, "health-spinner"); spin.append(icon("refresh"));
@@ -1839,14 +1839,13 @@ async function runAudit() {
   healthState = "loading"; const run = healthRun;
   // A re-check keeps the old results in view while it runs.
   if (!$("audit-results").children.length) renderAuditLoading();
-  $("audit-status").textContent = "Checking your vault locally…";
   $("audit").classList.add("is-syncing"); $("audit").disabled = true;
   try {
     const result = await request("audit");
     if (run !== healthRun) return;
     renderAudit(result); healthState = "done";
   } catch (error) {
-    if (run === healthRun) { healthState = "idle"; $("audit-results").replaceChildren(); $("audit-status").textContent = "The check didn’t finish. Try again."; }
+    if (run === healthRun) { healthState = "idle"; $("audit-results").replaceChildren(); }
     throw error;
   } finally { $("audit").classList.remove("is-syncing"); $("audit").disabled = false; }
 }
