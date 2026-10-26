@@ -393,8 +393,13 @@ pub fn set(
                 eprintln!();
                 eprintln!("{}:", style::name(&pu.entry_name, c));
                 for (field, old, new) in &pu.changes {
-                    // The diff shows the values themselves, secrets included.
-                    let (old, new) = if redact_enabled() {
+                    // The diff shows the values themselves; hide the secret
+                    // ones (a custom field may be hidden, so it counts).
+                    let secret = matches!(
+                        *field,
+                        "notes" | "password" | "totp" | "field"
+                    );
+                    let (old, new) = if redact_enabled() && secret {
                         (MASKED_SECRET, MASKED_SECRET)
                     } else {
                         (old.as_str(), new.as_str())

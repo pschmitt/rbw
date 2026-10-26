@@ -7,6 +7,8 @@
 * `move`, `collection assign` and `collection unassign` find the entry in
   whichever account holds it, like `get`, instead of only the primary account
   (they no longer need `-a`).
+* With `--redact`, the `set` confirmation diff masks only the secret fields
+  (password, TOTP, notes, custom fields) and shows the rest.
 
 ## [2.32.0] - 2026-10-26
 
