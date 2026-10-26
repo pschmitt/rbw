@@ -6,9 +6,10 @@
 
 * Browser extension: the vault health view is redesigned. It no longer repeats
   its title, shows summary tiles, and lists the affected logins (reused
-  passwords grouped, short passwords, logins without TOTP) as rows that open
-  the item; going back returns to the view. The native host's audit reply now
-  carries item ids and usernames (the old name lists are still sent).
+  passwords grouped, short passwords, logins without TOTP) as the vault's own
+  item cards, which open the item; going back returns to the view. The native
+  host's audit reply now carries the item fields a search result has (the old
+  name lists are still sent, and show without links).
 * Browser extension: the Send list's refresh button moved into the header,
   next to the settings cog, and its duplicate "Sends" title is gone.
 

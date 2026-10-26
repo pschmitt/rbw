@@ -890,23 +890,12 @@ article.is-inactive .item-lead, article.is-inactive .item-main strong { opacity:
 .health-chevron .svg-icon { width:16px; height:16px; }
 .health-section[open] .health-chevron { transform:rotate(180deg); }
 .health-body { padding:10px; border-top:1px solid var(--line); }
-.health-group { margin:0 0 8px; border:1px solid var(--line); border-radius:12px; background:var(--bg); overflow:hidden; }
+.health-group { margin:0 0 10px; }
 .health-group:last-child { margin-bottom:0; }
-.health-group-head { padding:6px 12px; border-bottom:1px solid var(--line); font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); }
-.health-item { display:flex; align-items:center; gap:10px; width:100%; padding:8px 10px; border:0; border-radius:0; background:transparent; text-align:left; }
-.health-item + .health-item { margin-left:0; border-top:1px solid var(--line); }
-button.health-item:hover:not(:disabled) { background:var(--raised); }
-.health-item .item-icon { width:30px; height:30px; border-radius:9px; background:var(--raised); }
-.health-item .item-icon .svg-icon { width:17px; height:17px; }
-.health-item-text { flex:1; min-width:0; }
-.health-item-text strong, .health-item-text small { display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-.health-item-text strong { font-size:13px; font-weight:560; }
-.health-item-text small { color:var(--muted); font-size:11px; }
-.health-go { display:inline-flex; flex:none; color:var(--muted); transform:rotate(-90deg); }
-.health-go .svg-icon { width:15px; height:15px; }
-button.health-item:hover .health-go { color:var(--accent); }
-.health-body .health-more, .health-group .health-more { display:block; width:100%; margin:0; padding:8px; border:0; border-top:1px dashed var(--line); border-radius:0; background:transparent; color:var(--accent); font-size:12px; font-weight:560; }
-.health-body > .health-more { margin-top:2px; border:1px dashed var(--line); border-radius:10px; }
+.health-group-head { padding:2px 4px 0; font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); }
+.health-item { padding:8px 12px; border:1px solid var(--line); border-radius:12px; background:var(--panel); }
+.health-item strong { font-size:13px; font-weight:560; }
+.health-body .health-more, .health-group .health-more { display:block; width:100%; margin:5px 0 0; padding:8px; border:1px dashed var(--line); border-radius:10px; background:transparent; color:var(--accent); font-size:12px; font-weight:560; }
 .tone-danger { --tone:var(--danger); }
 .tone-warn { --tone:var(--warn); }
 .tone-ok { --tone:var(--ok); }

@@ -626,7 +626,7 @@ const faviconObserver = new IntersectionObserver(entries => {
     }).catch(() => {});
   }
 }, { root: document.querySelector("main"), rootMargin: "80px" });
-function itemRow(item) {
+function itemRow(item, from) {
   const row = element("article"); const image = element("span", null, "item-icon");
   const fallback = item.type === "card"
     ? getCardBrandIcon(item.brand || item.username?.split(",")?.[0], item.name)
@@ -644,7 +644,7 @@ function itemRow(item) {
   }
   row.append(lead);
   if (preference.favicons && item.iconOrigin) { image.dataset.origin = item.iconOrigin; faviconObserver.observe(image); }
-  const main = button("", async () => { await openDetail(item.id, item.deleted); }, "item-main");
+  const main = button("", async () => { if (from === "health") healthScroll = document.querySelector("main").scrollTop; await openDetail(item.id, item.deleted, from); }, "item-main");
   const title = element("div", null, "item-title");
   if (item.favorite) { const star = icon("star"); star.classList.add("favorite-icon"); title.append(star); }
   title.append(element("strong", item.name));
@@ -1774,13 +1774,9 @@ $("copy-generated").onclick = () => attempt(async () => {
 // to open. Long lists show a page at a time.
 const AUDIT_PAGE = { groups: 12, items: 25 };
 function auditItem(item) {
-  const text = element("span", null, "health-item-text"); text.append(element("strong", item.name), element("small", item.username || "No username"));
-  if (!item.id) { const row = element("div", null, "health-item"); row.append(text); return row; }
-  const mark = element("span", null, "item-icon"); mark.append(icon("key"));
-  const go = element("span", null, "health-go"); go.append(icon("chevron-down"));
-  const row = element("button", null, "health-item"); row.type = "button"; row.title = `Open ${item.name}`;
-  row.onclick = () => attempt(async () => { healthScroll = document.querySelector("main").scrollTop; await openDetail(item.id, false, "health"); });
-  row.append(mark, text, go); return row;
+  // The vault list's own card; older hosts send names only, which can't be opened.
+  if (item.id) return itemRow(item, "health");
+  const row = element("div", null, "health-item"); row.append(element("strong", item.name)); return row;
 }
 function auditPaged(container, entries, size, render) {
   const more = element("button", null, "health-more"); more.type = "button"; let shown = 0;

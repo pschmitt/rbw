@@ -1597,8 +1597,13 @@ fn dispatch(
                             ..
                         } = &entry.data
                         {
+                            // The fields of a search result, so the popup
+                            // draws the same card.
                             let item = json!({
                                 "id": entry.id,
+                                "type": "login",
+                                "favorite": entry.favorite,
+                                "iconOrigin": login_icon_origin(entry),
                                 "name": decrypt(entry, &entry.name)?,
                                 "username": username
                                     .as_ref()
@@ -1818,6 +1823,22 @@ fn search_metadata(
 
 fn decrypt(entry: &rbw::db::Entry, value: &str) -> anyhow::Result<String> {
     actions::decrypt(value, entry.key.as_deref(), entry.org_id.as_deref())
+}
+
+// The site a login's favicon comes from: its first https (or localhost) URI.
+fn login_icon_origin(entry: &rbw::db::Entry) -> Option<String> {
+    let rbw::db::EntryData::Login { uris, .. } = &entry.data else {
+        return None;
+    };
+    uris.iter()
+        .filter_map(|uri| decrypt(entry, &uri.uri).ok())
+        .filter_map(|uri| url::Url::parse(&uri).ok())
+        .find(|uri| {
+            uri.scheme() == "https"
+                || (uri.scheme() == "http"
+                    && uri.host_str() == Some("localhost"))
+        })
+        .map(|uri| uri.origin().ascii_serialization())
 }
 
 // The extension's override, else rbw's configured `defaultUriMatch`, read per
