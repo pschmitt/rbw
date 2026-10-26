@@ -419,7 +419,10 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
                     matches!(&request.operation, Operation::Move { .. });
                 // Backend errors can contain vault data; never forward them.
                 dispatch(request, &mut attachments).map_or_else(
-                    |error| json!({"id": id, "error": if commands::exit_status(&error) == 2 { "The server write succeeded, but synchronization failed. Sync and inspect your vault before retrying to avoid duplicates." } else if moving { "Could not move the item; it was not deleted. Both accounts must be unlocked, and the other account must not already have an item with the same name and username." } else if fingerprint { "Fingerprint unlock failed. Scan again, or unlock with your master password." } else if unlocking { "Could not unlock this account. Check your master password and account configuration." } else { "Operation failed. Unlock this account or sync your vault, then try again." }}),
+                    |error| {
+                        log_error(&error);
+                        json!({"id": id, "error": if commands::exit_status(&error) == 2 { "The server write succeeded, but synchronization failed. Sync and inspect your vault before retrying to avoid duplicates." } else if moving { "Could not move the item; it was not deleted. Both accounts must be unlocked, and the other account must not already have an item with the same name and username." } else if fingerprint { "Fingerprint unlock failed. Scan again, or unlock with your master password." } else if unlocking { "Could not unlock this account. Check your master password and account configuration." } else { "Operation failed. Unlock this account or sync your vault, then try again." }})
+                    },
                     |result| json!({"id": id, "result": result}),
                 )
             }
@@ -428,6 +431,23 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
         write_response(&mut output, &response)?;
         run_after_response();
     }
+}
+
+// The responses to the browser hide backend errors, so diagnosing a failure
+// means asking for them: while a `browser-debug` file exists next to the
+// agent's pidfile, the error chains are appended to `browser-errors.log`
+// there (same user-only runtime directory; remove the file to stop).
+fn log_error(error: &anyhow::Error) {
+    use std::io::Write as _;
+    let dir = rbw::dirs::pid_file();
+    if !dir.with_file_name("browser-debug").exists() {
+        return;
+    }
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.with_file_name("browser-errors.log"))
+        .and_then(|mut file| writeln!(file, "{error:#}"));
 }
 
 // The accounts a merged request covers: the ones the user picked in the
