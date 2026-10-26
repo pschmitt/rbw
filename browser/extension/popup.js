@@ -35,7 +35,7 @@ let totpTimer;
 function stopTotp() { clearTimeout(totpTimer); }
 const initialSearch = new URLSearchParams(location.search).get("search");
 const initialSettings = new URLSearchParams(location.search).get("settings") === "1";
-let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, detailFrom = null, healthScroll = 0, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
+let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, detailFrom = null, healthScroll = 0, sendCount = 0, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
 let accountNames = [], accountStates = [], allAccounts = [], cliAccountColors = {}, primaryAccount = "";
 const colorOf = name => accountColor(name, allAccounts, preference.accountColors, cliAccountColors);
 const needsPassword = new Set(); // locked accounts whose row shows a password field
@@ -196,7 +196,8 @@ function show(page) {
   $("unlock-panel").hidden = unlocked || !["locked", "approval"].includes(page);
   for (const id of ["vault", "generator", "send", "send-editor", "health", "settings", "detail", "editor", "approval", "locked", "diagnostic"]) $(id).hidden = id !== page;
   $("title").textContent = ({ vault: "Vault", generator: "Generator", health: "Vault health", settings: "Settings", send: "Send", "send-editor": "Edit Send", detail: "Item", editor: currentItem ? "Edit item" : "New item", approval: "Passkey request", locked: "Vault", diagnostic: "Connection problem" })[page];
-  $("add").hidden = !["vault", "send"].includes(page) || !unlocked;
+  // The Send list only offers Add once it has entries; until it has loaded (or on a refresh) the last count decides, so the button doesn't flash.
+  $("add").hidden = !["vault", "send"].includes(page) || !unlocked || (page === "send" && !sendCount);
   $("add").classList.remove("collapsed");
   $("open-options").hidden = subpage;
   $("detail-header-actions").hidden = page !== "detail";
@@ -232,7 +233,7 @@ api?.storage?.onChanged?.addListener((changes, area) => {
   applyTheme(preference.theme); applyTabs();
 });
 function clearVault() {
-  vaultListed = false; stopTotp();
+  vaultListed = false; stopTotp(); sendCount = 0; document.documentElement.removeAttribute("data-send-empty");
   faviconObserver.disconnect();
   ++epoch; currentItem = null; currentDetail = null;
   for (const id of ["items", "suggestions", "detail-content", "edit-fields", "custom-fields", "edit-attachments", "edit-collections", "audit-results", "approval-items", "send-items"]) $(id).replaceChildren();
@@ -1918,7 +1919,7 @@ async function loadSends() {
   show("send"); message("Loading Sends…");
   const items = await send("list"); $("send-items").replaceChildren();
   // With nothing to list, the empty state's own button is the way in, and the popup only needs its height.
-  document.documentElement.toggleAttribute("data-send-empty", !items.length); $("add").hidden = !items.length;
+  sendCount = items.length; document.documentElement.toggleAttribute("data-send-empty", !items.length); $("add").hidden = !items.length;
   const files = items.filter(item => item.type === 1).length;
   $("send-summary").textContent = items.length ? `${items.length} active · ${files} ${files === 1 ? "file" : "files"}` : "";
   for (const item of items) {
