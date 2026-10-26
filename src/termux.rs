@@ -490,8 +490,17 @@ mod tests {
 
     #[test]
     fn missing_program_counts_as_missing_keystore() {
-        let e = command_output("rbw-test-no-such-program", &[], None)
-            .unwrap_err();
+        // Under qemu-user (aarch64 builds on x86 builders) a failed exec
+        // is not reported to the parent: spawn succeeds and the child
+        // exits 127. Only check the error when there is one.
+        if let Err(e) = command_output("rbw-test-no-such-program", &[], None)
+        {
+            assert!(keystore_missing(&e));
+        }
+        let e = anyhow::Error::from(std::io::Error::from(
+            std::io::ErrorKind::NotFound,
+        ))
+        .context("failed to start termux-keystore");
         assert!(keystore_missing(&e));
         assert!(!keystore_missing(&anyhow::anyhow!(
             "termux-keystore failed"
