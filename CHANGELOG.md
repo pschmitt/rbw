@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.32.2] - 2026-10-26
+
 ### Changed
 
 * Browser extension: the vault health view is redesigned. It no longer repeats
