@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [2.32.1] - 2026-10-26
+
+### Fixed
+
+* `move`, `collection assign` and `collection unassign` find the entry in
+  whichever account holds it, like `get`, instead of only the primary account
+  (they no longer need `-a`).
+* With `--redact`, the `set` confirmation diff masks only the secret fields
+  (password, TOTP, notes, custom fields) and shows the rest.
+
+## [2.32.0] - 2026-10-26
+
+### Fixed
+
+* Passkey logins in the browser extension failed with "invalid challenge" for
+  relying parties that send WebAuthn challenges over 4 KiB (Google).
+
 ### Added
 
 * `--redact` (aliases `--mask`, `--no-secrets`; `RBW_REDACT`, the `redact`

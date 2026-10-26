@@ -3946,6 +3946,7 @@ fn route_to_entry_account(opt: &Opt) -> anyhow::Result<()> {
         Opt::Edit { find_args, .. }
         | Opt::Remove { find_args, .. }
         | Opt::History { find_args, .. }
+        | Opt::Move { find_args, .. }
         | Opt::Attachment {
             attachment:
                 Attachment::List { find_args, .. }
@@ -3975,6 +3976,27 @@ fn route_to_entry_account(opt: &Opt) -> anyhow::Result<()> {
                     folder,
                     ignorecase,
                     exact,
+                    ..
+                },
+        }
+        | Opt::Collection {
+            collection:
+                Collection::Assign {
+                    needles,
+                    user,
+                    folder,
+                    ignorecase,
+                    exact,
+                    bulk: false,
+                    ..
+                }
+                | Collection::Unassign {
+                    needles,
+                    user,
+                    folder,
+                    ignorecase,
+                    exact,
+                    bulk: false,
                     ..
                 },
         } => commands::route_to_owning_account(

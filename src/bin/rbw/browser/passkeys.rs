@@ -50,9 +50,12 @@ pub fn relying_party(
     let challenge =
         options["challenge"].as_str().context("missing challenge")?;
     let bytes = decode(challenge)?;
+    // WebAuthn sets no maximum; some relying parties (Google) send large
+    // challenges. The native message limit bounds it anyway.
     ensure!(
-        !bytes.is_empty() && bytes.len() <= 4096,
-        "invalid challenge"
+        !bytes.is_empty() && bytes.len() <= 64 * 1024,
+        "invalid challenge ({} bytes)",
+        bytes.len()
     );
     Ok(rp.to_owned())
 }
