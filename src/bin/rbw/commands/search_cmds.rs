@@ -179,6 +179,9 @@ pub(super) fn search_from_file(
             eprintln!("{}", style::warning(&msg, c));
             std::process::exit(1);
         }
+        if redact_enabled() {
+            entries = entries.iter().map(DecryptedCipher::redacted).collect();
+        }
         return write_serialized_pretty(
             &entries,
             output,
@@ -190,6 +193,9 @@ pub(super) fn search_from_file(
         .iter()
         .map(std::convert::TryFrom::try_from)
         .collect::<anyhow::Result<_>>()?;
+    if insecure {
+        deny_if_redacted("`--insecure`")?;
+    }
     if insecure && !fields.contains(&ListField::Password) {
         let insert_pos = fields
             .iter()
@@ -321,6 +327,9 @@ pub fn search(
             eprintln!("{}", style::warning(&msg, c));
             std::process::exit(1);
         }
+        if redact_enabled() {
+            entries = entries.iter().map(DecryptedCipher::redacted).collect();
+        }
         return write_serialized_pretty(
             &entries,
             output,
@@ -332,6 +341,9 @@ pub fn search(
         .iter()
         .map(std::convert::TryFrom::try_from)
         .collect::<anyhow::Result<_>>()?;
+    if insecure {
+        deny_if_redacted("`--insecure`")?;
+    }
     if insecure && !fields.contains(&ListField::Password) {
         let insert_pos = fields
             .iter()

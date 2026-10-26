@@ -275,6 +275,17 @@ struct Cli {
     )]
     account: Option<String>,
 
+    #[arg(
+        long,
+        visible_aliases = ["mask", "no-secrets"],
+        global = true,
+        help = "Never show secret material (passwords, TOTP, card numbers, \
+            private keys, hidden fields, notes): shown as dots, and commands \
+            that exist to output a secret refuse (also RBW_REDACT, or the \
+            `redact` config option)"
+    )]
+    redact: bool,
+
     #[command(subcommand)]
     command: Opt,
 }
@@ -1139,13 +1150,6 @@ enum Opt {
             help = "Passphrase for an encrypted --from-file export; alternatively set $RBW_EXPORT_PASSPHRASE"
         )]
         from_file_passphrase: Option<String>,
-        #[arg(
-            long,
-            conflicts_with_all = ["raw", "yaml"],
-            help = "Show dots instead of secret values (password, TOTP, card \
-                number and CVV, SSN, SSH private key, hidden fields)"
-        )]
-        mask: bool,
     },
 
     #[command(about = "Search for entries")]
@@ -3889,6 +3893,39 @@ fn run_termux(termux: TermuxCmd) -> anyhow::Result<()> {
     }
 }
 
+// With `--redact`, the commands that exist to hand out a secret refuse.
+// Display commands (`get`, `show`, `list`, `search`, `history`, the TUI) mask
+// instead, so they aren't listed here.
+fn redact_guard(opt: &Opt) -> anyhow::Result<()> {
+    if !commands::redact_enabled() {
+        return Ok(());
+    }
+    let denied = match opt {
+        Opt::Code { .. } => Some("code"),
+        Opt::Inject { .. } => Some("inject"),
+        Opt::Run { .. } => Some("run"),
+        Opt::Copy { .. } => Some("copy"),
+        Opt::Export { .. } => Some("export"),
+        Opt::Edit { .. } => Some("edit"),
+        Opt::SecretService { .. } => Some("secret-service"),
+        Opt::Generate { name: Some(_), .. } => Some("generate NAME"),
+        Opt::Add { generate: true, .. } => Some("add --generate"),
+        Opt::Passkey {
+            passkey: Passkey::Assert { .. } | Passkey::Inject { .. },
+        } => Some("passkey sign-in"),
+        Opt::Attachment {
+            attachment: Attachment::Get { .. },
+        } => Some("attachment get"),
+        Opt::Send {
+            send: SendCmd::View { .. },
+        } => Some("send view"),
+        _ => None,
+    };
+    denied.map_or(Ok(()), |what| {
+        commands::deny_if_redacted(&format!("`rbw {what}`"))
+    })
+}
+
 fn route_to_entry_account(opt: &Opt) -> anyhow::Result<()> {
     let route = |find_args: &FindArgs| {
         // --fzf prompts while resolving; don't ask twice.
@@ -4002,6 +4039,19 @@ fn main() {
         }
     })
     .init();
+
+    commands::set_redact(cli.redact || commands::redact_requested());
+    if let Err(e) = redact_guard(&opt) {
+        eprintln!(
+            "{}",
+            commands::style_error(
+                &format!("{e:#}"),
+                std::io::stderr().is_terminal()
+                    && std::env::var_os("NO_COLOR").is_none()
+            )
+        );
+        std::process::exit(1);
+    }
 
     // `get` looks in every account; the commands that act on one entry
     // should find the same entry instead of only looking in the primary one.
@@ -4522,7 +4572,6 @@ fn main() {
             all,
             from_file,
             from_file_passphrase,
-            mask,
         } => (|| -> anyhow::Result<()> {
             let output = resolve_output_mode(output, raw, yaml)?;
             commands::show(
@@ -4537,7 +4586,6 @@ fn main() {
                 all,
                 from_file.as_deref(),
                 from_file_passphrase.as_deref(),
-                mask,
             )
         })(),
         Opt::Search {

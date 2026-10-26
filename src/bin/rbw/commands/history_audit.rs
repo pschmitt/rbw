@@ -35,6 +35,11 @@ pub(super) fn history_from_file(
     )
     .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
+    let decrypted = if redact_enabled() {
+        decrypted.redacted()
+    } else {
+        decrypted
+    };
     if output_is_structured(output) {
         write_serialized_pretty(
             &decrypted.history,
@@ -355,6 +360,11 @@ pub fn history(
         force_exact,
     )
     .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    let decrypted = if redact_enabled() {
+        decrypted.redacted()
+    } else {
+        decrypted
+    };
     if output_is_structured(output) {
         write_serialized_pretty(
             &decrypted.history,

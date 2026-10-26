@@ -810,6 +810,11 @@ pub struct Config {
     // `UriMatchDefault`.
     #[serde(default, skip_serializing_if = "UriMatchDefault::is_default")]
     pub default_uri_match: UriMatchDefault,
+    // Never show secret material (passwords, TOTP, card numbers, private
+    // keys, hidden fields, notes, ...): see `--redact`. The flag and
+    // `RBW_REDACT` turn it on for a single run; this turns it on for good.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub redact: bool,
     // Shortcut names for `rbw get`; see `ItemAlias`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<ItemAlias>,

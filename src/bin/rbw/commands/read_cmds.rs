@@ -19,6 +19,9 @@ pub(super) fn list_from_file(
 
     if output_is_structured(output) {
         entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        if redact_enabled() {
+            entries = entries.iter().map(DecryptedCipher::redacted).collect();
+        }
         return write_serialized_pretty(
             &entries,
             output,
@@ -30,6 +33,9 @@ pub(super) fn list_from_file(
         .iter()
         .map(std::convert::TryFrom::try_from)
         .collect::<anyhow::Result<_>>()?;
+    if insecure {
+        deny_if_redacted("`--insecure`")?;
+    }
     if insecure && !fields.contains(&ListField::Password) {
         let insert_pos = fields
             .iter()
@@ -182,6 +188,9 @@ pub fn list(
         entries.retain(|entry| trash_filter.matches(entry.deleted));
         entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         warn_undated_entries(undated);
+        if redact_enabled() {
+            entries = entries.iter().map(DecryptedCipher::redacted).collect();
+        }
         return write_serialized_pretty(
             &entries,
             output,
@@ -193,6 +202,9 @@ pub fn list(
         .iter()
         .map(std::convert::TryFrom::try_from)
         .collect::<anyhow::Result<_>>()?;
+    if insecure {
+        deny_if_redacted("`--insecure`")?;
+    }
     if insecure && !fields.contains(&ListField::Password) {
         // Insert password after user (or at position 2 if user column present)
         let insert_pos = fields
@@ -309,6 +321,12 @@ pub(super) fn get_from_file(
     )
     .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
+    deny_secret_get(&decrypted, field, list_fields, output)?;
+    let decrypted = if redact_enabled() {
+        decrypted.redacted()
+    } else {
+        decrypted
+    };
     if list_fields {
         decrypted.display_fields_list();
     } else if output_is_structured(output) {
@@ -499,6 +517,12 @@ pub fn get(
         );
     }
 
+    deny_secret_get(&decrypted, field.as_deref(), list_fields, output)?;
+    let decrypted = if redact_enabled() {
+        decrypted.redacted()
+    } else {
+        decrypted
+    };
     if list_fields {
         decrypted.display_fields_list();
     } else if output_is_structured(output) {
@@ -526,7 +550,6 @@ pub(super) fn show_from_file(
     output: OutputMode,
     force_exact: bool,
     passphrase: Option<&str>,
-    mask: bool,
 ) -> anyhow::Result<()> {
     let vault = load_from_file(path, passphrase)?;
 
@@ -551,6 +574,12 @@ pub(super) fn show_from_file(
     )
     .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
+    let mask = redact_enabled();
+    let decrypted = if mask {
+        decrypted.redacted()
+    } else {
+        decrypted
+    };
     if output_is_structured(output) {
         decrypted.display_structured(&desc, output)?;
     } else if output == OutputMode::Name {
@@ -574,12 +603,7 @@ pub fn show(
     all: bool,
     from_file: Option<&std::path::Path>,
     from_file_passphrase: Option<&str>,
-    mask: bool,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !mask || !output_is_structured(output),
-        "--mask only applies to the default text output"
-    );
     if let Some(path) = from_file {
         return show_from_file(
             path,
@@ -590,7 +614,6 @@ pub fn show(
             output,
             force_exact,
             from_file_passphrase,
-            mask,
         );
     }
 
@@ -618,6 +641,12 @@ pub fn show(
         force_exact,
     )
     .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    let mask = redact_enabled();
+    let decrypted = if mask {
+        decrypted.redacted()
+    } else {
+        decrypted
+    };
     if output_is_structured(output) {
         decrypted.display_structured(&desc, output)?;
     } else if output == OutputMode::Name {

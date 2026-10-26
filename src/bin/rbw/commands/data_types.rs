@@ -499,6 +499,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "passwordGen.diceware",
     "clipboard",
     "defaultUriMatch",
+    "redact",
     "browser.clients",
     "browser.fingerprintAutoStart",
 ];

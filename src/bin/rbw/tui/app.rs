@@ -828,7 +828,7 @@ impl App {
                     |target| commands::tui_file_entry_scope(target, &id),
                 );
                 self.scope_cache.insert((o, id.clone()), scope);
-                self.detail_cache.insert((o, id), detail);
+                self.detail_cache.insert((o, id), redact_detail(detail));
             }
             return;
         }
@@ -844,7 +844,7 @@ impl App {
                 let scope =
                     commands::tui_entry_scope(&self.vaults[o].db, &entry);
                 self.scope_cache.insert((o, id.clone()), scope);
-                self.detail_cache.insert((o, id), detail);
+                self.detail_cache.insert((o, id), redact_detail(detail));
             }
             Err(e) => self.set_status(Level::Error, format!("{e:#}")),
         }
@@ -884,7 +884,23 @@ impl App {
         }
     }
 
+    // With `--redact` nothing secret goes to the clipboard, and the detail is
+    // masked anyway. Returns whether the action was refused.
+    fn refuse_if_redacted(&mut self, what: &str) -> bool {
+        let refused = commands::redact_enabled();
+        if refused {
+            self.set_status(
+                Level::Warn,
+                format!("{what} is disabled by --redact"),
+            );
+        }
+        refused
+    }
+
     fn copy_password(&mut self) {
+        if self.refuse_if_redacted("copying the password") {
+            return;
+        }
         let value = self.current_detail().and_then(detail_password);
         self.copy("password", value);
     }
@@ -895,6 +911,9 @@ impl App {
     }
 
     fn copy_totp(&mut self) {
+        if self.refuse_if_redacted("copying the TOTP code") {
+            return;
+        }
         let secret = self.current_detail().and_then(detail_totp_secret);
         match secret {
             Some(secret) => match commands::generate_totp(&secret) {
@@ -979,6 +998,9 @@ impl App {
 
     // Download the highlighted attachment into the current working directory.
     fn download_attachment(&mut self) {
+        if self.refuse_if_redacted("downloading an attachment") {
+            return;
+        }
         let att_id = match &self.mode {
             Mode::Attachments(view) => {
                 view.items.get(view.selected).map(|i| i.id.clone())
@@ -1184,7 +1206,9 @@ impl App {
     }
 
     fn start_edit(&mut self) {
-        if self.reject_if_read_only() {
+        if self.reject_if_read_only()
+            || self.refuse_if_redacted("editing an entry")
+        {
             return;
         }
         let Some(owner) = self.current_owner() else {
@@ -2445,9 +2469,19 @@ impl App {
             TuiAction::PageUp => self.move_by(-10),
             TuiAction::PageDown => self.move_by(10),
             TuiAction::Quit => return Some(Action::Quit),
-            TuiAction::OpenEditor => return Some(Action::OpenEditor),
+            TuiAction::OpenEditor => {
+                return Some(if self.refuse_if_redacted("the editor") {
+                    Action::None
+                } else {
+                    Action::OpenEditor
+                });
+            }
             TuiAction::Sync => self.sync(),
-            TuiAction::ToggleReveal => self.reveal = !self.reveal,
+            TuiAction::ToggleReveal => {
+                if !self.refuse_if_redacted("revealing secrets") {
+                    self.reveal = !self.reveal;
+                }
+            }
             TuiAction::CopyPassword => self.copy_password(),
             TuiAction::CopyUsername => self.copy_username(),
             TuiAction::CopyTotp => self.copy_totp(),
@@ -2485,14 +2519,24 @@ impl App {
             Some(TuiAction::FocusDetail) => self.focus_detail(),
             Some(TuiAction::FocusList) => self.focus_list(),
             Some(TuiAction::ToggleSearch) => self.mode = Mode::Search,
-            Some(TuiAction::ToggleReveal) => self.reveal = !self.reveal,
+            Some(TuiAction::ToggleReveal) => {
+                if !self.refuse_if_redacted("revealing secrets") {
+                    self.reveal = !self.reveal;
+                }
+            }
             Some(TuiAction::CopyPassword) => self.copy_password(),
             Some(TuiAction::CopyUsername) => self.copy_username(),
             Some(TuiAction::CopyTotp) => self.copy_totp(),
             Some(TuiAction::OpenUri) => self.open_uri(),
             Some(TuiAction::OpenAttachments) => self.open_attachments(),
             Some(TuiAction::StartEdit) => self.start_edit(),
-            Some(TuiAction::OpenEditor) => return Action::OpenEditor,
+            Some(TuiAction::OpenEditor) => {
+                return if self.refuse_if_redacted("the editor") {
+                    Action::None
+                } else {
+                    Action::OpenEditor
+                };
+            }
             Some(TuiAction::StartAdd) => self.start_add(),
             Some(TuiAction::OpenAccounts) => self.open_accounts(),
             Some(TuiAction::OpenSettings) => self.open_settings(),
@@ -3193,6 +3237,16 @@ fn clone_editable(base: &EditableCipher) -> EditableCipher {
             data: EditableData::SecureNote,
             fields: Vec::new(),
         })
+}
+
+// What the detail pane keeps of a decrypted entry: with `--redact`, the
+// masked copy, so nothing secret is ever held for display or copying.
+fn redact_detail(detail: DecryptedCipher) -> DecryptedCipher {
+    if commands::redact_enabled() {
+        detail.redacted()
+    } else {
+        detail
+    }
 }
 
 fn detail_password(detail: &DecryptedCipher) -> Option<String> {

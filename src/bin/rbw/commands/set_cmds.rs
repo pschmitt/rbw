@@ -393,6 +393,12 @@ pub fn set(
                 eprintln!();
                 eprintln!("{}:", style::name(&pu.entry_name, c));
                 for (field, old, new) in &pu.changes {
+                    // The diff shows the values themselves, secrets included.
+                    let (old, new) = if redact_enabled() {
+                        (MASKED_SECRET, MASKED_SECRET)
+                    } else {
+                        (old.as_str(), new.as_str())
+                    };
                     eprintln!(
                         "  {} {} {} {}",
                         lbl(field),

@@ -72,6 +72,7 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
         "defaultUriMatch" => {
             Some(uri_match_default_str(config.default_uri_match).to_string())
         }
+        "redact" => Some(config.redact.to_string()),
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     };
     let Some(value) = value else {
@@ -262,6 +263,10 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
         "defaultUriMatch" => {
             config.default_uri_match = parse_uri_match_default(value)?;
         }
+        "redact" => {
+            config.redact =
+                value.parse().context("failed to parse value for redact")?;
+        }
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     }
     config.save()?;
@@ -343,6 +348,9 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
         "defaultUriMatch" => {
             config.default_uri_match =
                 rbw::config::UriMatchDefault::default();
+        }
+        "redact" => {
+            config.redact = false;
         }
         _ => return Err(anyhow::anyhow!("invalid config key: {key}")),
     }

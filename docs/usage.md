@@ -150,9 +150,9 @@ unset; they are applied after rbw's defaults and your own
 `FZF_DEFAULT_OPTS`, so they can override both. `rbw config set fzf.enabled
 true` uses the picker without `--fzf`, but only when rbw runs on a terminal,
 so scripts still get the error. The preview runs
-`CLICOLOR_FORCE=1 rbw show --mask <id>`. `rbw show --mask` prints `••••••••`
-in place of the password, TOTP seed, card number and CVV, SSN, SSH private
-key and hidden custom fields (text output only). `CLICOLOR_FORCE` forces colors in any rbw
+`CLICOLOR_FORCE=1 rbw show --mask <id>`: `--mask` is the global
+[`--redact`](#hiding-secrets) flag, which prints `••••••••` in place of every
+secret value. `CLICOLOR_FORCE` forces colors in any rbw
 command whose output isn't a terminal, and `NO_COLOR` still disables them.
 
 `rbw search --url URL [TERM]` answers what the browser extension offers for a
@@ -200,6 +200,31 @@ the editor opens with an empty `notes` field and a `secure_note` data type.
 Piped stdin is stored verbatim as the note (`echo foo | rbw create
 --secure-note NAME`) rather than parsed as a YAML/JSON entry. It conflicts
 with the `USER` argument, `--uri`, and password generation.
+
+## Hiding secrets
+
+`--redact` (aliases `--mask` and `--no-secrets`; also `RBW_REDACT=1`, or `rbw
+config set redact true` / `programs.rbw.declarative.redact`) keeps secret
+material off the screen, for a shared terminal, a recording or an AI agent
+driving rbw:
+
+* `get`, `show`, `history`, `list`, `search` (and their `--from-file`
+  forms), the `set` confirmation diff and the TUI show `••••••••` in place of
+  passwords, TOTP seeds, card numbers and security codes, SSH private keys,
+  passkey keys, hidden custom fields, the identity SSN, license and passport
+  numbers, previous passwords and notes (notes often hold secrets too).
+  Structured output (`--json`, `--yaml`) is masked the same way.
+* `get` without `--field`, or with a secret field (`password`, `totp`,
+  `notes`, ...), refuses; `get --field username` still works, as does
+  `--list-fields`.
+* `code`, `inject`, `run`, `copy`, `export`, `edit`, `secret-service`,
+  `passkey assert|inject`, `attachment get`, `send view`, `generate NAME`,
+  `add --generate` and `--insecure` refuse, since their job is to hand out
+  a secret.
+* In the TUI, reveal, copying the password or TOTP code, editing (form and
+  `$EDITOR`) and attachment downloads are disabled.
+
+The browser extension's host is not covered yet.
 
 ## Archiving and trash
 

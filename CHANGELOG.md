@@ -4,6 +4,18 @@
 
 ### Added
 
+* `--redact` (aliases `--mask`, `--no-secrets`; `RBW_REDACT`, the `redact`
+  config option and `programs.rbw.declarative.redact`) never shows secret
+  material: `get`, `show`, `history`, `list`, `search`, the `set` diff and the
+  TUI mask it, and commands that exist to output a secret (`code`, `inject`,
+  `run`, `copy`, `export`, `edit`, ...) refuse. It replaces `show --mask`,
+  which the `--fzf` preview keeps using.
+* `edit`, `set`, `remove`, `archive`, `unarchive`, `history` and `attachment`
+  find the entry in whichever account holds it, like `get`, instead of only
+  looking in the primary account without `--account`.
+* While `$XDG_RUNTIME_DIR/rbw/browser-debug` exists, the browser host appends
+  the real error behind a generic "Operation failed" to
+  `browser-errors.log` next to it.
 * `unlockHideFingerprintNotice` (`rbw config set`, `programs.rbw.declarative`
   option of the same name) hides the "Fingerprint not configured." line in the
   integrated unlock dialogs. Off by default: the notice still shows.

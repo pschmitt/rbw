@@ -574,6 +574,19 @@ let
           `auto` tries both and succeeds if either one does.
         '';
       };
+      redact = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Never show secret material: passwords, TOTP seeds and codes, card
+          numbers and security codes, SSH private keys, passkey keys, hidden
+          custom fields, identity numbers and notes are masked in `get`,
+          `show`, `list`, `search`, `history` and the TUI, and the commands
+          whose job is to hand out a secret (`code`, `inject`, `run`,
+          `copy`, `export`, `edit`, ...) refuse to run. The same as always
+          passing `--redact` (or setting `RBW_REDACT=1`).
+        '';
+      };
       # Mirrors `UriMatchDefault` in `src/config.rs`.
       defaultUriMatch = mkOption {
         type = types.enum [

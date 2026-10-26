@@ -138,6 +138,13 @@ pub use cipher_view::*;
     clippy::wildcard_imports,
     reason = "the command modules share one namespace, as they did in a single file"
 )]
+mod redact;
+pub use redact::*;
+
+#[allow(
+    clippy::wildcard_imports,
+    reason = "the command modules share one namespace, as they did in a single file"
+)]
 mod output;
 #[allow(
     clippy::wildcard_imports,
