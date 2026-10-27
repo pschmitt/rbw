@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.32.3] - 2026-10-27
+
 ### Added
 
 * Browser extension: Ctrl+Shift+9 generates a password with rbw's generator
