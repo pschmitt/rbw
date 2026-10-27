@@ -649,6 +649,9 @@ async function pageMessage(message, sender, respond) {
   if (sender.id !== api.runtime.id || !sender.tab || !sender.url) return respond({ error: "Invalid sender." });
   const url = new URL(sender.url);
   if (!sender.tab.url || new URL(sender.tab.url).origin !== url.origin) return respond({ fallback: true });
+  if (message.action === "open_generator") {
+    return api.windows.create({ url: api.runtime.getURL("popup.html?surface=window&page=generator"), type: "popup", width: 460, height: 680 }).then(() => respond({ result: true }), () => respond({ result: false }));
+  }
   if (message.action === "open_settings") {
     return api.windows.create({ url: api.runtime.getURL("popup.html?surface=window&settings=1"), type: "popup", width: 460, height: 680 }).then(() => respond({ result: true }), () => respond({ result: false }));
   }
@@ -1066,7 +1069,7 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
       if (["unlock", "sync", "save", "mutate", "set_preferences", "import", "save_offer_apply", "unsaved_login_apply", "passkey_approve"].includes(message.action)) settings().then(() => refreshActiveBadge()).catch(() => {});
     }, error => respond({ error: error.message || "Operation failed.", diagnostic: error.diagnostic || null })); return true;
   }
-  if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "inline_open", "keyboard_fill_shortcut", "autofill_load", "undo_fill", "dismiss_fill", "open_settings"].includes(message?.action)) return false;
+  if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "inline_open", "keyboard_fill_shortcut", "autofill_load", "undo_fill", "dismiss_fill", "open_settings", "open_generator"].includes(message?.action)) return false;
   pageMessage(message, sender, respond).catch(() => respond({ error: "Request failed." })); return true;
 });
 
@@ -1151,7 +1154,29 @@ async function fillShortcut(tabId) {
     }
   }
 }
+// Generates a password with rbw's defaults, puts it on the clipboard (the
+// agent's, so its clearing timeout applies) and says so on the page. The
+// password itself never reaches the page or the notice.
+async function generateToClipboard() {
+  let notice = { title: "Password copied", message: "A new password is on the clipboard.", clipboard: "Password copied to clipboard", generatorAction: true };
+  try {
+    const text = await native({ action: "generate", account: null, length: null, passphrase: false, mode: null });
+    await native({ action: "copy_text", account: null, text });
+  } catch (err) {
+    notice = { title: "Could not generate a password", message: err?.message || "rbw did not answer.", error: true };
+  }
+  try {
+    const [tab] = await api.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error("no tab");
+    await notifyFill(tab, notice);
+  } catch (_) {
+    // Internal pages take no overlay: flash the toolbar badge instead.
+    api.action.setBadgeText({ text: notice.error ? "!" : "✓" }).catch(() => {});
+    setTimeout(() => refreshActiveBadge().catch(() => {}), 2500);
+  }
+}
 api.commands.onCommand.addListener(command => {
+  if (command === "generate-password") { const operation = queue.then(generateToClipboard); queue = operation.catch(() => {}); return; }
   if (command === "open-vault") { api.action.openPopup().catch(() => {}); return; }
   if (command === "fill-login") {
     // Firefox may reserve this shortcut for a browser action. The content

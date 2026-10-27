@@ -35,6 +35,7 @@ let totpTimer;
 function stopTotp() { clearTimeout(totpTimer); }
 const initialSearch = new URLSearchParams(location.search).get("search");
 const initialSettings = new URLSearchParams(location.search).get("settings") === "1";
+const initialGenerator = new URLSearchParams(location.search).get("page") === "generator";
 let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, detailFrom = null, healthScroll = 0, sendCount = 0, healthState = "idle", healthRun = 0, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
 let accountNames = [], accountStates = [], allAccounts = [], cliAccountColors = {}, primaryAccount = "";
 const colorOf = name => accountColor(name, allAccounts, preference.accountColors, cliAccountColors);
@@ -1905,7 +1906,7 @@ attempt(async () => {
       showFilters(saved.expanded); syncChips();
     }
     await refresh(status, !!saved && saved.page !== "vault");
-    if (initialSettings) show("settings");
+    if (initialSettings) show("settings"); else if (initialGenerator && unlocked) show("generator");
     else if (saved && unlocked && !approvalId) {
       if (saved.page === "detail" && saved.item) await openDetail(saved.item);
       else if (saved.page === "send" && preference.showSend) await loadSends();

@@ -77,6 +77,7 @@ for target in ("firefox", "chromium"):
         "commands": {
             "open-vault": {"suggested_key": {"default": "Ctrl+Shift+Y"}, "description": "Open rbw vault"},
             "fill-login": {"suggested_key": {"default": "Ctrl+Shift+L"}, "description": "Fill matching login"},
+            "generate-password": {"suggested_key": {"default": "Ctrl+Shift+9"}, "description": "Generate a password and copy it"},
         },
         "icons": {str(size): f"icons/rbw-{size}.png" for size in [16, 32, 48, 64, 96, 128, 256]},
         "action": {"default_popup": "popup.html", "default_title": "rbw", "default_icon": toolbar_icons},

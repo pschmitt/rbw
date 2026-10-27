@@ -4,6 +4,10 @@
 
 ### Added
 
+* Browser extension: Ctrl+Shift+9 generates a password with rbw's generator
+  settings and copies it to the clipboard (through the agent, so its clipboard
+  timeout applies). A notice on the page confirms it and has an "Open
+  generator" button; internal browser pages flash the toolbar badge instead.
 * Browser extension: an opt-in "Browser sync" switch in the settings syncs the
   extension's preferences (theme, autofill options, blocklist, excluded items,
   tabs, ...) through Firefox Sync or Chrome sync. Each setting syncs on its

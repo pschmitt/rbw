@@ -432,6 +432,11 @@ function showFillNotice(expectedUrl, notice) {
     settings.addEventListener("click", () => { api.runtime.sendMessage({ action: "open_settings" }).catch(() => {}); dismiss(); });
     box.append(settings);
   }
+  if (notice.generatorAction) {
+    const generator = document.createElement("button"); generator.type = "button"; generator.className = "settings"; generator.textContent = "Open generator";
+    generator.addEventListener("click", event => { if (!event.isTrusted) return; api.runtime.sendMessage({ action: "open_generator" }).catch(() => {}); dismiss(); });
+    box.append(generator);
+  }
   // With several matching logins: a button for the next one (what the fill
   // shortcut does); the next notice replaces this one.
   if (Number.isInteger(notice.position) && Number.isInteger(notice.total) && notice.total > 1 && !notice.error && !notice.title) {
