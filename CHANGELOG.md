@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+* Browser extension: an opt-in "Browser sync" switch in the settings syncs the
+  extension's preferences (theme, autofill options, blocklist, excluded items,
+  tabs, ...) through Firefox Sync or Chrome sync. Each setting syncs on its
+  own and the newest change wins. Accounts, the popup account and account
+  colors stay per machine, since the rbw command line owns them. Values too
+  large for a sync item (8 KiB) are skipped and listed in the settings.
+
 ## [2.32.2] - 2026-10-26
 
 ### Changed

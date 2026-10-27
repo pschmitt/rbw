@@ -173,6 +173,74 @@ function accountScopeOf(prefs) {
   const names = prefs.accounts || [];
   return names.length === 1 ? { account: names[0] } : names.length > 1 ? { accounts: names } : {};
 }
+function normalizePreferences(next) {
+  next.autofillBlocklist = String(next.autofillBlocklist || "").slice(0, 16384);
+  next.accountColors = Object.fromEntries(Object.entries(next.accountColors && typeof next.accountColors === "object" ? next.accountColors : {}).filter(([name, color]) => name.length <= 256 && /^#[0-9a-f]{6}$/i.test(color)).slice(0, 64));
+  next.accounts = Array.isArray(next.accounts) ? [...new Set(next.accounts.filter(name => typeof name === "string" && name.length <= 256))].slice(0, 64) : [];
+  next.autofillExcludedItems = Array.isArray(next.autofillExcludedItems) ? [...new Set(next.autofillExcludedItems.filter(item => typeof item === "string" && item.length > 0 && item.length <= 128))].slice(0, 10000) : [];
+  if (!["off", "on", "plaid"].includes(next.animations)) next.animations = "on";
+  if (!["slow", "normal", "fast"].includes(next.animationSpeed)) next.animationSpeed = "normal";
+  if (!["off", "fill", "clipboard"].includes(next.cardSecurityCode)) next.cardSecurityCode = "off";
+  if (!URI_MATCH_TYPES.includes(next.uriMatchDefault)) next.uriMatchDefault = "";
+  uriMatchOverride = next.uriMatchDefault || null;
+  return next;
+}
+// Browser sync (Firefox Sync / Chrome sync) is opt-in per browser. Each
+// setting is its own sync item with a timestamp, so the newest change to a
+// setting wins without one device overwriting another's unrelated changes.
+// Accounts are driven by the rbw CLI on each machine and stay local.
+const LOCAL_ONLY_KEYS = ["accounts", "popupAccount", "accountColors"];
+const SYNC_KEYS = Object.keys(defaults).filter(key => !LOCAL_ONLY_KEYS.includes(key));
+const SYNC_ITEM_MAX = 7000; // Browsers cap a sync item at 8 KiB.
+let syncQueue = Promise.resolve();
+let syncSkipped = [];
+async function syncSettingsState() {
+  const enabled = (await api.storage.local.get("syncSettings")).syncSettings === true;
+  return { available: !!api.storage?.sync, enabled: enabled && !!api.storage?.sync, skipped: syncSkipped };
+}
+async function pushNow(keys, next) {
+  if (!keys.length || !(await syncSettingsState()).enabled) return;
+  const { prefStamps = {} } = await api.storage.local.get("prefStamps");
+  const now = Date.now(), items = {};
+  for (const key of keys) {
+    const item = { v: next[key], t: now };
+    if (JSON.stringify(item).length > SYNC_ITEM_MAX) { if (!syncSkipped.includes(key)) syncSkipped.push(key); continue; }
+    syncSkipped = syncSkipped.filter(skipped => skipped !== key);
+    items[`pref:${key}`] = item; prefStamps[key] = now;
+  }
+  // Local stamps first: the echo of our own write then finds nothing newer.
+  await api.storage.local.set({ prefStamps });
+  await api.storage.sync.set(items);
+}
+function pushSyncedPreferences(keys, next) {
+  syncQueue = syncQueue.then(() => pushNow(keys, next)).catch(() => { /* Sync is best effort; local settings always apply. */ });
+  return syncQueue;
+}
+// Applies newer synced values; with `upload`, also sends the local values the
+// sync area lacks (turning sync on in a browser that already has settings).
+function mergeSyncedPreferences(upload = false) {
+  syncQueue = syncQueue.then(async () => {
+    if (!(await syncSettingsState()).enabled) return;
+    const remote = await api.storage.sync.get(null);
+    const { preferences = {}, prefStamps = {} } = await api.storage.local.get(["preferences", "prefStamps"]);
+    const next = { ...preferences }, applied = [], missing = [];
+    for (const key of SYNC_KEYS) {
+      const item = remote[`pref:${key}`];
+      if (item && typeof item === "object" && typeof item.t === "number" && typeof item.v === typeof defaults[key]) {
+        if (item.t > (prefStamps[key] || 0) && JSON.stringify(item.v) !== JSON.stringify(preferences[key])) { next[key] = item.v; applied.push(key); }
+        prefStamps[key] = Math.max(prefStamps[key] || 0, item.t);
+      } else if (upload && key in preferences) missing.push(key);
+    }
+    if (applied.length) {
+      normalizePreferences(next);
+      if (applied.includes("favicons") || applied.includes("uriMatchDefault")) clearMetadata();
+    }
+    await api.storage.local.set({ preferences: next, prefStamps });
+    if (missing.length) await pushNow(missing, next);
+    if (applied.length) refreshActiveBadge().catch(() => {});
+  }).catch(() => { /* Sync is best effort; local settings always apply. */ });
+  return syncQueue;
+}
 async function settings() {
   const stored = (await api.storage.local.get("preferences")).preferences || {};
   let managed = {};
@@ -859,18 +927,17 @@ async function handle(message) {
     }
     case "set_preferences": {
       const old = await settings();
-      const next = { ...old, ...Object.fromEntries(Object.entries(message.preferences || {}).filter(([k, v]) => (k in defaults) && typeof v === typeof defaults[k])) };
-      next.autofillBlocklist = String(next.autofillBlocklist || "").slice(0, 16384);
-      next.accountColors = Object.fromEntries(Object.entries(next.accountColors && typeof next.accountColors === "object" ? next.accountColors : {}).filter(([name, color]) => name.length <= 256 && /^#[0-9a-f]{6}$/i.test(color)).slice(0, 64));
-      next.accounts = Array.isArray(next.accounts) ? [...new Set(next.accounts.filter(name => typeof name === "string" && name.length <= 256))].slice(0, 64) : [];
-      next.autofillExcludedItems = Array.isArray(next.autofillExcludedItems) ? [...new Set(next.autofillExcludedItems.filter(item => typeof item === "string" && item.length > 0 && item.length <= 128))].slice(0, 10000) : [];
-      if (!["off", "on", "plaid"].includes(next.animations)) next.animations = "on";
-      if (!["slow", "normal", "fast"].includes(next.animationSpeed)) next.animationSpeed = "normal";
-      if (!["off", "fill", "clipboard"].includes(next.cardSecurityCode)) next.cardSecurityCode = "off";
-      if (!URI_MATCH_TYPES.includes(next.uriMatchDefault)) next.uriMatchDefault = "";
-      uriMatchOverride = next.uriMatchDefault || null;
+      const next = normalizePreferences({ ...old, ...Object.fromEntries(Object.entries(message.preferences || {}).filter(([k, v]) => (k in defaults) && typeof v === typeof defaults[k])) });
       if (next.popupAccount !== old.popupAccount || JSON.stringify(next.accounts) !== JSON.stringify(old.accounts) || !next.favicons || next.uriMatchDefault !== old.uriMatchDefault) clearMetadata();
-      await api.storage.local.set({ preferences: next }); return next;
+      await api.storage.local.set({ preferences: next });
+      await pushSyncedPreferences(SYNC_KEYS.filter(key => JSON.stringify(next[key]) !== JSON.stringify(old[key])), next);
+      return next;
+    }
+    case "sync_settings": return syncSettingsState();
+    case "set_sync_settings": {
+      await api.storage.local.set({ syncSettings: message.enabled === true });
+      if (message.enabled === true) await mergeSyncedPreferences(true);
+      return syncSettingsState();
     }
     case "search": {
       let tab; try { tab = await activeTab(); } catch (_) { /* Search also works on internal pages. */ }
@@ -1035,7 +1102,8 @@ api.runtime.onInstalled.addListener(() => {
   api.alarms.create("rbw-vault-lock-state", { periodInMinutes: 1 });
   refreshVaultLockState();
 });
-api.runtime.onStartup.addListener(() => refreshVaultLockState());
+api.runtime.onStartup.addListener(() => { refreshVaultLockState(); mergeSyncedPreferences(); });
+api.storage.onChanged.addListener((_changes, area) => { if (area === "sync") mergeSyncedPreferences(); });
 api.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === "rbw-vault-lock-state") refreshVaultLockState();
 });

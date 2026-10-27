@@ -93,6 +93,17 @@ for (const id of ["passkeys", "inline", "autofill", "allow-http-fill", "autofill
   await request("set_preferences", { preferences }); $("animation-speed").disabled = preferences.animations === "off"; $("animation-speed").closest(".switch-row").hidden = preferences.animations === "off"; theme(preferences.theme); $("message").textContent = "Settings saved."; await status();
   showPolicy(await request("agent_settings"));
 });
+// Browser-account sync of the preferences (not the vault); see background.js.
+function showSyncState(state) {
+  const box = $("sync-settings"), note = $("sync-settings-note");
+  box.checked = state.enabled; box.disabled = !state.available; note.hidden = state.available && !state.skipped.length;
+  note.textContent = !state.available ? "Not available in this browser." : state.skipped.length ? `Too large to sync: ${state.skipped.join(", ")}.` : "";
+}
+$("sync-settings").onchange = () => attempt(async () => {
+  showSyncState(await request("set_sync_settings", { enabled: $("sync-settings").checked }));
+  if ($("sync-settings").checked) location.reload(); // Pick up whatever the sync area brought in.
+  else $("message").textContent = "Settings sync turned off.";
+});
 for (const action of ["sync", "lock"]) $(action).onclick = () => attempt(async () => {
   if (action === "lock" && !await confirmLock()) return;
   // The sync icon spins while syncing, like the popup's header button.
@@ -110,6 +121,7 @@ $("shortcuts").onclick = async () => {
   } catch (_) { $("shortcuts-hint").hidden = false; }
 };
 attempt(async () => {
+  showSyncState(await request("sync_settings"));
   const prefs = await request("preferences"); theme(prefs.theme);
   const managedPreferences = await request("managed_preferences");
   $("favicons").checked = prefs.favicons; $("show-generator").checked = prefs.showGenerator; $("show-send").checked = prefs.showSend; $("show-health").checked = prefs.showHealth;
