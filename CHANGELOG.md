@@ -18,6 +18,9 @@
   In the corner the window is dimmed; touching it or "Keep open" restores it.
 * Browser extension: the toolbar crab hops and sparkles after a successful
   autofill (unless animations are off).
+* Browser extension: Tab in the master password field of the unlock panel hides
+  the typed characters entirely (no dots) and shows them again, like the
+  terminal and GTK unlock dialogs. The choice is remembered.
 
 ## [2.32.6] - 2026-10-28
 

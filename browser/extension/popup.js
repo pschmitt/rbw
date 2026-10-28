@@ -434,7 +434,7 @@ function renderAccountStates(primary) {
       // credential source, a phone approval, chained unlocking); the key
       // button, or a failed attempt, opens a password field in the row.
       const form = element("form", null, "account-unlock"), input = element("input"), submit = element("button", "Unlock");
-      input.type = "password"; input.placeholder = `Master password for ${account.name}`; input.autocomplete = "off"; input.maxLength = 4096; input.required = true; input.spellcheck = false;
+      input.type = "password"; input.dataset.noEcho = ""; input.title = "Tab shows or hides the typed characters"; input.placeholder = `Master password for ${account.name}`; input.autocomplete = "off"; input.maxLength = 4096; input.required = true; input.spellcheck = false;
       submit.type = "submit"; form.append(input, submit); form.hidden = !needsPassword.has(account.name);
       form.onsubmit = event => {
         event.preventDefault(); const password = input.value; input.value = "";
@@ -2063,3 +2063,14 @@ document.addEventListener("mouseover", event => {
   if (row && !matchMedia("(prefers-reduced-motion: reduce)").matches) marqueeTimer = setTimeout(() => startMarquee(row), MARQUEE_DELAY);
 });
 document.addEventListener("mouseleave", () => { stopMarquee(); marqueeRow = null; });
+// Tab on a master password field hides the typed characters altogether (no
+// dots), as in the terminal and GTK unlock dialogs; Tab again shows them.
+// The choice is kept for the next time the popup opens.
+try { if (localStorage.getItem("rbw-no-echo") === "1") document.documentElement.classList.add("no-echo"); } catch (_) { /* Storage unavailable. */ }
+document.addEventListener("keydown", event => {
+  const field = event.target;
+  if (event.key !== "Tab" || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || !event.isTrusted || !(field instanceof HTMLInputElement) || !("noEcho" in field.dataset)) return;
+  event.preventDefault();
+  const hidden = document.documentElement.classList.toggle("no-echo");
+  try { localStorage.setItem("rbw-no-echo", hidden ? "1" : "0"); } catch (_) { /* Storage unavailable. */ }
+}, true);

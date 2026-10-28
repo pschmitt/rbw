@@ -905,3 +905,5 @@ article.is-inactive .item-lead, article.is-inactive .item-main strong { opacity:
 .tone-danger { --tone:var(--danger); }
 .tone-warn { --tone:var(--warn); }
 .tone-ok { --tone:var(--ok); }
+/* No echo: the master password is typed blind; the caret stays visible. */
+html.no-echo input[data-no-echo] { color:transparent; text-shadow:none; caret-color:var(--text, currentColor); }
