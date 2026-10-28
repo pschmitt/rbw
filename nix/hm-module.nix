@@ -433,6 +433,22 @@ let
         description = "Hide all password input feedback in integrated unlock dialogs.";
       };
 
+      unlockFingerprint = mkOption {
+        type = types.enum [
+          "auto"
+          "always"
+          "never"
+        ];
+        default = "auto";
+        description = ''
+          Fingerprint scan policy of enrolled accounts. `auto` skips the scan
+          in SSH sessions, where the reader is out of reach, and asks for the
+          master password instead; `always` scans even over SSH; `never`
+          never scans. `rbw unlock --no-fingerprint` and
+          `RBW_NO_FINGERPRINT=1` skip it for one unlock.
+        '';
+      };
+
       unlockHideFingerprintNotice = mkOption {
         type = types.bool;
         default = false;

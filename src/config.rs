@@ -267,6 +267,67 @@ impl UnlockUi {
     }
 }
 
+/// Whether an unlock may use the fingerprint scan of an enrolled account.
+#[derive(
+    serde::Serialize,
+    serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum UnlockFingerprint {
+    /// Scan, except in a remote (SSH) session, where the reader is out of
+    /// reach.
+    #[default]
+    Auto,
+    /// Always scan, even over SSH.
+    Always,
+    /// Never scan: ask for the master password.
+    Never,
+}
+
+impl UnlockFingerprint {
+    pub const fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Always => "always",
+            Self::Never => "never",
+        }
+    }
+
+    /// Whether this unlock must skip the fingerprint scan. `bypass` is the
+    /// `--no-fingerprint` flag or `RBW_NO_FINGERPRINT`; `remote` says the
+    /// session came in over SSH.
+    pub const fn skips_scan(self, bypass: bool, remote: bool) -> bool {
+        match self {
+            Self::Never => true,
+            Self::Always => bypass,
+            Self::Auto => bypass || remote,
+        }
+    }
+}
+
+/// Whether this process was started from an SSH session.
+pub fn remote_session() -> bool {
+    ["SSH_CONNECTION", "SSH_TTY"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty()))
+}
+
+/// Whether `RBW_NO_FINGERPRINT` asks to skip the fingerprint scan.
+pub fn fingerprint_bypass_env() -> bool {
+    std::env::var("RBW_NO_FINGERPRINT")
+        .is_ok_and(|v| !matches!(v.as_str(), "" | "0" | "false"))
+}
+
 #[derive(
     serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
 )]
@@ -777,6 +838,9 @@ pub struct Config {
     pub unlock_ui: UnlockUi,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unlock_no_echo: bool,
+    // Fingerprint scan policy: `auto` skips it in SSH sessions.
+    #[serde(default, skip_serializing_if = "UnlockFingerprint::is_auto")]
+    pub unlock_fingerprint: UnlockFingerprint,
     // Don't show "Fingerprint not configured." in the unlock dialogs of
     // accounts without fingerprint unlock. Off: the notice shows.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1336,7 +1400,8 @@ pub async fn device_id(config: &Config) -> Result<String> {
 mod test {
     use super::{
         parse_config, Account, ClipboardMechanism, Config, CredentialSource,
-        Error, ExcludeContext, ItemAlias, SecretString, UnlockPolicy,
+        Error, ExcludeContext, ItemAlias, SecretString, UnlockFingerprint,
+        UnlockPolicy,
     };
 
     fn named(name: &str, email: &str) -> Account {
@@ -1858,5 +1923,40 @@ mod test {
             account.server_name().unwrap(),
             "https://vault.example.com"
         );
+    }
+
+    #[test]
+    fn fingerprint_policy_skips_over_ssh_unless_always() {
+        use UnlockFingerprint::{Always, Auto, Never};
+        // (policy, bypass, remote) -> skip the scan
+        for (policy, bypass, remote, skip) in [
+            (Auto, false, false, false),
+            (Auto, false, true, true),
+            (Auto, true, false, true),
+            (Always, false, true, false),
+            (Always, true, true, true),
+            (Never, false, false, true),
+        ] {
+            assert_eq!(
+                policy.skips_scan(bypass, remote),
+                skip,
+                "{policy:?} bypass={bypass} remote={remote}"
+            );
+        }
+    }
+
+    #[test]
+    fn fingerprint_policy_round_trips_and_defaults_to_auto() {
+        let config: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(config.unlock_fingerprint, UnlockFingerprint::Auto);
+        assert!(!serde_json::to_string(&config)
+            .unwrap()
+            .contains("unlockFingerprint"));
+        let config: Config =
+            serde_json::from_str(r#"{"unlockFingerprint":"never"}"#).unwrap();
+        assert_eq!(config.unlock_fingerprint, UnlockFingerprint::Never);
+        assert!(serde_json::to_string(&config)
+            .unwrap()
+            .contains(r#""unlockFingerprint":"never""#));
     }
 }

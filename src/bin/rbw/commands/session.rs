@@ -193,7 +193,26 @@ pub fn unlock_from_credential_source() -> anyhow::Result<bool> {
 // work, rather than silently falling back to a weaker pinentry path.
 thread_local! {
     pub(super) static UNLOCK_NO_ECHO: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(super) static UNLOCK_NO_FINGERPRINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     pub(super) static UNLOCK_UI_OVERRIDE: std::cell::Cell<Option<rbw::config::UnlockUi>> = const { std::cell::Cell::new(None) };
+}
+
+pub fn set_unlock_no_fingerprint(no_fingerprint: bool) {
+    UNLOCK_NO_FINGERPRINT.with(|value| value.set(no_fingerprint));
+}
+
+// Whether this unlock skips the fingerprint scan and asks for the master
+// password instead (`--no-fingerprint`, `RBW_NO_FINGERPRINT`, the
+// `unlockFingerprint` setting, or an SSH session).
+fn skip_fingerprint() -> bool {
+    let policy = rbw::config::Config::load()
+        .map(|config| config.unlock_fingerprint)
+        .unwrap_or_default();
+    policy.skips_scan(
+        UNLOCK_NO_FINGERPRINT.with(std::cell::Cell::get)
+            || rbw::config::fingerprint_bypass_env(),
+        rbw::config::remote_session(),
+    )
 }
 
 pub fn set_unlock_ui(mode: Option<rbw::config::UnlockUi>, no_echo: bool) {
@@ -212,7 +231,15 @@ pub(super) fn resolve_unlock_credentials(
             "configure only one native unlock provider per account"
         );
     }
-    if let Some(ref desktop) = account.unlock.secret_service {
+    let skip_scan = skip_fingerprint();
+    // Skipping the scan also skips the enrolled credential, which is only
+    // released after it: the password prompt takes over.
+    if let Some(desktop) = account
+        .unlock
+        .secret_service
+        .as_ref()
+        .filter(|desktop| !(desktop.fingerprint && skip_scan))
+    {
         if desktop.fingerprint {
             let config = rbw::config::Config::load()?;
             let Ok(db) = load_db() else {
@@ -262,7 +289,7 @@ pub(super) fn resolve_unlock_credentials(
         }
         return Ok((Some(rbw::desktop::unlock(desktop)?), None));
     }
-    if let Some(termux) = account.unlock.termux {
+    if let Some(termux) = account.unlock.termux.filter(|_| !skip_scan) {
         let config = rbw::config::Config::load()?;
         let mut termux = termux;
         termux.key_alias = rbw::termux::resolve_key_alias(

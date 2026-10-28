@@ -564,6 +564,12 @@ enum Opt {
         ui: Option<rbw::config::UnlockUi>,
         #[arg(long, help = "Hide all password input feedback in integrated dialogs", conflicts_with_all = ["stdin", "pinentry"])]
         no_echo: bool,
+        #[arg(
+            long,
+            help = "Skip the fingerprint scan of an enrolled account and ask for the master password (the default in SSH sessions; also RBW_NO_FINGERPRINT)",
+            conflicts_with_all = ["stdin", "pinentry", "credentials_only"]
+        )]
+        no_fingerprint: bool,
         #[arg(long, help = "Use only pinentry, bypassing configured automatic unlock providers", conflicts_with_all = ["stdin", "all"])]
         pinentry: bool,
         #[arg(
@@ -4166,10 +4172,12 @@ fn main() {
             pinentry,
             ui,
             no_echo,
+            no_fingerprint,
             force,
             credentials_only,
         } => {
             commands::set_unlock_ui(ui, no_echo);
+            commands::set_unlock_no_fingerprint(no_fingerprint);
             commands::set_unlock_force(force);
             if credentials_only {
                 commands::unlock_from_credential_source().map(|_| ())
@@ -5928,6 +5936,20 @@ mod test {
         assert!(matches!(cli.command, Opt::Unlock { no_echo: true, .. }));
         let cli = parse(&["rbw", "unlock"]);
         assert!(matches!(cli.command, Opt::Unlock { no_echo: false, .. }));
+        let cli = parse(&["rbw", "unlock", "--no-fingerprint"]);
+        assert!(matches!(
+            cli.command,
+            Opt::Unlock {
+                no_fingerprint: true,
+                ..
+            }
+        ));
+        for arguments in [
+            vec!["rbw", "unlock", "--no-fingerprint", "--stdin"],
+            vec!["rbw", "unlock", "--no-fingerprint", "--pinentry"],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_err());
+        }
         for arguments in [
             vec!["rbw", "unlock", "--ui", "gtk", "--pinentry"],
             vec!["rbw", "unlock", "--ui", "terminal", "--stdin"],

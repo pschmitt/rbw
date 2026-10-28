@@ -482,6 +482,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "agent.lockTimeout",
     "unlockUi",
     "unlockNoEcho",
+    "unlockFingerprint",
     "unlockHideFingerprintNotice",
     "passkeyCounter",
     "pinentry.command",

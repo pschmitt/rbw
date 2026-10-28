@@ -35,6 +35,9 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
         "agent.lockTimeout" => Some(config.agent.lock_timeout.to_string()),
         "agent.syncInterval" => Some(config.agent.sync_interval.to_string()),
         "unlockNoEcho" => Some(config.unlock_no_echo.to_string()),
+        "unlockFingerprint" => {
+            Some(config.unlock_fingerprint.as_str().to_string())
+        }
         "unlockHideFingerprintNotice" => {
             Some(config.unlock_hide_fingerprint_notice.to_string())
         }
@@ -176,6 +179,16 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
                 .parse()
                 .context("unlockNoEcho must be true or false")?;
         }
+        "unlockFingerprint" => {
+            config.unlock_fingerprint = match value {
+                "auto" => rbw::config::UnlockFingerprint::Auto,
+                "always" => rbw::config::UnlockFingerprint::Always,
+                "never" => rbw::config::UnlockFingerprint::Never,
+                _ => anyhow::bail!(
+                    "unlockFingerprint must be auto, always, or never"
+                ),
+            }
+        }
         "unlockHideFingerprintNotice" => {
             config.unlock_hide_fingerprint_notice = value.parse().context(
                 "unlockHideFingerprintNotice must be true or false",
@@ -301,6 +314,9 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
             config.agent.sync_interval = rbw::config::default_sync_interval();
         }
         "unlockNoEcho" => config.unlock_no_echo = false,
+        "unlockFingerprint" => {
+            config.unlock_fingerprint = rbw::config::UnlockFingerprint::Auto;
+        }
         "unlockHideFingerprintNotice" => {
             config.unlock_hide_fingerprint_notice = false;
         }

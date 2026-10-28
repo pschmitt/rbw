@@ -305,6 +305,7 @@
               };
               unlockUi = "auto";
               unlockNoEcho = false;
+              unlockFingerprint = "auto";
               unlockHideFingerprintNotice = false;
               primaryAccount = "personal";
               accounts = [

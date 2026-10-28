@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+* `rbw unlock --no-fingerprint`, `RBW_NO_FINGERPRINT=1` and the
+  `unlockFingerprint` setting (`auto`, `always`, `never`; also
+  `programs.rbw.declarative.settings.unlockFingerprint`) skip the fingerprint
+  scan of an enrolled account and ask for the master password. With the default
+  `auto`, SSH sessions skip it, because the reader (a desktop's PolicyKit
+  fingerprint device, or the Android prompt of a Termux enrollment) is out of
+  reach there. A failed scan is still an error.
+
 ## [2.32.7] - 2026-10-28
 
 ### Fixed

@@ -103,6 +103,11 @@ rbw unlock --no-echo
 rbw config set unlockNoEcho true
 # Optional: hide the "Fingerprint not configured." notice (shown by default):
 rbw config set unlockHideFingerprintNotice true
+# Skip the fingerprint scan of an enrolled account (SSH sessions do this on
+# their own with the default "auto"; "always" scans even over SSH):
+rbw unlock --no-fingerprint
+RBW_NO_FINGERPRINT=1 rbw unlock
+rbw config set unlockFingerprint never
 # Password-only recovery with the existing configured pinentry:
 rbw unlock --pinentry
 
