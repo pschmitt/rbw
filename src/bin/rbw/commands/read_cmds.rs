@@ -29,10 +29,7 @@ pub(super) fn list_from_file(
         );
     }
 
-    let mut fields: Vec<ListField> = fields
-        .iter()
-        .map(std::convert::TryFrom::try_from)
-        .collect::<anyhow::Result<_>>()?;
+    let (mut fields, explicit_fields) = parse_list_fields(fields)?;
     if insecure {
         deny_if_redacted("`--insecure`")?;
     }
@@ -51,7 +48,7 @@ pub(super) fn list_from_file(
         .collect();
     entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
-    print_entry_list(&entries, &fields, output, "")?;
+    print_entry_list(&entries, &fields, explicit_fields, output, "")?;
 
     Ok(())
 }
@@ -198,10 +195,7 @@ pub fn list(
         );
     }
 
-    let mut fields: Vec<ListField> = fields
-        .iter()
-        .map(std::convert::TryFrom::try_from)
-        .collect::<anyhow::Result<_>>()?;
+    let (mut fields, explicit_fields) = parse_list_fields(fields)?;
     if insecure {
         deny_if_redacted("`--insecure`")?;
     }
@@ -274,7 +268,7 @@ pub fn list(
     entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
     warn_undated_entries(undated);
-    print_entry_list(&entries, &fields, output, "")?;
+    print_entry_list(&entries, &fields, explicit_fields, output, "")?;
 
     Ok(())
 }

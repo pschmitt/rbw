@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn print_entry_list(
     entries: &[DecryptedListCipher],
     fields: &[ListField],
+    explicit_fields: bool,
     output: OutputMode,
     term: &str,
 ) -> anyhow::Result<()> {
@@ -56,18 +57,29 @@ pub(super) fn print_entry_list(
                     header: "password",
                     style: TableColumnStyle::Password,
                 },
+                ListField::Account => TableColumn {
+                    header: "account",
+                    style: TableColumnStyle::Account,
+                },
+                ListField::Attachments => TableColumn {
+                    header: "attachments",
+                    style: TableColumnStyle::Attachments,
+                },
             })
             .collect::<Vec<_>>();
-        let show_account = entries.iter().any(|e| e.account.is_some());
+        // Only the default listing adds these; `--fields` prints what it names.
+        let show_account =
+            !explicit_fields && entries.iter().any(|e| e.account.is_some());
         if show_account {
             columns.push(TableColumn {
                 header: "account",
                 style: TableColumnStyle::Account,
             });
         }
-        let show_attachments = entries
-            .iter()
-            .any(|e| e.attachment_metadata.has_attachments());
+        let show_attachments = !explicit_fields
+            && entries
+                .iter()
+                .any(|e| e.attachment_metadata.has_attachments());
         if show_attachments {
             columns.push(TableColumn {
                 header: "attachments",
@@ -117,6 +129,12 @@ pub(super) fn print_entry_list(
                                 std::string::ToString::to_string,
                             )
                         }
+                        ListField::Account => {
+                            entry.account.clone().unwrap_or_default()
+                        }
+                        ListField::Attachments => attachments_cell(
+                            entry.attachment_metadata.attachment_count,
+                        ),
                     })
                     .collect::<Vec<_>>();
                 if show_account {
@@ -189,10 +207,7 @@ pub(super) fn search_from_file(
         );
     }
 
-    let mut fields: Vec<ListField> = fields
-        .iter()
-        .map(std::convert::TryFrom::try_from)
-        .collect::<anyhow::Result<_>>()?;
+    let (mut fields, explicit_fields) = parse_list_fields(fields)?;
     if insecure {
         deny_if_redacted("`--insecure`")?;
     }
@@ -231,7 +246,7 @@ pub(super) fn search_from_file(
         std::process::exit(1);
     }
 
-    print_entry_list(&entries, &fields, output, term)?;
+    print_entry_list(&entries, &fields, explicit_fields, output, term)?;
 
     Ok(())
 }
@@ -337,10 +352,7 @@ pub fn search(
         );
     }
 
-    let mut fields: Vec<ListField> = fields
-        .iter()
-        .map(std::convert::TryFrom::try_from)
-        .collect::<anyhow::Result<_>>()?;
+    let (mut fields, explicit_fields) = parse_list_fields(fields)?;
     if insecure {
         deny_if_redacted("`--insecure`")?;
     }
@@ -431,7 +443,7 @@ pub fn search(
         std::process::exit(1);
     }
 
-    print_entry_list(&entries, &fields, output, term)?;
+    print_entry_list(&entries, &fields, explicit_fields, output, term)?;
 
     Ok(())
 }

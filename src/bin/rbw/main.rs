@@ -937,9 +937,11 @@ enum Opt {
         #[arg(
             long,
             help = "Fields to display. \
-                Available options are id, name, user, folder, type, collections, \
-                modified. Multiple fields will be separated by tabs.",
-            default_value = "id,name,user",
+                Available options are id, name, user, password, folder, type, \
+                collections, modified, account, attachments. Multiple fields \
+                will be separated by tabs. Without it: id, name, user, plus \
+                account and attachments where they apply. With it, only the \
+                fields named are shown.",
             use_value_delimiter = true
         )]
         fields: Vec<String>,
@@ -1180,9 +1182,11 @@ enum Opt {
         #[arg(
             long,
             help = "Fields to display. \
-                Available options are id, name, user, folder, type, collections. \
-                Multiple fields will be separated by tabs.",
-            default_value = "id,name,user",
+                Available options are id, name, user, password, folder, type, \
+                collections, modified, account, attachments. Multiple fields \
+                will be separated by tabs. Without it: id, name, user, plus \
+                account and attachments where they apply. With it, only the \
+                fields named are shown.",
             use_value_delimiter = true
         )]
         fields: Vec<String>,
@@ -5936,6 +5940,14 @@ mod test {
         assert!(matches!(cli.command, Opt::Unlock { no_echo: true, .. }));
         let cli = parse(&["rbw", "unlock"]);
         assert!(matches!(cli.command, Opt::Unlock { no_echo: false, .. }));
+        let cli = parse(&["rbw", "list"]);
+        assert!(
+            matches!(&cli.command, Opt::List { fields, .. } if fields.is_empty())
+        );
+        let cli = parse(&["rbw", "list", "--fields", "name,account"]);
+        assert!(
+            matches!(&cli.command, Opt::List { fields, .. } if fields == &["name", "account"])
+        );
         let cli = parse(&["rbw", "unlock", "--no-fingerprint"]);
         assert!(matches!(
             cli.command,

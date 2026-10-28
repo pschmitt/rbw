@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+* `rbw list` and `rbw search`: with `--fields`, exactly the named columns are
+  printed. The `account` and `attachments` columns used to be appended to any
+  listing (so `--fields name` printed `name<TAB>account<TAB>none`); now they
+  only appear on their own when `--fields` is not given, and `account` and
+  `attachments` are valid `--fields` values (as is `password`, which `--help`
+  now lists). `--output name` is unchanged.
+
 ### Added
 
 * `rbw unlock --no-fingerprint`, `RBW_NO_FINGERPRINT=1` and the

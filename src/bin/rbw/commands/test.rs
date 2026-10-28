@@ -4790,3 +4790,20 @@ fn test_resolve_get_alias_skipped_with_multiple_needles() {
     assert!(resolve_get_alias(&config, &needles, None, None, None, None)
         .is_none());
 }
+
+#[test]
+fn list_fields_default_is_not_explicit_and_named_fields_are() {
+    let (fields, explicit) = parse_list_fields(&[]).unwrap();
+    assert_eq!(fields, [ListField::Id, ListField::Name, ListField::User]);
+    assert!(!explicit);
+
+    let names = ["name", "account", "attachments"].map(String::from);
+    let (fields, explicit) = parse_list_fields(&names).unwrap();
+    assert_eq!(
+        fields,
+        [ListField::Name, ListField::Account, ListField::Attachments]
+    );
+    assert!(explicit);
+
+    assert!(parse_list_fields(&["nope".to_string()]).is_err());
+}

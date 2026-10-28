@@ -168,7 +168,12 @@ search box (browser-daemon's live view does).
 matching entries, and `rbw list --with-attachments` restricts the results to
 items that have attachments. Interactive table-style output uses uppercase
 headers, smart coloring, and default `UID`, `NAME`, `USER`, and
-`ATTACHMENTS` columns. To inspect attachments directly, run
+`ATTACHMENTS` columns. `--fields` picks the columns instead, as a comma-separated
+list of `id`, `name`, `user`, `password`, `folder`, `type`, `collections`,
+`modified`, `account` and `attachments`; with it, exactly those columns are
+printed (`rbw list --fields name` is one name per line), while without it the
+`account` column (several accounts) and the `attachments` column (any entry has
+attachments) are added on their own. To inspect attachments directly, run
 `rbw attachment list <entry>` (or `rbw attachment list <entry> --json`). To
 download one, run
 `rbw attachment get <entry> --attachment <attachment-id-or-filename>`, and to

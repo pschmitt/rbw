@@ -420,6 +420,8 @@ pub(super) enum ListField {
     EntryType,
     Collections,
     Modified,
+    Account,
+    Attachments,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -464,9 +466,30 @@ impl std::convert::TryFrom<&String> for ListField {
             "type" => Self::EntryType,
             "collections" => Self::Collections,
             "modified" | "revision" => Self::Modified,
+            "account" => Self::Account,
+            "attachments" => Self::Attachments,
             _ => return Err(anyhow::anyhow!("unknown field {s}")),
         })
     }
+}
+
+/// Parses `--fields`. Without it the listing shows id, name and user, plus
+/// the account and attachments columns where they apply. An explicit list is
+/// shown as given; the flag says which of the two it was.
+pub(super) fn parse_list_fields(
+    fields: &[String],
+) -> anyhow::Result<(Vec<ListField>, bool)> {
+    if fields.is_empty() {
+        return Ok((
+            vec![ListField::Id, ListField::Name, ListField::User],
+            false,
+        ));
+    }
+    let fields = fields
+        .iter()
+        .map(std::convert::TryFrom::try_from)
+        .collect::<anyhow::Result<_>>()?;
+    Ok((fields, true))
 }
 
 pub const CONFIG_KEYS: &[&str] = &[
