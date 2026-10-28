@@ -24,6 +24,7 @@
 * Browser extension: the locked popup no longer shows a card. The header crab
   gets a pulsing pixel 💢 on its head and shuts its eyes, and the password
   prompt says "Vault locked!".
+* Browser extension: while the vault is locked the toolbar crab has red eyes.
 
 ## [2.32.6] - 2026-10-28
 

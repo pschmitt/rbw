@@ -305,6 +305,34 @@ async function drawSyncFrame() {
     await api.action.setIcon({ imageData: Object.fromEntries(bitmaps.map(([size, bitmap]) => [size, syncFrame(bitmap, size, angle)])) });
   } catch (_) { /* Cosmetic only. */ }
 }
+// Locked: the crab's eyes turn red. The eye band of the toolbar sprite is
+// recoloured pixel by pixel (white to red), keeping the anti-aliasing.
+let redEyeIcon = null;
+async function redEyeImages() {
+  redEyeIcon ||= toolbarBitmaps().then(bitmaps => Object.fromEntries(bitmaps.map(([size, bitmap]) => {
+    const canvas = new OffscreenCanvas(size, size); const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0, size, size);
+    const image = ctx.getImageData(0, 0, size, size), data = image.data;
+    for (let y = Math.floor(size * 0.55); y < Math.ceil(size * 0.72); y++) {
+      for (let x = Math.floor(size * 0.28); x < Math.ceil(size * 0.72); x++) {
+        const i = (y * size + x) * 4, low = Math.min(data[i], data[i + 1], data[i + 2]);
+        if (low < 150) continue;
+        const k = (low - 150) / 105;
+        data[i] = 255; data[i + 1] = Math.round(255 - k * 196); data[i + 2] = Math.round(255 - k * 177);
+      }
+    }
+    return [size, image];
+  })));
+  return redEyeIcon;
+}
+// The icon at rest: red eyes while the vault is locked, the packaged icon otherwise.
+async function restoreIcon() {
+  try {
+    if (syncAnimation.active || hopAnimation.running) return;
+    if (vaultUnlocked === false) await api.action.setIcon({ imageData: await redEyeImages() });
+    else await api.action.setIcon({ path: api.runtime.getManifest().action?.default_icon });
+  } catch (_) { /* Cosmetic only. */ }
+}
 function syncStarted() {
   if (syncAnimation.active++) return;
   badge(); drawSyncFrame(); syncAnimation.timer = setInterval(drawSyncFrame, 80);
@@ -312,7 +340,7 @@ function syncStarted() {
 function syncFinished() {
   if (--syncAnimation.active > 0) return;
   syncAnimation.active = 0; clearInterval(syncAnimation.timer); syncAnimation.timer = null;
-  Promise.resolve(api.action.setIcon({ path: api.runtime.getManifest().action?.default_icon })).catch(() => {});
+  restoreIcon();
   badge();
 }
 // Toolbar feedback after a successful fill: the crab squashes, hops twice and
@@ -349,7 +377,7 @@ async function hopIcon(prefs) {
     }
   } catch (_) { /* Cosmetic only. */ } finally {
     hopAnimation.running = false;
-    if (!syncAnimation.active) Promise.resolve(api.action.setIcon({ path: api.runtime.getManifest().action?.default_icon })).catch(() => {});
+    restoreIcon();
   }
 }
 let nativePort;
@@ -442,6 +470,7 @@ function badge(tabId) {
   if (tabId === undefined) {
     Promise.resolve(api.action.setBadgeBackgroundColor({ color: locked ? "#b3261e" : partial ? "#87642a" : "#555555" })).catch(() => {});
     Promise.resolve(api.action.setBadgeText({ text: locked || partial ? "L" : "" })).catch(() => {});
+    restoreIcon();
     Promise.resolve(api.action.setTitle({ title: locked ? "rbw — Vault is locked. Click to unlock." : partial ? partialTitle : "rbw" })).catch(() => {});
     for (const id of new Set([...badgeTabs, ...suggestionCounts.keys(), ...[...pending.values()].map(p => p.tabId), ...offers.keys()])) badge(id);
     return;
