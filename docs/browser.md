@@ -154,13 +154,13 @@ with
 2. `tag` waits for green build, test and docker runs on that commit and pushes
    a GPG-signed `vX.Y.Z` tag; the release workflow signs and publishes
    everything, then commits the package pin to `main`.
-The logo is the blue ninja crab in `assets/icon-source.png`: the `rbw-*`
-icons in `assets/icons/` and the unlock dialogs' logo
-(`assets/rbw.png`) are its Lanczos resizes. The toolbar button
-uses only its face, made round and outline-free, from `assets/toolbar-icon-source.png`
-(`toolbar-*`), so it stays legible at 16px.
-`assets/rbw.svg` and `assets/rbw-toolbar.svg` are vector traces of the two
-sources (three flat colours, no gradients); the PNGs remain the masters.
+The logo is the blue pixel-art ninja crab in `assets/icon-source.png`: the
+`rbw-*` and `toolbar-*` icons in `assets/icons/` and the unlock dialogs' logo
+(`assets/rbw.png`) are its trimmed, transparent Lanczos resizes. The 128 and
+256px sizes get a little padding. `assets/rbw.svg` redraws the sprite on its
+30x25 pixel grid (flat colours, one path per colour, no gradients) and
+`assets/rbw-toolbar.svg` is the same drawing in a square viewBox; the PNGs
+remain the masters.
 
 ## Native messaging allowlist
 

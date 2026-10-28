@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+* The logo is now a pixel-art version of the ninja crab: the browser extension's
+  toolbar button, popup, settings and notification icons, the unlock dialogs
+  and the desktop icon. The toolbar icon fills its full width, and
+  `assets/rbw.svg` and `assets/rbw-toolbar.svg` redraw the sprite on its pixel
+  grid.
+
 ## [2.32.3] - 2026-10-27
 
 ### Added
