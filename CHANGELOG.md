@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.33.0] - 2026-10-28
+
 ### Changed
 
 * `rbw list` and `rbw search`: with `--fields`, exactly the named columns are
