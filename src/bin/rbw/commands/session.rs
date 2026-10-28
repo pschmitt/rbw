@@ -204,15 +204,27 @@ pub fn set_unlock_no_fingerprint(no_fingerprint: bool) {
 // Whether this unlock skips the fingerprint scan and asks for the master
 // password instead (`--no-fingerprint`, `RBW_NO_FINGERPRINT`, the
 // `unlockFingerprint` setting, or an SSH session).
-fn skip_fingerprint() -> bool {
+//
+// `enrolled` says the account has a fingerprint unlock to skip: an SSH
+// session then gets a note, so the missing fingerprint doesn't look like a
+// failure.
+fn skip_fingerprint(enrolled: bool) -> bool {
     let policy = rbw::config::Config::load()
         .map(|config| config.unlock_fingerprint)
         .unwrap_or_default();
-    policy.skips_scan(
-        UNLOCK_NO_FINGERPRINT.with(std::cell::Cell::get)
-            || rbw::config::fingerprint_bypass_env(),
-        rbw::config::remote_session(),
-    )
+    let bypass = UNLOCK_NO_FINGERPRINT.with(std::cell::Cell::get)
+        || rbw::config::fingerprint_bypass_env();
+    let remote = rbw::config::remote_session();
+    if enrolled && policy.skipped_for_ssh(bypass, remote) {
+        let color = stderr_supports_color();
+        eprintln!(
+            "{} SSH session: skipping the fingerprint unlock, enter the \
+             master password (`rbw config set unlockFingerprint always` \
+             scans anyway)",
+            style::warning("note:", color)
+        );
+    }
+    policy.skips_scan(bypass, remote)
 }
 
 pub fn set_unlock_ui(mode: Option<rbw::config::UnlockUi>, no_echo: bool) {
@@ -231,7 +243,14 @@ pub(super) fn resolve_unlock_credentials(
             "configure only one native unlock provider per account"
         );
     }
-    let skip_scan = skip_fingerprint();
+    let skip_scan = skip_fingerprint(
+        account.unlock.termux.is_some()
+            || account
+                .unlock
+                .secret_service
+                .as_ref()
+                .is_some_and(|desktop| desktop.fingerprint),
+    );
     // Skipping the scan also skips the enrolled credential, which is only
     // released after it: the password prompt takes over.
     if let Some(desktop) = account

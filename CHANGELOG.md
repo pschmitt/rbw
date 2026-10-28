@@ -21,7 +21,7 @@
   scan of an enrolled account and ask for the master password. With the default
   `auto`, SSH sessions skip it, because the reader (a desktop's PolicyKit
   fingerprint device, or the Android prompt of a Termux enrollment) is out of
-  reach there. A failed scan is still an error.
+  reach there, and say so with a note. A failed scan is still an error.
 
 ## [2.32.7] - 2026-10-28
 

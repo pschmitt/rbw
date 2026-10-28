@@ -315,6 +315,14 @@ impl UnlockFingerprint {
     }
 }
 
+impl UnlockFingerprint {
+    /// Whether the scan is skipped only because the session is remote, so
+    /// the user is worth telling why the fingerprint isn't offered.
+    pub const fn skipped_for_ssh(self, bypass: bool, remote: bool) -> bool {
+        self.skips_scan(bypass, remote) && !self.skips_scan(bypass, false)
+    }
+}
+
 /// Whether this process was started from an SSH session.
 pub fn remote_session() -> bool {
     ["SSH_CONNECTION", "SSH_TTY"]
@@ -1943,6 +1951,17 @@ mod test {
                 "{policy:?} bypass={bypass} remote={remote}"
             );
         }
+    }
+
+    #[test]
+    fn only_the_ssh_skip_is_announced() {
+        use UnlockFingerprint::{Always, Auto, Never};
+        assert!(Auto.skipped_for_ssh(false, true));
+        assert!(!Auto.skipped_for_ssh(false, false));
+        // Asked for, by flag or setting: no need to explain.
+        assert!(!Auto.skipped_for_ssh(true, true));
+        assert!(!Never.skipped_for_ssh(false, true));
+        assert!(!Always.skipped_for_ssh(false, true));
     }
 
     #[test]
