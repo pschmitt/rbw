@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.34.0] - 2026-10-29
+
 ### Added
 
 * `rbw mcp`: a Model Context Protocol server (built on the official `rmcp`
