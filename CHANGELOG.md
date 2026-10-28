@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.32.6] - 2026-10-28
+
 ### Added
 
 * Unlock dialogs (terminal and GTK): Tab shows or hides the dots while you
