@@ -10,7 +10,14 @@ const offers = new Map();
 // 2FA code) uses that login rather than the first match.
 const fillCycles = new Map();
 const LOGIN_FLOW_MS = 10 * 60 * 1000;
-function rememberFill(tabId, account, item, url = null) { fillCycles.set(tabId, { url, account, item, at: Date.now() }); }
+function rememberFill(tabId, account, item, url = null, passkey = false) { fillCycles.set(tabId, { url, account, item, passkey, at: Date.now() }); }
+// A passkey login you just approved: the sign-in's next step (the password
+// page) is filled from the same login even with page-load autofill off.
+const PASSKEY_FLOW_MS = 2 * 60 * 1000;
+function passkeyFlow(tabId) {
+  const entry = lastFill(tabId);
+  return entry?.passkey === true && Date.now() - entry.at < PASSKEY_FLOW_MS ? entry : null;
+}
 function lastFill(tabId) {
   const entry = fillCycles.get(tabId);
   return entry && Date.now() - entry.at < LOGIN_FLOW_MS ? entry : null;
@@ -685,7 +692,7 @@ async function pageMessage(message, sender, respond) {
   const autofillBlocked = isAutofillBlocked(sender.url, prefs.autofillBlocklist);
   if (message.action === "passkey_available") return respond({ result: prefs.passkeys });
   if (message.action === "autofill_load") {
-    if (!prefs.autoFill || autofillBlocked || sender.frameId !== 0 || !sender.tab.active) return respond({ result: false });
+    if (!(prefs.autoFill || passkeyFlow(sender.tab.id)) || autofillBlocked || sender.frameId !== 0 || !sender.tab.active) return respond({ result: false });
     const results = await cachedSearch({ account: null, url: sender.url, site_only: true, kind: "login" });
     const eligible = results.items.filter(item => !item.protected && !isItemAutofillExcluded(item.id, prefs.autofillExcludedItems));
     if (!eligible.length) return respond({ result: false });
@@ -711,7 +718,7 @@ async function pageMessage(message, sender, respond) {
     // With auto-fill on page load the login is filled for you (the page may
     // focus its field before that has started); only an explicit request
     // (the inline icon) lists logins.
-    if (kind === "login" && prefs.autoFill && message.explicit !== true) return respond({ result: null });
+    if (kind === "login" && (prefs.autoFill || passkeyFlow(sender.tab.id)) && message.explicit !== true) return respond({ result: null });
     try {
       const result = await cachedSearch(kind === "card"
         ? { account: null, kind: "card" }
@@ -1040,7 +1047,7 @@ async function handle(message) {
       if (!pending.has(p.id)) throw new Error("The request was cancelled.");
       // The next steps of this sign-in (Authelia's password page after a
       // passkey) follow the login the passkey belongs to.
-      if (p.method === "get" && typeof message.item === "string") rememberFill(p.tabId, account, message.item, p.url);
+      if (p.method === "get" && typeof message.item === "string") rememberFill(p.tabId, account, message.item, p.url, true);
       finish(p.id, { result }); return true;
     }
     case "passkey_decline": finish(message.request, message.fallback ? { fallback: true } : { error: "Passkey request cancelled." }); return true;

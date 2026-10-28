@@ -6,7 +6,8 @@
 
 * Browser extension: after a passkey login, the next step of the same sign-in
   (Authelia's password page as second factor) is autofilled from the login the
-  passkey belongs to, instead of the first matching login or a chooser.
+  passkey belongs to, instead of the first matching login or a chooser. This works with "Autofill on
+  page load" off too, for two minutes after the passkey approval.
 
 ### Changed
 
