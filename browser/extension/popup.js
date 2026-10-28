@@ -561,6 +561,7 @@ async function refresh(knownStatus = null, skipList = false) {
   $("locked").classList.toggle("is-multi", several && !unlocked && !stale);
   $("locked").classList.toggle("is-stale", Boolean(stale));
   $("locked").querySelector("h2").textContent = stale ? "Browser host out of date" : "Vault locked";
+  $("unlock-title").hidden = Boolean(stale);
   const staleNote = $("locked").querySelector("p");
   staleNote.hidden = !stale;
   staleNote.textContent = stale ? `rbw-agent is ${status.staleAgent}, but this browser still runs rbw ${status.hostVersion}. Restart the browser.` : "";
