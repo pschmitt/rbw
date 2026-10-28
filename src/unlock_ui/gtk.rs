@@ -68,15 +68,37 @@ impl GtkDialog {
             .hexpand(true)
             .build();
         entry.set_enable_undo(false);
+        let text = entry
+            .delegate()
+            .and_then(|delegate| delegate.downcast::<gtk::Text>().ok())
+            .context("GTK password input does not support no-echo mode")?;
         if no_echo {
-            let text = entry
-                .delegate()
-                .and_then(|delegate| delegate.downcast::<gtk::Text>().ok())
-                .context(
-                    "GTK password input does not support no-echo mode",
-                )?;
             text.set_invisible_char('\0');
         }
+        // Tab shows or hides the dots, as in systemd-ask-password. It starts
+        // from the `unlock_no_echo` setting.
+        let hidden = Rc::new(Cell::new(no_echo));
+        let toggle = gtk::EventControllerKey::new();
+        toggle.set_propagation_phase(gtk::PropagationPhase::Capture);
+        toggle.connect_key_pressed(move |_, key, _, modifiers| {
+            if key == gtk::gdk::Key::Tab
+                && !modifiers.intersects(
+                    gtk::gdk::ModifierType::CONTROL_MASK
+                        | gtk::gdk::ModifierType::ALT_MASK,
+                )
+            {
+                if hidden.replace(!hidden.get()) {
+                    text.unset_invisible_char();
+                } else {
+                    text.set_invisible_char('\0');
+                }
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
+            }
+        });
+        entry.add_controller(toggle);
+        entry.set_tooltip_text(Some("Tab shows or hides the dots"));
         let status = gtk::Label::new(None);
         status.add_css_class("dim-label");
         status.add_css_class("caption");

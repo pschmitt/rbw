@@ -30,12 +30,139 @@ const MUTED: Color = Color::Rgb(149, 163, 187);
 const CYAN: Color = Color::Rgb(113, 220, 229);
 const ERROR: Color = Color::Rgb(255, 154, 166);
 
+// The pixel-art crab of the logo: one char per pixel, two pixel rows per
+// terminal row (half blocks). `.` is transparent.
+const CRAB: [&str; 18] = [
+    "...nnn........nnn...",
+    "..nbmnn......nnmbn..",
+    ".nbmnn........nnmmn.",
+    ".lmmnmmmn..nmm.nmmn.",
+    "nmmmmmmbn..nbmmmmmmn",
+    "nbmmmmbn....nbmmmmbn",
+    "nbmmmbnnnnnnnnbmmmbn",
+    ".nbmbnnnmmmmnnnbbbn.",
+    "..nbnnmmmmmmmmnnbn..",
+    "...nnnnnmmmmnnnnn...",
+    "..nnnnwnnnnnnwnnnn..",
+    ".nmmnnwwnnnnwwnnmmn.",
+    "nbbnnmwwnnnnwwmnnbbn",
+    "nn.nnnmmmmmmmmnnn..n",
+    "..nmn.nbmmmmbn.nmn..",
+    "..nbn..nnbbnn..nbn..",
+    "...n............n...",
+    "....................",
+];
+// The same crab, for terminals with little room.
+const CRAB_TINY: [&str; 8] = [
+    ".nn....nn.",
+    "nmnm..mnmn",
+    "bmmb..bmmb",
+    "nmnnmmnnbn",
+    ".nnnmmnnn.",
+    "mbnwnnwnbm",
+    "nnnmmmmnn.",
+    ".n..nn..n.",
+];
+const CRAB_WIDTH: u16 = 20;
+const CRAB_ROWS: u16 = 9;
+const CRAB_TINY_WIDTH: u16 = 10;
+const CRAB_TINY_ROWS: u16 = 4;
+// Card width from which the crab fits beside the form.
+const CRAB_CARD_WIDTH: u16 = 76;
+
+fn crab_color(pixel: u8) -> Option<Color> {
+    Some(match pixel {
+        b'n' => Color::Rgb(7, 20, 53),
+        b'm' => Color::Rgb(61, 154, 253),
+        b'b' => Color::Rgb(22, 104, 232),
+        b'l' => Color::Rgb(136, 202, 254),
+        b'd' => Color::Rgb(8, 79, 199),
+        b'w' => Color::Rgb(255, 255, 255),
+        _ => return None,
+    })
+}
+
+// The same pixel as a shade of green, for the unlock animation.
+fn crab_green(color: Color) -> Color {
+    let Color::Rgb(r, g, b) = color else {
+        return color;
+    };
+    let luma =
+        (u32::from(r) * 30 + u32::from(g) * 59 + u32::from(b) * 11) / 100;
+    let channel = |value: u32| u8::try_from(value.min(255)).unwrap_or(255);
+    Color::Rgb(
+        channel(luma * 45 / 100),
+        channel(70 + luma * 70 / 100),
+        channel(luma * 55 / 100),
+    )
+}
+
+// How many rows of an art `rows` tall the unlock animation has tinted green
+// by now: it sweeps the whole art in ten frames, however tall it is, and the
+// rest of the confirmation holds it green.
+fn green_rows(view: &View<'_>, rows: u16) -> usize {
+    if !view.success {
+        return 0;
+    }
+    usize::try_from((view.tick + 1) * u64::from(rows) / 10)
+        .unwrap_or(usize::MAX)
+}
+
+// A crab as terminal rows; the first `green_rows` of them are tinted green.
+fn crab_lines(sprite: &[&str], green_rows: usize) -> Vec<Line<'static>> {
+    sprite
+        .chunks(2)
+        .enumerate()
+        .map(|(index, pair)| {
+            let tint = |color: Color| {
+                if index < green_rows {
+                    crab_green(color)
+                } else {
+                    color
+                }
+            };
+            Line::from(
+                pair[0]
+                    .bytes()
+                    .zip(pair[1].bytes())
+                    .map(|(top, bottom)| {
+                        let (top, bottom) =
+                            (crab_color(top), crab_color(bottom));
+                        match (top, bottom) {
+                            (None, None) => Span::raw(" "),
+                            (Some(color), None) => Span::styled(
+                                "▀",
+                                Style::default().fg(tint(color)).bg(CARD),
+                            ),
+                            (None, Some(color)) => Span::styled(
+                                "▄",
+                                Style::default().fg(tint(color)).bg(CARD),
+                            ),
+                            (Some(top), Some(bottom)) if top == bottom => {
+                                Span::styled(
+                                    "█",
+                                    Style::default().fg(tint(top)),
+                                )
+                            }
+                            (Some(top), Some(bottom)) => Span::styled(
+                                "▀",
+                                Style::default()
+                                    .fg(tint(top))
+                                    .bg(tint(bottom)),
+                            ),
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect()
+}
+
 pub(super) struct TerminalDialog {
     terminal: Terminal<CrosstermBackend<File>>,
     input: File,
     original: libc::termios,
     state: InputState,
-    no_echo: bool,
 }
 
 struct InputState {
@@ -44,6 +171,8 @@ struct InputState {
     escape_len: usize,
     escape_started: Option<Instant>,
     paste: bool,
+    // Tab toggles it; it starts from the `unlock_no_echo` setting.
+    no_echo: bool,
     blocked: bool,
     busy: bool,
     issue: Option<&'static str>,
@@ -52,7 +181,8 @@ struct InputState {
 impl TerminalDialog {
     pub fn new(no_echo: bool) -> anyhow::Result<Self> {
         // Allocate input before entering raw mode: failure leaves the TTY intact.
-        let state = InputState::new()?;
+        let mut state = InputState::new()?;
+        state.no_echo = no_echo;
         let input = OpenOptions::new().read(true).write(true)
             .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC).open("/dev/tty")
             .context("terminal unlock needs a controlling terminal; use --ui gtk or --pinentry")?;
@@ -102,7 +232,6 @@ impl TerminalDialog {
             input,
             original,
             state,
-            no_echo,
         };
         execute!(
             dialog.terminal.backend_mut(),
@@ -129,6 +258,7 @@ impl InputState {
             escape_len: 0,
             escape_started: None,
             paste: false,
+            no_echo: false,
             blocked: false,
             busy: false,
             issue: None,
@@ -189,6 +319,8 @@ impl InputState {
                     return Ok(Some(Action::Submit(password)));
                 }
             }
+        } else if byte == b'\t' && !self.paste {
+            self.no_echo = !self.no_echo;
         } else if byte < 32 || byte == 127 {
             self.block_input(
                 "Paste contains control characters. Ctrl+U clears input.",
@@ -245,7 +377,8 @@ impl Frontend for TerminalDialog {
         self.state.busy = view.checking
             || view.success
             || size_class(area.width, area.height) == SizeClass::TooSmall;
-        let mask = (!self.no_echo).then(|| self.state.secret.char_count());
+        let mask =
+            (!self.state.no_echo).then(|| self.state.secret.char_count());
         let issue = self.state.issue;
         self.terminal.draw(|frame| draw(frame, view, mask, issue))?;
         Ok(())
@@ -349,15 +482,28 @@ fn mask_text(
     }
 }
 
-// The most detailed key hint that fits on one line of `width` columns.
-fn key_hint(width: u16) -> &'static str {
-    [
-        "Enter to unlock   ·   Esc to cancel   ·   Ctrl+U to clear",
-        "Enter unlock · Esc cancel · ^U clear",
-    ]
-    .into_iter()
-    .find(|hint| hint.chars().count() <= usize::from(width))
-    .unwrap_or("⏎ unlock · Esc cancel")
+// The most detailed key hint that fits `width` columns: one line, or two
+// when `two_rows` (the card has a second row for it).
+fn key_hint(width: u16, two_rows: bool) -> &'static str {
+    let tiers: &[&str] = if two_rows {
+        &[
+            "Enter to unlock   ·   Esc to cancel   ·   Ctrl+U to clear\nTab toggles the dots",
+            "Enter unlock · Esc cancel · ^U clear\nTab toggles the dots",
+        ]
+    } else {
+        &[
+            "Enter unlock · Esc cancel · ^U clear · Tab dots",
+            "Enter unlock · Esc cancel · ^U clear",
+        ]
+    };
+    tiers
+        .iter()
+        .find(|hint| {
+            hint.split('\n')
+                .all(|line| line.chars().count() <= usize::from(width))
+        })
+        .copied()
+        .unwrap_or("⏎ unlock · Esc cancel")
 }
 
 // Rows of `text` wrapped at `width` columns, at least one.
@@ -413,7 +559,7 @@ fn draw_compact(
             } else if view.checking {
                 "Checking password…"
             } else {
-                key_hint(width)
+                key_hint(width, false)
             }
         },
         |error| error,
@@ -451,6 +597,21 @@ fn draw_compact(
     let field_rows = if boxed { 3 } else { 1 };
     let total = 1 + status_rows + field_rows + hint_rows;
     let mut y = area.y + (area.height - total) / 2;
+    // A tiny crab above the stack when five spare rows allow it.
+    if y - area.y > CRAB_TINY_ROWS && width >= CRAB_TINY_WIDTH {
+        frame.render_widget(
+            Paragraph::new(crab_lines(
+                &CRAB_TINY,
+                green_rows(view, CRAB_TINY_ROWS),
+            )),
+            Rect::new(
+                area.x + (area.width - CRAB_TINY_WIDTH) / 2,
+                y - CRAB_TINY_ROWS - 1,
+                CRAB_TINY_WIDTH,
+                CRAB_TINY_ROWS,
+            ),
+        );
+    }
 
     let mut header = vec![
         Span::styled(
@@ -562,7 +723,8 @@ fn draw_full(
     issue: Option<&'static str>,
 ) {
     let area = frame.area();
-    let width = area.width.saturating_sub(4).min(66);
+    let width = area.width.saturating_sub(4).min(CRAB_CARD_WIDTH);
+    let crab = width >= CRAB_CARD_WIDTH;
     let height = 15.min(area.height.saturating_sub(2));
     let card = Rect::new(
         area.x + (area.width - width) / 2,
@@ -570,12 +732,21 @@ fn draw_full(
         width,
         height,
     );
+    // With the crab beside it, the form keeps to the right column.
+    let content = |offset: u16, height: u16| {
+        let mut area = row(card, offset, height);
+        if crab {
+            area.x += CRAB_WIDTH + 2;
+            area.width = area.width.saturating_sub(CRAB_WIDTH + 2);
+        }
+        area
+    };
     let verified_color = [
         Color::Rgb(45, 57, 79),
         Color::Rgb(56, 110, 92),
         Color::Rgb(88, 177, 128),
         Color::Rgb(134, 239, 172),
-    ][usize::try_from((view.tick / 6).min(3)).unwrap_or(3)];
+    ][usize::try_from((view.tick / 3).min(3)).unwrap_or(3)];
     frame.render_widget(Clear, card);
     frame.render_widget(
         Block::default()
@@ -600,21 +771,26 @@ fn draw_full(
                 Style::default().fg(MUTED).add_modifier(Modifier::DIM),
             ),
         ])),
-        row(card, 1, 1),
+        content(1, 1),
     );
     frame.render_widget(
         Paragraph::new(view.title)
             .style(Style::default().fg(MUTED))
             .wrap(Wrap { trim: true }),
         {
-            let mut title = row(card, 3, 2);
-            if width >= 58 {
+            let mut title = content(3, 2);
+            if width >= 58 && !crab {
                 title.width = title.width.saturating_sub(17);
             }
             title
         },
     );
-    if width >= 58 {
+    if crab {
+        frame.render_widget(
+            Paragraph::new(crab_lines(&CRAB, green_rows(view, CRAB_ROWS))),
+            Rect::new(card.x + 3, card.y + 3, CRAB_WIDTH, CRAB_ROWS),
+        );
+    } else if width >= 58 {
         let art = [
             "⣴⣾⣦⣶⡀⠀⠀⠀⠀⢀⣶⣴⣷⣦",
             "⢻⣿⣿⣿⢃⣀⣀⣀⣀⡘⣿⣿⣿⡟",
@@ -627,7 +803,7 @@ fn draw_full(
             .enumerate()
             .map(|(index, line)| {
                 let color = if view.success {
-                    if index <= usize::try_from(view.tick / 4).unwrap_or(5) {
+                    if index < green_rows(view, 5) {
                         Color::Rgb(134, 239, 172)
                     } else {
                         ACCENT
@@ -645,7 +821,7 @@ fn draw_full(
     }
     if view.success {
         // Unlocked: the status takes the password field's place.
-        let slot = row(card, 6, 3);
+        let slot = content(6, 3);
         frame.render_widget(
             Paragraph::new(status_text(view)).style(
                 Style::default()
@@ -682,7 +858,7 @@ fn draw_full(
             Paragraph::new(mask_text(
                 view,
                 mask,
-                usize::from(row(card, 6, 3).width.saturating_sub(4)),
+                usize::from(content(6, 3).width.saturating_sub(4)),
                 false,
             ))
             .style(Style::default().fg(if mask == Some(0) {
@@ -691,7 +867,7 @@ fn draw_full(
                 INK
             }))
             .block(field),
-            row(card, 6, 3),
+            content(6, 3),
         );
         frame.render_widget(
             Paragraph::new(status_text(view))
@@ -701,7 +877,7 @@ fn draw_full(
                     CYAN
                 }))
                 .wrap(Wrap { trim: true }),
-            row(card, 10, 2),
+            content(10, 2),
         );
     }
     let message = issue.or(view.error).unwrap_or_else(|| {
@@ -710,7 +886,7 @@ fn draw_full(
         } else if view.checking {
             "Checking password…"
         } else {
-            key_hint(row(card, 12, 2).width)
+            key_hint(content(12, 2).width, true)
         }
     });
     frame.render_widget(
@@ -721,7 +897,7 @@ fn draw_full(
                 MUTED
             }))
             .wrap(Wrap { trim: true }),
-        row(card, 12, 2),
+        content(12, 2),
     );
 }
 
@@ -763,6 +939,28 @@ mod tests {
             input.input_byte(b'\r').unwrap(),
             Some(Action::Submit(_))
         ));
+    }
+
+    #[test]
+    fn tab_toggles_the_dots_but_not_inside_a_paste() {
+        let mut input = InputState::new().unwrap();
+        assert!(!input.no_echo);
+        input.input_byte(b'\t').unwrap();
+        assert!(input.no_echo);
+        input.input_byte(b'\t').unwrap();
+        assert!(!input.no_echo);
+        assert!(!input.blocked);
+        for byte in b"\x1b[200~a\tb\x1b[201~" {
+            input.input_byte(*byte).unwrap();
+        }
+        assert!(input.blocked);
+        assert!(!input.no_echo);
+    }
+
+    #[test]
+    fn the_card_mentions_the_tab_shortcut() {
+        let text = render(90, 28, &DEMO, Some(3), None).join("\n");
+        assert!(text.contains("Tab toggles the dots"), "{text}");
     }
 
     #[test]

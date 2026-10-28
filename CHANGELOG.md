@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+* Unlock dialogs (terminal and GTK): Tab shows or hides the dots while you
+  type the master password, as in systemd-ask-password. It starts from the
+  `unlock_no_echo` setting. In the GTK dialog Tab no longer moves focus out of
+  the password field; Shift+Tab still does.
+
+### Changed
+
+* The terminal unlock dialog shows the pixel-art crab beside the form (a tiny
+  one above it on small terminals), and its success animation is faster.
+
 ## [2.32.5] - 2026-10-28
 
 ### Fixed
