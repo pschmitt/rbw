@@ -16,6 +16,8 @@
   behaviour payment cards already had); "Keep open" stops the timer. The window also follows fills started elsewhere
   (shortcut, popup, page load): the filled login shows as Filled.
   In the corner the window is dimmed; touching it or "Keep open" restores it.
+* Browser extension: the toolbar crab hops and sparkles after a successful
+  autofill (unless animations are off).
 
 ## [2.32.6] - 2026-10-28
 

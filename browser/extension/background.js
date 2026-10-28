@@ -315,6 +315,43 @@ function syncFinished() {
   Promise.resolve(api.action.setIcon({ path: api.runtime.getManifest().action?.default_icon })).catch(() => {});
   badge();
 }
+// Toolbar feedback after a successful fill: the crab squashes, hops twice and
+// a sparkle pops. Skipped while a sync spinner owns the icon.
+const hopAnimation = { running: false };
+function hopFrame(bitmap, size, t) {
+  const canvas = new OffscreenCanvas(size, size); const ctx = canvas.getContext("2d");
+  const body = size * 0.8, hops = 2;
+  const wave = Math.abs(Math.sin(t * Math.PI * hops)), air = Math.sin(t * Math.PI * hops) ** 2 * (1 - t * 0.35);
+  // Stretch in the air, squash on touching down.
+  const stretch = 1 + (wave > 0.6 ? 0.08 : 0) - (wave < 0.15 ? 0.1 : 0);
+  const w = body / stretch, h = body * stretch;
+  const x = (size - w) / 2, y = size - h - size * 0.04 - air * size * 0.2;
+  ctx.drawImage(bitmap, x, y, w, h);
+  // Sparkle: a four-point star pops in the top-right and fades out.
+  const pop = Math.max(0, (t - 0.35) / 0.65);
+  if (pop > 0) {
+    const r = size * 0.2 * Math.sin(Math.min(1, pop) * Math.PI) ** 0.7, cx = size * 0.82, cy = size * 0.2;
+    ctx.fillStyle = "rgba(120,255,160,.95)"; ctx.beginPath();
+    for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4, d = i % 2 ? r * 0.3 : r; ctx[i ? "lineTo" : "moveTo"](cx + Math.cos(a - Math.PI / 2) * d, cy + Math.sin(a - Math.PI / 2) * d); }
+    ctx.closePath(); ctx.fill();
+  }
+  return ctx.getImageData(0, 0, size, size);
+}
+async function hopIcon(prefs) {
+  if (prefs?.animations === "off" || hopAnimation.running || syncAnimation.active) return;
+  hopAnimation.running = true;
+  try {
+    const bitmaps = await toolbarBitmaps(); const frames = 16;
+    for (let i = 0; i <= frames; i++) {
+      if (syncAnimation.active) return;
+      await api.action.setIcon({ imageData: Object.fromEntries(bitmaps.map(([size, bitmap]) => [size, hopFrame(bitmap, size, i / frames)])) });
+      await new Promise(resolve => setTimeout(resolve, 45));
+    }
+  } catch (_) { /* Cosmetic only. */ } finally {
+    hopAnimation.running = false;
+    if (!syncAnimation.active) Promise.resolve(api.action.setIcon({ path: api.runtime.getManifest().action?.default_icon })).catch(() => {});
+  }
+}
 let nativePort;
 const nativeRequests = new Map();
 function native(request) {
@@ -873,6 +910,7 @@ async function fill(message, account) {
       // The line below the title then names the item (and login) whose code is on the clipboard.
       clipboard: copiedTotp ? "TOTP code copied to clipboard" : copiedSecurityCode ? "Card security code copied to clipboard" : null };
     await notifyFill(tab, notice).catch(() => {});
+    if (count > 0) hopIcon(prefs);
     return count;
   } finally {
     await api.tabs.sendMessage(tab.id, { action: "rbw_fill_state", token, active: false, item: message.item, filled: count > 0 }).catch(() => {});
