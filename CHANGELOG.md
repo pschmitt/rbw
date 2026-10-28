@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.32.5] - 2026-10-28
+
 ### Fixed
 
 * The release workflow's Android build installs `qemu-user`, since
