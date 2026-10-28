@@ -12,7 +12,8 @@
 
 * Browser extension: once a login is filled from the inline autofill window, it
   slides to the bottom right and closes after a five second countdown bar (the
-  behaviour payment cards already had); "Keep open" stops the timer.
+  behaviour payment cards already had); "Keep open" stops the timer. The window also follows fills started elsewhere
+  (shortcut, popup, page load): the filled login shows as Filled.
 
 ## [2.32.6] - 2026-10-28
 

@@ -471,6 +471,14 @@ function closeInlineSession(token, notify = false) {
   try { session.port?.disconnect(); } catch (_) { /* Already closed. */ }
   if (notify) api.tabs.sendMessage(session.tabId, { action: "rbw_inline_close", token }, { frameId: session.frameId }).catch(() => {});
 }
+// Fills that start elsewhere (shortcut, popup, page load) keep an open inline
+// chooser of the same kind in step: the row shows Filling… / Filled.
+function inlineFillState(tabId, kind, state) {
+  for (const session of inlineSessions.values()) {
+    if (session.tabId !== tabId || session.mode !== "choices" || session.kind !== kind || !session.port) continue;
+    try { session.port.postMessage({ type: "state", ...state }); } catch (_) { /* Closing. */ }
+  }
+}
 function closeTabInlineSessions(tabId) { for (const [token, session] of inlineSessions) if (session.tabId === tabId) closeInlineSession(token); }
 // Pages can hide or cover the frame. Briefly force every page element to be
 // hit-testable (a user-origin !important rule beats any page style, including
@@ -785,6 +793,9 @@ async function fill(message, account) {
   if (isItemAutofillExcluded(message.item, prefs.autofillExcludedItems)) throw new Error("This item is marked Do not autofill.");
   const token = crypto.randomUUID();
   await api.tabs.sendMessage(tab.id, { action: "rbw_fill_state", token, active: true, item: message.item, name: message.displayName }).catch(() => {});
+  const fillKind = message.type && message.type !== "login" ? message.type : "login";
+  let shownName = message.displayName;
+  inlineFillState(tab.id, fillKind, { item: message.item, active: true, name: shownName });
   let count = 0;
   let securityCodeFieldPresent = false;
   try {
@@ -850,6 +861,7 @@ async function fill(message, account) {
     clearTimeout(fillUndos.get(tab.id)?.timer);
     fillUndos.set(tab.id, { token, url: tab.url, frames: filledFrames, timer: setTimeout(() => { if (fillUndos.get(tab.id)?.token === token) fillUndos.delete(tab.id); }, 10000) });
     // Only public display metadata goes to the notice, never the credential.
+    shownName = label || credential.name || shownName;
     const notice = { undoToken: token, name: label || credential.name || "Item", username: credential.type === "login" ? credential.username ?? shownUsername : null, position: message.cycleIndex, total: message.cycleCount, message: message.totpOnly ? `${label || credential.name || "Item"} · 2FA code filled` : totpCopyFailed ? "TOTP code could not be copied" : securityCodeCopyFailed ? "Security code could not be copied" : hasSecurityCode && securityCodeFieldPresent && cardSecurityCode === "off" ? "Security code left blank (see settings)." : hasSecurityCode && !securityCodeFieldPresent && cardSecurityCode === "fill" ? "No security-code field found." : null,
       // The line below the title then names the item (and login) whose code is on the clipboard.
       clipboard: copiedTotp ? "TOTP code copied to clipboard" : copiedSecurityCode ? "Card security code copied to clipboard" : null };
@@ -857,6 +869,7 @@ async function fill(message, account) {
     return count;
   } finally {
     await api.tabs.sendMessage(tab.id, { action: "rbw_fill_state", token, active: false, item: message.item, filled: count > 0 }).catch(() => {});
+    inlineFillState(tab.id, fillKind, { item: message.item, active: false, filled: count > 0, name: shownName });
   }
 }
 async function handle(message) {
