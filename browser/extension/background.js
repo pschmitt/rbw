@@ -1025,6 +1025,9 @@ async function handle(message) {
       }
       await checkDocument(p);
       if (!pending.has(p.id)) throw new Error("The request was cancelled.");
+      // The next steps of this sign-in (Authelia's password page after a
+      // passkey) follow the login the passkey belongs to.
+      if (p.method === "get" && typeof message.item === "string") rememberFill(p.tabId, account, message.item, p.url);
       finish(p.id, { result }); return true;
     }
     case "passkey_decline": finish(message.request, message.fallback ? { fallback: true } : { error: "Passkey request cancelled." }); return true;

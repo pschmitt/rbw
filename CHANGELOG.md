@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Browser extension: after a passkey login, the next step of the same sign-in
+  (Authelia's password page as second factor) is autofilled from the login the
+  passkey belongs to, instead of the first matching login or a chooser.
+
 ## [2.32.6] - 2026-10-28
 
 ### Added
