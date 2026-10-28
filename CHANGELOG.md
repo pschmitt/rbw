@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.32.7] - 2026-10-28
+
 ### Fixed
 
 * Browser extension: after a passkey login, the next step of the same sign-in
