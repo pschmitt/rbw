@@ -27,6 +27,8 @@
   gets a pulsing pixel 💢 on its head and shuts its eyes, and the password
   prompt says "Vault locked!".
 * Browser extension: while the vault is locked the toolbar crab has red eyes.
+* Browser extension: the "Lock vault" confirmation is red and its button has a
+  lock icon.
 
 ## [2.32.6] - 2026-10-28
 

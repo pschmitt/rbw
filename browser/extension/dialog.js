@@ -1,7 +1,7 @@
 /* In-page confirmation sheet for the popup and options pages, replacing
    window.confirm(). Resolves true only when the confirm button is used;
    Escape, Cancel and clicking the backdrop all resolve false. */
-function confirmDialog({ title, text = "", confirm = "Confirm", choices = null, choiceLabel = "", danger = false, icon: iconName = danger ? "trash" : "check" } = {}) {
+function confirmDialog({ title, text = "", confirm = "Confirm", choices = null, choiceLabel = "", danger = false, icon: iconName = danger ? "trash" : "check", buttonIcon = null } = {}) {
   return new Promise(resolve => {
     const dialog = document.createElement("dialog");
     dialog.className = `confirm-dialog${danger ? " is-danger" : ""}`;
@@ -19,7 +19,9 @@ function confirmDialog({ title, text = "", confirm = "Confirm", choices = null, 
     }
     const actions = document.createElement("div"); actions.className = "confirm-dialog-actions";
     const cancel = document.createElement("button"); cancel.value = "cancel"; cancel.textContent = "Cancel";
-    const ok = document.createElement("button"); ok.value = "ok"; ok.textContent = confirm; ok.className = danger ? "danger-solid" : "primary";
+    const ok = document.createElement("button"); ok.value = "ok"; ok.className = danger ? "danger-solid" : "primary";
+    if (buttonIcon) { ok.classList.add("with-icon"); ok.append(icon(buttonIcon)); }
+    ok.append(confirm);
     actions.append(cancel, ok); form.append(badge, heading, body, ...(choiceRow ? [choiceRow] : []), actions); dialog.append(form);
     dialog.addEventListener("click", event => { if (event.target === dialog) dialog.close("cancel"); });
     dialog.addEventListener("close", () => { resolve(dialog.returnValue === "ok" ? (select ? select.value : true) : false); dialog.remove(); }, { once: true });
@@ -35,6 +37,8 @@ function confirmLock() {
     text: "This locks rbw-agent for everything using it, including the command line, until you unlock it again.",
     confirm: "Lock vault",
     icon: "lock",
+    buttonIcon: "lock",
+    danger: true,
   });
 }
 // Locks the controls of preferences set by browser policy (managed storage),
