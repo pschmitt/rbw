@@ -913,10 +913,22 @@ html.no-echo input[data-no-echo] { color:transparent; text-shadow:none; caret-co
 .unlock-title { margin:6px 2px 10px; font-size:18px; font-weight:700; color:var(--danger); }
 html:not([data-page=locked]) #unlock-title { display:none; }
 button.avatar { position:relative; }
-button.avatar .rage { display:none; position:absolute; top:9px; left:34px; width:15px; height:15px; pointer-events:none; filter:drop-shadow(0 0 2px #0008); }
-html[data-page=locked] button.avatar .rage { display:block; animation:rage-throb 1.1s ease-in-out infinite; }
-@keyframes rage-throb { 0%, 100% { transform:scale(1) rotate(-6deg); } 50% { transform:scale(1.28) rotate(6deg); } }
+button.avatar .rage { display:none; position:absolute; top:5px; left:31px; width:21px; height:21px; pointer-events:none; filter:drop-shadow(0 0 2px #0008); }
+html[data-page=locked] button.avatar .rage { display:block; animation:rage-throb .7s ease-in-out infinite; }
+@keyframes rage-throb { 0%, 100% { transform:scale(1) rotate(-6deg); } 50% { transform:scale(1.35) rotate(8deg); } }
 @media (prefers-reduced-motion: reduce) { html[data-page=locked] button.avatar .rage { animation:none; } }
 /* Locked: the crab shuts its eyes (overlay on the sprite's 30x25 grid). */
 button.avatar .shut-eyes { display:none; position:absolute; left:14px; top:3px; width:40px; height:33.3px; pointer-events:none; }
 html[data-page=locked] button.avatar .shut-eyes { display:block; }
+/* Furious: red glow and bursts of trembling. */
+html[data-page=locked] button.avatar img { filter:drop-shadow(0 0 5px #ff2a3d99); animation:rage-glow 1.4s ease-in-out infinite; }
+html[data-page=locked] button.avatar { animation:rage-shake 1.8s linear infinite; }
+@keyframes rage-glow { 0%, 100% { filter:drop-shadow(0 0 3px #ff2a3d66); } 50% { filter:drop-shadow(0 0 8px #ff2a3dcc); } }
+@keyframes rage-shake {
+  0%, 38%, 100% { transform:none; }
+  4% { transform:translate(-1px,0) rotate(-1.5deg); } 8% { transform:translate(1px,-1px) rotate(1.5deg); }
+  12% { transform:translate(-1px,1px) rotate(-1deg); } 16% { transform:translate(1px,0) rotate(1.5deg); }
+  20% { transform:translate(-1px,-1px) rotate(-1.5deg); } 24% { transform:translate(1px,1px) rotate(1deg); }
+  28% { transform:translate(-1px,0) rotate(-1deg); } 32% { transform:translate(1px,-1px) rotate(1deg); }
+}
+@media (prefers-reduced-motion: reduce) { html[data-page=locked] button.avatar, html[data-page=locked] button.avatar img { animation:none; } }
