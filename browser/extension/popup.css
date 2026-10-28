@@ -917,3 +917,6 @@ button.avatar .rage { display:none; position:absolute; top:9px; left:34px; width
 html[data-page=locked] button.avatar .rage { display:block; animation:rage-throb 1.1s ease-in-out infinite; }
 @keyframes rage-throb { 0%, 100% { transform:scale(1) rotate(-6deg); } 50% { transform:scale(1.28) rotate(6deg); } }
 @media (prefers-reduced-motion: reduce) { html[data-page=locked] button.avatar .rage { animation:none; } }
+/* Locked: the crab shuts its eyes (overlay on the sprite's 30x25 grid). */
+button.avatar .shut-eyes { display:none; position:absolute; left:14px; top:3px; width:40px; height:33.3px; pointer-events:none; }
+html[data-page=locked] button.avatar .shut-eyes { display:block; }

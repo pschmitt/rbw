@@ -22,7 +22,8 @@
   the typed characters entirely (no dots) and shows them again, like the
   terminal and GTK unlock dialogs. The choice is remembered.
 * Browser extension: the locked popup no longer shows a card. The header crab
-  gets a pulsing pixel 💢 and the password prompt says "Vault locked!".
+  gets a pulsing pixel 💢 on its head and shuts its eyes, and the password
+  prompt says "Vault locked!".
 
 ## [2.32.6] - 2026-10-28
 
