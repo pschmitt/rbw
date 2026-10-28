@@ -35,6 +35,8 @@ timeout.
 - **Account security**: change the master password, KDF settings or account
   key (`rbw security`), and native unlock via the desktop keyring with
   fingerprint confirmation or the Termux Android Keystore.
+- **MCP server** (`rbw mcp`) so AI agents can search and edit the vault with
+  secrets masked. See [docs/mcp.md](docs/mcp.md).
 - **Home Manager module**.
 
 ## Install
@@ -78,6 +80,7 @@ rest. On bitwarden.com, run `rbw register` first
 | [Backup and restore](docs/backup.md) | `export`, `import`, file-backed vaults |
 | [Mirroring](docs/mirror.md) | Copying vaults between accounts |
 | [Injection](docs/inject.md) | `rbw inject` and `rbw run` |
+| [MCP server](docs/mcp.md) | `rbw mcp` for AI agents |
 | [SSH agent](docs/ssh-agent.md) | Using vault SSH keys |
 | [Termux](docs/termux.md) | Android Keystore unlock |
 | [Desktop unlock](docs/desktop-unlock.md) | Secret Service and fingerprint confirmation |

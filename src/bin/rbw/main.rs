@@ -16,6 +16,7 @@ mod browser;
 mod commands;
 mod export_info;
 mod import_bitwarden;
+mod mcp;
 mod osc52;
 mod passkey;
 mod sends;
@@ -332,6 +333,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
         "Other",
         &[
             "tui",
+            "mcp",
             "inject",
             "run",
             "version",
@@ -1489,6 +1491,16 @@ enum Opt {
         field: Option<String>,
         #[arg(
             long,
+            conflicts_with_all = ["yaml", "field", "from_file"],
+            help = "Read a JSON merge patch (RFC 7396) from stdin and apply \
+                it to the entry as `--json` shows it: objects merge, null \
+                removes a key, `fields` and `uris` are replaced whole. \
+                Nothing is printed, so it also works with --redact; a \
+                masked value is refused"
+        )]
+        patch: bool,
+        #[arg(
+            long,
             value_name = "FILE",
             help = "Edit an entry directly in a `rbw export` file instead \
                 of a configured account -- no config/agent/account is \
@@ -2216,6 +2228,38 @@ enum Opt {
         dry_run: bool,
     },
 
+    #[command(
+        about = "Run a Model Context Protocol server on stdin/stdout",
+        long_about = "Run a Model Context Protocol (MCP) server on \
+            stdin/stdout, so AI agents can list, search, read, create, \
+            update, archive, delete and restore entries, manage \
+            attachments and collections, and run other rbw commands.\n\n\
+            Secrets stay masked: every tool runs rbw with --redact, secret \
+            values are passed to rbw through its environment or stdin, and \
+            the tools that need one (secret_to_file, generate, \
+            attachment_download) write it to a file and only report its \
+            size."
+    )]
+    Mcp {
+        #[arg(
+            long,
+            help = "Let get/history/code return secrets in plain text when \
+                a tool call asks for it (`reveal`), and generate return \
+                passwords"
+        )]
+        allow_secrets: bool,
+        #[arg(long, help = "Only offer tools that don't change the vault")]
+        read_only: bool,
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            default_value_t = 120,
+            help = "Time limit for each rbw command a tool runs (unlock \
+                waits up to 330s regardless)"
+        )]
+        timeout: u64,
+    },
+
     #[command(name = "stop-agent", about = "Terminate the background agent")]
     StopAgent {
         #[arg(
@@ -2372,6 +2416,7 @@ impl Opt {
                 format!("security {}", security.subcommand_name())
             }
             Self::Mirror { .. } => "mirror".to_string(),
+            Self::Mcp { .. } => "mcp".to_string(),
             Self::StopAgent { .. } => "stop-agent".to_string(),
             Self::Completions { .. } => "completions".to_string(),
         }
@@ -3916,7 +3961,7 @@ fn redact_guard(opt: &Opt) -> anyhow::Result<()> {
         Opt::Run { .. } => Some("run"),
         Opt::Copy { .. } => Some("copy"),
         Opt::Export { .. } => Some("export"),
-        Opt::Edit { .. } => Some("edit"),
+        Opt::Edit { patch: false, .. } => Some("edit"),
         Opt::SecretService { .. } => Some("secret-service"),
         Opt::Generate { name: Some(_), .. } => Some("generate NAME"),
         Opt::Add { generate: true, .. } => Some("add --generate"),
@@ -4054,7 +4099,7 @@ fn main() {
     }
 
     env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info"),
+        env_logger::Env::default().default_filter_or("info,rmcp=warn"),
     )
     // D-Bus wire diagnostics may include credential message bodies. Never
     // forward them to the terminal, including under an inherited RUST_LOG.
@@ -4807,6 +4852,7 @@ fn main() {
             json,
             yaml,
             field: None,
+            patch,
             from_file,
             from_file_passphrase,
         } => commands::edit(
@@ -4818,6 +4864,7 @@ fn main() {
             find_args.ignorecase,
             json,
             yaml,
+            patch,
             find_args.exact,
             from_file.as_deref(),
             from_file_passphrase.as_deref(),
@@ -5338,6 +5385,11 @@ fn main() {
                 ),
             }
         }
+        Opt::Mcp {
+            allow_secrets,
+            read_only,
+            timeout,
+        } => mcp::run(allow_secrets, read_only, timeout),
         Opt::StopAgent { kill } => {
             if kill {
                 commands::kill_agent()

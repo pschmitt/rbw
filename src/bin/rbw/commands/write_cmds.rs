@@ -386,6 +386,7 @@ pub fn edit(
     ignore_case: bool,
     json: bool,
     _yaml: bool,
+    patch: bool,
     force_exact: bool,
     from_file: Option<&std::path::Path>,
     from_file_passphrase: Option<&str>,
@@ -410,6 +411,7 @@ pub fn edit(
         org,
         ignore_case,
         json,
+        patch,
         force_exact,
     )
 }

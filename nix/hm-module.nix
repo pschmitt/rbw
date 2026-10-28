@@ -24,6 +24,7 @@
 {
   config,
   lib,
+  options,
   pkgs,
   ...
 }:
@@ -753,6 +754,38 @@ in
       '';
     };
 
+    mcp = {
+      enable = mkEnableOption ''
+        the `rbw mcp` Model Context Protocol server, registered as
+        `programs.mcp.servers.rbw` so AI agents that use Home Manager's
+        shared MCP configuration (Claude Code, Codex, ...) get vault tools.
+        Secrets stay masked unless {option}`allowSecrets` is set
+      '';
+
+      allowSecrets = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Pass `--allow-secrets`: let the `get`, `history` and `code` tools
+          return plain-text secrets when a call asks for them, and
+          `generate` return passwords. Without it agents only ever see
+          masked values and use secrets through `secret_to_file`.
+        '';
+      };
+
+      readOnly = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Pass `--read-only`: only offer tools that don't change the vault.";
+      };
+
+      timeout = mkOption {
+        type = types.ints.positive;
+        default = 120;
+        description = "Time limit in seconds for each rbw command a tool runs (`--timeout`).";
+      };
+    };
+
     renderedConfigFile = mkOption {
       type = types.path;
       internal = true;
@@ -766,47 +799,73 @@ in
   };
 
   config = mkIf cfg.enable (
-    let
-      rendered = filterNulls (
-        cfg.settings
-        // {
-          accounts = lib.attrValues cfg.settings.accounts;
-          passwordGen =
-            if isDefaultPasswordGen cfg.settings.passwordGen then null else cfg.settings.passwordGen;
+    lib.mkMerge [
+      (mkIf cfg.mcp.enable {
+        assertions = [
+          {
+            assertion = options ? programs.mcp.servers;
+            message = "programs.rbw.declarative.mcp needs a Home Manager with programs.mcp.";
+          }
+        ];
+      })
+      # Only set where Home Manager has `programs.mcp`; the assertion above
+      # reports the rest.
+      (lib.optionalAttrs (options ? programs.mcp.servers) {
+        programs.mcp.servers.rbw = mkIf cfg.mcp.enable {
+          command = lib.getExe' cfg.package "rbw";
+          args = [
+            "mcp"
+            "--timeout"
+            (toString cfg.mcp.timeout)
+          ]
+          ++ lib.optional cfg.mcp.allowSecrets "--allow-secrets"
+          ++ lib.optional cfg.mcp.readOnly "--read-only";
+        };
+      })
+      (
+        let
+          rendered = filterNulls (
+            cfg.settings
+            // {
+              accounts = lib.attrValues cfg.settings.accounts;
+              passwordGen =
+                if isDefaultPasswordGen cfg.settings.passwordGen then null else cfg.settings.passwordGen;
+            }
+          );
+          configFile = "${config.xdg.configHome}/rbw/config.yaml";
+          # Plain JSON text -- valid YAML too, and rbw's `parse_config` accepts
+          # either based on the file's extension -- so no yq/jq step is needed
+          # to produce it. Any `secretRef` (`{ file = ...; }`) values in
+          # `rendered` end up in this text completely unresolved: only the
+          # *path* to a secret ever touches the Nix store, never the secret's
+          # own content, so this is safe to build like any other derivation.
+          renderedConfigFile = pkgs.writeText "rbw-config.json" (builtins.toJSON rendered);
+        in
+        {
+          home.packages = [ cfg.package ];
+
+          # Exposed (read-only) purely so the flake's smoke test can check the
+          # rendered content without re-implementing the `rendered` expression.
+          programs.rbw.declarative.renderedConfigFile = renderedConfigFile;
+
+          # Copies the rendered file out of the read-only Nix store into a real,
+          # writable one -- `rbw config set`/`config edit`/`account add` (and
+          # the TUI's "add account" flow) all rewrite config.yaml in place at
+          # runtime, which a `xdg.configFile` symlink into the store wouldn't
+          # allow. Since nothing above ever needs a secret to actually be
+          # decrypted -- `renderedConfigFile` only ever holds `{ file = ...; }`
+          # path references, resolved by rbw itself at the point it's actually
+          # run -- this can run at any point in activation, including at boot
+          # before the user's own sops-nix service exists, with no race to
+          # guard against (contrast the old `_secret`-marker approach this
+          # replaced, which had to bake the *resolved* secret value into
+          # config.yaml during activation itself).
+          home.activation.rbw-config = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+            $DRY_RUN_CMD mkdir -p "$(dirname '${configFile}')"
+            $DRY_RUN_CMD install -m 0600 '${renderedConfigFile}' '${configFile}'
+          '';
         }
-      );
-      configFile = "${config.xdg.configHome}/rbw/config.yaml";
-      # Plain JSON text -- valid YAML too, and rbw's `parse_config` accepts
-      # either based on the file's extension -- so no yq/jq step is needed
-      # to produce it. Any `secretRef` (`{ file = ...; }`) values in
-      # `rendered` end up in this text completely unresolved: only the
-      # *path* to a secret ever touches the Nix store, never the secret's
-      # own content, so this is safe to build like any other derivation.
-      renderedConfigFile = pkgs.writeText "rbw-config.json" (builtins.toJSON rendered);
-    in
-    {
-      home.packages = [ cfg.package ];
-
-      # Exposed (read-only) purely so the flake's smoke test can check the
-      # rendered content without re-implementing the `rendered` expression.
-      programs.rbw.declarative.renderedConfigFile = renderedConfigFile;
-
-      # Copies the rendered file out of the read-only Nix store into a real,
-      # writable one -- `rbw config set`/`config edit`/`account add` (and
-      # the TUI's "add account" flow) all rewrite config.yaml in place at
-      # runtime, which a `xdg.configFile` symlink into the store wouldn't
-      # allow. Since nothing above ever needs a secret to actually be
-      # decrypted -- `renderedConfigFile` only ever holds `{ file = ...; }`
-      # path references, resolved by rbw itself at the point it's actually
-      # run -- this can run at any point in activation, including at boot
-      # before the user's own sops-nix service exists, with no race to
-      # guard against (contrast the old `_secret`-marker approach this
-      # replaced, which had to bake the *resolved* secret value into
-      # config.yaml during activation itself).
-      home.activation.rbw-config = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-        $DRY_RUN_CMD mkdir -p "$(dirname '${configFile}')"
-        $DRY_RUN_CMD install -m 0600 '${renderedConfigFile}' '${configFile}'
-      '';
-    }
+      )
+    ]
   );
 }

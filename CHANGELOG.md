@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Added
+
+* `rbw mcp`: a Model Context Protocol server (built on the official `rmcp`
+  SDK) so AI agents can list, search, read, create, update, patch, archive,
+  delete and restore entries, manage attachments and collections, audit
+  passwords and run other rbw commands. Output is redacted; secrets are passed
+  to rbw through its environment or stdin, and `secret_to_file` writes one to
+  a file instead of returning it. `--allow-secrets` and `--read-only` widen or
+  narrow that. See [docs/mcp.md](docs/mcp.md). Home Manager:
+  `programs.rbw.declarative.mcp`.
+* `rbw edit --patch`: apply a JSON merge patch (RFC 7396) from stdin to an
+  entry's `--json` form. It prints nothing, works with `--redact` and refuses
+  the redaction mask.
+
+### Fixed
+
+* `rbw set --diff` with `--redact` printed the start and end of the old and
+  new passwords, TOTP secrets and custom field values; it now masks them
+  completely.
+* `rbw edit` and editing in the TUI added a password history entry even when
+  the password didn't change.
+
 ## [2.33.0] - 2026-10-28
 
 ### Changed

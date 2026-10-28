@@ -8,6 +8,7 @@ pub(super) fn edit_structured(
     org: Option<&str>,
     ignore_case: bool,
     json: bool,
+    patch: bool,
     force_exact: bool,
 ) -> anyhow::Result<()> {
     unlock(None, None)?;
@@ -41,6 +42,7 @@ pub(super) fn edit_structured(
     .with_context(|| format!("couldn't find entry for '{desc}'"))?;
 
     let editable = decrypted_to_editable(&decrypted);
+    let json = json || patch;
 
     let serialized = if json {
         serde_json::to_string_pretty(&editable)?
@@ -60,8 +62,14 @@ pub(super) fn edit_structured(
         )
     };
 
-    let interactive = std::io::stdin().is_terminal();
-    let contents = rbw::edit::edit(&serialized, help, ext)?;
+    let interactive = !patch && std::io::stdin().is_terminal();
+    let contents = if patch {
+        let patch = std::io::read_to_string(std::io::stdin())
+            .map_err(|e| anyhow::anyhow!("failed to read stdin: {e}"))?;
+        apply_editable_patch(&editable, &patch)?
+    } else {
+        rbw::edit::edit(&serialized, help, ext)?
+    };
     let result = (|| {
         let contents_trimmed = contents
             .lines()
@@ -109,17 +117,21 @@ pub(super) fn edit_structured(
             .transpose()?;
 
         let mut history = entry.history.clone();
-        if let (
-            rbw::db::EntryData::Login {
-                password: Some(old_pw),
-                ..
-            },
-            rbw::db::EntryData::Login {
-                password: new_pw, ..
-            },
-        ) = (&entry.data, &data)
+        // Compare the plaintexts: re-encrypting an unchanged password gives
+        // a different ciphertext, which would add a bogus history entry.
+        let password_changed = matches!(
+            (&decrypted.data, &updated.data),
+            (
+                DecryptedData::Login { password: Some(old), .. },
+                EditableData::Login { password: new, .. },
+            ) if Some(old) != new.as_ref()
+        );
+        if let rbw::db::EntryData::Login {
+            password: Some(old_pw),
+            ..
+        } = &entry.data
         {
-            if Some(old_pw) != new_pw.as_ref() {
+            if password_changed {
                 history.insert(
                     0,
                     rbw::db::HistoryEntry {
@@ -1682,6 +1694,10 @@ pub(super) fn resolve_folder_id(
 }
 
 pub(super) fn censor(s: &str) -> String {
+    // A partial value is still secret material.
+    if redact_enabled() {
+        return MASKED_SECRET.to_string();
+    }
     let chars: Vec<char> = s.chars().collect();
     let len = chars.len();
     if len <= 4 {
@@ -1728,5 +1744,65 @@ pub(super) fn print_entry_diff(changes: &[(&str, String, String)]) {
             style::dim("→", c),
             style::new_val(new, c),
         );
+    }
+}
+
+// `rbw edit --patch`: applies an RFC 7396 JSON merge patch (objects merge,
+// `null` removes a key, anything else replaces it) to the entry as `rbw edit
+// --json` would show it, so a script can change one field of any entry type
+// without ever reading the secrets it leaves alone. A masked value
+// (`MASKED_SECRET`, what `--redact` output shows) is refused, so a redacted
+// entry can't be written back over the real one.
+pub(super) fn apply_editable_patch(
+    editable: &EditableCipher,
+    patch: &str,
+) -> anyhow::Result<String> {
+    let patch: serde_json::Value = serde_json::from_str(patch)
+        .map_err(|e| anyhow::anyhow!("failed to parse JSON patch: {e}"))?;
+    anyhow::ensure!(
+        patch.is_object(),
+        "the JSON patch must be an object (RFC 7396 merge patch)"
+    );
+    anyhow::ensure!(
+        !contains_masked_secret(&patch),
+        "the JSON patch contains the redaction mask {MASKED_SECRET:?}; \
+         leave masked fields out of the patch instead"
+    );
+    let mut value = serde_json::to_value(editable)?;
+    merge_patch(&mut value, &patch);
+    Ok(serde_json::to_string_pretty(&value)?)
+}
+
+fn merge_patch(target: &mut serde_json::Value, patch: &serde_json::Value) {
+    let serde_json::Value::Object(patch) = patch else {
+        *target = patch.clone();
+        return;
+    };
+    if !target.is_object() {
+        *target = serde_json::Value::Object(serde_json::Map::new());
+    }
+    let target = target.as_object_mut().unwrap();
+    for (key, value) in patch {
+        if value.is_null() {
+            target.remove(key);
+        } else {
+            merge_patch(
+                target.entry(key.clone()).or_insert(serde_json::Value::Null),
+                value,
+            );
+        }
+    }
+}
+
+fn contains_masked_secret(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(s) => s == MASKED_SECRET,
+        serde_json::Value::Array(values) => {
+            values.iter().any(contains_masked_secret)
+        }
+        serde_json::Value::Object(map) => {
+            map.values().any(contains_masked_secret)
+        }
+        _ => false,
     }
 }

@@ -75,6 +75,11 @@ full configuration file.
 rbw reads both `config.yaml` and the legacy `config.json`; `config.yaml` wins
 when both exist, and `rbw config set`/`rbw config edit` write `config.yaml`.
 
+`programs.rbw.declarative.mcp.enable = true;` registers the
+[MCP server](mcp.md) as `programs.mcp.servers.rbw`, which Home Manager's Claude
+Code, Codex and other agent modules pick up with `enableMcpIntegration`.
+`mcp.allowSecrets`, `mcp.readOnly` and `mcp.timeout` map to its flags.
+
 ## Browser extension
 
 The extension needs three things: the add-on, the native messaging host, and

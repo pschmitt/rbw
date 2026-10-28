@@ -277,6 +277,10 @@
                 };
                 programs.rbw.declarative = {
                   enable = true;
+                  mcp = {
+                    enable = true;
+                    readOnly = true;
+                  };
                   settings = {
                     pinentry.command = "pinentry-gtk2";
                     agent.lockTimeout = 120;
@@ -293,6 +297,7 @@
             ];
           };
           renderedConfigFile = hm.config.programs.rbw.declarative.renderedConfigFile;
+          mcpArgs = hm.config.programs.mcp.servers.rbw.args;
           expected =
             builtins.toJSON {
               agent = {
@@ -346,6 +351,15 @@
                 diff -u expected.json actual.json
                 touch "$out"
               '';
+          hm-module-mcp =
+            assert
+              mcpArgs == [
+                "mcp"
+                "--timeout"
+                "120"
+                "--read-only"
+              ];
+            pkgs.runCommand "rbw-hm-module-mcp-check" { } "touch $out";
         }
         // {
           inherit (self.packages.${system}) browser-daemon-extension;

@@ -990,12 +990,19 @@ pub fn tui_save_edit(
             password: Some(old_pw),
             ..
         },
-        rbw::db::EntryData::Login {
+        EditableData::Login {
             password: new_pw, ..
         },
-    ) = (&entry.data, &data)
+    ) = (&entry.data, &updated.data)
     {
-        if Some(old_pw) != new_pw.as_ref() {
+        // Compare the plaintexts: re-encrypting an unchanged password gives
+        // a different ciphertext, which would add a bogus history entry.
+        let old_plain = crate::actions::decrypt(
+            old_pw,
+            entry.key.as_deref(),
+            entry.org_id.as_deref(),
+        )?;
+        if Some(&old_plain) != new_pw.as_ref() {
             history.insert(
                 0,
                 rbw::db::HistoryEntry {
