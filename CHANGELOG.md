@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.32.4] - 2026-10-28
+
 ### Changed
 
 * The logo is now a pixel-art version of the ninja crab: the browser extension's
