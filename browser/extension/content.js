@@ -114,7 +114,7 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
     }
     if (message?.action === "rbw_fill_state") {
       if (message.active) fills.add(message.token);
-      else { fills.delete(message.token); if (message.filled) { filled = true; if (ui?.kind === "card") startCardCloseCountdown(); } }
+      else { fills.delete(message.token); if (message.filled) { filled = true; if (ui) { dockFilled(); startCardCloseCountdown(); } } }
       return;
     }
     if (!ui || message?.token !== ui.token) return;
@@ -149,10 +149,23 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
   function place() {
     if (!ui) return null;
     const size = ui.box.getBoundingClientRect(), rect = ui.input.getBoundingClientRect();
-    const anchor = movedPosition || { x: rect.left, y: rect.bottom + 4 };
+    const anchor = movedPosition || (ui.docked ? { x: innerWidth - size.width - 16, y: innerHeight - size.height - 16 } : { x: rect.left, y: rect.bottom + 4 });
     const point = { x: Math.max(8, Math.min(anchor.x, innerWidth - size.width - 8)), y: Math.max(8, Math.min(anchor.y, innerHeight - size.height - 8)) };
     ui.host.style.setProperty("left", `${point.x}px`, "important"); ui.host.style.setProperty("top", `${point.y}px`, "important");
     return point;
+  }
+  // Once filled, the window slips to the bottom right, out of the form's way,
+  // and counts down to closing. The slide is a transition on the pinned host
+  // position, removed afterwards so dragging stays immediate.
+  function dockFilled() {
+    const current = ui;
+    if (!current || current.docked) return;
+    current.docked = true; movedPosition = null;
+    if (rbwMotion()) {
+      current.host.style.setProperty("transition", "left .45s cubic-bezier(.2,.8,.2,1),top .45s cubic-bezier(.2,.8,.2,1)", "important");
+      setTimeout(() => { if (ui === current) current.host.style.removeProperty("transition"); }, 500);
+    }
+    place();
   }
   const moveTo = (x, y) => { movedPosition = { x, y }; movedPosition = place(); };
   document.addEventListener("contextmenu", event => {

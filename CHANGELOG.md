@@ -8,6 +8,12 @@
   (Authelia's password page as second factor) is autofilled from the login the
   passkey belongs to, instead of the first matching login or a chooser.
 
+### Changed
+
+* Browser extension: once a login is filled from the inline autofill window, it
+  slides to the bottom right and closes after a five second countdown bar (the
+  behaviour payment cards already had); "Keep open" stops the timer.
+
 ## [2.32.6] - 2026-10-28
 
 ### Added
