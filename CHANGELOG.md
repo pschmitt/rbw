@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* The release workflow's Android build installs `qemu-user`, since
+  `qemu-user-static` is gone on the Ubuntu 26.04 runners. The `v2.32.4` tag
+  failed there and was never published; this release carries its changes.
+
 ## [2.32.4] - 2026-10-28
 
 ### Changed
