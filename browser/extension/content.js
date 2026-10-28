@@ -134,6 +134,15 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
     if (!ui) return;
     clearTimeout(ui.closeTimer); ui.closeTimer = null; ui.closeStopped = true;
     ui.progress.hidden = true; ui.keepOpen.hidden = true;
+    undim();
+  }
+  // The docked window fades back in once you touch it. The fade is on the box
+  // inside the shadow root: the host's own opacity stays pinned at 1.
+  function undim() {
+    const current = ui;
+    if (!current?.dimmed) return;
+    current.dimmed = false;
+    current.box.style.setProperty("opacity", "1");
   }
   function startCardCloseCountdown() {
     const current = ui;
@@ -161,6 +170,9 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
     const current = ui;
     if (!current || current.docked) return;
     current.docked = true; movedPosition = null;
+    current.dimmed = true;
+    current.box.style.setProperty("transition", rbwMotion() ? "opacity .35s ease" : "none");
+    current.box.style.setProperty("opacity", ".55");
     if (rbwMotion()) {
       current.host.style.setProperty("transition", "left .45s cubic-bezier(.2,.8,.2,1),top .45s cubic-bezier(.2,.8,.2,1)", "important");
       setTimeout(() => { if (ui === current) current.host.style.removeProperty("transition"); }, 500);
@@ -218,6 +230,7 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
     handle.append(grip, title); header.append(handle, keepOpen, dismiss, progress);
     const frame = document.createElement("iframe"); frame.title = "rbw suggestions"; frame.src = api.runtime.getURL("inline.html");
     box.append(header, frame); shadow.append(style, box);
+    for (const type of ["pointerenter", "pointerdown", "focusin", "keydown"]) box.addEventListener(type, event => { if (event.isTrusted) undim(); });
     const rect = input.getBoundingClientRect();
     host.style.cssText = `position:fixed!important;z-index:2147483647!important;top:0!important;left:0!important;width:${Math.max(0, Math.min(380, Math.max(rect.width, 240), innerWidth - 16))}px!important;visibility:hidden!important;pointer-events:auto!important;${rbwHardenCss}`;
     document.documentElement.append(host);
