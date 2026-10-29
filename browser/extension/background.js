@@ -827,7 +827,7 @@ async function pageMessage(message, sender, respond) {
   if (!["get", "create"].includes(message.method) || typeof message.request !== "string" || JSON.stringify(message.options || {}).length > 65536) return respond({ error: "Invalid passkey request." });
   if ([...pending.values()].some(p => p.tabId === sender.tab.id) || pending.size >= 8) return respond({ error: "Another request is already pending." });
   const id = crypto.randomUUID();
-  const operation = { id, method: message.method, origin: url.origin, options: structuredClone(message.options), tabId: sender.tab.id, frameId: sender.frameId, documentId: sender.documentId, topUrl: sender.tab.url, url: sender.url, pageRequest: message.request, respond, timer: setTimeout(() => finish(id, { error: "Passkey request expired." }), 120000) };
+  const operation = { id, method: message.method, origin: url.origin, options: structuredClone(message.options), tabId: sender.tab.id, frameId: sender.frameId, documentId: sender.documentId, topUrl: sender.tab.url, url: sender.url, pageRequest: message.request, respond, timer: setTimeout(() => finish(id, { error: "Passkey request expired." }), 305000) };
   pending.set(id, operation); badge();
   if (!message.conditional) {
     try {

@@ -193,7 +193,7 @@ where
                 len -= nl + 1;
             } else if data.starts_with(b"ERR ") {
                 let line: Vec<u8> = data.iter().take(nl).copied().collect();
-                let line = String::from_utf8(line).unwrap();
+                let line = String::from_utf8_lossy(&line);
                 let mut split = line.splitn(3, ' ');
                 let _ = split.next(); // ERR
                 let code = split.next();
@@ -315,6 +315,13 @@ fn test_read_password() {
             assert_eq!(&buf[0..len], &output[..]);
         });
     }
+}
+
+#[tokio::test]
+async fn invalid_utf8_pinentry_error_does_not_panic() {
+    let mut buf = [0; 64];
+    let result = read_password(1, &mut buf, &b"ERR 42 bad \xff\n"[..]).await;
+    assert!(matches!(result, Err(Error::PinentryErrorMessage { .. })));
 }
 
 #[tokio::test]

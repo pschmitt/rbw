@@ -276,12 +276,6 @@ async fn handle_request(
                 dir,
                 std::os::unix::fs::PermissionsExt::from_mode(0o700),
             )?;
-            // Never keep a credential in two stores at once.
-            for other in [UnlockStore::Tpm2, UnlockStore::File] {
-                if other != *store {
-                    let _ = std::fs::remove_file(ctx.file(uid, id, other));
-                }
-            }
             match store {
                 UnlockStore::Tpm2 => {
                     rbw::creds::encrypt(
@@ -294,6 +288,21 @@ async fn handle_request(
                     .await?;
                 }
                 _ => rbw::creds::write_private(&path, password.as_bytes())?,
+            }
+            // Keep the old enrollment until the replacement is safely written.
+            let other = if *store == UnlockStore::Tpm2 {
+                UnlockStore::File
+            } else {
+                UnlockStore::Tpm2
+            };
+            match std::fs::remove_file(ctx.file(uid, id, other)) {
+                Ok(()) => {}
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(error.into());
+                }
             }
             Ok(Event::Done {
                 password: None,
@@ -530,6 +539,21 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[tokio::test]
+    async fn failed_replacement_preserves_old_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Context::new(dir.path().into(), Box::new(Fake(true)));
+        let uid = rustix::process::getuid().as_raw();
+        let old = ctx.file(uid, ID, UnlockStore::Tpm2);
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, b"old credential").unwrap();
+        // A directory at the target makes the atomic replacement fail.
+        std::fs::create_dir(ctx.file(uid, ID, UnlockStore::File)).unwrap();
+        let events = request(&ctx, &enroll("replacement")).await;
+        assert!(matches!(events.last(), Some(Event::Error { .. })));
+        assert_eq!(std::fs::read(old).unwrap(), b"old credential");
     }
 
     #[tokio::test]

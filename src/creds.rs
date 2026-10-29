@@ -57,9 +57,12 @@ pub async fn encrypt(
     if secure_boot {
         command.arg("--tpm2-pcrs=7");
     }
+    let dir = path.parent().context("credential path has no directory")?;
+    let staging = tempfile::tempdir_in(dir)?;
+    let staged_path = staging.path().join("credential");
     let mut child = command
         .arg("-")
-        .arg(path)
+        .arg(&staged_path)
         .spawn()
         .context("could not run systemd-creds; is systemd installed?")?;
     let mut stdin =
@@ -72,6 +75,7 @@ pub async fn encrypt(
     if !output.status.success() {
         return Err(failure("encrypt", &output));
     }
+    std::fs::rename(&staged_path, path)?;
     Ok(())
 }
 
@@ -106,7 +110,6 @@ pub fn write_private(
     secret: &[u8],
 ) -> anyhow::Result<()> {
     use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
 
     let dir = path.parent().context("credential path has no directory")?;
     std::fs::create_dir_all(dir)
@@ -115,18 +118,15 @@ pub fn write_private(
         dir,
         std::os::unix::fs::PermissionsExt::from_mode(0o700),
     )?;
-    let temp = path.with_extension("tmp");
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&temp)
-        .with_context(|| format!("could not write {}", temp.display()))?;
+    let mut file =
+        tempfile::NamedTempFile::new_in(dir).with_context(|| {
+            format!("could not create temporary file in {}", dir.display())
+        })?;
     file.write_all(secret)?;
-    file.sync_all()?;
-    std::fs::rename(&temp, path)
-        .with_context(|| format!("could not write {}", path.display()))
+    file.as_file().sync_all()?;
+    file.persist(path)
+        .with_context(|| format!("could not write {}", path.display()))?;
+    Ok(())
 }
 
 /// Reads a file written by `write_private`, refusing one that others could
@@ -175,6 +175,26 @@ mod tests {
             );
             assert!(decrypt(scope, "other-name", &path).await.is_err());
         }
+    }
+
+    #[test]
+    fn private_write_ignores_existing_tmp_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unlock.secret");
+        let stale = path.with_extension("tmp");
+        std::fs::write(&stale, b"stale").unwrap();
+        std::fs::set_permissions(
+            &stale,
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        write_private(&path, b"secret").unwrap();
+        assert_eq!(std::fs::read(&stale).unwrap(), b"stale");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o077,
+            0
+        );
     }
 
     #[test]

@@ -29,6 +29,11 @@ export default [
     },
   },
   {
+    files: ["extension/popup-audit.js"],
+    languageOptions: { globals: { itemRow: "readonly", element: "readonly", AUDIT_PAGE: "readonly", $: "readonly", healthState: "writable", healthRun: "readonly", request: "readonly" } },
+  },
+  { files: ["extension/popup.js"], languageOptions: { globals: { runAudit: "readonly" } } },
+  {
     // browser-daemon's live-view extension: classic scripts too; bridge.js
     // gives the others bd, $, esc, ico, warning and motion.
     files: ["browser-daemon/**/*.js"],
