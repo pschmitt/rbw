@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [2.34.2] - 2026-10-29
+
+### Changed
+
+* Browser extension: the autofill notice's crab hops and sparkles after a
+  successful fill, unless animations are disabled or reduced motion is on.
+
+### Fixed
+
+* Unlock enrollment keeps the previous credential until its replacement is
+  safely written, so a failed replacement no longer loses the enrollment.
+  Private credential writes also ignore stale temporary files.
+* Browser extension: passkey requests now allow five minutes for approval
+  before timing out.
+* `rbw-unlockd`: invalid UTF-8 in a pinentry error no longer causes a panic.
+
 ## [2.34.1] - 2026-10-29
 
 ### Changed
