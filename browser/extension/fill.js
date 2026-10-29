@@ -370,7 +370,7 @@ function showFillNotice(expectedUrl, notice) {
   const border = notice.error ? "#efa9b9" : "#555555";
   const bg = notice.error ? "#302528" : "#282828";
   const motionRules = notice.animations === "off" ? "" : `@media(prefers-reduced-motion:no-preference){.notice{opacity:0;transform:translateX(40px)}.notice.entering{animation:rbw-in ${enterDuration}ms cubic-bezier(.16,1,.3,1) both}.notice.closing{animation:rbw-out ${exitDuration}ms ease-in both}@keyframes rbw-in{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}@keyframes rbw-out{to{opacity:0;transform:translateX(16px)}}}`;
-  sheet.replaceSync(`:host{all:initial}.notice{box-sizing:border-box;position:relative;overflow:hidden;display:flex;align-items:center;gap:14px;width:450px;max-width:calc(100vw - 32px);padding:14px 16px;border:1px solid ${border};border-radius:14px;background:${bg};color:#efefef;box-shadow:0 6px 24px #0006;font:17px/1.4 system-ui,sans-serif;pointer-events:auto}.brand{width:38px;height:38px;object-fit:contain;flex-shrink:0}.text{min-width:0;flex:1}.progress{position:absolute;left:0;right:0;bottom:0;height:3px;background:rgba(255,255,255,.12);pointer-events:none}.progress span{display:block;width:100%;height:100%;background:#8ab4f8;transform-origin:left center}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}small{color:#adadad;font-size:14.5px;margin-top:3px}button{flex-shrink:0;pointer-events:auto;cursor:pointer;border:0;border-radius:6px;background:transparent;color:#adadad;width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}button.settings{width:auto;padding:0 8px;font:600 14px system-ui,sans-serif}button svg{width:22px;height:22px;display:block;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}button:hover,button:focus-visible{background:#383838;color:#efefef;outline:1px solid #d0d0d0}${motionRules}`);
+  sheet.replaceSync(`:host{all:initial}.notice{box-sizing:border-box;position:relative;overflow:hidden;display:flex;align-items:center;gap:14px;width:450px;max-width:calc(100vw - 32px);padding:14px 16px;border:1px solid ${border};border-radius:14px;background:${bg};color:#efefef;box-shadow:0 6px 24px #0006;font:17px/1.4 system-ui,sans-serif;pointer-events:auto}.brand{width:38px;height:38px;object-fit:contain;display:block}.brandwrap{position:relative;flex-shrink:0;width:38px;height:38px}.brandwrap .sparkle{position:absolute;right:-3px;top:-3px;width:16px;height:16px;pointer-events:none}.brand:only-child{flex-shrink:0}.text{min-width:0;flex:1}.progress{position:absolute;left:0;right:0;bottom:0;height:3px;background:rgba(255,255,255,.12);pointer-events:none}.progress span{display:block;width:100%;height:100%;background:#8ab4f8;transform-origin:left center}strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}small{color:#adadad;font-size:14.5px;margin-top:3px}button{flex-shrink:0;pointer-events:auto;cursor:pointer;border:0;border-radius:6px;background:transparent;color:#adadad;width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}button.settings{width:auto;padding:0 8px;font:600 14px system-ui,sans-serif}button svg{width:22px;height:22px;display:block;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}button:hover,button:focus-visible{background:#383838;color:#efefef;outline:1px solid #d0d0d0}${motionRules}`);
   shadow.adoptedStyleSheets = [sheet];
   const box = document.createElement("div"); box.className = "notice"; box.setAttribute("role", "status"); box.setAttribute("aria-live", "polite");
   const text = document.createElement("div"); text.className = "text";
@@ -406,7 +406,32 @@ function showFillNotice(expectedUrl, notice) {
   };
   host.__rbwDispose = cleanup;
   close.addEventListener("click", dismiss); document.addEventListener("keydown", onKey);
-  if (notice.icon) { const image = document.createElement("img"); image.className = "brand"; image.alt = "rbw"; image.src = notice.icon; box.append(image); }
+  if (notice.icon) {
+    const image = document.createElement("img"); image.className = "brand"; image.alt = "rbw"; image.src = notice.icon;
+    if (notice.error || notice.animations === "off" || matchMedia("(prefers-reduced-motion: reduce)").matches) box.append(image);
+    else {
+      // Like the toolbar icon after a fill: the crab squashes, hops twice and
+      // a sparkle pops in its top-right corner.
+      const brand = document.createElement("span"); brand.className = "brandwrap";
+      const sparkle = document.createElementNS("http://www.w3.org/2000/svg", "svg"); sparkle.setAttribute("viewBox", "-1 -1 2 2"); sparkle.setAttribute("aria-hidden", "true"); sparkle.setAttribute("class", "sparkle");
+      const star = document.createElementNS(sparkle.namespaceURI, "path");
+      star.setAttribute("d", Array.from({ length: 8 }, (_, i) => { const a = i * Math.PI / 4 - Math.PI / 2, d = i % 2 ? 0.3 : 1; return `${i ? "L" : "M"}${(Math.cos(a) * d).toFixed(3)} ${(Math.sin(a) * d).toFixed(3)}`; }).join("") + "Z");
+      star.setAttribute("fill", "#78ffa0"); sparkle.append(star); sparkle.style.opacity = "0";
+      brand.append(image, sparkle); box.append(brand);
+      const hopSteps = 16, hopFrames = [], sparkleFrames = [];
+      for (let i = 0; i <= hopSteps; i++) {
+        const t = i / hopSteps, wave = Math.abs(Math.sin(t * Math.PI * 2)), air = Math.sin(t * Math.PI * 2) ** 2 * (1 - t * 0.35);
+        const stretch = 1 + (wave > 0.6 ? 0.08 : 0) - (wave < 0.15 ? 0.1 : 0);
+        hopFrames.push({ transform: `translateY(${(-air * 7.6).toFixed(2)}px) scale(${(1 / stretch).toFixed(3)}, ${stretch.toFixed(3)})`, offset: t });
+        const pop = Math.max(0, (t - 0.35) / 0.65);
+        sparkleFrames.push({ transform: `scale(${(Math.sin(Math.min(1, pop) * Math.PI) ** 0.7).toFixed(3)})`, opacity: pop > 0 ? 1 : 0, offset: t });
+      }
+      // Starts once the notice has slid in; the sparkle stays hidden until then.
+      const timing = { duration: Math.round(720 / speedFactor), delay: Math.round(enterDuration * 0.7), easing: "linear" };
+      image.style.transformOrigin = "50% 100%"; image.animate(hopFrames, timing);
+      sparkle.animate(sparkleFrames, { ...timing, fill: "backwards" });
+    }
+  }
   box.append(text);
   if (typeof notice.clipboard === "string") {
     // Something was put on the clipboard: a clipboard icon says so.
