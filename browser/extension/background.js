@@ -707,6 +707,7 @@ function finish(id, response) {
   const operation = pending.get(id);
   if (!operation) return;
   clearTimeout(operation.timer); pending.delete(id); badge(); operation.respond(response);
+  if (operation.approvalWindow != null) api.windows.remove(operation.approvalWindow).catch(() => {});
 }
 function originOf(url) {
   try { return new URL(url).origin; } catch (_) { return null; }
@@ -835,7 +836,15 @@ async function pageMessage(message, sender, respond) {
       // Open the toolbar UI only for the active page in the focused window.
       // If the browser refuses, keep the request badged for a manual click.
       if (pending.has(id) && tab.active && window.focused && tab.windowId === window.id) {
-        await api.action.openPopup({ windowId: tab.windowId });
+        // A window.open() sign-in popup (Google, Microsoft, ...) has no
+        // toolbar, so neither openPopup nor a manual click can reach the
+        // approval: show it in a window of its own.
+        if (window.type === "normal") await api.action.openPopup({ windowId: tab.windowId });
+        else {
+          const approval = await api.windows.create({ url: api.runtime.getURL(`popup.html?surface=window&request=${id}`), type: "popup", width: 460, height: 680 });
+          if (pending.has(id)) operation.approvalWindow = approval.id;
+          else api.windows.remove(approval.id).catch(() => {});
+        }
       }
     } catch (_) { /* The toolbar badge remains available until cancellation/expiry. */ }
   }
@@ -1170,6 +1179,11 @@ api.tabs.onRemoved.addListener(tabId => {
   closeTabInlineSessions(tabId);
   const offer = offers.get(tabId); if (offer) { rememberUnsaved(offer); offers.delete(tabId); badge(); }
   badgeTabs.delete(tabId);
+});
+// Closing a dedicated approval window declines its request, as nothing
+// else would show it.
+api.windows.onRemoved.addListener(windowId => {
+  for (const [id, p] of pending) if (p.approvalWindow === windowId) { p.approvalWindow = null; finish(id, { error: "Passkey request cancelled." }); }
 });
 api.tabs.onActivated.addListener(({ tabId }) => { updateSuggestionsBadge(tabId).catch(() => {}); });
 api.tabs.onUpdated.addListener((tabId, change, tab) => {

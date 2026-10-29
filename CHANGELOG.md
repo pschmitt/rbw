@@ -13,6 +13,9 @@
 * `rbw mcp`: an empty `list`/`search` result names the locked accounts (which
   aren't searched) and points to `unlock`, and the server no longer logs the
   MCP SDK's internal spans to stderr.
+* Browser extension: a passkey request from a sign-in popup window (such as
+  "Log in with Google") opens the approval in a window of its own; such
+  windows have no toolbar, so the approval never showed.
 
 ## [2.34.0] - 2026-10-29
 

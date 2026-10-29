@@ -529,7 +529,8 @@ async function activeApproval() {
 }
 async function finishApproval(text) {
   approvalId = null; message(text);
-  if (document.documentElement.dataset.surface !== "window") window.close();
+  // The window opened just for this request (see `approvalWindow`) closes too.
+  if (document.documentElement.dataset.surface !== "window" || new URLSearchParams(location.search).has("request")) window.close();
   else await refresh();
 }
 // A popup restored onto another page skips the vault search; leaving that
