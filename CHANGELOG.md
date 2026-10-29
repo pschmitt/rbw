@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.34.1] - 2026-10-29
+
 ### Changed
 
 * Home Manager: the module's options moved from `programs.rbw.declarative` to
