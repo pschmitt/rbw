@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* `rbw mcp`: an empty `list`/`search` result names the locked accounts (which
+  aren't searched) and points to `unlock`, and the server no longer logs the
+  MCP SDK's internal spans to stderr.
+
 ## [2.34.0] - 2026-10-29
 
 ### Added

@@ -281,6 +281,32 @@ impl Server {
         Ok(serde_json::from_str(&out)?)
     }
 
+    // An empty `list`/`search` result. Those skip locked accounts, so say
+    // which are locked: "nothing found" may only mean "not unlocked".
+    fn no_entries(&self, args: &Args) -> anyhow::Result<String> {
+        let mut result = json!({ "count": 0, "entries": [] });
+        let mut argv = account_args(args);
+        argv.extend(["status", "--json"].map(String::from));
+        let locked: Vec<Value> = self
+            .shown(Cmd::new(argv))
+            .ok()
+            .and_then(|out| serde_json::from_str::<Value>(&out).ok())
+            .and_then(|status| status["accounts"].as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a["unlocked"] == json!(false))
+            .filter_map(|a| a.get("name").cloned())
+            .collect();
+        if !locked.is_empty() {
+            result["locked_accounts"] = json!(locked);
+            result["hint"] = json!(
+                "locked accounts aren't searched; call `unlock` (or \
+                 `all_accounts: true`) and retry"
+            );
+        }
+        Ok(serde_json::to_string_pretty(&result)?)
+    }
+
     // Redacted JSON of the entry with this id.
     fn entry_by_id(&self, args: &Args, id: &str) -> anyhow::Result<String> {
         let mut argv = account_args(args);
@@ -611,6 +637,11 @@ fn no_match_is_empty(
     }
 }
 
+fn is_empty_array(out: &str) -> bool {
+    serde_json::from_str::<Value>(out)
+        .is_ok_and(|v| v.as_array().is_some_and(Vec::is_empty))
+}
+
 fn summarize_list(
     out: &str,
     limit: u64,
@@ -849,8 +880,9 @@ static TOOLS: &[Tool] = &[
                 argv.extend(["--".to_string(), term.to_string()]);
             }
             let Some(out) = no_match_is_empty(server.shown(Cmd::new(argv)))?
+                .filter(|out| !is_empty_array(out))
             else {
-                return Ok(r#"{"count": 0, "entries": []}"#.to_string());
+                return server.no_entries(args);
             };
             summarize_list(
                 &out,
@@ -894,8 +926,9 @@ static TOOLS: &[Tool] = &[
                 argv.extend(["--".to_string(), term.to_string()]);
             }
             let Some(out) = no_match_is_empty(server.shown(Cmd::new(argv)))?
+                .filter(|out| !is_empty_array(out))
             else {
-                return Ok(r#"{"count": 0, "entries": []}"#.to_string());
+                return server.no_entries(args);
             };
             if args.str("url").is_some() {
                 return Ok(out);

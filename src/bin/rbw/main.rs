@@ -4099,7 +4099,8 @@ fn main() {
     }
 
     env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,rmcp=warn"),
+        env_logger::Env::default()
+            .default_filter_or("info,rmcp=warn,tracing::span=warn"),
     )
     // D-Bus wire diagnostics may include credential message bodies. Never
     // forward them to the terminal, including under an inherited RUST_LOG.
