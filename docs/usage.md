@@ -209,7 +209,7 @@ with the `USER` argument, `--uri`, and password generation.
 ## Hiding secrets
 
 `--redact` (aliases `--mask` and `--no-secrets`; also `RBW_REDACT=1`, or `rbw
-config set redact true` / `programs.rbw.declarative.redact`) keeps secret
+config set redact true` / `programs.rbw.settings.redact`) keeps secret
 material off the screen, for a shared terminal, a recording or an AI agent
 driving rbw:
 

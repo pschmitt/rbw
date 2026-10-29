@@ -21,7 +21,7 @@ extension source. Pin a tag (`github:pschmitt/rbw/vX.Y.Z`) for a release.
 | `packages.<system>.browser-native-host` | Native messaging manifests for Firefox and Chromium, pointing at `rbw-browser` |
 | `packages.<system>.rbw-termux` | A native Android (Termux) build |
 | `overlays.default` | Sets `pkgs.rbw` to this flake's package |
-| `homeManagerModules.default` | `programs.rbw.declarative` |
+| `homeManagerModules.default` | `programs.rbw` |
 | `nixosModules.default` | `services.rbw-unlockd`, the fingerprint-enforcing unlock broker (see [desktop-unlock.md](desktop-unlock.md)) |
 
 The package builds with [crane](https://github.com/ipetkov/crane): rbw's
@@ -44,7 +44,7 @@ The module exposes `config.yaml` as Nix options (mirroring `Config` and
 {
   imports = [ inputs.rbw.homeManagerModules.default ];
 
-  programs.rbw.declarative = {
+  programs.rbw = {
     enable = true;
     settings = {
       pinentry.command = "pinentry-gnome3";
@@ -62,20 +62,20 @@ The module exposes `config.yaml` as Nix options (mirroring `Config` and
 
 This writes `~/.config/rbw/config.yaml` (or `$XDG_CONFIG_HOME/rbw/config.yaml`);
 unset options are left out instead of being written as `null`. See the
-module's option documentation (`home-manager option programs.rbw.declarative`
+module's option documentation (`home-manager option programs.rbw`
 or your editor's Nix LSP) for every setting, including
 `accounts.<name>.unlock`, `accounts.<name>.excludeFrom`, `accounts.<name>.color`, `tui.keys` and
-`browser.clients`. `programs.rbw.declarative.package` selects the rbw package.
+`browser.clients`. `programs.rbw.package` selects the rbw package.
 
-The options live under `programs.rbw.declarative` because Home Manager's own
-minimal `programs.rbw` module already declares `programs.rbw.enable`,
-`package` and `settings`. Use one or the other: only this module renders the
-full configuration file.
+This module replaces Home Manager's own `programs.rbw` module (it disables
+it): `settings` takes rbw's `config.yaml` options above, not that module's
+freeform `config.json` keys such as `email` and `base_url`. The old
+`programs.rbw.declarative.*` path still works, with a deprecation warning.
 
 rbw reads both `config.yaml` and the legacy `config.json`; `config.yaml` wins
 when both exist, and `rbw config set`/`rbw config edit` write `config.yaml`.
 
-`programs.rbw.declarative.mcp.enable = true;` registers the
+`programs.rbw.mcp.enable = true;` registers the
 [MCP server](mcp.md) as `programs.mcp.servers.rbw`, which Home Manager's Claude
 Code, Codex and other agent modules pick up with `enableMcpIntegration`.
 `mcp.allowSecrets`, `mcp.readOnly` and `mcp.timeout` map to its flags.
@@ -139,7 +139,7 @@ root and whose extension ID is listed. Browser updates change the store path,
 so declare it with the browser packages themselves:
 
 ```nix
-programs.rbw.declarative.settings.browser.clients = {
+programs.rbw.settings.browser.clients = {
   firefox = {
     browser = "firefox";
     extensions = [ "rbw-browser@pschmitt.dev" ];

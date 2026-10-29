@@ -9,7 +9,7 @@ configuration as the CLI.
 claude mcp add rbw -- rbw mcp
 ```
 
-With Home Manager, `programs.rbw.declarative.mcp.enable = true;` registers it
+With Home Manager, `programs.rbw.mcp.enable = true;` registers it
 as `programs.mcp.servers.rbw` (see [Nix](nix.md)).
 
 ## Tools

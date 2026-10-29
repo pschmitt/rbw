@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Home Manager: the module's options moved from `programs.rbw.declarative` to
+  `programs.rbw`, replacing Home Manager's own `programs.rbw` module (which it
+  now disables). The old path still works, with a deprecation warning.
+
 ### Fixed
 
 * `rbw mcp`: an empty `list`/`search` result names the locked accounts (which

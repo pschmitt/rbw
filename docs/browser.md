@@ -165,7 +165,7 @@ remain the masters.
 ## Native messaging allowlist
 
 Browser access is denied by default. Configure `browser.clients` in rbw's
-configuration (or `programs.rbw.declarative.settings.browser.clients` in Home
+configuration (or `programs.rbw.settings.browser.clients` in Home
 Manager). Each named rule requires `browser` (`firefox` or `chromium`),
 `extensions` (exact add-on IDs), and `executableRoots` (absolute executable paths
 or immutable browser package directories). For example:

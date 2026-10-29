@@ -5,21 +5,11 @@
 # Parameterized over the flake's `self` so `package` can default to this
 # flake's own build, mirroring `overlays.default` in `flake.nix`.
 #
-# NOTE on the option path: home-manager itself now ships a built-in (and
-# unconditionally-imported) `programs.rbw` module -- a thin, freeform-typed
-# installer (see upstream `modules/programs/rbw.nix`). Its `enable`,
-# `package`, and `settings` options are therefore already declared before
-# this module ever loads, and the module system forbids re-declaring an
-# option's `type`/`default` a second time ("... is already declared in
-# ..."). To avoid that collision (and to avoid two different, confusingly
-# similar `settings` options coexisting under the same `programs.rbw.*`
-# prefix -- one freeform and effectively unused, one fully typed), this
-# module lives under the sibling path `programs.rbw.declarative.*` instead
-# of `programs.rbw.*` directly. It is fully independent of upstream's
-# `programs.rbw.enable`/`.settings`: enabling this module does not touch
-# those, and vice versa. Don't set both `programs.rbw.settings` (upstream)
-# and `programs.rbw.declarative.enable` (this module) at once -- only this
-# module actually renders rbw's configuration file.
+# Replaces Home Manager's own `programs.rbw` module (a thin installer with
+# a freeform `settings` for the old `config.json`), which declares the same
+# `enable`, `package` and `settings` options: it is disabled below, and
+# `programs.rbw.declarative.*`, this module's old path, still works with a
+# deprecation warning.
 { self }:
 {
   config,
@@ -36,7 +26,7 @@ let
     types
     ;
 
-  cfg = config.programs.rbw.declarative;
+  cfg = config.programs.rbw;
 
   # Recursively drop `null` values from attrsets (including those nested
   # inside lists), so unset `Option<T>` fields are omitted from the
@@ -733,7 +723,52 @@ let
   };
 in
 {
-  options.programs.rbw.declarative = {
+  disabledModules = [ "programs/rbw.nix" ];
+
+  imports =
+    map
+      (
+        path:
+        lib.mkRenamedOptionModule
+          (
+            [
+              "programs"
+              "rbw"
+              "declarative"
+            ]
+            ++ path
+          )
+          (
+            [
+              "programs"
+              "rbw"
+            ]
+            ++ path
+          )
+      )
+      [
+        [ "enable" ]
+        [ "package" ]
+        [ "settings" ]
+        [
+          "mcp"
+          "enable"
+        ]
+        [
+          "mcp"
+          "allowSecrets"
+        ]
+        [
+          "mcp"
+          "readOnly"
+        ]
+        [
+          "mcp"
+          "timeout"
+        ]
+      ];
+
+  options.programs.rbw = {
     enable = mkEnableOption "rbw, the unofficial Bitwarden CLI, with a fully declarative config.yaml";
 
     package = mkOption {
@@ -804,7 +839,7 @@ in
         assertions = [
           {
             assertion = options ? programs.mcp.servers;
-            message = "programs.rbw.declarative.mcp needs a Home Manager with programs.mcp.";
+            message = "programs.rbw.mcp needs a Home Manager with programs.mcp.";
           }
         ];
       })
@@ -846,7 +881,7 @@ in
 
           # Exposed (read-only) purely so the flake's smoke test can check the
           # rendered content without re-implementing the `rendered` expression.
-          programs.rbw.declarative.renderedConfigFile = renderedConfigFile;
+          programs.rbw.renderedConfigFile = renderedConfigFile;
 
           # Copies the rendered file out of the read-only Nix store into a real,
           # writable one -- `rbw config set`/`config edit`/`account add` (and

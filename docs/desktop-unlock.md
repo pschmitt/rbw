@@ -213,5 +213,5 @@ opens on a locked account, enable it (off by default):
 rbw config set browser.fingerprintAutoStart true
 ```
 
-or `programs.rbw.declarative.settings.browser.fingerprintAutoStart = true;`
+or `programs.rbw.settings.browser.fingerprintAutoStart = true;`
 in Home Manager.

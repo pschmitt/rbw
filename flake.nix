@@ -251,7 +251,7 @@
       nixosModules.default = import ./nix/nixos-module.nix { inherit self; };
 
       # Smoke test: build a minimal home-manager configuration exercising
-      # `programs.rbw.declarative`, and assert the rendered `config.yaml`
+      # `programs.rbw`, and assert the rendered `config.yaml`
       # matches what we expect (field naming, kebab-case `unlock` enum,
       # `accounts` attrsOf->list conversion, null-stripping, and a `file`
       # secretRef staying an unresolved `{file: ...}` reference rather than
@@ -265,38 +265,44 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          hm = home-manager.lib.homeManagerConfiguration {
-            inherit pkgs;
-            modules = [
-              self.homeManagerModules.default
-              {
-                home = {
-                  username = "rbw-test";
-                  homeDirectory = "/build/rbw-test";
-                  stateVersion = "24.05";
-                };
-                programs.rbw.declarative = {
-                  enable = true;
-                  mcp = {
-                    enable = true;
-                    readOnly = true;
+          mkHm =
+            rbw:
+            home-manager.lib.homeManagerConfiguration {
+              inherit pkgs;
+              modules = [
+                self.homeManagerModules.default
+                {
+                  home = {
+                    username = "rbw-test";
+                    homeDirectory = "/build/rbw-test";
+                    stateVersion = "24.05";
                   };
-                  settings = {
-                    pinentry.command = "pinentry-gtk2";
-                    agent.lockTimeout = 120;
-                    unlockUi = "auto";
-                    unlockNoEcho = false;
-                    primaryAccount = "personal";
-                    accounts.personal = {
-                      email = "me@example.com";
-                      baseUrl.file = "/run/secrets/rbw-base-url";
-                    };
-                  };
-                };
-              }
-            ];
+                  programs.rbw = rbw;
+                }
+              ];
+            };
+          rbwConfig = {
+            enable = true;
+            mcp = {
+              enable = true;
+              readOnly = true;
+            };
+            settings = {
+              pinentry.command = "pinentry-gtk2";
+              agent.lockTimeout = 120;
+              unlockUi = "auto";
+              unlockNoEcho = false;
+              primaryAccount = "personal";
+              accounts.personal = {
+                email = "me@example.com";
+                baseUrl.file = "/run/secrets/rbw-base-url";
+              };
+            };
           };
-          renderedConfigFile = hm.config.programs.rbw.declarative.renderedConfigFile;
+          hm = mkHm rbwConfig;
+          # The old `programs.rbw.declarative` path, renamed to `programs.rbw`.
+          hmLegacy = mkHm { declarative = rbwConfig; };
+          renderedConfigFile = hm.config.programs.rbw.renderedConfigFile;
           mcpArgs = hm.config.programs.mcp.servers.rbw.args;
           expected =
             builtins.toJSON {
@@ -360,6 +366,10 @@
                 "--read-only"
               ];
             pkgs.runCommand "rbw-hm-module-mcp-check" { } "touch $out";
+          hm-module-legacy-path =
+            assert hmLegacy.config.programs.rbw.renderedConfigFile == renderedConfigFile;
+            assert hmLegacy.config.programs.mcp.servers.rbw.args == mcpArgs;
+            pkgs.runCommand "rbw-hm-module-legacy-path-check" { } "touch $out";
         }
         // {
           inherit (self.packages.${system}) browser-daemon-extension;
