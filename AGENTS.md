@@ -63,7 +63,7 @@ fnuc's `$PATH` resolve to the last-deployed Nix store path, not a local
 `target/debug`; the deploy's `home-manager-pschmitt.service` restart picks
 up a new rbw build automatically, but re-run `rbw stop-agent` if a stale
 agent process seems to survive it. Commit the `nixos-config` flake.lock
-bump locally only — never push that repo unless separately asked.
+bump and push it, then deploy.
 
 `browser-daemon` (`~/devel/private/pschmitt/browser-daemon.git`) has its
 own `rbw` flake input (rbw's `main`, for its live view's vault extension).
