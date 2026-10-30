@@ -2,8 +2,8 @@
 
 ## Build/test
 
-Don't run `cargo build`/`test`/`clippy` on `fnuc` (it hosts Home Assistant
-and other live infra). Do it on a scratch host instead: `rsync -az --delete
+Don't run `cargo build`/`test`/`clippy` on the machine the agent runs on (it
+may host live infra; see the `brkn-infra` skill). Do it on a build host instead: `rsync -az --delete
 --exclude target --exclude .git ./ <host>:~/build/rbw/`, then `nix shell
 nixpkgs#cargo nixpkgs#rustc nixpkgs#clippy nixpkgs#pkg-config
 nixpkgs#openssl nixpkgs#gcc -c cargo <build|test|clippy>`. Run `cargo fmt
@@ -55,11 +55,9 @@ version, because AMO signs each version only once.
 This repo is consumed by `nixos-config` (flake input `rbw`, following
 `main`). After a release's workflow has finished (the pin commit has landed on
 `main`): bump the lock (`nix flake lock --update-input rbw` in
-`nixos-config.git`), then deploy with `just deploy fnuc` (fnuc is a full
-NixOS host now, not a standalone Home Manager one — `hosts/fnuc/nixos.nix`
-is the source of truth, `hosts/fnuc/default.nix`/`just hm fnuc` is the old
-pre-migration path and shouldn't be relied on). `rbw`/`rbw-agent` on
-fnuc's `$PATH` resolve to the last-deployed Nix store path, not a local
+`nixos-config.git`), then deploy to the hosts that run rbw (`just deploy <host>`; the
+`brkn-infra` skill lists them and their roles). `rbw`/`rbw-agent` on
+a deployed host's `$PATH` resolve to the last-deployed Nix store path, not a local
 `target/debug`; the deploy's `home-manager-pschmitt.service` restart picks
 up a new rbw build automatically, but re-run `rbw stop-agent` if a stale
 agent process seems to survive it. Commit the `nixos-config` flake.lock
