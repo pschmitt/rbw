@@ -23,6 +23,21 @@ push or infer success from local checks, an older commit, or a few passing jobs.
 If CI cannot finish because of an external blocker, report the specific blocker
 and leave release and deployment actions pending.
 
+## Browser extension and its other front ends
+
+The browser extension (`browser/extension/`) is the source of truth for how
+the vault looks and behaves. Its other front ends (today browser-daemon's
+live-view bundle in `browser/browser-daemon/`, and any future one) must reuse
+the extension's own files, never a copy or a reimplementation: load the same
+CSS, scripts and images (add them to `SHARED` in `browser/build.py`), and when
+code only lives in `background.js` or another extension-only file, move it
+into a shared script that both load (as `toolbar-icon.js` does for the toolbar
+crab's pictures: locked, sync, hop). Generated copies of assets (a recolored
+icon saved as a PNG, a pasted algorithm) are drift waiting to happen. A new
+front-end feature starts by asking what the extension already has for it. If
+the host needs something the bundle protocol lacks, extend the protocol
+rather than fork the logic.
+
 ## Agent protocol
 
 `rbw`, `rbw-browser` and `rbw-agent` work together when they share

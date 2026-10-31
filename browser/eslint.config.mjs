@@ -40,7 +40,7 @@ export default [
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: "script",
-      globals: { ...globals.browser, icon: "readonly", stampResult: "readonly", bd: "readonly", $: "readonly", esc: "readonly", ico: "readonly", warning: "readonly", motion: "readonly" },
+      globals: { ...globals.browser, icon: "readonly", stampResult: "readonly", bd: "readonly", $: "readonly", esc: "readonly", ico: "readonly", warning: "readonly", motion: "readonly", rbwToolbarIcon: "readonly" },
     },
     rules: {
       "no-unused-vars": ["error", { vars: "local", args: "none", caughtErrors: "none" }],

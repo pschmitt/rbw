@@ -15,7 +15,7 @@ ICONS = ROOT.parent / "assets" / "icons"
 VERSION = tomllib.loads((ROOT.parent / "Cargo.toml").read_text())["package"]["version"]
 # What browser-daemon's live-view extension (browser-daemon/) takes from this
 # one, so both look alike.
-SHARED = ["theme.css", "popup.css", "icons.js", "feedback.css", "feedback.js", "icons/rbw-48.png", "icons/rbw-64.png", "icons/toolbar-64.png"]  # icons/ lives in ../assets
+SHARED = ["theme.css", "popup.css", "icons.js", "feedback.css", "feedback.js", "toolbar-icon.js", "icons/rbw-48.png", "icons/rbw-64.png", "icons/toolbar-64.png"]  # icons/ lives in ../assets
 
 
 def browser_daemon(dest):
@@ -84,7 +84,7 @@ for target in ("firefox", "chromium"):
         "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'"},
     }
     if target == "firefox":
-        manifest["background"] = {"scripts": ["fill-targets.js", "fill.js", "background.js"]}
+        manifest["background"] = {"scripts": ["fill-targets.js", "fill.js", "toolbar-icon.js", "background.js"]}
         manifest["sidebar_action"] = {"default_panel": "popup.html?surface=window", "default_title": "rbw", "default_icon": toolbar_icons}
         manifest["browser_specific_settings"] = {"gecko": {
             "id": "rbw-browser@pschmitt.dev",

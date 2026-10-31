@@ -11,28 +11,13 @@ let ctx = { site: "", ready: false };
 let shown = false, seq = 0, abort = null, timer = 0, rows = [], query = "";
 
 // As in the extension's toolbar button: locked, the crab's eyes are red and
-// the badge is a red L. The eye band of the sprite is recoloured pixel by
-// pixel (white to red, keeping the anti-aliasing), as in background.js.
+// the badge is a red L. The picture is drawn by the extension's own code
+// (toolbar-icon.js), from the same sprite.
 const SPRITE = "icons/toolbar-64.png";
 let redEyes = null;
 function redEyeIcon() {
-  redEyes ||= fetch(SPRITE).then((r) => r.blob()).then(createImageBitmap).then((bitmap) => {
-    const size = bitmap.width, canvas = document.createElement("canvas");
-    canvas.width = canvas.height = size;
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(bitmap, 0, 0, size, size);
-    const image = ctx.getImageData(0, 0, size, size), data = image.data;
-    for (let y = Math.floor(size * 0.55); y < Math.ceil(size * 0.72); y++) {
-      for (let x = Math.floor(size * 0.28); x < Math.ceil(size * 0.72); x++) {
-        const i = (y * size + x) * 4, low = Math.min(data[i], data[i + 1], data[i + 2]);
-        if (low < 150) continue;
-        const k = (low - 150) / 105;
-        data[i] = 255; data[i + 1] = Math.round(255 - k * 196); data[i + 2] = Math.round(255 - k * 177);
-      }
-    }
-    ctx.putImageData(image, 0, 0);
-    return canvas.toDataURL("image/png");
-  }).catch(() => null);
+  redEyes ||= fetch(SPRITE).then((r) => r.blob()).then(createImageBitmap)
+    .then((bitmap) => rbwToolbarIcon.dataUrl(rbwToolbarIcon.redEyeFrame(bitmap, bitmap.width))).catch(() => null);
   return redEyes;
 }
 function badge() {
