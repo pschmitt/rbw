@@ -283,6 +283,12 @@ impl InputState {
                 match &self.escape[..self.escape_len] {
                     b"[200~" if !self.paste => self.paste = true,
                     b"[201~" if self.paste => self.paste = false,
+                    // Ctrl+Delete
+                    b"[3;5~" if !self.paste && !self.busy => {
+                        self.secret.clear();
+                        self.blocked = false;
+                        self.issue = None;
+                    }
                     _ if self.paste => self.block_input("Paste contains control characters. Ctrl+U clears input."),
                     _ => {},
                 }
@@ -934,6 +940,21 @@ mod tests {
         assert!(input.secret.is_empty());
         assert!(input.input_byte(b'\r').unwrap().is_none());
         input.input_byte(21).unwrap();
+        input.input_byte(b'a').unwrap();
+        assert!(matches!(
+            input.input_byte(b'\r').unwrap(),
+            Some(Action::Submit(_))
+        ));
+    }
+
+    #[test]
+    fn ctrl_delete_clears_the_input() {
+        let mut input = InputState::new().unwrap();
+        for byte in b"secret\x1b[3;5~" {
+            input.input_byte(*byte).unwrap();
+        }
+        assert!(input.secret.is_empty());
+        assert!(!input.blocked);
         input.input_byte(b'a').unwrap();
         assert!(matches!(
             input.input_byte(b'\r').unwrap(),

@@ -182,6 +182,22 @@ impl GtkDialog {
             }
         });
         window.add_controller(keys);
+        // Capture phase: the entry would otherwise take Ctrl+Delete for
+        // "delete next word".
+        let clear = gtk::EventControllerKey::new();
+        clear.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let field = entry.clone();
+        clear.connect_key_pressed(move |_, key, _, modifiers| {
+            if matches!(key, gtk::gdk::Key::Delete | gtk::gdk::Key::KP_Delete)
+                && modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+            {
+                field.set_text("");
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
+            }
+        });
+        entry.add_controller(clear);
         window.present();
         entry.grab_focus();
         Ok(Self {
