@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.34.4] - 2026-10-31
+
 ### Changed
 
 * Browser extension: the fake passkey credential and the platform-authenticator
