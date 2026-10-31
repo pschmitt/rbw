@@ -15,7 +15,7 @@ ICONS = ROOT.parent / "assets" / "icons"
 VERSION = tomllib.loads((ROOT.parent / "Cargo.toml").read_text())["package"]["version"]
 # What browser-daemon's live-view extension (browser-daemon/) takes from this
 # one, so both look alike.
-SHARED = ["theme.css", "popup.css", "icons.js", "feedback.css", "feedback.js", "icons/rbw-48.png", "icons/rbw-64.png", "icons/toolbar-64.png", "icons/toolbar-locked-64.png"]  # icons/ lives in ../assets
+SHARED = ["theme.css", "popup.css", "icons.js", "feedback.css", "feedback.js", "icons/rbw-48.png", "icons/rbw-64.png", "icons/toolbar-64.png"]  # icons/ lives in ../assets
 
 
 def browser_daemon(dest):

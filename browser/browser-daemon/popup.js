@@ -11,13 +11,35 @@ let ctx = { site: "", ready: false };
 let shown = false, seq = 0, abort = null, timer = 0, rows = [], query = "";
 
 // As in the extension's toolbar button: locked, the crab's eyes are red and
-// the badge is a red L.
-const LOCKED_ICON = "icons/toolbar-locked-64.png", UNLOCKED_ICON = "icons/toolbar-64.png";
+// the badge is a red L. The eye band of the sprite is recoloured pixel by
+// pixel (white to red, keeping the anti-aliasing), as in background.js.
+const SPRITE = "icons/toolbar-64.png";
+let redEyes = null;
+function redEyeIcon() {
+  redEyes ||= fetch(SPRITE).then((r) => r.blob()).then(createImageBitmap).then((bitmap) => {
+    const size = bitmap.width, canvas = document.createElement("canvas");
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0, size, size);
+    const image = ctx.getImageData(0, 0, size, size), data = image.data;
+    for (let y = Math.floor(size * 0.55); y < Math.ceil(size * 0.72); y++) {
+      for (let x = Math.floor(size * 0.28); x < Math.ceil(size * 0.72); x++) {
+        const i = (y * size + x) * 4, low = Math.min(data[i], data[i + 1], data[i + 2]);
+        if (low < 150) continue;
+        const k = (low - 150) / 105;
+        data[i] = 255; data[i + 1] = Math.round(255 - k * 196); data[i + 2] = Math.round(255 - k * 177);
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+    return canvas.toDataURL("image/png");
+  }).catch(() => null);
+  return redEyes;
+}
 function badge() {
   const n = vault.site === ctx.site && Array.isArray(vault.list) ? vault.list.filter((e) => e.site !== false).length : 0;
   if (vault.locked) bd.badge("L", "danger"); else bd.badge(n ? (n > 9 ? "9+" : String(n)) : null);
-  bd.icon(vault.locked ? LOCKED_ICON : UNLOCKED_ICON);
-  $("logo").src = vault.locked ? LOCKED_ICON : "icons/rbw-64.png";
+  if (!vault.locked) { bd.icon(null); $("logo").src = "icons/rbw-64.png"; return; }
+  redEyeIcon().then((src) => { if (!src || !vault.locked) return; bd.icon(src); $("logo").src = src; });
 }
 // After a page load: how many logins the vault has for the site (the button's badge).
 // Never asks for an unlock; a node without a secret agent is left alone a while.

@@ -58,9 +58,9 @@ const bd = (() => {
         post("request", { id, kind, ...args });
       });
     },
-    // tone: "danger" (red) or "warn" (amber); the toolbar's picture, by path in this bundle (none: the manifest's).
+    // tone: "danger" (red) or "warn" (amber); the toolbar's picture as a PNG data URL (none: the manifest's).
     badge: (text, tone) => post("badge", { text: text || null, tone: tone || null }),
-    icon: (path) => post("icon", { path: path || null }),
+    icon: (src) => post("icon", { src: src || null }),
     close: (focus = "button") => post("close", { focus }),
     toast: (text, ms) => post("toast", { text, ms }),
     // use: sign in with the vault (entry: the account picked, or null to let
