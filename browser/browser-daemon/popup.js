@@ -90,6 +90,28 @@ bd.on("open", (m) => {
   if (matchMedia("(hover: hover) and (pointer: fine)").matches) $("query").focus();
   load(ctx.site);
 });
+// Ctrl+Alt+L (the view catches it; the extension's own is Ctrl+Shift+L): fill the
+// site's first login, and the next one at each press, as the extension's fill shortcut.
+let cycle = { site: "", next: 0 };
+bd.on("shortcut", async (m) => {
+  if (m.action !== "fill") return;
+  const site = ctx.site;
+  if (!site || !ctx.ready) return bd.toast("This page is not on a website: there is nothing to fill.", 2500);
+  let list;
+  try { list = await vaultRequest("logins"); } catch (err) { return bd.toast(`Not filled: ${err.message}`, 4000); }
+  if (list?.locked) { vault.locked = true; badge(); return bd.toast("Your vault is locked: open the vault button to unlock it.", 4000); }
+  const own = (Array.isArray(list) ? list : []).filter((e) => e.site !== false);
+  if (!own.length) return bd.toast("No login saved for this site.", 2500);
+  if (cycle.site !== site) cycle = { site, next: 0 };
+  const index = cycle.next % own.length, entry = own[index];
+  cycle.next = index + 1;
+  try {
+    await vaultRequest("fill", { entry: entry.id, fields: ["username", "password", "totp"], any_site: false });
+    hop();
+    const where = own.length > 1 ? ` (${index + 1}/${own.length}, press again for the next)` : "";
+    bd.toast(`Filled ${entry.name || "the login"}${entry.user ? ` · ${entry.user}` : ""}${where}`, 3500);
+  } catch (err) { bd.toast(`Not filled: ${err.message}`, 5000); }
+});
 bd.on("closed", () => {
   shown = false;
   seq++;
