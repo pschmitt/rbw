@@ -888,7 +888,7 @@ async function fill(message, account) {
       label = detail.cipher.name;
       if (!["card", "identity"].includes(credential.type)) throw new Error("This item cannot fill a form.");
     } else {
-      credential = { type: "login", ...await native({ action: "credential", account, item: message.item, url: tab.url }) };
+      credential = { type: "login", ...await native({ action: "credential", account, item: message.item, url: tab.url, manual: message.manual === true }) };
       if (message.totpOnly && !(credential.hasTotp === true && prefs.autofillTotp)) throw new Error("No authenticator code to fill.");
       // The code is generated per fill and goes to the page like the password.
       if (credential.hasTotp === true && prefs.autofillTotp) totpCode = (await native({ action: "totp", account, item: message.item })).code;
@@ -1099,7 +1099,7 @@ async function handle(message) {
     case "mutate": return native({ action: "mutate", account, item: message.item, mutation: message.mutation });
     case "copy": return native({ action: "copy", account, item: message.item, field: message.field });
     case "generate": return native({ action: "generate", account, length: message.length || null, passphrase: !!message.passphrase, mode: message.mode || null });
-    case "fill": return fill(message, account);
+    case "fill": return fill({ ...message, manual: true }, account);
     case "pending": return [...pending.values()].map(p => ({ id: p.id, tabId: p.tabId, method: p.method, origin: p.origin, user: p.options.user?.name, rp: p.options.rp?.id || p.options.rpId || new URL(p.origin).hostname, verification: (p.method === "create" ? p.options.authenticatorSelection?.userVerification : p.options.userVerification) || "preferred" }));
     case "passkey_choices": {
       const p = pending.get(message.request); if (!p) throw new Error("This request has expired.");

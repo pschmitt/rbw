@@ -60,6 +60,10 @@ enum Operation {
         url: String,
         #[serde(default)]
         match_default: Option<String>,
+        // The user picked this item themselves (popup "Autofill"), so it
+        // fills even where its URIs do not match the page.
+        #[serde(default)]
+        manual: bool,
     },
     Totp {
         item: String,
@@ -421,7 +425,7 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
                 dispatch(request, &mut attachments).map_or_else(
                     |error| {
                         log_error(&error);
-                        json!({"id": id, "error": if commands::exit_status(&error) == 2 { "The server write succeeded, but synchronization failed. Sync and inspect your vault before retrying to avoid duplicates." } else if moving { "Could not move the item; it was not deleted. Both accounts must be unlocked, and the other account must not already have an item with the same name and username." } else if fingerprint { "Fingerprint unlock failed. Scan again, or unlock with your master password." } else if unlocking { "Could not unlock this account. Check your master password and account configuration." } else { "Operation failed. Unlock this account or sync your vault, then try again." }})
+                        json!({"id": id, "error": if commands::exit_status(&error) == 2 { "The server write succeeded, but synchronization failed. Sync and inspect your vault before retrying to avoid duplicates." } else if moving { "Could not move the item; it was not deleted. Both accounts must be unlocked, and the other account must not already have an item with the same name and username." } else if fingerprint { "Fingerprint unlock failed. Scan again, or unlock with your master password." } else if format!("{error:#}").contains("site mismatch") { "This item has no URI matching this page. Use Autofill from the item's menu to fill it anyway." } else if unlocking { "Could not unlock this account. Check your master password and account configuration." } else { "Operation failed. Unlock this account or sync your vault, then try again." }})
                     },
                     |result| json!({"id": id, "result": result}),
                 )
@@ -1135,6 +1139,7 @@ fn dispatch(
                     item,
                     url,
                     match_default,
+                    manual,
                 } => {
                     let url = web_url(&url)?;
                     let default =
@@ -1151,7 +1156,7 @@ fn dispatch(
                         anyhow::bail!("not a login");
                     };
                     ensure!(
-                        matches(entry, uris, &url, default)?,
+                        manual || matches(entry, uris, &url, default)?,
                         "site mismatch"
                     );
                     let custom = entry.fields.iter().map(|f| Ok(json!({"name": f.name.as_deref().map(|v| decrypt(entry, v)).transpose()?, "value": f.value.as_deref().map(|v| decrypt(entry, v)).transpose()?, "type": match f.ty { Some(rbw::api::FieldType::Hidden) => "hidden", Some(rbw::api::FieldType::Boolean) => "boolean", Some(rbw::api::FieldType::Linked) => "linked", _ => "text" }}))).collect::<anyhow::Result<Vec<_>>>()?;
