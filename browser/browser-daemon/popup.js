@@ -20,7 +20,23 @@ function redEyeIcon() {
     .then((bitmap) => rbwToolbarIcon.dataUrl(rbwToolbarIcon.redEyeFrame(bitmap, bitmap.width))).catch(() => null);
   return redEyes;
 }
+// After a fill: the crab squashes and hops, as in the extension (toolbar-icon.js),
+// then the icon goes back to its resting picture.
+let hopping = false;
+async function hop() {
+  if (hopping || !motion()) return;
+  hopping = true;
+  try {
+    const bitmap = await fetch(SPRITE).then((r) => r.blob()).then(createImageBitmap);
+    const size = bitmap.width;
+    await rbwToolbarIcon.playHop(async (t) => bd.icon(await rbwToolbarIcon.dataUrl(rbwToolbarIcon.hopFrame(bitmap, size, t))));
+  } catch (_) { /* Cosmetic only. */ } finally {
+    hopping = false;
+    badge();
+  }
+}
 function badge() {
+  if (hopping) return;
   const n = vault.site === ctx.site && Array.isArray(vault.list) ? vault.list.filter((e) => e.site !== false).length : 0;
   if (vault.locked) bd.badge("L", "danger"); else bd.badge(n ? (n > 9 ? "9+" : String(n)) : null);
   if (!vault.locked) { bd.icon(null); $("logo").src = "icons/rbw-64.png"; return; }
@@ -280,6 +296,7 @@ async function fill(entry, fields, anySite, stampOn, article) {
       { onNote: (note) => { if (note !== shownNote) { shownNote = note; bd.toast(note, 0); } } });
     stampOn.classList.remove("is-pending");
     stampResult(stampOn, { motion: motion() });
+    hop();
     // A note is still up: replace it with the outcome.
     if (shownNote) {
       const names = (res?.filled || []).map((f) => (f === "totp" ? "one-time code" : f === "custom" ? "custom fields" : f));

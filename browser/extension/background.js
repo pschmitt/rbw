@@ -276,7 +276,7 @@ async function refreshVaultLockState(preferences = null) {
 // rotating sync arrows in the top-right corner, standing in for the match
 // count until the sync ends. Writes sync afterwards, so they count as well.
 const SYNCING_ACTIONS = ["sync", "save", "mutate", "import", "set_collections", "upload_finish", "attachment_delete"];
-const { redEyeFrame, syncFrame, hopFrame } = globalThis.rbwToolbarIcon;
+const { redEyeFrame, syncFrame, hopFrame, playHop } = globalThis.rbwToolbarIcon;
 const syncAnimation = { active: 0, timer: null, frame: 0, bitmaps: null };
 // Locked: the crab's eyes turn red (drawn in toolbar-icon.js).
 let redEyeIcon = null;
@@ -321,12 +321,8 @@ async function hopIcon(prefs) {
   if (prefs?.animations === "off" || hopAnimation.running || syncAnimation.active) return;
   hopAnimation.running = true;
   try {
-    const bitmaps = await toolbarBitmaps(); const frames = 16;
-    for (let i = 0; i <= frames; i++) {
-      if (syncAnimation.active) return;
-      await api.action.setIcon({ imageData: Object.fromEntries(bitmaps.map(([size, bitmap]) => [size, hopFrame(bitmap, size, i / frames)])) });
-      await new Promise(resolve => setTimeout(resolve, 45));
-    }
+    const bitmaps = await toolbarBitmaps();
+    await playHop(t => api.action.setIcon({ imageData: Object.fromEntries(bitmaps.map(([size, bitmap]) => [size, hopFrame(bitmap, size, t)])) }), () => syncAnimation.active);
   } catch (_) { /* Cosmetic only. */ } finally {
     hopAnimation.running = false;
     restoreIcon();

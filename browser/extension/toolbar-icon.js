@@ -66,5 +66,15 @@ async function dataUrl(image) {
   const blob = await canvas.convertToBlob({ type: "image/png" });
   return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob); });
 }
-return { redEyeFrame, syncFrame, hopFrame, dataUrl };
+// The hop, frame after frame: show(t) draws the picture at t (0..1) and
+// returns when it is on screen; stopped() ends it early.
+async function playHop(show, stopped = () => false) {
+  const frames = 16;
+  for (let i = 0; i <= frames; i++) {
+    if (stopped()) return;
+    await show(i / frames);
+    await new Promise(resolve => setTimeout(resolve, 45));
+  }
+}
+return { redEyeFrame, syncFrame, hopFrame, dataUrl, playHop };
 })();
