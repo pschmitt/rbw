@@ -384,6 +384,36 @@ impl QueryToken {
 
 // Parse a full query string (e.g. "u:alice uri:google admin") into its
 // AND-ed tokens, splitting on whitespace.
+// `rbw search`'s word matching for the browser extension, which decrypts
+// only the fields it lists (never passwords, card numbers or hidden fields,
+// so those do not match).
+pub fn browser_search_match(
+    query: &str,
+    name: &str,
+    user: Option<&str>,
+    folder: Option<&str>,
+    notes: Option<&str>,
+    uris: &[String],
+    fields: &[String],
+) -> bool {
+    let cipher = DecryptedSearchCipher {
+        id: String::new(),
+        entry_type: String::new(),
+        folder: folder.map(str::to_owned),
+        name: name.to_owned(),
+        user: user.map(str::to_owned),
+        uris: uris.iter().map(|uri| (uri.clone(), None)).collect(),
+        fields: fields.to_vec(),
+        notes: notes.map(str::to_owned),
+        attachment_count: 0,
+        archived: false,
+        deleted: false,
+        sensitive_fields: Vec::new(),
+        password: None,
+    };
+    cipher.search_match_with_scope(query, None, false, None)
+}
+
 pub(super) fn parse_query(input: &str) -> Vec<QueryToken> {
     input.split_whitespace().map(QueryToken::parse).collect()
 }

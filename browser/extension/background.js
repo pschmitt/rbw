@@ -5,6 +5,8 @@ let serial = 0;
 let queue = Promise.resolve();
 const pending = new Map();
 const offers = new Map();
+// Items the user filled by hand into a page none of their URIs match, per tab: when that sign-in goes through, offer to add the page to the item.
+const manualFills = new Map();
 // The login last filled (or submitted) in each tab. It outlives navigation
 // for a while, so a later step of the same sign-in (the password page, the
 // 2FA code) uses that login rather than the first match.
@@ -64,7 +66,7 @@ function setPasskeySyncFailure(value) {
   passkeySyncFailure = value; badge();
 }
 function rememberUnsaved(offer) {
-  if (!offer) return;
+  if (!offer || offer.addUri) return;
   clearTimeout(offer.timer);
   unsavedLogins = [{ id: crypto.randomUUID(), origin: offer.origin, url: offer.url, username: offer.username, password: offer.password, time: Date.now() },
     ...unsavedLogins.filter(entry => entry.origin !== offer.origin || entry.username !== offer.username)].slice(0, 10);
@@ -678,7 +680,7 @@ async function saveOfferIcon(tabId, offer) {
   } catch (_) { return null; }
 }
 async function notifySaveOffer(tabId, offer) {
-  const token = openInlineSession({ mode: "save", tabId, frameId: 0, origin: offer.origin, url: offer.url, payload: { mode: "save", host: new URL(offer.origin).host, username: offer.username, update: offer.update || null, favicon: await saveOfferIcon(tabId, offer) } });
+  const token = openInlineSession({ mode: "save", tabId, frameId: 0, origin: offer.origin, url: offer.url, payload: { mode: "save", host: new URL(offer.origin).host, username: offer.username, update: offer.update || null, addUri: offer.addUri ? { name: offer.addUri.name } : null, favicon: await saveOfferIcon(tabId, offer) } });
   return api.tabs.sendMessage(tabId, { action: "rbw_save_offer", token, origin: offer.origin }, { frameId: 0 });
 }
 
@@ -689,6 +691,15 @@ async function applySaveOffer(tabId, item, account) {
   return true;
 }
 async function saveOfferLogin(offer, item, account) {
+  if (offer.addUri) {
+    const detail = await native({ action: "detail", account: offer.addUri.account, item: offer.addUri.id });
+    const data = detail.cipher.data, uris = data.uris || [];
+    if (!uris.some(entry => { try { return new URL(entry.uri).origin === offer.origin; } catch (_) { return false; } })) {
+      await native({ action: "save", account: offer.addUri.account, item: offer.addUri.id, revision: detail.revision, cipher: { ...detail.cipher, data: { ...data, uris: [...uris, { uri: offer.origin }] } } });
+    }
+    clearMetadata();
+    return;
+  }
   if (item) {
     const detail = await native({ action: "detail", account, item });
     // Recheck the originating site with the same native matcher used for fill.
@@ -813,6 +824,21 @@ async function pageMessage(message, sender, respond) {
   if (message.action === "save_offer") {
     if (!(prefs.savePrompts || prefs.autoFill) || typeof message.username !== "string" || typeof message.password !== "string" || message.password.length > 4096 || message.username.length > 1024) return respond({ result: false });
     const tabId = sender.tab.id;
+    const manual = manualFills.get(tabId);
+    if (manual) manualFills.delete(tabId);
+    if (prefs.savePrompts && manual && manual.origin === url.origin && Date.now() - manual.at < 600000) {
+      // The user filled this item by hand and the same credentials were submitted: suggest remembering the site.
+      let stored = null;
+      try { stored = await native({ action: "credential", account: manual.account, item: manual.item, url: sender.url, manual: true }); } catch (_) { /* Item gone. */ }
+      if (stored && stored.password === message.password && String(stored.username || "").trim().toLowerCase() === message.username.trim().toLowerCase()) {
+        const previous = offers.get(tabId); if (previous) clearTimeout(previous.timer);
+        const offer = { origin: url.origin, url: sender.url, username: message.username, password: null, addUri: { id: manual.item, account: manual.account, name: manual.name || "this login" }, update: null, timer: setTimeout(() => { offers.delete(tabId); badge(); api.tabs.sendMessage(tabId, { action: "rbw_save_offer_clear" }).catch(() => {}); }, 120000) };
+        offers.set(tabId, offer);
+        rememberFill(tabId, manual.account, manual.item);
+        notifySaveOffer(tabId, offer).catch(() => {});
+        badge(); return respond({ result: true });
+      }
+    }
     const known = await classifySaveOffer(null, sender.url, message.username, message.password);
     // Typed in by hand: the next steps of this sign-in follow that login too.
     if (known.item) rememberFill(tabId, null, known.item);
@@ -920,6 +946,7 @@ async function fill(message, account) {
     // Automatic, inline and popup fills all establish the shortcut's position.
     // Remember the item rather than its index: matching order can change.
     if (credential.type === "login") rememberFill(tab.id, account, message.item, tab.url);
+    if (credential.type === "login" && message.manual === true && credential.matched === false) manualFills.set(tab.id, { account, item: message.item, origin: new URL(tab.url).origin, name: credential.name, at: Date.now() });
     const hasSecurityCode = credential.type === "card" && typeof credential.code === "string" && credential.code.length > 0;
     let copiedSecurityCode = false;
     let securityCodeCopyFailed = false;
@@ -1175,7 +1202,7 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
 
 api.tabs.onRemoved.addListener(tabId => {
   suggestionCounts.delete(tabId); badgeRequests.delete(tabId);
-  fillCycles.delete(tabId); popupNotices.delete(tabId);
+  fillCycles.delete(tabId); popupNotices.delete(tabId); manualFills.delete(tabId);
   for (const [id, p] of pending) if (p.tabId === tabId) finish(id, { error: "Page closed." });
   closeTabInlineSessions(tabId);
   const offer = offers.get(tabId); if (offer) { rememberUnsaved(offer); offers.delete(tabId); badge(); }

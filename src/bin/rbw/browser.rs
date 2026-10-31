@@ -934,6 +934,7 @@ fn dispatch(
                         &db.entries,
                         view.as_deref(),
                         kind.as_deref(),
+                        !query.trim().is_empty(),
                     )?;
                     let decrypt = |entry: &rbw::db::Entry, value: &str| {
                         metadata.get(
@@ -1087,17 +1088,65 @@ fn dispatch(
                         {
                             continue;
                         }
-                        // Like `rbw search`: every word of the query must
-                        // match somewhere (as a sub-word), in any order.
-                        let haystack = format!(
-                            "{name} {}",
-                            subtitle.as_deref().unwrap_or_default()
-                        )
-                        .to_lowercase();
-                        if !query
-                            .split_whitespace()
-                            .all(|term| haystack.contains(term))
-                        {
+                        // Like `rbw search`: every word must match
+                        // somewhere (name, user, folder, URIs, notes, custom
+                        // fields), as a sub-word and in any order; `u:`,
+                        // `uri:` and friends scope a word to one field.
+                        let deep = !query.trim().is_empty()
+                            && !entry.master_password_reprompt();
+                        let get = |value: &String| {
+                            metadata
+                                .get(
+                                    value,
+                                    entry.key.as_deref(),
+                                    entry.org_id.as_deref(),
+                                )
+                                .ok()
+                        };
+                        let (notes, uris, fields) = if deep {
+                            (
+                                entry.notes.as_ref().and_then(get),
+                                match &entry.data {
+                                    rbw::db::EntryData::Login {
+                                        uris,
+                                        ..
+                                    } => uris
+                                        .iter()
+                                        .filter_map(|u| get(&u.uri))
+                                        .collect(),
+                                    _ => Vec::new(),
+                                },
+                                searchable_fields(entry)
+                                    .filter_map(get)
+                                    .collect(),
+                            )
+                        } else {
+                            (None, Vec::new(), Vec::new())
+                        };
+                        let user = match &entry.data {
+                            rbw::db::EntryData::Login { .. } => {
+                                subtitle.as_deref()
+                            }
+                            _ => None,
+                        };
+                        let found = query.trim().is_empty()
+                            || commands::browser_search_match(
+                                &query,
+                                &name,
+                                user,
+                                folder_name.as_deref(),
+                                notes.as_deref(),
+                                &uris,
+                                &fields,
+                            )
+                            || subtitle.as_deref().is_some_and(|s| {
+                                query.split_whitespace().all(|term| {
+                                    format!("{name} {s}")
+                                        .to_lowercase()
+                                        .contains(term)
+                                })
+                            });
+                        if !found {
                             continue;
                         }
                         let icon_origin = if let rbw::db::EntryData::Login {
@@ -1159,17 +1208,15 @@ fn dispatch(
                     else {
                         anyhow::bail!("not a login");
                     };
-                    ensure!(
-                        manual || matches(entry, uris, &url, default)?,
-                        "site mismatch"
-                    );
+                    let matched = matches(entry, uris, &url, default)?;
+                    ensure!(manual || matched, "site mismatch");
                     let custom = entry.fields.iter().map(|f| Ok(json!({"name": f.name.as_deref().map(|v| decrypt(entry, v)).transpose()?, "value": f.value.as_deref().map(|v| decrypt(entry, v)).transpose()?, "type": match f.ty { Some(rbw::api::FieldType::Hidden) => "hidden", Some(rbw::api::FieldType::Boolean) => "boolean", Some(rbw::api::FieldType::Linked) => "linked", _ => "text" }}))).collect::<anyhow::Result<Vec<_>>>()?;
                     Ok(
                         json!({"name": decrypt(entry, &entry.name)?, "custom": custom, "username": username.as_deref().map(|s| decrypt(entry, s)).transpose()?,
                         "password": password.as_deref().map(|s| decrypt(entry, s)).transpose()?,
                         // Only whether there is one: the extension asks the
                         // native host to copy the current code (`copy`).
-                        "hasTotp": totp.is_some()}),
+                        "hasTotp": totp.is_some(), "matched": matched}),
                     )
                 }
                 Operation::Totp { item } => {
@@ -1739,6 +1786,7 @@ fn search_metadata(
     entries: &[rbw::db::Entry],
     view: Option<&str>,
     kind: Option<&str>,
+    deep: bool,
 ) -> anyhow::Result<SearchMetadata> {
     let mut indices = std::collections::HashMap::new();
     let mut requests = Vec::new();
@@ -1789,6 +1837,16 @@ fn search_metadata(
         if let Some(folder) = &entry.folder {
             push(folder, None, None);
         }
+        // Words of a query also match notes and plain custom fields, as in
+        // `rbw search`; not for items that ask for the master password.
+        if deep && !entry.master_password_reprompt() {
+            if let Some(notes) = &entry.notes {
+                push(notes, key, org);
+            }
+            for field in searchable_fields(entry) {
+                push(field, key, org);
+            }
+        }
         match &entry.data {
             rbw::db::EntryData::Login { username, uris, .. } => {
                 if let Some(value) = username {
@@ -1828,6 +1886,17 @@ fn search_metadata(
     };
     ensure!(results.len() == count, "incomplete search metadata batch");
     Ok(SearchMetadata { indices, results })
+}
+
+// Custom fields `rbw search` looks into: everything but hidden ones.
+fn searchable_fields(
+    entry: &rbw::db::Entry,
+) -> impl Iterator<Item = &String> {
+    entry
+        .fields
+        .iter()
+        .filter(|f| f.ty != Some(rbw::api::FieldType::Hidden))
+        .filter_map(|f| f.value.as_ref())
 }
 
 fn decrypt(entry: &rbw::db::Entry, value: &str) -> anyhow::Result<String> {

@@ -145,7 +145,7 @@ function header(titleText, onClose) {
 const labelled = (button, iconName, text) => { button.append(icon(iconName), element("span", text)); return button; };
 function renderSave(data) {
   root.className = "save";
-  const update = data.update;
+  const update = data.update, addUri = data.addUri;
   const top = header("rbw · Save login", () => send({ type: "dismiss" }));
   const body = element("div", null, "body");
   const head = element("div", null, "head");
@@ -154,12 +154,12 @@ function renderSave(data) {
   if (data.favicon) { const image = element("img"); image.alt = ""; image.src = data.favicon; image.onerror = () => image.replaceWith(icon("key")); logo.append(image); }
   else logo.append(icon("key"));
   const copy = element("div", null, "copy");
-  copy.append(element("strong", update ? `Update password for ${update.name}?` : "Save this login?"),
+  copy.append(element("strong", addUri ? `Add this site to ${addUri.name}?` : update ? `Update password for ${update.name}?` : "Save this login?"),
     element("small", `${data.host}${(update?.username || data.username) ? ` · ${update?.username || data.username}` : ""}`));
   head.append(logo, copy);
   const actions = element("div", null, "actions");
-  const primary = labelled(element("button", null, "primary"), update ? "check" : "plus", update ? "Update password" : "Save new login"); primary.type = "button";
-  const secondary = update ? labelled(element("button"), "plus", "Save as new") : labelled(element("button"), "edit", "Update existing"); secondary.type = "button";
+  const primary = labelled(element("button", null, "primary"), update || addUri ? "check" : "plus", addUri ? "Add site" : update ? "Update password" : "Save new login"); primary.type = "button";
+  const secondary = addUri ? labelled(element("button"), "close", "Not now") : update ? labelled(element("button"), "plus", "Save as new") : labelled(element("button"), "edit", "Update existing"); secondary.type = "button";
   const picker = element("div", null, "picker"); picker.hidden = true;
   const select = element("select"); select.setAttribute("aria-label", "Choose an existing login"); select.append(new Option("Choose a login…", ""));
   const apply = labelled(element("button", null, "primary"), "check", "Update login"); apply.type = "button"; apply.disabled = true;
@@ -169,7 +169,8 @@ function renderSave(data) {
   const busy = (value, text = "") => { for (const button of buttons) button.disabled = value; if (!value) apply.disabled = !select.value; status.textContent = text; };
   const engaged = () => top.stop();
   primary.addEventListener("click", event => { engaged(); if (act(event, { type: "save", item: update ? update.id : null })) busy(true, update ? "Updating and syncing…" : "Saving and syncing…"); });
-  if (update) secondary.addEventListener("click", event => { engaged(); if (act(event, { type: "save", item: null })) busy(true, "Saving and syncing…"); });
+  if (addUri) secondary.addEventListener("click", event => { if (event.isTrusted) send({ type: "dismiss" }); });
+  else if (update) secondary.addEventListener("click", event => { engaged(); if (act(event, { type: "save", item: null })) busy(true, "Saving and syncing…"); });
   else secondary.addEventListener("click", event => { if (!event.isTrusted) return; engaged(); picker.hidden = false; secondary.disabled = true; status.textContent = "Loading this site's logins…"; send({ type: "save_choices" }); });
   select.addEventListener("change", () => { engaged(); apply.disabled = !select.value; });
   apply.addEventListener("click", event => { engaged(); if (select.value && act(event, { type: "save", item: select.value })) busy(true, "Updating and syncing…"); });

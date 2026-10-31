@@ -4807,3 +4807,25 @@ fn list_fields_default_is_not_explicit_and_named_fields_are() {
 
     assert!(parse_list_fields(&["nope".to_string()]).is_err());
 }
+
+#[test]
+fn browser_search_matches_words_like_the_cli() {
+    let find = |query: &str| {
+        super::browser_search_match(
+            query,
+            "Stricknani (demo user)",
+            Some("demo@stricknani.local"),
+            Some("Work"),
+            Some("some note"),
+            &["http://localhost:7674/auth/login".to_string()],
+            &[],
+        )
+    };
+    assert!(find("strick demo"));
+    assert!(find("demo strick"));
+    assert!(find("demo 7674"));
+    assert!(find("note work"));
+    assert!(find("uri:localhost demo"));
+    assert!(!find("strick nope"));
+    assert!(!find("u:nope"));
+}
