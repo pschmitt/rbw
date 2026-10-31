@@ -935,7 +935,8 @@ html[data-page=locked] button.avatar { animation:rage-shake 1.8s linear infinite
 .confirm-dialog-actions button.with-icon { display:inline-flex; align-items:center; justify-content:center; gap:7px; }
 .confirm-dialog-actions button.with-icon .svg-icon { width:16px; height:16px; flex:none; }
 
-/* Search hits: grep-like emphasis on what matched, and where. */
-.item-main mark { background:transparent; color:var(--danger); font-weight:700; }
+/* Search hits: a soft accent tint on what matched, and where. */
+.item-main mark { padding:0 1px; margin:0 -1px; border-radius:3px; background:color-mix(in srgb, var(--accent) 24%, transparent); color:inherit; font-weight:inherit; }
+.item-main small mark { color:var(--text); }
 .item-main small.item-hit { font-family:ui-monospace,monospace; font-size:11px; }
 .item-hit-label { margin-right:6px; padding:0 4px; border-radius:3px; background:var(--surface-2, rgba(128,128,128,.2)); color:var(--muted); font-family:inherit; font-size:10px; text-transform:uppercase; }
