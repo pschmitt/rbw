@@ -192,6 +192,41 @@ fn find_by_rp_id(
         .with_context(|| format!("no passkey for {rp_id} in the vault"))
 }
 
+/// The one entry whose passkey for `rp_id` is on the site's allow list, when
+/// several entries hold a passkey for the site and none was named.
+fn entry_for_allow(
+    rp_id: &str,
+    allow: &[String],
+) -> anyhow::Result<Option<String>> {
+    use base64::Engine as _;
+    let b64url = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let db = commands::load_db()?;
+    let mut ids = Vec::new();
+    for (entry, decrypted) in candidates(&db, rp_id)? {
+        let commands::DecryptedData::Login {
+            fido2_credentials, ..
+        } = &decrypted.data
+        else {
+            continue;
+        };
+        let listed = fido2_credentials.iter().any(|c| {
+            c.rp_id.as_deref() == Some(rp_id)
+                && c.credential_id
+                    .as_deref()
+                    .and_then(|v| credential_id(v).ok())
+                    .and_then(|v| rbw::base64::decode(v).ok())
+                    .is_some_and(|raw| {
+                        let mine = b64url.encode(raw);
+                        allow.iter().any(|a| a.trim_end_matches('=') == mine)
+                    })
+        });
+        if listed {
+            ids.push(entry.id.clone());
+        }
+    }
+    Ok((ids.len() == 1).then(|| ids.remove(0)))
+}
+
 fn stored_counter(
     credential: &commands::DecryptedFido2Credential,
 ) -> anyhow::Result<u32> {
@@ -718,6 +753,25 @@ fn assertion_value(
     log::set_max_level(log::LevelFilter::Off);
     commands::unlocked().context("the vault is locked")?;
     rbw::dirs::make_all()?;
+    let narrowed;
+    let args = match rp_id {
+        Some(rp) if args.needles.is_empty() && !allow.is_empty() => {
+            match entry_for_allow(rp, allow)? {
+                Some(id) => {
+                    let uuid = uuid::Uuid::parse_str(&id)?;
+                    narrowed = FindArgs {
+                        needles: vec![crate::commands::Needle::Uuid(
+                            uuid, id,
+                        )],
+                        ..args.clone()
+                    };
+                    &narrowed
+                }
+                None => args,
+            }
+        }
+        _ => args,
+    };
     let selected = if preserve_zero {
         select_cached(args, rp_id)?
     } else {

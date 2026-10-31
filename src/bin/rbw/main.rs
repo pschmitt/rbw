@@ -23,7 +23,7 @@ mod sends;
 mod sock;
 mod tui;
 
-#[derive(Debug, clap::Args)]
+#[derive(Clone, Debug, clap::Args)]
 struct FindArgs {
     #[arg(
         help = "Name, URI, UUID (or multiple terms, all required to match)",
