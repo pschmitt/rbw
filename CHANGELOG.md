@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+
+* Unlock dialog (terminal and GTK): Ctrl+Delete clears the master password field.
+* browser-daemon live view: the vault popover looks like the extension's when the
+  vault is locked (red-eyed crab on the toolbar button and in the header, red "L"
+  badge, lock card), unlocks with the master password as well as from the
+  phone (not in publicly shared sessions), spins the sync ring while the vault is
+  asked, hops after a fill, fills with Ctrl+Alt+L (and the next login on each
+  press), and warns when the node's rbw and the bundle differ in major.minor.
+  Needs a browser-daemon that speaks these messages.
+
+### Fixed
+
+* browser-daemon live view: the vault popover's ⋮ menu is no longer cropped.
+
+### Changed
+
+* The toolbar crab's pictures (red eyes, sync ring, fill hop) are drawn by one
+  shared script (`toolbar-icon.js`) that the extension and the live view both load.
+
 ## [2.36.0] - 2026-10-31
 
 ### Added
