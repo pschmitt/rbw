@@ -1087,12 +1087,16 @@ fn dispatch(
                         {
                             continue;
                         }
-                        if !format!(
+                        // Like `rbw search`: every word of the query must
+                        // match somewhere (as a sub-word), in any order.
+                        let haystack = format!(
                             "{name} {}",
                             subtitle.as_deref().unwrap_or_default()
                         )
-                        .to_lowercase()
-                        .contains(&query)
+                        .to_lowercase();
+                        if !query
+                            .split_whitespace()
+                            .all(|term| haystack.contains(term))
                         {
                             continue;
                         }
