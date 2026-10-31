@@ -82,12 +82,13 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
       if (requests.delete(data.id)) window.postMessage({ channel: "rbw-passkey-response", id: data.id, fallback: true }, location.origin);
     });
   });
-  // Capture only user submitted forms. Nothing is written without approval.
+  // Capture only user submitted forms. Nothing is written without approval;
+  // the background drops pages that are not secure for filling either.
   document.addEventListener("submit", event => {
     if (!event.isTrusted || !(event.target instanceof HTMLFormElement)) return;
     const form = event.target;
     const fields = [...form.querySelectorAll('input[type="password"]')].filter(el => el.value && !el.disabled);
-    if (!fields.length || fields.length > 3 || !isSecureContext) return;
+    if (!fields.length || fields.length > 3) return;
     const password = fields.find(el => el.autocomplete === "new-password")?.value || fields[0].value;
     const username = form.querySelector('input[autocomplete="username"],input[type="email"],input[type="text"]')?.value || "";
     if (password.length > 4096 || username.length > 1024) return;

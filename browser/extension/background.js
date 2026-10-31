@@ -823,6 +823,7 @@ async function pageMessage(message, sender, respond) {
   }
   if (message.action === "save_offer") {
     if (!(prefs.savePrompts || prefs.autoFill) || typeof message.username !== "string" || typeof message.password !== "string" || message.password.length > 4096 || message.username.length > 1024) return respond({ result: false });
+    if (!isSecureFillUrl(sender.url, prefs.allowHttpFill)) return respond({ result: false });
     const tabId = sender.tab.id;
     const manual = manualFills.get(tabId);
     if (manual) manualFills.delete(tabId);
