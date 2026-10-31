@@ -69,9 +69,11 @@ in
             ../browser/extension/icons.js
             ../browser/extension/feedback.css
             ../browser/extension/feedback.js
+            ../browser/extension/toolbar-icon.js
             ../browser/extension/popup.css
             ../assets/icons/rbw-64.png
             ../assets/icons/rbw-48.png
+            ../assets/icons/toolbar-64.png
           ];
         };
       }

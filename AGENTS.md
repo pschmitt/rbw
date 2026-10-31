@@ -36,7 +36,9 @@ crab's pictures: locked, sync, hop). Generated copies of assets (a recolored
 icon saved as a PNG, a pasted algorithm) are drift waiting to happen. A new
 front-end feature starts by asking what the extension already has for it. If
 the host needs something the bundle protocol lacks, extend the protocol
-rather than fork the logic.
+rather than fork the logic. The bundle's files are listed twice: `SHARED` in
+`browser/build.py` and the fileset of `browser-daemon-extension` in
+`nix/browser.nix`; keep them in step, or the flake check fails on a missing file.
 
 ## Agent protocol
 
