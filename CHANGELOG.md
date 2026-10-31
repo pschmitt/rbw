@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Added
+
+* Browser extension: after you autofill an item by hand into a page none of its
+  URIs match and submit the same credentials, a prompt offers to add the site
+  to the item, like the prompt for a changed password.
+
+### Changed
+
+* Browser extension: search matches words like `rbw search`. Every word must
+  match the name, username, folder, URIs, notes or a plain custom field, in any
+  order, and `u:`, `uri:` and the other prefixes scope a word to one field.
+* Browser extension: login capture (save, update and add-site prompts) works on
+  plain-HTTP pages when filling is allowed there (`allowHttpFill`), not only on
+  secure pages.
+
+### Fixed
+
+* Browser extension: Autofill from an item's menu fills items whose URIs do not
+  match the page. It failed with a generic "Operation failed" message; a real
+  mismatch now says so.
+
 ## [2.34.4] - 2026-10-31
 
 ### Changed
