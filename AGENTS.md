@@ -1,5 +1,10 @@
 # Agent notes
 
+## Private infrastructure details
+
+Do not include private hostnames, device identifiers, network addresses or topology here. Use placeholders and consult the private `brkn-infra` skill for specific host or device details.
+
+
 ## Build/test
 
 Don't run `cargo build`/`test`/`clippy` on the machine the agent runs on (it
@@ -63,7 +68,7 @@ up a new rbw build automatically, but re-run `rbw stop-agent` if a stale
 agent process seems to survive it. Commit the `nixos-config` flake.lock
 bump and push it, then deploy.
 
-`browser-daemon` (`~/devel/private/pschmitt/browser-daemon.git`) has its
+`browser-daemon` (`<private-checkout>`) has its
 own `rbw` flake input (rbw's `main`, for its live view's vault extension).
 After each release, bump it to the same pin commit: `nix flake lock
 --override-input rbw github:pschmitt/rbw/<pin commit>`, then set
