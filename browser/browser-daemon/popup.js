@@ -8,7 +8,7 @@
 const vault = { site: "", list: null, at: 0, peeking: null, peekSite: "", off: 0, locked: false };
 const FRESH = 120000;
 let ctx = { site: "", ready: false };
-let shown = false, seq = 0, abort = null, timer = 0, rows = [], query = "";
+let publicSession = false, shown = false, seq = 0, abort = null, timer = 0, rows = [], query = "";
 
 // As in the extension's toolbar button: locked, the crab's eyes are red and
 // the badge is a red L. The picture is drawn by the extension's own code
@@ -83,6 +83,7 @@ bd.on("context", (m) => { ctx = { site: m.site || "", ready: !!m.ready }; peek()
 bd.on("open", (m) => {
   shown = true;
   warning($("public"), m.warning);
+  publicSession = !!m.warning;
   $("query").value = query = "";
   $("folder").value = "";
   // Desktop: type right away. Phones: the keyboard would cover the list.
@@ -126,7 +127,27 @@ $("folder").onchange = () => render(rows, ctx.site, query);
 
 const filter = (list, q) => list.filter((e) => `${e.name || ""} ${e.user || ""} ${e.folder || ""}`.toLowerCase().includes(q.toLowerCase()));
 const empty = (text, cls = "") => `<p class="empty ${cls}">${text}</p>`;
-async function load(site, unlock = false, q = "") {
+// The locked card, as in the extension's popup: the master password (unless the
+// session is shared publicly) or the phone.
+function lockedCard(site, q, problem, body) {
+  const field = publicSession ? "" : `<form id="unlock-form"><div class="unlock-password-row"><input id="unlock-password" type="password" aria-label="Master password" placeholder="Master password" maxlength="4096" autocomplete="off" spellcheck="false" required>` +
+    `<button type="submit" class="primary">${ico("unlock")}<span>Unlock</span></button></div></form>`;
+  body(`<section id="locked"><div class="lock-art">${ico("lock")}</div><h2>Vault locked</h2>` +
+    (problem ? `<p class="empty bad">${esc(problem)}</p>` : "") + field +
+    `<div class="actions"><button id="unlock">${ico("unlock")}<span>Unlock from your phone</span></button></div></section>`);
+  if (!$("unlock")) return;                     // the view moved on: nothing was drawn
+  $("unlock").onclick = () => load(site, true, q);
+  const form = $("unlock-form");
+  if (!form) return;
+  $("unlock-password").focus();
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    const input = $("unlock-password"), password = input.value;
+    input.value = "";                          // not kept in this page
+    if (password) load(site, false, q, password);
+  };
+}
+async function load(site, unlock = false, q = "", password = null) {
   const mine = ++seq;
   abort?.abort();                            // the previous question is not wanted any more
   const ac = abort = new AbortController();
@@ -146,20 +167,18 @@ async function load(site, unlock = false, q = "") {
   }
   let found;
   try {
-    found = await vaultRequest("logins", { unlock, query: q || null },
+    found = await vaultRequest("logins", { unlock, query: q || null, ...(password ? { password } : {}) },
       { onNote: (note) => body(empty(esc(note), "locked checking")), signal: ac.signal });
   } catch (err) {
     if (err.aborted) return;
+    if (password) return lockedCard(site, q, err.message, body); // wrong password: try again
     return body(empty(esc(err.message), "bad"));
   }
   if (!shown || mine !== seq || ctx.site !== site) return;
   vault.locked = !!found?.locked;
   if (vault.locked) {
     badge();
-    body(`<section id="locked"><div class="lock-art">${ico("lock")}</div><h2>Vault locked</h2><p>Confirm the unlock on your phone.</p>` +
-      `<div class="actions"><button class="primary" id="unlock">${ico("unlock")}<span>Unlock from your phone</span></button></div></section>`);
-    $("unlock").onclick = () => load(site, true, q);
-    return;
+    return lockedCard(site, q, "", body);
   }
   found = Array.isArray(found) ? found : [];
   if (vault.locked) { vault.locked = false; badge(); }
