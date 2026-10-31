@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.37.0] - 2026-10-31
+
 ### Added
 
 * Unlock dialog (terminal and GTK): Ctrl+Delete clears the master password field.
