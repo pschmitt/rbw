@@ -112,6 +112,23 @@ bd.on("shortcut", async (m) => {
     bd.toast(`Filled ${entry.name || "the login"}${entry.user ? ` · ${entry.user}` : ""}${where}`, 3500);
   } catch (err) { bd.toast(`Not filled: ${err.message}`, 5000); }
 });
+// As the extension says when its browser host is out of date: the bundle (rbw
+// as built into this live view) and the rbw the node's secret agent uses should
+// share major.minor, or the bundle may ask for things the node does not know.
+let bundleVersion = "";
+bd.on("init", (m) => { bundleVersion = String(m.version || "").replace(/^v/, ""); });
+bd.on("rbw", (m) => {
+  const node = String(m.rbw || ""), mine = bundleVersion, el = $("stale");
+  const minor = (v) => v.split(".").slice(0, 2).join(".");
+  if (!/^\d+\.\d+/.test(node) || !/^\d+\.\d+/.test(mine) || minor(node) === minor(mine)) { el.hidden = true; return; }
+  const parts = (v) => v.split(".").map((n) => parseInt(n, 10) || 0);
+  const [a, b] = [parts(node), parts(mine)];
+  const older = (a.find((n, i) => n !== b[i]) ?? 0) < (b.find((n, i) => n !== a[i]) ?? 0);
+  el.textContent = older
+    ? `rbw on the node is ${node}, but this live view runs rbw ${mine}: update rbw on the node.`
+    : `rbw on the node is ${node}, but this live view runs rbw ${mine}: update the live view's vault bundle.`;
+  el.hidden = false;
+});
 bd.on("closed", () => {
   shown = false;
   seq++;
