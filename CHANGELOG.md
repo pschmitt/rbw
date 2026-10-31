@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.34.3] - 2026-10-31
+
 ### Fixed
 
 * Browser extension: the credential handed to the page has a writable
