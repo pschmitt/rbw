@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.35.0] - 2026-10-31
+
 ### Added
 
 * Browser extension: after you autofill an item by hand into a page none of its
