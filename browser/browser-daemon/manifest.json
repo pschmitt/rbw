@@ -2,7 +2,7 @@
   "api": 1,
   "name": "rbw",
   "title": "rbw",
-  "icon": "icons/rbw-48.png",
+  "icon": "icons/toolbar-64.png",
   "permissions": ["vault"],
   "toolbar": { "entry": "popup.html", "label": "Fill a login from the vault (rbw)" },
   "passkey": { "entry": "passkey.html" }

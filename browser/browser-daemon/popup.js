@@ -5,14 +5,19 @@
 // a password or code only goes to the clipboard of the device viewing, when
 // you copy it, and never through this frame. Which page and site that is the
 // live view decides.
-const vault = { site: "", list: null, at: 0, peeking: null, peekSite: "", off: 0 };
+const vault = { site: "", list: null, at: 0, peeking: null, peekSite: "", off: 0, locked: false };
 const FRESH = 120000;
 let ctx = { site: "", ready: false };
 let shown = false, seq = 0, abort = null, timer = 0, rows = [], query = "";
 
+// As in the extension's toolbar button: locked, the crab's eyes are red and
+// the badge is a red L.
+const LOCKED_ICON = "icons/toolbar-locked-64.png", UNLOCKED_ICON = "icons/toolbar-64.png";
 function badge() {
   const n = vault.site === ctx.site && Array.isArray(vault.list) ? vault.list.filter((e) => e.site !== false).length : 0;
-  bd.badge(n ? (n > 9 ? "9+" : String(n)) : null);
+  if (vault.locked) bd.badge("L", "danger"); else bd.badge(n ? (n > 9 ? "9+" : String(n)) : null);
+  bd.icon(vault.locked ? LOCKED_ICON : UNLOCKED_ICON);
+  $("logo").src = vault.locked ? LOCKED_ICON : "icons/rbw-64.png";
 }
 // After a page load: how many logins the vault has for the site (the button's badge).
 // Never asks for an unlock; a node without a secret agent is left alone a while.
@@ -26,6 +31,7 @@ function peek() {
     vault.site = site;
     vault.at = Date.now();
     vault.list = Array.isArray(found) ? found : null; // locked: not known
+    vault.locked = !!found?.locked;
   }, (err) => {
     if (/secret agent/i.test(err.message)) vault.off = Date.now() + 300000;
   }).finally(() => { vault.peeking = null; badge(); });
@@ -105,12 +111,16 @@ async function load(site, unlock = false, q = "") {
     return body(empty(esc(err.message), "bad"));
   }
   if (!shown || mine !== seq || ctx.site !== site) return;
-  if (found?.locked) {
-    body(empty("Your vault is locked.", "locked") + `<div class="actions"><button class="primary" id="unlock">${ico("unlock")}<span>Unlock from your phone</span></button></div>`);
+  vault.locked = !!found?.locked;
+  if (vault.locked) {
+    badge();
+    body(`<section id="locked"><div class="lock-art">${ico("lock")}</div><h2>Vault locked</h2><p>Confirm the unlock on your phone.</p>` +
+      `<div class="actions"><button class="primary" id="unlock">${ico("unlock")}<span>Unlock from your phone</span></button></div></section>`);
     $("unlock").onclick = () => load(site, true, q);
     return;
   }
   found = Array.isArray(found) ? found : [];
+  if (vault.locked) { vault.locked = false; badge(); }
   if (!q) {
     vault.site = site;
     vault.at = Date.now();
