@@ -1,5 +1,8 @@
 /* MAIN world: only WebAuthn public options and responses cross this boundary. */
 (() => {
+  const shim = globalThis.rbwPasskeyShim;
+  delete globalThis.rbwPasskeyShim;
+  const { credential } = shim;
   if (!globalThis.isSecureContext || !navigator.credentials) return;
   try { if (window.top.location.origin !== location.origin) return; } catch (_) { return; }
   const credentials = navigator.credentials;
@@ -13,34 +16,6 @@
     if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).filter(([key]) => key !== "signal").map(([key, v]) => [key, encode(v)]));
     return value;
   };
-  const decode = value => {
-    const text = atob(value.replace(/-/g, "+").replace(/_/g, "/"));
-    return Uint8Array.from(text, c => c.charCodeAt(0)).buffer;
-  };
-  function credential(value, method) {
-    const data = value.response;
-    const response = Object.create(method === "create" ? AuthenticatorAttestationResponse.prototype : AuthenticatorAssertionResponse.prototype);
-    for (const field of ["clientDataJSON", "attestationObject", "authenticatorData", "signature", "userHandle"]) {
-      if (field in data) Object.defineProperty(response, field, { value: data[field] == null ? null : decode(data[field]), enumerable: true });
-    }
-    if (method === "create") {
-      Object.defineProperties(response, {
-        getTransports: { value: () => data.transports || ["internal"] },
-        getPublicKey: { value: () => data.publicKey ? decode(data.publicKey) : null },
-        getPublicKeyAlgorithm: { value: () => data.publicKeyAlgorithm || -7 },
-        getAuthenticatorData: { value: () => decode(data.authenticatorData) },
-      });
-    }
-    const result = Object.create(PublicKeyCredential.prototype);
-    Object.defineProperties(result, {
-      id: { value: value.id, enumerable: true }, rawId: { value: decode(value.rawId), enumerable: true },
-      type: { value: "public-key", enumerable: true }, response: { value: response, enumerable: true },
-      authenticatorAttachment: { value: "platform", enumerable: true },
-      getClientExtensionResults: { writable: true, configurable: true, value: () => value.clientExtensionResults || {} },
-      toJSON: { writable: true, configurable: true, value: () => value },
-    });
-    return result;
-  }
   function available() {
     const id = crypto.randomUUID();
     return new Promise(resolve => {
@@ -53,15 +28,7 @@
       window.postMessage({ channel: "rbw-passkey", action: "availability", id }, location.origin);
     });
   }
-  for (const name of ["isUserVerifyingPlatformAuthenticatorAvailable", "isConditionalMediationAvailable"]) {
-    const fallback = PublicKeyCredential[name]?.bind(PublicKeyCredential);
-    if (fallback) Object.defineProperty(PublicKeyCredential, name, { configurable: true, value: async () => await available() || await fallback() });
-  }
-  const capabilities = PublicKeyCredential.getClientCapabilities?.bind(PublicKeyCredential);
-  if (capabilities) Object.defineProperty(PublicKeyCredential, "getClientCapabilities", { configurable: true, value: async () => {
-    const result = await capabilities();
-    return await available() ? { ...result, userVerifyingPlatformAuthenticator: true, passkeyPlatformAuthenticator: true, conditionalGet: true } : result;
-  } });
+  shim.patchPlatformAuthenticator(available);
   const methods = ["get", "create"].map(method => ({ method, handler: null, outer: null, repair: null, retries: 0, warned: false }));
   function install(state) {
     const { method } = state;

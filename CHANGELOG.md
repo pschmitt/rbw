@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Browser extension: the fake passkey credential and the platform-authenticator
+  answers moved from `webauthn.js` into `passkey-shim.js`, a self-contained file
+  that browser-daemon vendors, so both share one implementation.
+
 ## [2.34.3] - 2026-10-31
 
 ### Fixed

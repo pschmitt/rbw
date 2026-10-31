@@ -4,6 +4,7 @@ import {randomUUID} from "node:crypto";
 import {test} from "node:test";
 import vm from "node:vm";
 
+const shim = readFileSync(new URL("../extension/passkey-shim.js", import.meta.url), "utf8");
 const source = readFileSync(new URL("../extension/webauthn.js", import.meta.url), "utf8");
 
 function page({before, respond = () => ({fallback: true})} = {}) {
@@ -47,7 +48,7 @@ function page({before, respond = () => ({fallback: true})} = {}) {
     clearTimeout(id) { timers.delete(id); },
   });
   const result = {context, credentials, calls, messages, warnings, timers, reply,
-    run: () => vm.runInContext(source, context),
+    run: () => { vm.runInContext(shim, context); vm.runInContext(source, context); },
     hide() { for (const listener of listeners.get("pagehide") || []) listener(); },
     advance(ms) {
       const end = now + ms;
