@@ -36,8 +36,8 @@
       id: { value: value.id, enumerable: true }, rawId: { value: decode(value.rawId), enumerable: true },
       type: { value: "public-key", enumerable: true }, response: { value: response, enumerable: true },
       authenticatorAttachment: { value: "platform", enumerable: true },
-      getClientExtensionResults: { value: () => value.clientExtensionResults || {} },
-      toJSON: { value: () => value },
+      getClientExtensionResults: { writable: true, configurable: true, value: () => value.clientExtensionResults || {} },
+      toJSON: { writable: true, configurable: true, value: () => value },
     });
     return result;
   }
