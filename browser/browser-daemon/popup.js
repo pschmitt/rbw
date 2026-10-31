@@ -217,7 +217,9 @@ function row(e, site) {
     document.body.style.paddingBottom = "";
     if (!menu.open) return;
     for (const o of document.querySelectorAll("details.menu[open]")) if (o !== menu) o.open = false;
-    const below = entries.getBoundingClientRect().bottom + scrollY + 10 - document.documentElement.scrollHeight;
+    // Against the body, not the document: scrollHeight already counts the
+    // menu overflowing it, and the frame is sized from the body.
+    const below = entries.getBoundingClientRect().bottom + 10 - document.body.getBoundingClientRect().bottom;
     if (below > 0) document.body.style.paddingBottom = `${below}px`;
   });
   menu.append(summary, entries);
