@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Browser extension: the credential handed to the page has a writable
+  `toJSON`, so sites that assign it (GitHub) no longer end the passkey sign-in
+  with a TypeError.
+* `rbw passkey assert` without a named entry picks the one whose passkey is on
+  the site's allow list when several entries hold a passkey for the site.
+
 ## [2.34.2] - 2026-10-29
 
 ### Changed
