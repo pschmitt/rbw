@@ -7,7 +7,7 @@ import globals from "globals";
 // (see the <script> tags in the .html files and background.scripts).
 const shared = Object.fromEntries(
   ["icon", "stampResult", "accountColor", "accountTextColor", "confirmDialog", "confirmLock", "lockManagedControls",
-   "fillPage", "undoPageFill", "showFillNotice", "marked", "DOMPurify", "importScripts"].map(name => [name, "readonly"]),
+   "fillPage", "rbwFillTargets", "undoPageFill", "showFillNotice", "marked", "DOMPurify", "importScripts"].map(name => [name, "readonly"]),
 );
 
 export default [

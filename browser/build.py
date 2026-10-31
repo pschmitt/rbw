@@ -70,7 +70,7 @@ for target in ("firefox", "chromium"):
         "host_permissions": ["https://*/*", "http://*/*"],
         "content_scripts": [
             {"matches": ["https://*/*", "http://*/*"], "js": ["passkey-shim.js", "webauthn.js"], "run_at": "document_start", "all_frames": True, "world": "MAIN"},
-            {"matches": ["https://*/*", "http://*/*"], "js": ["icons.js", "content.js"], "run_at": "document_start", "all_frames": True},
+            {"matches": ["https://*/*", "http://*/*"], "js": ["icons.js", "fill-targets.js", "content.js"], "run_at": "document_start", "all_frames": True},
         ],
         "web_accessible_resources": [{"resources": ["inline.html"], "matches": ["https://*/*", "http://*/*"]}],
         "options_ui": {"page": "options.html", "open_in_tab": True},
@@ -84,7 +84,7 @@ for target in ("firefox", "chromium"):
         "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'"},
     }
     if target == "firefox":
-        manifest["background"] = {"scripts": ["fill.js", "background.js"]}
+        manifest["background"] = {"scripts": ["fill-targets.js", "fill.js", "background.js"]}
         manifest["sidebar_action"] = {"default_panel": "popup.html?surface=window", "default_title": "rbw", "default_icon": toolbar_icons}
         manifest["browser_specific_settings"] = {"gecko": {
             "id": "rbw-browser@pschmitt.dev",

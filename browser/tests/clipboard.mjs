@@ -55,7 +55,7 @@ test("filling the top document establishes a token even when only a subframe has
     document: {querySelectorAll: () => []},
     setTimeout: fn => { timers.push(fn); },
   });
-  vm.runInContext(readFileSync(new URL("../extension/fill.js", import.meta.url), "utf8"), context);
+  for (const file of ["fill-targets.js", "fill.js"]) vm.runInContext(readFileSync(new URL(`../extension/${file}`, import.meta.url), "utf8"), context);
   const result = await context.fillPage("https://login.example/", {type: "login"}, "fill-token", {animations: "off"});
   assert.equal(result.count, 0);
   assert.equal(context.__rbwClipboardFillToken, "fill-token");

@@ -318,8 +318,8 @@ if (window === window.top) {
       if (autofillGate.pending || document.visibilityState === "hidden") return;
       const fields = [...document.querySelectorAll('input[type="password"]:not([autocomplete="new-password"]),input[autocomplete="username"]')];
       // Authenticator-code fields too (the background fills them only when
-      // "Autofill TOTP codes" is on). Same detection as fill.js.
-      const otpFields = [...document.querySelectorAll("input")].filter(el => ["text", "tel", "number", ""].includes(el.type) && !el.autocomplete.split(/\s+/).includes("username") && (el.autocomplete.split(/\s+/).includes("one-time-code") || /(^|[^a-z])(otp|totp|mfa|2fa|tfa|authenticator|one[\s_-]*time|verification[\s_-]*code|auth(entication)?[\s_-]*code)([^a-z]|$)/i.test([el.id, el.name, el.getAttribute("aria-label"), el.placeholder].filter(Boolean).join(" ").replace(/([a-z])([A-Z])/g, "$1 $2"))));
+      // "Autofill TOTP codes" is on). The detection of fill-targets.js.
+      const otpFields = [...document.querySelectorAll("input")].filter(rbwFillTargets.isOtpField);
       fields.push(...otpFields.filter(el => !fields.includes(el)));
       const field = fields.find(el => !attempted.has(el) && !el.value && !el.disabled && !el.readOnly && visible(el));
       if (!field) return;

@@ -7,6 +7,9 @@
 * Browser extension: the fake passkey credential and the platform-authenticator
   answers moved from `webauthn.js` into `passkey-shim.js`, a self-contained file
   that browser-daemon vendors, so both share one implementation.
+* Browser extension: which input is the login's username, password and
+  one-time-code field is decided in `fill-targets.js`, shared by the fill, the
+  autofill prompt and browser-daemon, instead of three copies of the rules.
 
 ## [2.34.3] - 2026-10-31
 

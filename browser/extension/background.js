@@ -906,6 +906,7 @@ async function fill(message, account) {
     const fillOptions = { automatic: message.automatic === true, animations: prefs.animations, animationSpeed: prefs.animationSpeed, icon: prefs.animations === "plaid" ? await getNotificationIcon() : null, cardSecurityCode };
     for (const frame of frames.filter(f => { try { return new URL(f.url).origin === new URL(tab.url).origin; } catch (_) { return false; } })) {
       try {
+        await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [frame.frameId] }, files: ["fill-targets.js"] });
         const results = await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [frame.frameId] }, func: fillPage, args: [frame.url, credential, token, fillOptions] });
         const result = results[0]?.result || {};
         const filled = typeof result === "number" ? result : result.count || 0;
