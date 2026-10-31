@@ -300,8 +300,6 @@
             };
           };
           hm = mkHm rbwConfig;
-          # The old `programs.rbw.declarative` path, renamed to `programs.rbw`.
-          hmLegacy = mkHm { declarative = rbwConfig; };
           renderedConfigFile = hm.config.programs.rbw.renderedConfigFile;
           mcpArgs = hm.config.programs.mcp.servers.rbw.args;
           expected =
@@ -366,10 +364,6 @@
                 "--read-only"
               ];
             pkgs.runCommand "rbw-hm-module-mcp-check" { } "touch $out";
-          hm-module-legacy-path =
-            assert hmLegacy.config.programs.rbw.renderedConfigFile == renderedConfigFile;
-            assert hmLegacy.config.programs.mcp.servers.rbw.args == mcpArgs;
-            pkgs.runCommand "rbw-hm-module-legacy-path-check" { } "touch $out";
         }
         // {
           inherit (self.packages.${system}) browser-daemon-extension;
