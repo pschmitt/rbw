@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+* Browser extension: a search marks what matched, like `grep --color`: the hits
+  in the name and username are bold red, and a line under the item shows where
+  else it matched (URI, notes, folder, custom field) with the hit marked.
+
 ## [2.35.0] - 2026-10-31
 
 ### Added

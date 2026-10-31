@@ -1149,6 +1149,45 @@ fn dispatch(
                         if !found {
                             continue;
                         }
+                        // Like grep's colour: where the words hit, in the
+                        // shown name and username and in what is not shown.
+                        let (name_ranges, user_ranges, hits) = if query
+                            .trim()
+                            .is_empty()
+                        {
+                            (Vec::new(), Vec::new(), Vec::new())
+                        } else {
+                            use commands::SearchField as F;
+                            let mut hits = Vec::new();
+                            let mut push =
+                                |label: &str, text: &str, field| {
+                                    if let Some((text, ranges)) =
+                                        hit_snippet(&query, field, text)
+                                    {
+                                        hits.push(json!({"label": label, "text": text, "ranges": ranges}));
+                                    }
+                                };
+                            if let Some(folder) = folder_name.as_deref() {
+                                push("Folder", folder, F::Folder);
+                            }
+                            for uri in uris.iter().take(20) {
+                                push("URI", uri, F::Uri);
+                            }
+                            if let Some(notes) = notes.as_deref() {
+                                push("Notes", notes, F::Notes);
+                            }
+                            for field in &fields {
+                                push("Field", field, F::Field);
+                            }
+                            hits.truncate(4);
+                            (
+                                hit_ranges(&query, F::Name, &name),
+                                user.map_or_else(Vec::new, |user| {
+                                    hit_ranges(&query, F::User, user)
+                                }),
+                                hits,
+                            )
+                        };
                         let icon_origin = if let rbw::db::EntryData::Login {
                             uris,
                             ..
@@ -1169,7 +1208,7 @@ fn dispatch(
                         } else {
                             None
                         };
-                        items.push(json!({"id": entry.id, "name": name, "iconOrigin": icon_origin, "username": subtitle, "matched": matched, "type": ty, "passkeys": passkeys, "favorite": entry.favorite, "folder": folder_name, "archived": entry.archived, "deleted": entry.deleted, "protected": entry.master_password_reprompt()}));
+                        items.push(json!({"id": entry.id, "name": name, "nameRanges": name_ranges, "userRanges": user_ranges, "hits": hits, "iconOrigin": icon_origin, "username": subtitle, "matched": matched, "type": ty, "passkeys": passkeys, "favorite": entry.favorite, "folder": folder_name, "archived": entry.archived, "deleted": entry.deleted, "protected": entry.master_password_reprompt()}));
                     }
                     items.sort_by_key(|v| {
                         (
@@ -1888,6 +1927,87 @@ fn search_metadata(
     Ok(SearchMetadata { indices, results })
 }
 
+// Where the words of a query hit one piece of text, as sorted, merged
+// UTF-16 ranges (what the extension's JavaScript indexes by).
+fn hit_ranges(
+    query: &str,
+    field: commands::SearchField,
+    text: &str,
+) -> Vec<[usize; 2]> {
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in commands::highlight_ranges(query, field, text) {
+        if end > text.len()
+            || !text.is_char_boundary(start)
+            || !text.is_char_boundary(end)
+        {
+            continue;
+        }
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
+        .into_iter()
+        .map(|(start, end)| {
+            let at = |i: usize| text[..i].encode_utf16().count();
+            [at(start), at(end)]
+        })
+        .collect()
+}
+
+// A one-line excerpt of `text` around its first hit, with that line's hits.
+fn hit_snippet(
+    query: &str,
+    field: commands::SearchField,
+    text: &str,
+) -> Option<(String, Vec<[usize; 2]>)> {
+    const CONTEXT: usize = 40;
+    let first = commands::highlight_ranges(query, field, text)
+        .into_iter()
+        .find(|&(start, end)| {
+            end <= text.len()
+                && text.is_char_boundary(start)
+                && text.is_char_boundary(end)
+        })?;
+    let line_start = text[..first.0].rfind('\n').map_or(0, |i| i + 1);
+    let line_end = text[first.1..]
+        .find('\n')
+        .map_or(text.len(), |i| first.1 + i);
+    let before: Vec<usize> = text[line_start..first.0]
+        .char_indices()
+        .map(|(i, _)| line_start + i)
+        .collect();
+    let (start, cut_left) = if before.len() > CONTEXT {
+        (before[before.len() - CONTEXT], true)
+    } else {
+        (line_start, false)
+    };
+    let after: Vec<usize> = text[first.1..line_end]
+        .char_indices()
+        .map(|(i, _)| first.1 + i)
+        .collect();
+    let (end, cut_right) = if after.len() > CONTEXT {
+        (after[CONTEXT], true)
+    } else {
+        (line_end, false)
+    };
+    let excerpt = &text[start..end];
+    let ranges = hit_ranges(query, field, excerpt);
+    let prefix = if cut_left { "\u{2026}" } else { "" };
+    let shift = prefix.encode_utf16().count();
+    Some((
+        format!(
+            "{prefix}{excerpt}{}",
+            if cut_right { "\u{2026}" } else { "" }
+        ),
+        ranges
+            .into_iter()
+            .map(|[a, b]| [a + shift, b + shift])
+            .collect(),
+    ))
+}
+
 // Custom fields `rbw search` looks into: everything but hidden ones.
 fn searchable_fields(
     entry: &rbw::db::Entry,
@@ -1973,6 +2093,34 @@ fn detail(entry: &rbw::db::Entry) -> anyhow::Result<Value> {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
+    #[test]
+    fn hit_ranges_are_utf16_merged_and_scoped() {
+        use super::{commands::SearchField as F, hit_ranges};
+        // "é" is one UTF-16 unit but two bytes; the hits stay aligned.
+        assert_eq!(hit_ranges("de", F::Name, "é demo"), vec![[2, 4]]);
+        assert_eq!(hit_ranges("de em", F::Name, "demo"), vec![[0, 3]]);
+        assert_eq!(
+            hit_ranges("u:demo", F::Name, "demo"),
+            Vec::<[usize; 2]>::new()
+        );
+        assert_eq!(hit_ranges("u:demo", F::User, "demo"), vec![[0, 4]]);
+    }
+
+    #[test]
+    fn hit_snippet_cuts_long_lines_around_the_first_hit() {
+        use super::{commands::SearchField as F, hit_snippet};
+        let text =
+            format!("first\n{}needle{}", "a".repeat(80), "b".repeat(80));
+        let (excerpt, ranges) =
+            hit_snippet("needle", F::Notes, &text).unwrap();
+        assert!(excerpt.starts_with('\u{2026}'));
+        assert!(excerpt.ends_with('\u{2026}'));
+        let [start, end] = ranges[0];
+        let chars: Vec<char> = excerpt.chars().collect();
+        assert_eq!(chars[start..end].iter().collect::<String>(), "needle");
+        assert!(hit_snippet("zzz", F::Notes, &text).is_none());
+    }
+
     use super::{fingerprint_unlock, store_package_name, Operation, Request};
 
     #[test]

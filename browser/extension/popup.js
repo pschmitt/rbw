@@ -154,6 +154,18 @@ $("diagnostic-copy").onclick = () => {
   $("diagnostic-copy-status").textContent = copied ? "Diagnostic trace copied." : "Copy failed. Select the trace above and copy it manually.";
 };
 $("diagnostic-retry").onclick = () => window.location.reload();
+// Text with the [start, end) UTF-16 ranges of a search hit in <mark>.
+function highlighted(tag, text, ranges, cls) {
+  const el = element(tag, null, cls); let at = 0;
+  for (const range of Array.isArray(ranges) ? ranges : []) {
+    const [start, end] = Array.isArray(range) ? range : [];
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < at || end <= start || end > text.length) continue;
+    if (start > at) el.append(text.slice(at, start));
+    el.append(element("mark", text.slice(start, end))); at = end;
+  }
+  el.append(text.slice(at));
+  return el;
+}
 function element(tag, text, cls) { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; }
 function button(label, action, cls) { const el = element("button", label, cls); el.type = "button"; el.onclick = () => attempt(async () => { el.disabled = true; try { await action(); } finally { el.disabled = false; } }); return el; }
 function actionButton(label, name, action, cls) {
@@ -654,14 +666,21 @@ function itemRow(item, from) {
   const main = button("", async () => { if (from === "health") healthScroll = document.querySelector("main").scrollTop; await openDetail(item.id, item.deleted, from); }, "item-main");
   const title = element("div", null, "item-title");
   if (item.favorite) { const star = icon("star"); star.classList.add("favorite-icon"); title.append(star); }
-  title.append(element("strong", item.name));
+  title.append(highlighted("strong", item.name, item.nameRanges));
   // Archived and trashed items can show up beside live ones (search, the trash view).
   const status = item.deleted ? ["Trash", "trash"] : item.archived ? ["Archived", "archive"] : null;
   if (status) {
     const badge = element("span", null, "item-status"); badge.dataset.status = status[1]; badge.append(icon(status[1]), status[0]);
     title.append(badge); row.classList.add("is-inactive");
   }
-  main.append(title, element("small", item.username || labels[item.type])); row.append(main);
+  main.append(title, highlighted("small", item.username || labels[item.type], item.username ? item.userRanges : null));
+  // What else matched the search (URI, notes, folder, custom fields).
+  for (const hit of Array.isArray(item.hits) ? item.hits : []) {
+    const line = highlighted("small", hit.text, hit.ranges, "item-hit");
+    line.prepend(element("span", hit.label, "item-hit-label"));
+    main.append(line);
+  }
+  row.append(main);
   const autofillExcluded = Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(item.id);
   if (autofillExcluded) title.append(element("small", "Autofill off", "item-autofill-disabled"));
   const actions = element("div", null, "item-actions");

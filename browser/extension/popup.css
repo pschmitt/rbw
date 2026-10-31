@@ -934,3 +934,8 @@ html[data-page=locked] button.avatar { animation:rage-shake 1.8s linear infinite
 @media (prefers-reduced-motion: reduce) { html[data-page=locked] button.avatar, html[data-page=locked] button.avatar img { animation:none; } }
 .confirm-dialog-actions button.with-icon { display:inline-flex; align-items:center; justify-content:center; gap:7px; }
 .confirm-dialog-actions button.with-icon .svg-icon { width:16px; height:16px; flex:none; }
+
+/* Search hits: grep-like emphasis on what matched, and where. */
+.item-main mark { background:transparent; color:var(--danger); font-weight:700; }
+.item-main small.item-hit { font-family:ui-monospace,monospace; font-size:11px; }
+.item-hit-label { margin-right:6px; padding:0 4px; border-radius:3px; background:var(--surface-2, rgba(128,128,128,.2)); color:var(--muted); font-family:inherit; font-size:10px; text-transform:uppercase; }
