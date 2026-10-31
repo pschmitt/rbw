@@ -276,7 +276,7 @@ async function refreshVaultLockState(preferences = null) {
 // rotating sync arrows in the top-right corner, standing in for the match
 // count until the sync ends. Writes sync afterwards, so they count as well.
 const SYNCING_ACTIONS = ["sync", "save", "mutate", "import", "set_collections", "upload_finish", "attachment_delete"];
-const { redEyeFrame, syncFrame, hopFrame, playHop } = globalThis.rbwToolbarIcon;
+const { redEyeFrame, syncFrame, hopFrame, playHop, spinner } = globalThis.rbwToolbarIcon;
 const syncAnimation = { active: 0, timer: null, frame: 0, bitmaps: null };
 // Locked: the crab's eyes turn red (drawn in toolbar-icon.js).
 let redEyeIcon = null;
@@ -289,13 +289,6 @@ async function toolbarBitmaps() {
   syncAnimation.bitmaps ||= Promise.all([16, 32, 48].map(async size => [size, await createImageBitmap(await (await fetch(api.runtime.getURL(icons[size] || `icons/toolbar-${size}.png`))).blob())]));
   return syncAnimation.bitmaps;
 }
-async function drawSyncFrame() {
-  try {
-    const bitmaps = await toolbarBitmaps(); if (!syncAnimation.active) return;
-    const angle = (syncAnimation.frame++ % 16) * (Math.PI / 8);
-    await api.action.setIcon({ imageData: Object.fromEntries(bitmaps.map(([size, bitmap]) => [size, syncFrame(bitmap, size, angle)])) });
-  } catch (_) { /* Cosmetic only. */ }
-}
 // The icon at rest: red eyes while the vault is locked, the packaged icon otherwise.
 async function restoreIcon() {
   try {
@@ -304,16 +297,13 @@ async function restoreIcon() {
     else await api.action.setIcon({ path: api.runtime.getManifest().action?.default_icon });
   } catch (_) { /* Cosmetic only. */ }
 }
-function syncStarted() {
-  if (syncAnimation.active++) return;
-  badge(); drawSyncFrame(); syncAnimation.timer = setInterval(drawSyncFrame, 80);
-}
-function syncFinished() {
-  if (--syncAnimation.active > 0) return;
-  syncAnimation.active = 0; clearInterval(syncAnimation.timer); syncAnimation.timer = null;
-  restoreIcon();
-  badge();
-}
+const sync = spinner(syncAnimation, async angle => {
+  try {
+    const bitmaps = await toolbarBitmaps(); if (!syncAnimation.active) return;
+    await api.action.setIcon({ imageData: Object.fromEntries(bitmaps.map(([size, bitmap]) => [size, syncFrame(bitmap, size, angle)])) });
+  } catch (_) { /* Cosmetic only. */ }
+}, spinning => { if (spinning) badge(); else { restoreIcon(); badge(); } });
+const syncStarted = sync.begin, syncFinished = sync.end;
 // Toolbar feedback after a successful fill: the crab squashes, hops twice and
 // a sparkle pops (drawn in toolbar-icon.js). Skipped while a sync spinner owns the icon.
 const hopAnimation = { running: false };

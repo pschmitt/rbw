@@ -76,5 +76,23 @@ async function playHop(show, stopped = () => false) {
     await new Promise(resolve => setTimeout(resolve, 45));
   }
 }
-return { redEyeFrame, syncFrame, hopFrame, dataUrl, playHop };
+// The sync spinner for as long as something is going on: begin() when it
+// starts, end() when it is over (they nest; the spinner runs until the last
+// one ends). show(angle) draws a frame, onChange(spinning) follows the start
+// and the end. state ({active, timer, frame}) is the caller's to read.
+function spinner(state, show, onChange) {
+  const draw = () => show((state.frame++ % 16) * (Math.PI / 8));
+  return {
+    begin() {
+      if (state.active++) return;
+      onChange(true); draw(); state.timer = setInterval(draw, 80);
+    },
+    end() {
+      if (--state.active > 0) return;
+      state.active = 0; clearInterval(state.timer); state.timer = null;
+      onChange(false);
+    },
+  };
+}
+return { redEyeFrame, syncFrame, hopFrame, dataUrl, playHop, spinner };
 })();

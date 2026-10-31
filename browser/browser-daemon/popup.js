@@ -35,8 +35,27 @@ async function hop() {
     badge();
   }
 }
+// While the vault is being asked (a lookup, an unlock, a fill): the sync ring
+// round the crab and no badge, as in the extension.
+const syncState = { active: 0, timer: null, frame: 0 };
+let spriteBitmap = null;
+const sprite = () => (spriteBitmap ||= fetch(SPRITE).then((r) => r.blob()).then(createImageBitmap));
+const sync = rbwToolbarIcon.spinner(syncState, async (angle) => {
+  try {
+    const bitmap = await sprite();
+    if (!syncState.active || hopping || !motion()) return;
+    const src = await rbwToolbarIcon.dataUrl(rbwToolbarIcon.syncFrame(bitmap, bitmap.width, angle));
+    if (syncState.active) bd.icon(src); // not after the spinner ended: that frame would outlive it
+  } catch (_) { /* Cosmetic only. */ }
+}, () => badge());
+const vaultRequest = (kind, args, opts) => {
+  sync.begin();
+  const call = bd.request(kind, args, opts);
+  call.then(sync.end, sync.end);
+  return call;
+};
 function badge() {
-  if (hopping) return;
+  if (hopping || syncState.active) { if (syncState.active) bd.badge(null); return; }
   const n = vault.site === ctx.site && Array.isArray(vault.list) ? vault.list.filter((e) => e.site !== false).length : 0;
   if (vault.locked) bd.badge("L", "danger"); else bd.badge(n ? (n > 9 ? "9+" : String(n)) : null);
   if (!vault.locked) { bd.icon(null); $("logo").src = "icons/rbw-64.png"; return; }
@@ -50,7 +69,7 @@ function peek() {
   if (!site || !ctx.ready || vault.peeking || Date.now() < vault.off) return;
   if (vault.site === site && Date.now() - vault.at < FRESH) return;
   vault.peekSite = site;
-  vault.peeking = bd.request("logins").then((found) => {
+  vault.peeking = vaultRequest("logins").then((found) => {
     vault.site = site;
     vault.at = Date.now();
     vault.list = Array.isArray(found) ? found : null; // locked: not known
@@ -127,7 +146,7 @@ async function load(site, unlock = false, q = "") {
   }
   let found;
   try {
-    found = await bd.request("logins", { unlock, query: q || null },
+    found = await vaultRequest("logins", { unlock, query: q || null },
       { onNote: (note) => body(empty(esc(note), "locked checking")), signal: ac.signal });
   } catch (err) {
     if (err.aborted) return;
@@ -292,7 +311,7 @@ async function fill(entry, fields, anySite, stampOn, article) {
   stampOn.classList.add("is-pending");
   let shownNote = "";
   try {
-    const res = await bd.request("fill", { entry: entry.id, fields, any_site: anySite },
+    const res = await vaultRequest("fill", { entry: entry.id, fields, any_site: anySite },
       { onNote: (note) => { if (note !== shownNote) { shownNote = note; bd.toast(note, 0); } } });
     stampOn.classList.remove("is-pending");
     stampResult(stampOn, { motion: motion() });
@@ -318,7 +337,7 @@ async function copy(entry, fields, stampOn) {
   stampOn.classList.add("is-pending");
   let shownNote = "";
   try {
-    const res = await bd.request("copy", { entry: entry.id, fields },
+    const res = await vaultRequest("copy", { entry: entry.id, fields },
       { onNote: (note) => { if (note !== shownNote) { shownNote = note; bd.toast(note, 0); } } });
     stampOn.classList.remove("is-pending");
     stampResult(stampOn, { motion: motion() });
