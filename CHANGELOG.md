@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.36.0] - 2026-10-31
+
 ### Added
 
 * Browser extension: a search marks what matched, like `grep --color`: the hits
