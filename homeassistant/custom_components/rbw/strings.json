@@ -103,9 +103,6 @@
     "binary_sensor": {
       "api_connected": {"name": "API connected"},
       "vault_locked": {"name": "Vault locked ({account})"}
-    },
-    "sensor": {
-      "api_version": {"name": "API version"}
     }
   }
 }

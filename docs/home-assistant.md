@@ -115,9 +115,10 @@ the item is read through local interactive rbw.
 ## Status device
 
 The integration also creates one diagnostic **rbw Policy API** device. It polls
-`GET /v1/status` once per minute and exposes API connectivity, the API version,
-the agent version in device information, and one lock binary sensor per account
-returned by the status API. For example, account `ai` uses
+`GET /v1/status` once per minute and exposes API connectivity and one lock
+binary sensor per account returned by the status API. The device information
+shows the agent version as its software version and the API contract version as
+its model identifier (for example, `API v1`). For example, account `ai` uses
 `binary_sensor.rbw_ai_locked`. Account names appear only for accounts explicitly
 included in this client's status grants. The response contains no item fields
 or credentials. A denied status request still reports the API as reachable. A

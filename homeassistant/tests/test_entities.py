@@ -89,6 +89,12 @@ class FakeDeviceInfo:
     def __getitem__(self, key: str) -> object:
         return self.values[key]
 
+    def get(self, key: str, default: object = None) -> object:
+        return self.values.get(key, default)
+
+    def __setitem__(self, key: str, value: object) -> None:
+        self.values[key] = value
+
 
 class FakeEntityRegistry:
     def __init__(self, entities: dict[str, object] | None = None) -> None:
@@ -108,7 +114,9 @@ class FakeEntityRegistry:
 class FakeDeviceRegistry:
     def __init__(self, sw_version: str | None = None, *, registered: bool = True) -> None:
         self.device = (
-            SimpleNamespace(id="device", sw_version=sw_version, configuration_url=None)
+            SimpleNamespace(
+                id="device", sw_version=sw_version, model_id=None, configuration_url=None
+            )
             if registered
             else None
         )
@@ -226,7 +234,7 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
             packaged["entity"]["binary_sensor"]["vault_locked"]["name"],
             "Vault locked ({account})",
         )
-        self.assertNotIn("vault_status", packaged["entity"]["sensor"])
+        self.assertNotIn("sensor", packaged["entity"])
         self.assertFalse(hasattr(sensor_module, "VAULT_STATUS_OPTIONS"))
         self.assertFalse(hasattr(sensor_module, "RbwAgentVersionSensor"))
         self.assertEqual(
@@ -316,8 +324,8 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
 
         await sensor_module.async_setup_entry(hass, FakeEntry("entry"), entities.extend)
 
-        self.assertEqual(list(registry.entities), [api_version.entity_id])
-        self.assertEqual(len(entities), 1)
+        self.assertEqual(registry.entities, {})
+        self.assertEqual(entities, [])
 
     async def test_platforms_create_shared_and_per_account_diagnostic_entities(self) -> None:
         coordinator_module, binary_module, sensor_module = load_entities()
@@ -352,7 +360,7 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
         await sensor_module.async_setup_entry(hass, entry, sensor_entities.extend)
 
         self.assertEqual(len(binary_entities), 5)
-        self.assertEqual(len(sensor_entities), 1)
+        self.assertEqual(len(sensor_entities), 0)
         entities = binary_entities + sensor_entities
         self.assertTrue(all(entity.entity_category == "diagnostic" for entity in entities))
         self.assertTrue(
@@ -365,7 +373,6 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
         locked_by_account = {
             entity.account: entity for entity in binary_entities[1:]
         }
-        (api_version,) = sensor_entities
         self.assertTrue(connected.is_on)
         self.assertEqual(
             set(locked_by_account), {"ai", "bw", "default", "wiit"}
@@ -378,7 +385,7 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
         }.items():
             self.assertEqual(
                 locked_by_account[account].is_on,
-                expected_state == "locked",
+                expected_state == "unlocked",
             )
             self.assertTrue(locked_by_account[account].available)
             self.assertEqual(
@@ -392,8 +399,9 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
             )._attr_unique_id,
         )
         self.assertEqual(locked_by_account["ai"]._object_id, "rbw_ai_locked")
+        self.assertFalse(locked_by_account["ai"].is_on)  # locked => off for device class LOCK
+        self.assertTrue(locked_by_account["bw"].is_on)  # unlocked => on for device class LOCK
         self.assertEqual(connected.device_info.values["sw_version"], "2.40.0")
-        self.assertEqual(api_version.device_info.values["sw_version"], "2.40.0")
         self.assertEqual(
             connected.device_info.values["configuration_url"],
             "https://fnuc.example:24871",
@@ -402,7 +410,7 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
             len({entity._attr_unique_id for entity in locked_by_account.values()}),
             4,
         )
-        self.assertEqual(api_version.native_value, 1)
+        self.assertEqual(connected.device_info.values["model_id"], "API v1")
         self.assertEqual(device_registry.device.sw_version, "2.40.0")
         self.assertEqual(device_registry.device.configuration_url, "https://fnuc.example:24871")
         self.assertEqual(
@@ -411,6 +419,7 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
                 "device",
                 {
                     "sw_version": "2.40.0",
+                    "model_id": "API v1",
                     "configuration_url": "https://fnuc.example:24871",
                 },
             ),
@@ -421,12 +430,14 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
 
         coordinator.data = coordinator_module.RbwStatusData(
             connected=True,
-            status=api.RbwApiStatus(1, "2.41.0", ()),
+            status=api.RbwApiStatus(2, "2.41.0", ()),
         )
         coordinator.notify()
         self.assertEqual(device_registry.device.sw_version, "2.41.0")
+        self.assertEqual(device_registry.device.model_id, "API v2")
         self.assertEqual(
-            device_registry.updates[-1], ("device", {"sw_version": "2.41.0"})
+            device_registry.updates[-1],
+            ("device", {"sw_version": "2.41.0", "model_id": "API v2"}),
         )
 
     async def test_metadata_is_applied_when_device_registers_after_first_refresh(self) -> None:
@@ -454,7 +465,7 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(device_registry.device)
 
         device_registry.device = SimpleNamespace(
-            id="device", sw_version=None, configuration_url=None
+            id="device", sw_version=None, model_id=None, configuration_url=None
         )
         await entities[0].async_added_to_hass()
 
@@ -486,10 +497,8 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(binary_entities[0].is_on)
         self.assertEqual(len(binary_entities), 1)
-        self.assertEqual(len(sensor_entities), 1)
-        self.assertIsNone(sensor_entities[0].native_value)
-        self.assertIsNone(sensor_entities[0].device_info.values["sw_version"])
-        self.assertIsNone(binary_entities[0].device_info.values["configuration_url"])
+        self.assertEqual(len(sensor_entities), 0)
+        self.assertNotIn("configuration_url", binary_entities[0].device_info.values)
 
     async def test_transport_failure_reports_unavailable_and_not_locked(self) -> None:
         coordinator_module, binary_module, _ = load_entities()

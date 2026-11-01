@@ -37,8 +37,9 @@ async def async_setup_entry(
         name="rbw",
         manufacturer="rbw",
         model="Policy API",
-        configuration_url=runtime.configuration_url,
     )
+    if runtime.configuration_url is not None:
+        device["configuration_url"] = runtime.configuration_url
     def async_update_device_info() -> None:
         """Update registered device metadata from permitted status data."""
         data = runtime.coordinator.data
@@ -53,6 +54,9 @@ async def async_setup_entry(
         updates: dict[str, str] = {}
         if registered_device.sw_version != data.status.agent_version:
             updates["sw_version"] = data.status.agent_version
+        api_model_id = f"API v{data.status.api_version}"
+        if registered_device.model_id != api_model_id:
+            updates["model_id"] = api_model_id
         if (
             runtime.configuration_url is not None
             and registered_device.configuration_url != runtime.configuration_url
@@ -157,17 +161,19 @@ class RbwStatusBinarySensor(CoordinatorEntity[RbwStatusCoordinator], BinarySenso
     def device_info(self) -> DeviceInfo:
         """Expose the running agent version on the shared device."""
         data = self.coordinator.data
+        values: dict[str, str | set[tuple[str, str]]] = {
+            "identifiers": self._attr_device_info["identifiers"],
+            "name": "rbw",
+            "manufacturer": "rbw",
+            "model": "Policy API",
+        }
+        if configuration_url := self._attr_device_info.get("configuration_url"):
+            values["configuration_url"] = configuration_url
+        if data is not None and data.status is not None:
+            values["sw_version"] = data.status.agent_version
+            values["model_id"] = f"API v{data.status.api_version}"
         return DeviceInfo(
-            identifiers=self._attr_device_info["identifiers"],
-            name="rbw",
-            manufacturer="rbw",
-            model="Policy API",
-            configuration_url=self._attr_device_info["configuration_url"],
-            sw_version=(
-                data.status.agent_version
-                if data is not None and data.status is not None
-                else None
-            ),
+            **values,
         )
 
     @property
@@ -271,10 +277,11 @@ class RbwVaultLockedSensor(RbwStatusBinarySensor):
 
     @property
     def is_on(self) -> bool | None:
-        """Return unknown when lock state is not configured or unavailable."""
+        """Return on only when unlocked, matching Home Assistant lock semantics."""
         if self.coordinator.data is None:
             return None
-        return self.coordinator.data.account_locked(self.account)
+        locked = self.coordinator.data.account_locked(self.account)
+        return None if locked is None else not locked
 
 
 def _account_object_ids(accounts: set[str]) -> dict[str, str]:
