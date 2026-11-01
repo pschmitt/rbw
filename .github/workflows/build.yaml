@@ -14,7 +14,7 @@ jobs:
   # Every push and pull request: unsigned packages for temporary loading
   # (Firefox about:debugging, Chromium "Load unpacked" after unzipping).
   # The release workflow signs them when a version is tagged.
-  browser:
+  browser-extensions:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
