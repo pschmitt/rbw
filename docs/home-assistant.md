@@ -115,12 +115,14 @@ the item is read through local interactive rbw.
 ## Status device
 
 The integration also creates one diagnostic **rbw Policy API** device. It polls
-`GET /v1/status` once per minute and exposes API connectivity, API and agent
-versions, and a lock sensor plus status sensor for each account returned by the
-status API. Account names appear only for accounts explicitly included in this
-client's status grants. The response contains no item fields or credentials. A
-denied status request still reports the API as reachable. A granted account
-that is no longer configured is reported as unconfigured, never as unlocked.
+`GET /v1/status` once per minute and exposes API connectivity, the API version,
+the agent version in device information, and one lock binary sensor per account
+returned by the status API. For example, account `ai` uses
+`binary_sensor.rbw_ai_locked`. Account names appear only for accounts explicitly
+included in this client's status grants. The response contains no item fields
+or credentials. A denied status request still reports the API as reachable. A
+granted account that is no longer configured has an unknown lock state, never
+an unlocked state. The device links to the configured API endpoint.
 
 Status access is a separate permission for one or more accounts. Grant specific
 accounts to the existing client identity:

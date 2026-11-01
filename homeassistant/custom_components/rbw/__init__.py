@@ -38,19 +38,22 @@ class RbwRuntimeData:
 
     client: RbwApiClient
     coordinator: RbwStatusCoordinator
+    configuration_url: str | None
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Create an API client without making network calls during startup."""
     try:
         base_url = RbwApiClient.validate_base_url(entry.data[CONF_BASE_URL])
+        configuration_url = base_url
         context = RbwApiClient.create_ssl_context(
             entry.data[CONF_CA_CERT],
             entry.data[CONF_CLIENT_CERT],
             entry.data[CONF_CLIENT_KEY],
         )
     except (KeyError, ValueError, OSError, ssl.SSLError):
-        base_url = entry.data.get(CONF_BASE_URL, "https://invalid.local")
+        base_url = "https://invalid.local"
+        configuration_url = None
         context = None
         _create_issue(hass, entry.entry_id, ISSUE_CLIENT_CERT)
     client = RbwApiClient(
@@ -59,7 +62,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         context,
     )
     coordinator = RbwStatusCoordinator(hass, entry, client)
-    runtime = RbwRuntimeData(client, coordinator)
+    runtime = RbwRuntimeData(client, coordinator, configuration_url)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     # Do not hold HA startup open for a remote status request.

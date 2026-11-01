@@ -105,19 +105,7 @@
       "vault_locked": {"name": "Vault locked ({account})"}
     },
     "sensor": {
-      "vault_status": {
-        "name": "Vault status ({account})",
-        "state": {
-          "locked": "Locked",
-          "unlocked": "Unlocked",
-          "unconfigured": "Unconfigured",
-          "status_permission_required": "Status permission required",
-          "authentication_failed": "Authentication failed",
-          "unavailable": "Unavailable"
-        }
-      },
-      "api_version": {"name": "API version"},
-      "agent_version": {"name": "Agent version"}
+      "api_version": {"name": "API version"}
     }
   }
 }
