@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.40.0] - 2026-11-01
+
 ### Added
 
 * Home Assistant diagnostics can report connection and account-scoped vault
