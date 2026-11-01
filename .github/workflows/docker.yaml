@@ -90,7 +90,7 @@ jobs:
       - id: meta
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
-          tags="-t ${{ env.IMAGE }}:latest"
+          tags="-t ${{ env.IMAGE }}:latest -t ${{ env.IMAGE }}:sha-${{ github.sha }}"
           if [[ "${{ github.ref_type }}" == "tag" ]]
           then
             tags="${tags} -t ${{ env.IMAGE }}:${version}"

@@ -20,9 +20,11 @@ extension source. Pin a tag (`github:pschmitt/rbw/vX.Y.Z`) for a release.
 | `packages.<system>.chromium-addon` | The signed Chromium CRX (`passthru.extensionId`, `passthru.version`) |
 | `packages.<system>.browser-native-host` | Native messaging manifests for Firefox and Chromium, pointing at `rbw-browser` |
 | `packages.<system>.rbw-termux` | A native Android (Termux) build |
-| `overlays.default` | Sets `pkgs.rbw` to this flake's package |
+| `packages.<system>.rbw-auto-backup`, `rbw-auto-sync` | Backup and sync jobs from [`auto/`](../auto/README.md) |
+| `overlays.default` | Sets `pkgs.rbw` and the two `pkgs.rbw-auto-*` packages |
 | `homeManagerModules.default` | `programs.rbw` |
 | `nixosModules.default` | `services.rbw-unlockd`, the fingerprint-enforcing unlock broker (see [desktop-unlock.md](desktop-unlock.md)) |
+| `nixosModules.auto` | `services.rbw-auto` backup and sync jobs (see [`auto/`](../auto/README.md)) |
 
 The package builds with [crane](https://github.com/ipetkov/crane): rbw's
 dependencies are a separate derivation that only changes with `Cargo.lock` or

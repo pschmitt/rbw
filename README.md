@@ -28,7 +28,8 @@ timeout.
 - **Passkeys** synced, shown and usable from the CLI and the browser.
 - **Built-in SSH agent** for keys stored in the vault.
 - **Backup, import and mirroring** between accounts, in rbw and Bitwarden
-  formats.
+  formats. The `rbw-auto` backup and sync jobs are also maintained in this
+  repository; see [auto/README.md](auto/README.md).
 - **`rbw inject` and `rbw run`** to render templates and environment files
   with secrets.
 - **Organizations and collections** management.

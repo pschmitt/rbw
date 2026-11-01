@@ -129,6 +129,8 @@
               '';
             }
           );
+          rbwAutoBackup = pkgs.callPackage ./auto/nix/rbw-auto-backup.nix { rbw = rbw; };
+          rbwAutoSync = pkgs.callPackage ./auto/nix/rbw-auto-sync.nix { rbw = rbw; };
 
           rbwTermux =
             let
@@ -206,6 +208,8 @@
         in
         {
           inherit rbw;
+          rbw-auto-backup = rbwAutoBackup;
+          rbw-auto-sync = rbwAutoSync;
 
           # This output is built on Linux by Nix's Android cross set. Its
           # metadata describes files for the Termux bundle exporter, which
@@ -246,11 +250,14 @@
 
       overlays.default = final: _prev: {
         rbw = self.packages.${final.stdenv.hostPlatform.system}.default;
+        rbw-auto-backup = self.packages.${final.stdenv.hostPlatform.system}.rbw-auto-backup;
+        rbw-auto-sync = self.packages.${final.stdenv.hostPlatform.system}.rbw-auto-sync;
       };
 
       homeManagerModules.default = import ./nix/hm-module.nix { inherit self; };
 
       nixosModules.default = import ./nix/nixos-module.nix { inherit self; };
+      nixosModules.auto = import ./auto/nix/module.nix { inherit self; };
 
       # Smoke test: build a minimal home-manager configuration exercising
       # `programs.rbw`, and assert the rendered `config.yaml`
@@ -376,6 +383,41 @@
           inherit (self.packages.${system}) browser-daemon-extension;
         }
         // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          # Evaluates a representative rbw-auto backup service and checks
+          # that the module uses the packages from this flake.
+          nixos-module-auto =
+            let
+              nixos = nixpkgs.lib.nixosSystem {
+                inherit system;
+                modules = [
+                  self.nixosModules.auto
+                  {
+                    services.rbw-auto.backupJobs.smoke = {
+                      account = {
+                        name = "smoke";
+                        email = "smoke@example.invalid";
+                      };
+                    };
+                    boot.loader.grub.enable = false;
+                    fileSystems."/" = {
+                      device = "none";
+                      fsType = "tmpfs";
+                    };
+                    system.stateVersion = "24.05";
+                  }
+                ];
+              };
+              service = nixos.config.systemd.services.rbw-auto-backup-smoke;
+              start = builtins.unsafeDiscardStringContext service.serviceConfig.ExecStart;
+              startProgram = builtins.elemAt (nixpkgs.lib.splitString " " start) (
+                nixpkgs.lib.length (nixpkgs.lib.splitString " " start) - 1
+              );
+              backup = self.packages.${system}.rbw-auto-backup;
+            in
+            assert nixos.config.services.rbw-auto.backupPackage == backup;
+            assert startProgram == builtins.unsafeDiscardStringContext "${backup}/bin/rbw-auto-backup";
+            pkgs.runCommand "rbw-auto-nixos-module-check" { } "touch $out";
+
           # Evaluates (without building rbw) a NixOS system enabling
           # `services.rbw-unlockd` and checks the units it renders.
           nixos-module-unlockd =
