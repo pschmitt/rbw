@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+* `rbw-auto` now lives in this repository under `auto/`, keeping its backup and
+  sync scripts, container, NixOS modules and documentation alongside rbw.
+  Docker publication keeps the existing `ghcr.io/pschmitt/rbw-auto` image name
+  and publishes only when the matching rbw image is available, so both stay in
+  sync.
+
 ## [2.38.0] - 2026-11-01
 
 ### Added
