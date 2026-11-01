@@ -14,9 +14,18 @@ let publicSession = false, shown = false, seq = 0, abort = null, timer = 0, rows
 // the badge is a red L. The picture is drawn by the extension's own code
 // (toolbar-icon.js), from the same sprite.
 const SPRITE = "icons/toolbar-64.png";
+// The bundle's page may not fetch (its CSP has connect-src 'none'), but it may
+// load images, and the files carry CORS headers: a decoded sprite for the canvas.
+const loadSprite = () => new Promise((resolve, reject) => {
+  const image = new Image();
+  image.crossOrigin = "anonymous";
+  image.onload = () => createImageBitmap(image).then(resolve, reject);
+  image.onerror = () => reject(new Error("sprite"));
+  image.src = SPRITE;
+});
 let redEyes = null;
 function redEyeIcon() {
-  redEyes ||= fetch(SPRITE).then((r) => r.blob()).then(createImageBitmap)
+  redEyes ||= loadSprite()
     .then((bitmap) => rbwToolbarIcon.dataUrl(rbwToolbarIcon.redEyeFrame(bitmap, bitmap.width))).catch(() => null);
   return redEyes;
 }
@@ -27,7 +36,7 @@ async function hop() {
   if (hopping || !motion()) return;
   hopping = true;
   try {
-    const bitmap = await fetch(SPRITE).then((r) => r.blob()).then(createImageBitmap);
+    const bitmap = await loadSprite();
     const size = bitmap.width;
     await rbwToolbarIcon.playHop(async (t) => bd.icon(await rbwToolbarIcon.dataUrl(rbwToolbarIcon.hopFrame(bitmap, size, t))));
   } catch (_) { /* Cosmetic only. */ } finally {
@@ -39,7 +48,7 @@ async function hop() {
 // round the crab and no badge, as in the extension.
 const syncState = { active: 0, timer: null, frame: 0 };
 let spriteBitmap = null;
-const sprite = () => (spriteBitmap ||= fetch(SPRITE).then((r) => r.blob()).then(createImageBitmap));
+const sprite = () => (spriteBitmap ||= loadSprite());
 const sync = rbwToolbarIcon.spinner(syncState, async (angle) => {
   try {
     const bitmap = await sprite();
@@ -321,12 +330,17 @@ function row(e, site) {
   if (e.password !== false) entries.append(menuEntry("Copy password", "key", () => copy(e, ["password"], copyBtn)));
   if (e.totp) entries.append(menuEntry("Copy TOTP", "generator", () => copy(e, ["totp"], copyBtn)));
   entries.addEventListener("click", (ev) => { if (ev.target.closest("button")) menu.open = false; });
-  // The frame is as tall as its content: an open menu makes room below
-  // itself (the frame grows) rather than open over the search field.
+  // The frame is as tall as its content, up to what the live view allows: an
+  // open menu goes above its button when the frame ends too soon below it and
+  // there is room above (as the extension's menus do), and otherwise makes room
+  // below itself (the frame grows) rather than open over the search field.
   menu.addEventListener("toggle", () => {
     document.body.style.paddingBottom = "";
+    menu.classList.remove("drop-up");
     if (!menu.open) return;
     for (const o of document.querySelectorAll("details.menu[open]")) if (o !== menu) o.open = false;
+    const need = entries.offsetHeight + 10, button = summary.getBoundingClientRect();
+    if (innerHeight - button.bottom < need && button.top > need) { menu.classList.add("drop-up"); return; }
     // Against the body, not the document: scrollHeight already counts the
     // menu overflowing it, and the frame is sized from the body.
     const below = entries.getBoundingClientRect().bottom + 10 - document.body.getBoundingClientRect().bottom;
