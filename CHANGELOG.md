@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.38.0] - 2026-11-01
+
 ### Added
 
 * Optional remote field API, disabled by default, with rbw-managed TLS
@@ -13,7 +15,8 @@
   over mutual TLS, with the existing sensitive-field masking controls. See
   [docs/mcp.md](docs/mcp.md).
 * Home Assistant integration for explicit, policy-checked field reads, with
-  repair flows for API and authentication failures. See
+  repair flows for API and authentication failures. An installer exports a
+  deterministic source archive or deploys a versioned copy over SSH. See
   [docs/home-assistant.md](docs/home-assistant.md).
 
 ### Changed
