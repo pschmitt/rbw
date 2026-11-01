@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.39.0] - 2026-11-01
+
 ### Added
 
 * `rbw-auto` now lives in this repository under `auto/`, keeping its backup and
@@ -9,6 +11,8 @@
   Docker publication keeps the existing `ghcr.io/pschmitt/rbw-auto` image name
   and publishes only when the matching rbw image is available, so both stay in
   sync.
+* The Home Assistant integration now includes rbw branding, copied from the
+  canonical icon asset and included in installer archives.
 
 ## [2.38.0] - 2026-11-01
 
