@@ -34,7 +34,7 @@
   "issues": {
     "status_permission_required": {
       "title": "rbw status permission required",
-      "description": "This client can reach the rbw API, but its separate status permission is missing. Run rbw api client list, then grant status access for the existing client and configured account with rbw api status-grant <client-id> --account <account-name>."
+      "description": "This client can reach the rbw API, but its separate status permission is missing. Run rbw api client list, then grant status access for the existing client and each intended account with rbw api status-grant <client-id> --account <account-name>."
     },
     "status_unavailable": {
       "title": "rbw status API unavailable",
@@ -102,11 +102,11 @@
   "entity": {
     "binary_sensor": {
       "api_connected": {"name": "API connected"},
-      "vault_locked": {"name": "Vault locked"}
+      "vault_locked": {"name": "Vault locked ({account})"}
     },
     "sensor": {
       "vault_status": {
-        "name": "Vault status",
+        "name": "Vault status ({account})",
         "state": {
           "locked": "Locked",
           "unlocked": "Unlocked",

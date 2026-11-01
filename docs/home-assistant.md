@@ -115,27 +115,39 @@ the item is read through local interactive rbw.
 ## Status device
 
 The integration also creates one diagnostic **rbw Policy API** device. It polls
-`GET /v1/status` once per minute and exposes API connectivity, whether the
-configured account is locked, the vault status, and the API and agent versions.
-The response contains no item fields, account names, or credentials. A denied
-status request still reports the API as reachable; the vault lock sensor stays
-unknown until the separate status permission is granted. An unconfigured
-account is reported as unconfigured, never as unlocked.
+`GET /v1/status` once per minute and exposes API connectivity, API and agent
+versions, and a lock sensor plus status sensor for each account returned by the
+status API. Account names appear only for accounts explicitly included in this
+client's status grants. The response contains no item fields or credentials. A
+denied status request still reports the API as reachable. A granted account
+that is no longer configured is reported as unconfigured, never as unlocked.
 
-Status access is a separate, account-scoped permission. Grant it to the same
-client identity and account used by the integration:
+Status access is a separate permission for one or more accounts. Grant specific
+accounts to the existing client identity:
 
 ```sh
 rbw api client list
 rbw api status-grant '<client-id>' --account '<account-name>'
+rbw api status-grant '<client-id>' --account '<first>' --account '<second>'
 ```
+
+Or grant all accounts configured at the time the command runs:
+
+```sh
+rbw api status-grant '<client-id>' --all-configured
+```
+
+This is a snapshot. Accounts configured later are not added automatically;
+grant them explicitly or run `--all-configured` again. The API never reports
+account names outside the status grant set. Revoke one account's status grant
+with `rbw api status-revoke '<client-id>' --account '<account-name>'`, or revoke
+all status grants with `rbw api status-revoke '<client-id>'`.
 
 The integration reports a persistent repair when the permission is missing and
 clears it when status becomes available. Network errors retry automatically.
 The status permission grants no access to item fields; grant those separately
-only when another integration needs to read a specific field. Remove the status
-permission with `rbw api status-revoke '<client-id>'` when it is no longer
-needed.
+only when another integration needs to read a specific field. Revoking an
+account's status grant removes its per-account entities from Home Assistant.
 
 ## Tests
 

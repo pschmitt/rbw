@@ -2476,13 +2476,25 @@ enum ApiCmd {
     Status,
     #[command(
         name = "status-grant",
-        about = "Grant a client non-secret status for one account"
+        about = "Grant a client non-secret status for configured accounts"
     )]
     StatusGrant {
         #[arg(help = "Client ID from `rbw api client create`")]
         client_id: String,
-        #[arg(long, help = "Configured account name")]
-        account: String,
+        #[arg(
+            long,
+            value_name = "ACCOUNT",
+            num_args = 1..,
+            conflicts_with = "all_configured",
+            help = "Configured account name (repeatable)"
+        )]
+        account: Vec<String>,
+        #[arg(
+            long,
+            conflicts_with = "account",
+            help = "Grant status for every currently configured account"
+        )]
+        all_configured: bool,
     },
     #[command(
         name = "status-revoke",
@@ -2491,6 +2503,11 @@ enum ApiCmd {
     StatusRevoke {
         #[arg(help = "Client ID")]
         client_id: String,
+        #[arg(
+            long,
+            help = "Revoke only this configured account's status grant"
+        )]
+        account: Option<String>,
     },
     #[command(about = "Manage mTLS client credentials")]
     Client {
@@ -4327,11 +4344,17 @@ fn main() {
             }
             ApiCmd::Disable => commands::api_disable(),
             ApiCmd::Status => commands::api_status(),
-            ApiCmd::StatusGrant { client_id, account } => {
-                commands::api_status_grant(&client_id, &account)
-            }
-            ApiCmd::StatusRevoke { client_id } => {
-                commands::api_status_revoke(&client_id)
+            ApiCmd::StatusGrant {
+                client_id,
+                account,
+                all_configured,
+            } => commands::api_status_grant(
+                &client_id,
+                &account,
+                all_configured,
+            ),
+            ApiCmd::StatusRevoke { client_id, account } => {
+                commands::api_status_revoke(&client_id, account.as_deref())
             }
             ApiCmd::Client { client } => match client {
                 ApiClientCmd::Create { name } => {
@@ -5686,6 +5709,48 @@ mod test {
         ])
         .is_err());
         assert!(Cli::try_parse_from(["rbw", "mcp"]).is_ok());
+    }
+
+    #[test]
+    fn status_grant_cli_accepts_multiple_accounts_or_all_configured() {
+        assert!(Cli::try_parse_from([
+            "rbw",
+            "api",
+            "status-grant",
+            "client-1",
+            "--account",
+            "personal",
+            "--account",
+            "work",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "rbw",
+            "api",
+            "status-grant",
+            "client-1",
+            "--all-configured",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "rbw",
+            "api",
+            "status-grant",
+            "client-1",
+            "--account",
+            "personal",
+            "--all-configured",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "rbw",
+            "api",
+            "status-revoke",
+            "client-1",
+            "--account",
+            "personal",
+        ])
+        .is_ok());
     }
 
     #[test]

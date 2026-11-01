@@ -39,12 +39,20 @@ class RbwApiError(Exception):
 
 
 @dataclass(frozen=True, slots=True)
+class RbwAccountStatus:
+    """Lock state for one explicitly status-granted account."""
+
+    account: str
+    state: Literal["locked", "unlocked", "unconfigured"]
+
+
+@dataclass(frozen=True, slots=True)
 class RbwApiStatus:
     """Safe, non-secret status returned by the API."""
 
     api_version: int
     agent_version: str
-    vault_state: Literal["locked", "unlocked", "unconfigured"]
+    accounts: tuple[RbwAccountStatus, ...]
 
 
 class RbwApiClient:
@@ -268,19 +276,58 @@ class RbwApiClient:
                             http_status=response.status,
                         )
 
-                    vault = payload.get("vault") if isinstance(payload, dict) else None
-                    api_version = payload.get("apiVersion") if isinstance(payload, dict) else None
-                    agent_version = (
-                        payload.get("agentVersion") if isinstance(payload, dict) else None
-                    )
-                    vault_state = vault.get("state") if isinstance(vault, dict) else None
+                    if not isinstance(payload, dict) or set(payload) != {
+                        "apiVersion",
+                        "agentVersion",
+                        "accounts",
+                    }:
+                        raise RbwApiError(
+                            "invalid_response",
+                            "The rbw API returned an invalid status response",
+                            retryable=True,
+                            http_status=response.status,
+                        )
+
+                    api_version = payload.get("apiVersion")
+                    agent_version = payload.get("agentVersion")
+                    accounts_payload = payload.get("accounts")
+                    accounts: list[RbwAccountStatus] = []
+                    seen_accounts: set[str] = set()
+                    if isinstance(accounts_payload, list):
+                        for item in accounts_payload:
+                            if not isinstance(item, dict) or set(item) != {"account", "state"}:
+                                raise RbwApiError(
+                                    "invalid_response",
+                                    "The rbw API returned an invalid status response",
+                                    retryable=True,
+                                    http_status=response.status,
+                                )
+                            account = item["account"]
+                            state = item["state"]
+                            if (
+                                not isinstance(account, str)
+                                or not account
+                                or len(account) > 128
+                                or account != account.strip()
+                                or any(ord(char) < 32 or ord(char) == 127 for char in account)
+                                or account in seen_accounts
+                                or state not in ("locked", "unlocked", "unconfigured")
+                            ):
+                                raise RbwApiError(
+                                    "invalid_response",
+                                    "The rbw API returned an invalid status response",
+                                    retryable=True,
+                                    http_status=response.status,
+                                )
+                            seen_accounts.add(account)
+                            accounts.append(RbwAccountStatus(account, state))
                     if (
                         isinstance(api_version, bool)
                         or not isinstance(api_version, int)
                         or api_version < 1
                         or not isinstance(agent_version, str)
                         or not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,63}", agent_version)
-                        or vault_state not in ("locked", "unlocked", "unconfigured")
+                        or not isinstance(accounts_payload, list)
                     ):
                         raise RbwApiError(
                             "invalid_response",
@@ -288,7 +335,7 @@ class RbwApiClient:
                             retryable=True,
                             http_status=response.status,
                         )
-                    return RbwApiStatus(api_version, agent_version, vault_state)
+                    return RbwApiStatus(api_version, agent_version, tuple(accounts))
         except TimeoutError:
             raise RbwApiError("timeout", "The rbw API request timed out", retryable=True) from None
         except aiohttp.ClientSSLError:

@@ -207,6 +207,11 @@ pub struct ClientPolicy {
     /// Whether this client may read non-secret, scoped vault status.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub status: bool,
+    /// Account names this client may inspect through the status endpoint.
+    /// `status` plus the legacy `account` field remains readable for policy
+    /// files created before per-account status grants were introduced.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub status_accounts: Vec<String>,
     #[serde(default)]
     pub items: std::collections::BTreeMap<String, Vec<FieldRef>>,
 }
@@ -225,7 +230,7 @@ pub enum VaultLockState {
     Unlocked,
 }
 
-/// Non-secret remote agent and scoped vault status.
+/// Non-secret remote agent and explicitly scoped vault status.
 #[derive(
     serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
 )]
@@ -233,15 +238,16 @@ pub enum VaultLockState {
 pub struct StatusResponse {
     pub api_version: u32,
     pub agent_version: String,
-    pub vault: VaultStatus,
+    pub accounts: Vec<AccountStatus>,
 }
 
-/// The account-scoped portion of [`StatusResponse`].
+/// The status of an account explicitly granted to the requesting client.
 #[derive(
-    serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq,
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
 )]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct VaultStatus {
+pub struct AccountStatus {
+    pub account: String,
     pub state: VaultLockState,
 }
 
@@ -607,6 +613,7 @@ pub fn create_client(name: &str) -> anyhow::Result<ClientPolicy> {
         fingerprint,
         account: None,
         status: false,
+        status_accounts: Vec::new(),
         items: std::collections::BTreeMap::new(),
     };
     if let Err(error) = update_policy_store(|store| {
@@ -660,49 +667,86 @@ fn grant_fields_policy(
     Ok(())
 }
 
-/// Grant a client access to non-secret status for one configured account.
+/// Grant a client access to non-secret status for configured accounts.
 /// This does not grant access to any item fields.
-pub fn grant_status(client_id: &str, account: &str) -> anyhow::Result<()> {
-    crate::config::Config::load()?.account(Some(account))?;
-    update_policy_store(|store| {
-        let client = store
-            .clients
-            .get_mut(client_id)
-            .context("remote API client was not found")?;
-        grant_status_policy(client, account)
-    })
-}
-
-fn grant_status_policy(
-    client: &mut ClientPolicy,
-    account: &str,
+pub fn grant_status(
+    client_id: &str,
+    accounts: &[String],
 ) -> anyhow::Result<()> {
-    if let Some(existing) = &client.account {
-        anyhow::ensure!(
-            existing == account,
-            "a client can be scoped to one account; revoke and recreate it to change accounts"
-        );
+    anyhow::ensure!(!accounts.is_empty(), "at least one account is required");
+    let config = crate::config::Config::load()?;
+    for account in accounts {
+        config.account(Some(account))?;
     }
-    client.account = Some(account.to_owned());
-    client.status = true;
-    Ok(())
-}
-
-/// Revoke a client's non-secret status permission without changing item grants.
-pub fn revoke_status(client_id: &str) -> anyhow::Result<()> {
     update_policy_store(|store| {
         let client = store
             .clients
             .get_mut(client_id)
             .context("remote API client was not found")?;
-        revoke_status_policy(client);
+        for account in accounts {
+            grant_status_policy(client, account);
+        }
         Ok(())
     })
 }
 
-fn revoke_status_policy(client: &mut ClientPolicy) {
-    client.status = false;
+pub fn granted_status_accounts(client: &ClientPolicy) -> Vec<String> {
+    if !client.status {
+        return Vec::new();
+    }
+    let mut accounts = client.status_accounts.clone();
+    // Older policy files represented status permission with a boolean and
+    // reused the item grant's account. Continue honoring that exact grant.
+    if client.status && accounts.is_empty() {
+        if let Some(account) = &client.account {
+            accounts.push(account.clone());
+        }
+    }
+    accounts.sort();
+    accounts.dedup();
+    accounts
+}
+
+fn grant_status_policy(client: &mut ClientPolicy, account: &str) {
+    let accounts = granted_status_accounts(client);
+    client.status_accounts = accounts;
     if client.items.is_empty() {
+        // A pre-statusAccounts policy used `account` only as its status
+        // scope. Once migrated, leave the item grant scope independent.
+        client.account = None;
+    }
+    if !client.status_accounts.iter().any(|name| name == account) {
+        client.status_accounts.push(account.to_owned());
+        client.status_accounts.sort();
+    }
+    client.status = true;
+}
+
+/// Revoke one account's status grant, or all status grants when `account` is
+/// `None`, without changing item grants.
+pub fn revoke_status(
+    client_id: &str,
+    account: Option<&str>,
+) -> anyhow::Result<()> {
+    update_policy_store(|store| {
+        let client = store
+            .clients
+            .get_mut(client_id)
+            .context("remote API client was not found")?;
+        revoke_status_policy(client, account);
+        Ok(())
+    })
+}
+
+fn revoke_status_policy(client: &mut ClientPolicy, account: Option<&str>) {
+    client.status_accounts = granted_status_accounts(client);
+    if let Some(account) = account {
+        client.status_accounts.retain(|name| name != account);
+    } else {
+        client.status_accounts.clear();
+    }
+    client.status = !client.status_accounts.is_empty();
+    if !client.status && client.items.is_empty() {
         client.account = None;
     }
 }
@@ -853,17 +897,18 @@ mod tests {
     fn status_response_matches_http_json_contract() {
         let response = StatusResponse {
             api_version: 1,
-            agent_version: "2.39.0".to_owned(),
-            vault: VaultStatus {
-                state: VaultLockState::Unconfigured,
-            },
+            agent_version: "2.40.0".to_owned(),
+            accounts: vec![AccountStatus {
+                account: "personal".to_owned(),
+                state: VaultLockState::Locked,
+            }],
         };
         assert_eq!(
             serde_json::to_value(response).unwrap(),
             serde_json::json!({
                 "apiVersion": 1,
-                "agentVersion": "2.39.0",
-                "vault": { "state": "unconfigured" }
+                "agentVersion": "2.40.0",
+                "accounts": [{ "account": "personal", "state": "locked" }]
             })
         );
     }
@@ -880,10 +925,41 @@ mod tests {
             }))
             .unwrap();
         assert!(!policy.status);
+        assert_eq!(policy.status_accounts, Vec::<String>::new());
         assert!(serde_json::to_value(policy)
             .unwrap()
             .get("status")
             .is_none());
+    }
+
+    #[test]
+    fn legacy_status_policy_keeps_its_existing_single_account_grant() {
+        let policy: ClientPolicy =
+            serde_json::from_value(serde_json::json!({
+                "id": "client-1",
+                "name": "legacy status client",
+                "fingerprint": "fingerprint",
+                "account": "personal",
+                "status": true,
+                "items": {}
+            }))
+            .unwrap();
+        assert_eq!(granted_status_accounts(&policy), ["personal"]);
+        assert_eq!(policy.status_accounts, Vec::<String>::new());
+
+        let mut migrated = policy;
+        grant_status_policy(&mut migrated, "work");
+        assert_eq!(migrated.account, None);
+        assert_eq!(granted_status_accounts(&migrated), ["personal", "work"]);
+        grant_fields_policy(
+            &mut migrated,
+            "work",
+            "item-1",
+            &[FieldRef::Username],
+        )
+        .unwrap();
+        assert_eq!(migrated.account.as_deref(), Some("work"));
+        assert_eq!(granted_status_accounts(&migrated), ["personal", "work"]);
     }
 
     #[test]
@@ -894,38 +970,47 @@ mod tests {
             fingerprint: "fingerprint".to_owned(),
             account: None,
             status: false,
+            status_accounts: Vec::new(),
             items: std::collections::BTreeMap::new(),
         };
 
-        grant_status_policy(&mut client, "personal").unwrap();
-        assert_eq!(client.account.as_deref(), Some("personal"));
+        grant_status_policy(&mut client, "personal");
+        assert_eq!(client.account, None);
         assert!(client.status);
+        assert_eq!(client.status_accounts, ["personal"]);
         assert!(client.items.is_empty());
-        assert!(grant_status_policy(&mut client, "work").is_err());
-        assert_eq!(client.account.as_deref(), Some("personal"));
+        grant_status_policy(&mut client, "work");
+        assert_eq!(client.status_accounts, ["personal", "work"]);
 
-        revoke_status_policy(&mut client);
+        revoke_status_policy(&mut client, Some("personal"));
+        assert_eq!(client.status_accounts, ["work"]);
+        assert_eq!(granted_status_accounts(&client), ["work"]);
+        assert!(client.status);
+        revoke_status_policy(&mut client, None);
         assert_eq!(client.account, None);
         assert!(!client.status);
+        assert_eq!(client.status_accounts, Vec::<String>::new());
 
-        grant_status_policy(&mut client, "personal").unwrap();
+        grant_status_policy(&mut client, "personal");
+        client.account = Some("personal".to_owned());
         client
             .items
             .insert("item-1".to_owned(), vec![FieldRef::Username]);
-        revoke_status_policy(&mut client);
+        revoke_status_policy(&mut client, None);
         assert_eq!(client.account.as_deref(), Some("personal"));
         assert!(!client.status);
         assert_eq!(client.items["item-1"], [FieldRef::Username]);
     }
 
     #[test]
-    fn revoking_last_item_grant_preserves_active_status_account_scope() {
+    fn status_accounts_remain_independent_from_item_account_scope() {
         let mut client = ClientPolicy {
             id: "client-1".to_owned(),
             name: "status client".to_owned(),
             fingerprint: "fingerprint".to_owned(),
             account: Some("personal".to_owned()),
             status: true,
+            status_accounts: Vec::new(),
             items: std::collections::BTreeMap::from([(
                 "item-1".to_owned(),
                 vec![FieldRef::Username],
@@ -936,19 +1021,22 @@ mod tests {
         assert!(client.items.is_empty());
         assert_eq!(client.account.as_deref(), Some("personal"));
         assert!(client.status);
-        assert!(grant_status_policy(&mut client, "work").is_err());
-        assert!(grant_fields_policy(
+        grant_status_policy(&mut client, "work");
+        assert_eq!(client.status_accounts, ["personal", "work"]);
+        assert_eq!(client.account, None);
+        grant_fields_policy(
             &mut client,
             "work",
             "item-2",
-            &[FieldRef::Username]
+            &[FieldRef::Username],
         )
-        .is_err());
-        assert_eq!(client.account.as_deref(), Some("personal"));
-        assert!(client.items.is_empty());
+        .unwrap();
+        assert_eq!(client.account.as_deref(), Some("work"));
+        assert_eq!(client.items["item-2"], [FieldRef::Username]);
+        assert_eq!(granted_status_accounts(&client), ["personal", "work"]);
 
-        revoke_status_policy(&mut client);
-        assert_eq!(client.account, None);
+        revoke_status_policy(&mut client, None);
+        assert_eq!(client.account.as_deref(), Some("work"));
     }
 
     #[test]

@@ -95,21 +95,27 @@ class RbwStatusDataTests(unittest.TestCase):
         coordinator = load_coordinator([])
         locked = coordinator.RbwStatusData(
             connected=True,
-            status=api.RbwApiStatus(1, "2.39.0", "locked"),
+            status=api.RbwApiStatus(
+                1, "2.40.0", (api.RbwAccountStatus("locked-account", "locked"),)
+            ),
         )
         unlocked = coordinator.RbwStatusData(
             connected=True,
-            status=api.RbwApiStatus(1, "2.39.0", "unlocked"),
+            status=api.RbwApiStatus(
+                1, "2.40.0", (api.RbwAccountStatus("open-account", "unlocked"),)
+            ),
         )
         unconfigured = coordinator.RbwStatusData(
             connected=True,
-            status=api.RbwApiStatus(1, "2.39.0", "unconfigured"),
+            status=api.RbwApiStatus(
+                1, "2.40.0", (api.RbwAccountStatus("removed-account", "unconfigured"),)
+            ),
         )
 
-        self.assertTrue(locked.vault_locked)
-        self.assertFalse(unlocked.vault_locked)
-        self.assertIsNone(unconfigured.vault_locked)
-        self.assertEqual(unconfigured.vault_status, "unconfigured")
+        self.assertTrue(locked.account_locked("locked-account"))
+        self.assertFalse(unlocked.account_locked("open-account"))
+        self.assertIsNone(unconfigured.account_locked("removed-account"))
+        self.assertEqual(unconfigured.account_status("removed-account"), "unconfigured")
 
     def test_forbidden_status_is_connected_but_does_not_claim_vault_state(self) -> None:
         coordinator = load_coordinator([])
@@ -119,8 +125,8 @@ class RbwStatusDataTests(unittest.TestCase):
         )
 
         self.assertTrue(data.connected)
-        self.assertEqual(data.vault_status, "status_permission_required")
-        self.assertIsNone(data.vault_locked)
+        self.assertEqual(data.account_status("personal"), "status_permission_required")
+        self.assertIsNone(data.account_locked("personal"))
 
 
 class RbwStatusCoordinatorTests(unittest.IsolatedAsyncioTestCase):
@@ -146,8 +152,8 @@ class RbwStatusCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             result = await coordinator._async_update_data()
 
         self.assertTrue(result.connected)
-        self.assertEqual(result.vault_status, "status_permission_required")
-        self.assertIsNone(result.vault_locked)
+        self.assertEqual(result.account_status("personal"), "status_permission_required")
+        self.assertIsNone(result.account_locked("personal"))
         self.assertEqual(coordinator.kwargs["update_interval"].total_seconds(), 60)
         self.assertEqual(issue_calls[0][0], "create")
         self.assertEqual(issue_calls[0][4]["translation_key"], "status_permission_required")
@@ -168,15 +174,17 @@ class RbwStatusCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         result = await coordinator._async_update_data()
 
         self.assertFalse(result.connected)
-        self.assertEqual(result.vault_status, "unavailable")
-        self.assertIsNone(result.vault_locked)
+        self.assertEqual(result.account_status("personal"), "unavailable")
+        self.assertIsNone(result.account_locked("personal"))
         self.assertEqual(issue_calls[0][0], "create")
         self.assertEqual(issue_calls[0][4]["translation_key"], "status_unavailable")
 
     async def test_success_clears_status_issues_and_returns_only_safe_metadata(self) -> None:
         issue_calls: list[tuple[object, ...]] = []
         module = load_coordinator(issue_calls)
-        client = FakeClient(api.RbwApiStatus(1, "2.39.0", "unlocked"))
+        client = FakeClient(
+            api.RbwApiStatus(1, "2.40.0", (api.RbwAccountStatus("personal", "unlocked"),))
+        )
         coordinator = module.RbwStatusCoordinator(
             SimpleNamespace(),
             SimpleNamespace(entry_id="entry"),
@@ -186,9 +194,9 @@ class RbwStatusCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         result = await coordinator._async_update_data()
 
         self.assertTrue(result.connected)
-        self.assertEqual(result.vault_status, "unlocked")
-        self.assertFalse(result.vault_locked)
-        self.assertEqual(result.status.agent_version, "2.39.0")
+        self.assertEqual(result.account_status("personal"), "unlocked")
+        self.assertFalse(result.account_locked("personal"))
+        self.assertEqual(result.status.agent_version, "2.40.0")
         self.assertTrue(all(call[0] == "delete" for call in issue_calls))
 
 

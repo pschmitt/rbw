@@ -101,7 +101,8 @@ where
 }
 
 use rbw::remote_api::{
-    ApiError, ErrorCode, FieldReadResponse, StatusResponse, VaultLockState,
+    AccountStatus, ApiError, ErrorCode, FieldReadResponse, StatusResponse,
+    VaultLockState,
 };
 
 type PolicyFuture = BoxFuture<
@@ -109,7 +110,7 @@ type PolicyFuture = BoxFuture<
     Result<(bool, rbw::remote_api::PolicyStore), ApiError>,
 >;
 type ReaderFuture = BoxFuture<'static, Result<FieldReadResponse, ApiError>>;
-type StatusFuture = BoxFuture<'static, Result<VaultLockState, ApiError>>;
+type StatusFuture = BoxFuture<'static, Result<AccountStatus, ApiError>>;
 
 #[derive(Clone)]
 struct ApiState {
@@ -120,7 +121,7 @@ struct ApiState {
             + Sync,
     >,
     status_reader:
-        std::sync::Arc<dyn Fn(Option<String>) -> StatusFuture + Send + Sync>,
+        std::sync::Arc<dyn Fn(String) -> StatusFuture + Send + Sync>,
 }
 
 impl ApiState {
@@ -157,24 +158,27 @@ impl ApiState {
             })
         });
         let status_reader: std::sync::Arc<
-            dyn Fn(Option<String>) -> StatusFuture + Send + Sync,
+            dyn Fn(String) -> StatusFuture + Send + Sync,
         > = std::sync::Arc::new(move |account| {
             let agent = agent.clone();
             Box::pin(async move {
-                let Some(account) = account else {
-                    return Ok(VaultLockState::Unconfigured);
-                };
                 let config = rbw::config::Config::load_async()
                     .await
                     .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
                 if config.account(Some(&account)).is_err() {
-                    return Ok(VaultLockState::Unconfigured);
+                    return Ok(AccountStatus {
+                        account,
+                        state: VaultLockState::Unconfigured,
+                    });
                 }
                 let locked = agent.lock().await.needs_unlock(&account);
-                Ok(if locked {
-                    VaultLockState::Locked
-                } else {
-                    VaultLockState::Unlocked
+                Ok(AccountStatus {
+                    account,
+                    state: if locked {
+                        VaultLockState::Locked
+                    } else {
+                        VaultLockState::Unlocked
+                    },
                 })
             })
         });
@@ -491,13 +495,16 @@ async fn read_status_inner(
     certificate_der: Option<&[u8]>,
 ) -> Result<StatusResponse, ApiError> {
     let (enabled, store) = (state.policy)().await?;
-    let account =
-        authorized_status_account(enabled, &store, certificate_der)?;
-    let vault_state = (state.status_reader)(account).await?;
+    let accounts =
+        authorized_status_accounts(enabled, &store, certificate_der)?;
+    let mut statuses = Vec::with_capacity(accounts.len());
+    for account in accounts {
+        statuses.push((state.status_reader)(account).await?);
+    }
     Ok(StatusResponse {
         api_version: 1,
         agent_version: env!("CARGO_PKG_VERSION").to_owned(),
-        vault: rbw::remote_api::VaultStatus { state: vault_state },
+        accounts: statuses,
     })
 }
 
@@ -564,11 +571,11 @@ fn authorized_account(
     Ok(account)
 }
 
-fn authorized_status_account(
+fn authorized_status_accounts(
     enabled: bool,
     store: &rbw::remote_api::PolicyStore,
     certificate_der: Option<&[u8]>,
-) -> Result<Option<String>, ApiError> {
+) -> Result<Vec<String>, ApiError> {
     if !enabled {
         return Err(ApiError::new(ErrorCode::Unauthorized));
     }
@@ -584,7 +591,13 @@ fn authorized_status_account(
     if !client.status {
         return Err(ApiError::new(ErrorCode::Forbidden));
     }
-    Ok(client.account.clone())
+    let accounts = rbw::remote_api::granted_status_accounts(client);
+    if accounts.is_empty()
+        || accounts.iter().any(|account| account.trim().is_empty())
+    {
+        return Err(ApiError::new(ErrorCode::Unavailable));
+    }
+    Ok(accounts)
 }
 
 #[cfg(test)]
@@ -674,6 +687,7 @@ mod tests {
             fingerprint,
             account: Some("personal".to_owned()),
             status: true,
+            status_accounts: vec!["personal".to_owned()],
             items: std::collections::BTreeMap::from([(
                 "item-1".to_owned(),
                 vec![FieldRef::Password],
@@ -716,25 +730,33 @@ mod tests {
             },
         );
         let status_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let status_reader: Arc<
-            dyn Fn(Option<String>) -> StatusFuture + Send + Sync,
-        > = Arc::new({
-            let status_calls = status_calls.clone();
-            move |account| {
+        let status_reader: Arc<dyn Fn(String) -> StatusFuture + Send + Sync> =
+            Arc::new({
                 let status_calls = status_calls.clone();
-                Box::pin(async move {
-                    status_calls.fetch_add(1, Ordering::SeqCst);
-                    match account.as_deref() {
-                        Some("personal") => Ok(VaultLockState::Locked),
-                        Some("work") => Ok(VaultLockState::Unlocked),
-                        Some("unavailable") => {
-                            Err(ApiError::new(ErrorCode::Unavailable))
+                move |account| {
+                    let status_calls = status_calls.clone();
+                    Box::pin(async move {
+                        status_calls.fetch_add(1, Ordering::SeqCst);
+                        match account.as_str() {
+                            "personal" => Ok(AccountStatus {
+                                account,
+                                state: VaultLockState::Locked,
+                            }),
+                            "work" => Ok(AccountStatus {
+                                account,
+                                state: VaultLockState::Unlocked,
+                            }),
+                            "unavailable" => {
+                                Err(ApiError::new(ErrorCode::Unavailable))
+                            }
+                            _ => Ok(AccountStatus {
+                                account,
+                                state: VaultLockState::Unconfigured,
+                            }),
                         }
-                        _ => Ok(VaultLockState::Unconfigured),
-                    }
-                })
-            }
-        });
+                    })
+                }
+            });
         (
             ApiState {
                 policy,
@@ -831,8 +853,8 @@ mod tests {
             serde_json::from_str(&response.2).unwrap();
         assert_eq!(payload.value.as_deref(), Some("synthetic-secret-value"));
 
-        // Status permission is distinct from item fields and reports only
-        // the account scoped to this client.
+        // Status permission is distinct from item fields and reveals only
+        // account names explicitly granted to this client.
         policy
             .write()
             .await
@@ -856,11 +878,13 @@ mod tests {
             serde_json::from_str(&response.2).unwrap();
         assert_eq!(payload.api_version, 1);
         assert_eq!(payload.agent_version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(payload.vault.state, VaultLockState::Locked);
-        assert!(!response.2.contains("personal"));
+        assert_eq!(payload.accounts.len(), 1);
+        assert_eq!(payload.accounts[0].account, "personal");
+        assert_eq!(payload.accounts[0].state, VaultLockState::Locked);
+        assert!(!response.2.contains("work"));
         assert!(!response.2.contains("client-1"));
 
-        // A differently scoped account reports that account's state.
+        // Multiple explicit grants return each account's state.
         policy
             .write()
             .await
@@ -868,7 +892,7 @@ mod tests {
             .clients
             .get_mut("client-1")
             .unwrap()
-            .account = Some("work".to_owned());
+            .status_accounts = vec!["personal".to_owned(), "work".to_owned()];
         let response = https_request(
             url.clone(),
             fixture.ca_pem.clone(),
@@ -880,10 +904,38 @@ mod tests {
         assert_eq!(response.0, StatusCode::OK);
         let payload: StatusResponse =
             serde_json::from_str(&response.2).unwrap();
-        assert_eq!(payload.vault.state, VaultLockState::Unlocked);
+        assert_eq!(payload.accounts.len(), 2);
+        assert_eq!(payload.accounts[0].account, "personal");
+        assert_eq!(payload.accounts[0].state, VaultLockState::Locked);
+        assert_eq!(payload.accounts[1].account, "work");
+        assert_eq!(payload.accounts[1].state, VaultLockState::Unlocked);
+        assert!(!response.2.contains("unavailable"));
+
+        // Revoking one account removes its name and state immediately.
+        policy
+            .write()
+            .await
+            .1
+            .clients
+            .get_mut("client-1")
+            .unwrap()
+            .status_accounts = vec!["personal".to_owned()];
+        let response = https_request(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/status",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::OK);
+        let payload: StatusResponse =
+            serde_json::from_str(&response.2).unwrap();
+        assert_eq!(payload.accounts.len(), 1);
+        assert_eq!(payload.accounts[0].account, "personal");
         assert!(!response.2.contains("work"));
 
-        // A client without an account scope sees only an unconfigured state.
+        // A deleted account remains visible only because it was granted.
         policy
             .write()
             .await
@@ -891,7 +943,7 @@ mod tests {
             .clients
             .get_mut("client-1")
             .unwrap()
-            .account = None;
+            .status_accounts = vec!["deleted-account".to_owned()];
         let response = https_request(
             url.clone(),
             fixture.ca_pem.clone(),
@@ -903,7 +955,9 @@ mod tests {
         assert_eq!(response.0, StatusCode::OK);
         let payload: StatusResponse =
             serde_json::from_str(&response.2).unwrap();
-        assert_eq!(payload.vault.state, VaultLockState::Unconfigured);
+        assert_eq!(payload.accounts.len(), 1);
+        assert_eq!(payload.accounts[0].account, "deleted-account");
+        assert_eq!(payload.accounts[0].state, VaultLockState::Unconfigured);
         assert!(!response.2.contains("personal"));
 
         // Temporary config failures use the shared retryable error contract.
@@ -914,7 +968,7 @@ mod tests {
             .clients
             .get_mut("client-1")
             .unwrap()
-            .account = Some("unavailable".to_owned());
+            .status_accounts = vec!["unavailable".to_owned()];
         let response = https_request(
             url.clone(),
             fixture.ca_pem.clone(),
@@ -928,6 +982,26 @@ mod tests {
         let error: ApiError = serde_json::from_str(&response.2).unwrap();
         assert!(matches!(error.code, ErrorCode::Unavailable));
         assert!(error.retryable);
+
+        // A malformed policy that enables status without an account scope is
+        // a repairable server error, not an empty successful response.
+        {
+            let mut state = policy.write().await;
+            let client = state.1.clients.get_mut("client-1").unwrap();
+            client.status_accounts.clear();
+            client.account = None;
+        }
+        let response = https_request(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/status",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::SERVICE_UNAVAILABLE);
+        let error: ApiError = serde_json::from_str(&response.2).unwrap();
+        assert!(matches!(error.code, ErrorCode::Unavailable));
 
         // Status authorization defaults to deny, independently of mTLS.
         policy
@@ -1003,7 +1077,7 @@ mod tests {
         .unwrap();
         assert_eq!(response.0, StatusCode::UNAUTHORIZED);
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert_eq!(status_calls.load(std::sync::atomic::Ordering::SeqCst), 4);
+        assert_eq!(status_calls.load(std::sync::atomic::Ordering::SeqCst), 6);
 
         server_task.abort();
     }

@@ -6,8 +6,8 @@
 
 ### Added
 
-* Home Assistant diagnostics can report connection and account-scoped vault
-  lock status through an explicitly granted status API, without accessing
+* Home Assistant diagnostics can report connection and lock status for
+  explicitly granted rbw accounts through the status API, without accessing
   item data or prompting to unlock.
 
 ## [2.39.0] - 2026-11-01

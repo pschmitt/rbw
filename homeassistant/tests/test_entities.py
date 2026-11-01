@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import sys
 import types
@@ -29,6 +30,9 @@ class FakeCoordinatorEntity:
     def __init__(self, coordinator: object) -> None:
         self.coordinator = coordinator
 
+    async def async_remove(self, *, force_remove: bool = False) -> None:
+        self.removed = force_remove
+
 
 class FakeDataUpdateCoordinator:
     def __class_getitem__(cls, item: object) -> type[FakeDataUpdateCoordinator]:
@@ -43,6 +47,33 @@ class FakeEntity:
     @property
     def device_info(self) -> FakeDeviceInfo:
         return self._attr_device_info
+
+    @property
+    def available(self) -> bool:
+        return True
+
+
+class FakeCoordinator:
+    def __init__(self, data: object) -> None:
+        self.data = data
+        self.listeners: list[object] = []
+
+    def async_add_listener(self, listener: object) -> object:
+        self.listeners.append(listener)
+        return lambda: self.listeners.remove(listener)
+
+    def notify(self) -> None:
+        for listener in self.listeners:
+            listener()
+
+
+class FakeEntry:
+    def __init__(self, entry_id: str) -> None:
+        self.entry_id = entry_id
+        self.unload_callbacks: list[object] = []
+
+    def async_on_unload(self, callback: object) -> None:
+        self.unload_callbacks.append(callback)
 
 
 class FakeDeviceInfo:
@@ -123,24 +154,38 @@ def load_entities() -> tuple[types.ModuleType, types.ModuleType, types.ModuleTyp
 
 
 class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
-    async def test_platforms_create_five_diagnostic_entities_for_one_device(self) -> None:
+    async def test_platforms_create_shared_and_per_account_diagnostic_entities(self) -> None:
         coordinator_module, binary_module, sensor_module = load_entities()
-        runtime = SimpleNamespace(
-            coordinator=SimpleNamespace(
-                data=coordinator_module.RbwStatusData(
-                    connected=True,
-                    status=api.RbwApiStatus(1, "2.39.0", "locked"),
-                )
+        coordinator = FakeCoordinator(
+            coordinator_module.RbwStatusData(
+                connected=True,
+                status=api.RbwApiStatus(
+                    1,
+                    "2.40.0",
+                    (
+                        api.RbwAccountStatus("personal", "locked"),
+                        api.RbwAccountStatus("work", "unlocked"),
+                    ),
+                ),
             )
         )
-        hass = SimpleNamespace(data={"rbw": {"entry": runtime}})
-        entry = SimpleNamespace(entry_id="entry")
-        entities: list[object] = []
+        runtime = SimpleNamespace(
+            coordinator=coordinator,
+        )
+        hass = SimpleNamespace(
+            data={"rbw": {"entry": runtime}},
+            async_create_task=asyncio.create_task,
+        )
+        entry = FakeEntry("entry")
+        binary_entities: list[object] = []
+        sensor_entities: list[object] = []
 
-        await binary_module.async_setup_entry(hass, entry, entities.extend)
-        await sensor_module.async_setup_entry(hass, entry, entities.extend)
+        await binary_module.async_setup_entry(hass, entry, binary_entities.extend)
+        await sensor_module.async_setup_entry(hass, entry, sensor_entities.extend)
 
-        self.assertEqual(len(entities), 5)
+        self.assertEqual(len(binary_entities), 3)
+        self.assertEqual(len(sensor_entities), 4)
+        entities = binary_entities + sensor_entities
         self.assertTrue(all(entity.entity_category == "diagnostic" for entity in entities))
         self.assertTrue(
             all(
@@ -148,26 +193,36 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
                 for entity in entities
             )
         )
-        connected, vault_locked = entities[:2]
-        vault_status, api_version, agent_version = entities[2:]
+        connected, locked_personal, locked_work = binary_entities
+        api_version, agent_version, status_personal, status_work = sensor_entities
         self.assertTrue(connected.is_on)
-        self.assertTrue(vault_locked.is_on)
-        self.assertEqual(vault_status.native_value, "locked")
+        self.assertTrue(locked_personal.is_on)
+        self.assertFalse(locked_work.is_on)
+        self.assertEqual(status_personal.native_value, "locked")
+        self.assertEqual(status_work.native_value, "unlocked")
+        self.assertTrue(locked_personal.available)
+        self.assertEqual(
+            locked_personal._attr_unique_id,
+            binary_module.RbwVaultLockedSensor(
+                coordinator, "entry", locked_personal.device_info, "personal"
+            )._attr_unique_id,
+        )
+        self.assertEqual(locked_personal._attr_translation_placeholders, {"account": "personal"})
         self.assertEqual(api_version.native_value, 1)
-        self.assertEqual(agent_version.native_value, "2.39.0")
+        self.assertEqual(agent_version.native_value, "2.40.0")
 
     async def test_status_permission_denial_is_connected_but_lock_remains_unknown(self) -> None:
         coordinator_module, binary_module, sensor_module = load_entities()
-        runtime = SimpleNamespace(
-            coordinator=SimpleNamespace(
-                data=coordinator_module.RbwStatusData(
-                    connected=True,
-                    error_code="status_permission_required",
-                )
+        coordinator = FakeCoordinator(
+            coordinator_module.RbwStatusData(
+                connected=True, error_code="status_permission_required"
             )
         )
-        hass = SimpleNamespace(data={"rbw": {"entry": runtime}})
-        entry = SimpleNamespace(entry_id="entry")
+        runtime = SimpleNamespace(coordinator=coordinator)
+        hass = SimpleNamespace(
+            data={"rbw": {"entry": runtime}}, async_create_task=asyncio.create_task
+        )
+        entry = FakeEntry("entry")
         binary_entities: list[object] = []
         sensor_entities: list[object] = []
 
@@ -175,27 +230,120 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
         await sensor_module.async_setup_entry(hass, entry, sensor_entities.extend)
 
         self.assertTrue(binary_entities[0].is_on)
-        self.assertIsNone(binary_entities[1].is_on)
-        self.assertEqual(sensor_entities[0].native_value, "status_permission_required")
+        self.assertEqual(len(binary_entities), 1)
+        self.assertEqual(len(sensor_entities), 2)
+        self.assertIsNone(sensor_entities[0].native_value)
         self.assertIsNone(sensor_entities[1].native_value)
-        self.assertIsNone(sensor_entities[2].native_value)
 
     async def test_transport_failure_reports_unavailable_and_not_locked(self) -> None:
         coordinator_module, binary_module, _ = load_entities()
-        runtime = SimpleNamespace(
-            coordinator=SimpleNamespace(
-                data=coordinator_module.RbwStatusData(connected=False, error_code="timeout")
-            )
+        coordinator = FakeCoordinator(
+            coordinator_module.RbwStatusData(connected=False, error_code="timeout")
         )
-        hass = SimpleNamespace(data={"rbw": {"entry": runtime}})
+        runtime = SimpleNamespace(coordinator=coordinator)
+        hass = SimpleNamespace(
+            data={"rbw": {"entry": runtime}}, async_create_task=asyncio.create_task
+        )
         entities: list[object] = []
 
-        await binary_module.async_setup_entry(
-            hass, SimpleNamespace(entry_id="entry"), entities.extend
-        )
+        await binary_module.async_setup_entry(hass, FakeEntry("entry"), entities.extend)
 
         self.assertFalse(entities[0].is_on)
-        self.assertIsNone(entities[1].is_on)
+        self.assertEqual(len(entities), 1)
+
+    async def test_account_entities_follow_grants_and_keep_unknown_on_transport_failure(
+        self,
+    ) -> None:
+        coordinator_module, binary_module, sensor_module = load_entities()
+        coordinator = FakeCoordinator(
+            coordinator_module.RbwStatusData(
+                connected=True,
+                status=api.RbwApiStatus(
+                    1,
+                    "2.40.0",
+                    (
+                        api.RbwAccountStatus("personal", "locked"),
+                        api.RbwAccountStatus("work", "unlocked"),
+                    ),
+                ),
+            )
+        )
+        runtime = SimpleNamespace(coordinator=coordinator)
+        hass = SimpleNamespace(
+            data={"rbw": {"entry": runtime}}, async_create_task=asyncio.create_task
+        )
+        entry = FakeEntry("entry")
+        binary_entities: list[object] = []
+        sensor_entities: list[object] = []
+        await binary_module.async_setup_entry(hass, entry, binary_entities.extend)
+        await sensor_module.async_setup_entry(hass, entry, sensor_entities.extend)
+
+        old_work_lock = next(
+            entity for entity in binary_entities if getattr(entity, "account", None) == "work"
+        )
+        old_work_status = next(
+            entity for entity in sensor_entities if getattr(entity, "account", None) == "work"
+        )
+        coordinator.data = coordinator_module.RbwStatusData(
+            connected=False,
+            error_code="timeout",
+        )
+        coordinator.notify()
+        self.assertIsNone(old_work_lock.is_on)
+        self.assertEqual(old_work_status.native_value, "unavailable")
+        self.assertFalse(old_work_lock.available)
+        self.assertFalse(old_work_status.available)
+        self.assertFalse(getattr(old_work_lock, "removed", False))
+
+        coordinator.data = coordinator_module.RbwStatusData(
+            connected=True,
+            status=api.RbwApiStatus(
+                1,
+                "2.40.0",
+                (
+                    api.RbwAccountStatus("personal", "unconfigured"),
+                    api.RbwAccountStatus("new-account", "locked"),
+                ),
+            ),
+        )
+        coordinator.notify()
+        await asyncio.sleep(0)
+        self.assertTrue(old_work_lock.removed)
+        self.assertTrue(old_work_status.removed)
+        remaining_locks = [
+            entity
+            for entity in binary_entities
+            if hasattr(entity, "account") and not getattr(entity, "removed", False)
+        ]
+        remaining_statuses = [
+            entity
+            for entity in sensor_entities
+            if hasattr(entity, "account") and not getattr(entity, "removed", False)
+        ]
+        self.assertEqual(
+            sorted(entity.account for entity in remaining_locks), ["new-account", "personal"]
+        )
+        self.assertEqual(
+            sorted(entity.account for entity in remaining_statuses),
+            ["new-account", "personal"],
+        )
+        personal_lock = next(entity for entity in remaining_locks if entity.account == "personal")
+        personal_status = next(
+            entity for entity in remaining_statuses if entity.account == "personal"
+        )
+        self.assertTrue(personal_lock.available)
+        self.assertIsNone(personal_lock.is_on)
+        self.assertTrue(personal_status.available)
+        self.assertEqual(personal_status.native_value, "unconfigured")
+
+        coordinator.data = coordinator_module.RbwStatusData(
+            connected=True,
+            error_code="status_permission_required",
+        )
+        coordinator.notify()
+        await asyncio.sleep(0)
+        self.assertTrue(all(getattr(entity, "removed", False) for entity in remaining_locks))
+        self.assertTrue(all(getattr(entity, "removed", False) for entity in remaining_statuses))
 
 
 if __name__ == "__main__":

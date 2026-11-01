@@ -104,16 +104,12 @@ pub fn api_client_list() -> anyhow::Result<()> {
     for client in store.clients.values() {
         let fields: usize = client.items.values().map(Vec::len).sum();
         println!(
-            "{}\t{}\t{}\t{} item(s), {fields} field grant(s), status {}",
+            "{}\t{}\t{}\t{} item(s), {fields} field grant(s), status [{}]",
             client.id,
             client.name,
             client.account.as_deref().unwrap_or("unscoped"),
             client.items.len(),
-            if client.status {
-                "granted"
-            } else {
-                "not granted"
-            },
+            rbw::remote_api::granted_status_accounts(client).join(", "),
         );
     }
     Ok(())
@@ -121,18 +117,42 @@ pub fn api_client_list() -> anyhow::Result<()> {
 
 pub fn api_status_grant(
     client_id: &str,
-    account: &str,
+    accounts: &[String],
+    all_configured: bool,
 ) -> anyhow::Result<()> {
-    rbw::remote_api::grant_status(client_id, account)?;
+    let accounts = if all_configured {
+        rbw::config::Config::load()?
+            .accounts()
+            .into_iter()
+            .map(|account| account.name)
+            .collect::<Vec<_>>()
+    } else {
+        accounts.to_vec()
+    };
+    anyhow::ensure!(!accounts.is_empty(), "at least one account is required");
+    rbw::remote_api::grant_status(client_id, &accounts)?;
     println!(
-        "Granted non-secret status for account {account} to client {client_id}; no item fields were granted"
+        "Granted non-secret status for {} account(s) to client {client_id}; no item fields were granted",
+        accounts.len()
     );
+    for account in accounts {
+        println!("  {account}");
+    }
     Ok(())
 }
 
-pub fn api_status_revoke(client_id: &str) -> anyhow::Result<()> {
-    rbw::remote_api::revoke_status(client_id)?;
-    println!("Revoked non-secret status permission for client {client_id}");
+pub fn api_status_revoke(
+    client_id: &str,
+    account: Option<&str>,
+) -> anyhow::Result<()> {
+    rbw::remote_api::revoke_status(client_id, account)?;
+    if let Some(account) = account {
+        println!(
+            "Revoked status for account {account} from client {client_id}"
+        );
+    } else {
+        println!("Revoked all status grants for client {client_id}");
+    }
     Ok(())
 }
 

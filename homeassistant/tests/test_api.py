@@ -56,7 +56,7 @@ def success(field_id: str, value: str | None, *, sensitive: bool = True) -> Fake
 
 
 def status_success(
-    state: str = "unlocked",
+    accounts: list[dict[str, str]] | None = None,
     *,
     api_version: int = 1,
     agent_version: str = "2.39.0",
@@ -67,7 +67,9 @@ def status_success(
         {
             "apiVersion": api_version,
             "agentVersion": agent_version,
-            "vault": {"state": state},
+            "accounts": accounts
+            if accounts is not None
+            else [{"account": "personal", "state": "unlocked"}],
         },
     )
 
@@ -226,29 +228,60 @@ class RbwApiClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_status_request_returns_only_safe_status_and_uses_mtls(self) -> None:
         context = ssl.create_default_context()
-        session = FakeSession(status_success("locked"))
+        session = FakeSession(status_success([{"account": "personal", "state": "locked"}]))
         client = api.RbwApiClient(session, "https://vault.example", context)
 
         result = await client.async_get_status()
 
         self.assertEqual(
             result,
-            api.RbwApiStatus(api_version=1, agent_version="2.39.0", vault_state="locked"),
+            api.RbwApiStatus(
+                api_version=1,
+                agent_version="2.39.0",
+                accounts=(api.RbwAccountStatus("personal", "locked"),),
+            ),
         )
         url, kwargs = session.requests[0]
         self.assertEqual(url, "https://vault.example/v1/status")
         self.assertIs(kwargs["ssl"], context)
 
-    async def test_status_supports_unconfigured_vault_without_calling_it_unlocked(self) -> None:
+    async def test_status_preserves_unconfigured_account_without_calling_it_unlocked(self) -> None:
         client = api.RbwApiClient(
-            FakeSession(status_success("unconfigured")),
+            FakeSession(status_success([{"account": "retired", "state": "unconfigured"}])),
             "https://vault.example",
             ssl.create_default_context(),
         )
 
         result = await client.async_get_status()
 
-        self.assertEqual(result.vault_state, "unconfigured")
+        self.assertEqual(
+            result.accounts,
+            (api.RbwAccountStatus("retired", "unconfigured"),),
+        )
+
+    async def test_status_preserves_all_explicitly_granted_accounts(self) -> None:
+        client = api.RbwApiClient(
+            FakeSession(
+                status_success(
+                    [
+                        {"account": "personal", "state": "locked"},
+                        {"account": "work", "state": "unlocked"},
+                    ]
+                )
+            ),
+            "https://vault.example",
+            ssl.create_default_context(),
+        )
+
+        result = await client.async_get_status()
+
+        self.assertEqual(
+            result.accounts,
+            (
+                api.RbwAccountStatus("personal", "locked"),
+                api.RbwAccountStatus("work", "unlocked"),
+            ),
+        )
 
     async def test_status_forbidden_preserves_reachability_and_error_code(self) -> None:
         client = api.RbwApiClient(
@@ -270,11 +303,39 @@ class RbwApiClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(raised.exception.retryable)
         self.assertNotIn("not granted", str(raised.exception))
 
-    async def test_status_rejects_invalid_version_or_vault_state(self) -> None:
+    async def test_status_rejects_invalid_metadata_or_account_rows(self) -> None:
         for payload in (
-            {"apiVersion": True, "agentVersion": "2.39.0", "vault": {"state": "locked"}},
-            {"apiVersion": 1, "agentVersion": "2.39.0", "vault": {"state": "maybe"}},
-            {"apiVersion": 1, "agentVersion": "2.39.0\nsecret", "vault": {"state": "locked"}},
+            {"apiVersion": True, "agentVersion": "2.39.0", "accounts": []},
+            {"apiVersion": 1, "agentVersion": "2.39.0\nsecret", "accounts": []},
+            {
+                "apiVersion": 1,
+                "agentVersion": "2.39.0",
+                "accounts": [{"account": "a", "state": "maybe"}],
+            },
+            {
+                "apiVersion": 1,
+                "agentVersion": "2.39.0",
+                "accounts": [{"account": "", "state": "locked"}],
+            },
+            {
+                "apiVersion": 1,
+                "agentVersion": "2.39.0",
+                "accounts": [
+                    {"account": "a", "state": "locked"},
+                    {"account": "a", "state": "unlocked"},
+                ],
+            },
+            {
+                "apiVersion": 1,
+                "agentVersion": "2.39.0",
+                "accounts": [{"account": "a", "state": "locked", "password": "secret"}],
+            },
+            {
+                "apiVersion": 1,
+                "agentVersion": "2.39.0",
+                "accounts": [],
+                "vault": {"password": "secret"},
+            },
         ):
             with self.subTest(payload=payload):
                 client = api.RbwApiClient(
@@ -286,6 +347,7 @@ class RbwApiClientTests(unittest.IsolatedAsyncioTestCase):
                     await client.async_get_status()
                 self.assertEqual(raised.exception.code, "invalid_response")
                 self.assertEqual(raised.exception.http_status, 200)
+                self.assertNotIn("secret", str(raised.exception))
 
 
 if __name__ == "__main__":

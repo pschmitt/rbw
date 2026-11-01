@@ -48,21 +48,28 @@ choose or impersonate a client.
 
 ## Grant status without item access
 
-Grant a client non-secret lock status for one configured account without
-granting any item fields:
+Grant a client non-secret lock status for one or more configured accounts
+without granting any item fields:
 
 ```sh
 rbw api status-grant '<client-id>' --account '<account-name>'
+rbw api status-grant '<client-id>' --account '<first>' --account '<second>'
+rbw api status-grant '<client-id>' --all-configured
 ```
 
-Status reports only `locked`, `unlocked`, or `unconfigured`. It does not return
-the account name, enumerate other accounts, or inspect vault items. The state
-is read from the agent's existing per-account unlocked-key state; this request
-does not unlock, prompt, or change timeouts. Revoke status separately from item
+Status reports each explicitly granted account name and its `locked`,
+`unlocked`, or `unconfigured` state. `--all-configured` adds grants for every
+account configured when the command runs; later accounts are not added
+automatically, and existing grants remain until revoked. The API never returns
+account names outside this grant set and does not inspect vault items. State
+comes from the agent's current per-account key
+state; requests do not unlock, prompt, or change timeouts. Revoke one status
+grant with `--account`, or revoke all status grants separately from item
 permissions:
 
 ```sh
 rbw api status-revoke '<client-id>'
+rbw api status-revoke '<client-id>' --account '<account-name>'
 ```
 
 ## Grant the minimum fields
@@ -102,10 +109,11 @@ GET /v1/status
 ```
 
 This endpoint requires a registered mTLS client with the explicit status grant.
-Its response has `apiVersion`, `agentVersion`, and a `vault.state` property.
-Clients without an account scope, or with an account that is no longer
-configured, receive `vault.state: "unconfigured"` rather than global account
-information.
+Its response has `apiVersion`, `agentVersion`, and an `accounts` array. Each
+element has the explicitly granted `account` name and its `state`. A granted
+account that is no longer configured appears as `unconfigured`; no other
+configured account is enumerated. A client with no remaining status grants
+receives HTTP 403.
 
 ```text
 GET /v1/items/{item-id}/fields/{field-token}

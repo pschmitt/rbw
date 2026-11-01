@@ -25,29 +25,31 @@ STATUS_UPDATE_INTERVAL = timedelta(seconds=60)
 
 @dataclass(frozen=True, slots=True)
 class RbwStatusData:
-    """A poll result with no item fields, account names, or credentials."""
+    """A poll result with only explicitly granted account lock states."""
 
     connected: bool
     status: RbwApiStatus | None = None
     error_code: str | None = None
 
-    @property
-    def vault_status(self) -> str:
-        """Return the vault state or a clear reason it is not known."""
+    def account_status(self, account: str) -> str:
+        """Return an account state or a safe reason it is unknown."""
         if self.status is not None:
-            return self.status.vault_state
+            for account_status in self.status.accounts:
+                if account_status.account == account:
+                    return account_status.state
+            return "unavailable"
         if self.error_code == ISSUE_STATUS_PERMISSION:
             return "status_permission_required"
         if self.error_code == ISSUE_CLIENT_CERT:
             return "authentication_failed"
         return "unavailable"
 
-    @property
-    def vault_locked(self) -> bool | None:
+    def account_locked(self, account: str) -> bool | None:
         """Return lock state only when the server could confirm it."""
-        if self.status is None or self.status.vault_state == "unconfigured":
+        state = self.account_status(account)
+        if state not in ("locked", "unlocked"):
             return None
-        return self.status.vault_state == "locked"
+        return state == "locked"
 
 
 class RbwStatusCoordinator(DataUpdateCoordinator[RbwStatusData]):
@@ -71,7 +73,7 @@ class RbwStatusCoordinator(DataUpdateCoordinator[RbwStatusData]):
         self.client = client
 
     async def _async_update_data(self) -> RbwStatusData:
-        """Fetch only API version, agent version, and scoped lock state."""
+        """Fetch only API version, agent version, and granted lock states."""
         try:
             status = await self.client.async_get_status()
         except RbwApiError as err:
