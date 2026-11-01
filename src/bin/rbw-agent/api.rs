@@ -272,17 +272,14 @@ fn tls_config() -> anyhow::Result<axum_server::tls_rustls::RustlsConfig> {
 fn tls_config_at(
     pki_dir: &std::path::Path,
 ) -> anyhow::Result<axum_server::tls_rustls::RustlsConfig> {
+    use rustls::pki_types::pem::PemObject;
     use rustls::{
         pki_types::{CertificateDer, PrivateKeyDer},
         server::WebPkiClientVerifier,
         RootCertStore,
     };
-    use std::io::BufReader;
 
-    let ca_file = std::fs::File::open(pki_dir.join("ca.pem"))?;
-    let ca = rustls_pemfile::certs(&mut BufReader::new(ca_file))
-        .next()
-        .transpose()?
+    let ca = CertificateDer::from_pem_file(pki_dir.join("ca.pem"))
         .context("remote API CA certificate is missing")?;
     let mut roots = RootCertStore::empty();
     roots.add(ca).context("invalid remote API CA certificate")?;
@@ -290,13 +287,11 @@ fn tls_config_at(
         .build()
         .context("failed to configure required mTLS client verification")?;
 
-    let cert_file = std::fs::File::open(pki_dir.join("server.pem"))?;
     let cert_chain: Vec<CertificateDer<'static>> =
-        rustls_pemfile::certs(&mut BufReader::new(cert_file))
+        CertificateDer::pem_file_iter(pki_dir.join("server.pem"))?
             .collect::<Result<_, _>>()?;
-    let key_file = std::fs::File::open(pki_dir.join("server-key.pem"))?;
     let key: PrivateKeyDer<'static> =
-        rustls_pemfile::private_key(&mut BufReader::new(key_file))?
+        PrivateKeyDer::from_pem_file(pki_dir.join("server-key.pem"))
             .context("remote API server key is missing")?;
     let mut server = rustls::ServerConfig::builder()
         .with_client_cert_verifier(verifier)

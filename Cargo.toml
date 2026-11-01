@@ -113,7 +113,6 @@ uuid = { version = "1.19.0", features = ["v4"] }
 zeroize = "1.8.2"
 serde_yaml = "0.9.34"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-rustls-pemfile = "2.2.0"
 yansi = "1.0.1"
 zip = { version = "9.0.0", default-features = false, features = ["deflate"] }
 

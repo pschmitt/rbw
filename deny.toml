@@ -131,6 +131,11 @@ skip = [
     { name = "hashbrown", version = "0.17.1" },
     { name = "foldhash", version = "0.1.5" },
     { name = "foldhash", version = "0.2.0" },
+    # axum-server-mtls uses x509-parser, which still requires these older
+    # versions; unrelated URL/clipboard dependencies use nom 8 and
+    # synstructure 0.14.
+    { name = "nom", version = "7.1.3" },
+    { name = "synstructure", version = "0.13.2" },
     # ssh-agent-lib's async-trait macro needs a newer syn than the rest of
     # the tree has converged on yet
     { name = "syn", version = "2.0.119" },
