@@ -5,6 +5,23 @@ use rsa::signature::{
     RandomizedSigner as _, SignatureEncoding as _, Signer as _,
 };
 
+async fn record_ssh_agent_event(operation: &'static str, success: bool) {
+    let Ok(config) = rbw::config::Config::load_async().await else {
+        log::warn!("audit event could not read rbw configuration");
+        return;
+    };
+    let config = config.audit;
+    rbw::audit::record_async_best_effort(
+        config,
+        rbw::audit::Event::new(
+            "ssh-agent",
+            operation,
+            if success { "success" } else { "failure" },
+        ),
+    )
+    .await;
+}
+
 const SSH_AGENT_RSA_SHA2_256: u32 = 2;
 const SSH_AGENT_RSA_SHA2_512: u32 = 4;
 
@@ -40,19 +57,23 @@ impl ssh_agent_lib::agent::Session for SshAgent {
         Vec<ssh_agent_lib::proto::Identity>,
         ssh_agent_lib::error::AgentError,
     > {
-        crate::actions::get_ssh_public_keys(self.state.clone())
+        let result = crate::actions::get_ssh_public_keys(self.state.clone())
             .await
-            .map_err(|e| ssh_agent_lib::error::AgentError::Other(e.into()))?
-            .into_iter()
-            .map(|p| {
-                p.parse::<ssh_agent_lib::ssh_key::PublicKey>()
-                    .map(|pk| ssh_agent_lib::proto::Identity {
-                        credential: pk.key_data().clone().into(),
-                        comment: String::new(),
+            .map_err(|e| ssh_agent_lib::error::AgentError::Other(e.into()))
+            .and_then(|keys| {
+                keys.into_iter()
+                    .map(|p| {
+                        p.parse::<ssh_agent_lib::ssh_key::PublicKey>()
+                            .map(|pk| ssh_agent_lib::proto::Identity {
+                                credential: pk.key_data().clone().into(),
+                                comment: String::new(),
+                            })
+                            .map_err(ssh_agent_lib::error::AgentError::other)
                     })
-                    .map_err(ssh_agent_lib::error::AgentError::other)
-            })
-            .collect()
+                    .collect()
+            });
+        record_ssh_agent_event("ssh_agent.identities", result.is_ok()).await;
+        result
     }
 
     async fn sign(
@@ -62,78 +83,99 @@ impl ssh_agent_lib::agent::Session for SshAgent {
         ssh_agent_lib::ssh_key::Signature,
         ssh_agent_lib::error::AgentError,
     > {
-        let pubkey = ssh_agent_lib::ssh_key::PublicKey::new(
-            request.credential.key_data().clone(),
-            "",
-        );
+        let result: Result<_, ssh_agent_lib::error::AgentError> = async {
+            let pubkey = ssh_agent_lib::ssh_key::PublicKey::new(
+                request.credential.key_data().clone(),
+                "",
+            );
 
-        let private_key =
-            crate::actions::find_ssh_private_key(self.state.clone(), pubkey)
-                .await
-                .map_err(|e| {
-                    ssh_agent_lib::error::AgentError::Other(e.into())
-                })?;
+            let private_key = crate::actions::find_ssh_private_key(
+                self.state.clone(),
+                pubkey,
+            )
+            .await
+            .map_err(|e| ssh_agent_lib::error::AgentError::Other(e.into()))?;
 
-        match private_key.key_data() {
-            ssh_agent_lib::ssh_key::private::KeypairData::Ed25519(key) => key
-                .try_sign(&request.data)
-                .map_err(ssh_agent_lib::error::AgentError::other),
+            match private_key.key_data() {
+                ssh_agent_lib::ssh_key::private::KeypairData::Ed25519(
+                    key,
+                ) => key
+                    .try_sign(&request.data)
+                    .map_err(ssh_agent_lib::error::AgentError::other),
 
-            ssh_agent_lib::ssh_key::private::KeypairData::Rsa(key) => {
-                let p = rsa::BigUint::from_bytes_be(key.private.p.as_bytes());
-                let q = rsa::BigUint::from_bytes_be(key.private.q.as_bytes());
-                let e = rsa::BigUint::from_bytes_be(key.public.e.as_bytes());
-                let rsa_key = rsa::RsaPrivateKey::from_p_q(p, q, e)
-                    .map_err(ssh_agent_lib::error::AgentError::other)?;
-
-                let mut rng = rand_8::rngs::OsRng;
-
-                let (algorithm, sig_bytes) = if request.flags
-                    & SSH_AGENT_RSA_SHA2_512
-                    != 0
-                {
-                    let signing_key = rsa::pkcs1v15::SigningKey::<
-                        rsa::sha2::Sha512,
-                    >::new(rsa_key);
-                    let signature = signing_key
-                        .try_sign_with_rng(&mut rng, &request.data)
+                ssh_agent_lib::ssh_key::private::KeypairData::Rsa(key) => {
+                    let p =
+                        rsa::BigUint::from_bytes_be(key.private.p.as_bytes());
+                    let q =
+                        rsa::BigUint::from_bytes_be(key.private.q.as_bytes());
+                    let e =
+                        rsa::BigUint::from_bytes_be(key.public.e.as_bytes());
+                    let rsa_key = rsa::RsaPrivateKey::from_p_q(p, q, e)
                         .map_err(ssh_agent_lib::error::AgentError::other)?;
 
-                    ("rsa-sha2-512", signature.to_bytes())
-                } else if request.flags & SSH_AGENT_RSA_SHA2_256 != 0 {
-                    let signing_key = rsa::pkcs1v15::SigningKey::<
-                        rsa::sha2::Sha256,
-                    >::new(rsa_key);
-                    let signature = signing_key
-                        .try_sign_with_rng(&mut rng, &request.data)
-                        .map_err(ssh_agent_lib::error::AgentError::other)?;
+                    let mut rng = rand_8::rngs::OsRng;
 
-                    ("rsa-sha2-256", signature.to_bytes())
-                } else {
-                    let signing_key = rsa::pkcs1v15::SigningKey::<
-                        sha1_10::Sha1,
-                    >::new_unprefixed(
-                        rsa_key
-                    );
-                    let signature = signing_key
-                        .try_sign_with_rng(&mut rng, &request.data)
-                        .map_err(ssh_agent_lib::error::AgentError::other)?;
+                    let (algorithm, sig_bytes) =
+                        if request.flags & SSH_AGENT_RSA_SHA2_512 != 0 {
+                            let signing_key = rsa::pkcs1v15::SigningKey::<
+                                rsa::sha2::Sha512,
+                            >::new(
+                                rsa_key
+                            );
+                            let signature = signing_key
+                                .try_sign_with_rng(&mut rng, &request.data)
+                                .map_err(
+                                    ssh_agent_lib::error::AgentError::other,
+                                )?;
 
-                    ("ssh-rsa", signature.to_bytes())
-                };
+                            ("rsa-sha2-512", signature.to_bytes())
+                        } else if request.flags & SSH_AGENT_RSA_SHA2_256 != 0
+                        {
+                            let signing_key = rsa::pkcs1v15::SigningKey::<
+                                rsa::sha2::Sha256,
+                            >::new(
+                                rsa_key
+                            );
+                            let signature = signing_key
+                                .try_sign_with_rng(&mut rng, &request.data)
+                                .map_err(
+                                    ssh_agent_lib::error::AgentError::other,
+                                )?;
 
-                Ok(ssh_agent_lib::ssh_key::Signature::new(
-                    ssh_agent_lib::ssh_key::Algorithm::new(algorithm)
-                        .map_err(ssh_agent_lib::error::AgentError::other)?,
-                    sig_bytes,
-                )
-                .map_err(ssh_agent_lib::error::AgentError::other)?)
+                            ("rsa-sha2-256", signature.to_bytes())
+                        } else {
+                            let signing_key = rsa::pkcs1v15::SigningKey::<
+                                sha1_10::Sha1,
+                            >::new_unprefixed(
+                                rsa_key
+                            );
+                            let signature = signing_key
+                                .try_sign_with_rng(&mut rng, &request.data)
+                                .map_err(
+                                    ssh_agent_lib::error::AgentError::other,
+                                )?;
+
+                            ("ssh-rsa", signature.to_bytes())
+                        };
+
+                    Ok(ssh_agent_lib::ssh_key::Signature::new(
+                        ssh_agent_lib::ssh_key::Algorithm::new(algorithm)
+                            .map_err(
+                                ssh_agent_lib::error::AgentError::other,
+                            )?,
+                        sig_bytes,
+                    )
+                    .map_err(ssh_agent_lib::error::AgentError::other)?)
+                }
+
+                // TODO: Check which other key types are supported by bitwarden
+                other => Err(ssh_agent_lib::error::AgentError::Other(
+                    format!("Unsupported key type: {other:?}").into(),
+                )),
             }
-
-            // TODO: Check which other key types are supported by bitwarden
-            other => Err(ssh_agent_lib::error::AgentError::Other(
-                format!("Unsupported key type: {other:?}").into(),
-            )),
         }
+        .await;
+        record_ssh_agent_event("ssh_agent.sign", result.is_ok()).await;
+        result
     }
 }

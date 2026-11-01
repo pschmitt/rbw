@@ -2006,7 +2006,7 @@ pub async fn decrypt_batch(
     environment: &rbw::protocol::Environment,
     entries: &[rbw::protocol::DecryptRequest],
     account: &rbw::config::Account,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let mut results = Vec::with_capacity(entries.len());
     for entry in entries {
         let result = decrypt_cipher(
@@ -2030,10 +2030,17 @@ pub async fn decrypt_batch(
         });
     }
 
+    let all_succeeded = decrypt_batch_succeeded(&results);
     sock.send(&rbw::protocol::Response::DecryptBatch { results })
         .await?;
 
-    Ok(())
+    Ok(all_succeeded)
+}
+
+fn decrypt_batch_succeeded(results: &[rbw::protocol::DecryptResult]) -> bool {
+    results.iter().all(|result| {
+        matches!(result, rbw::protocol::DecryptResult::Success { .. })
+    })
 }
 
 pub async fn decrypt_attachment(
@@ -2251,17 +2258,13 @@ pub async fn clipboard_store(
 }
 
 #[cfg(not(feature = "clipboard"))]
+#[allow(clippy::unused_async)] // Keep the feature-gated action API async.
 pub async fn clipboard_store(
-    sock: &mut crate::sock::Sock,
+    _sock: &mut crate::sock::Sock,
     _state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     _text: &str,
 ) -> anyhow::Result<()> {
-    sock.send(&rbw::protocol::Response::Error {
-        error: "clipboard not supported".to_string(),
-    })
-    .await?;
-
-    Ok(())
+    anyhow::bail!("clipboard not supported")
 }
 
 pub async fn version(sock: &mut crate::sock::Sock) -> anyhow::Result<()> {
@@ -2322,22 +2325,25 @@ pub async fn resolve_account(
 // logged and skipped.
 pub async fn sync_all(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
-) {
+) -> bool {
     let config = match rbw::config::Config::load_async().await {
         Ok(config) => config,
         Err(e) => {
             eprintln!("failed to load config for sync: {e:#}");
-            return;
+            return false;
         }
     };
+    let mut succeeded = true;
     for account in config.accounts() {
         let res = rbw::actions::AGENT_ACCOUNT
             .scope(account.clone(), sync(None, state.clone(), &account))
             .await;
         if let Err(e) = res {
             log::debug!("failed to sync account {}: {e:#}", account.name);
+            succeeded = false;
         }
     }
+    succeeded
 }
 
 async fn load_db(
@@ -2563,4 +2569,54 @@ pub async fn verify_master_password(
     )?;
     respond_ack(sock).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod audit_result_tests {
+    use super::decrypt_batch_succeeded;
+    use rbw::protocol::DecryptResult;
+
+    #[test]
+    fn decrypt_batch_audit_fails_when_any_entry_fails() {
+        assert!(decrypt_batch_succeeded(&[DecryptResult::Success {
+            plaintext: "value".to_owned(),
+        }]));
+        assert!(!decrypt_batch_succeeded(&[
+            DecryptResult::Success {
+                plaintext: "value".to_owned(),
+            },
+            DecryptResult::Failure {
+                error: "private error detail".to_owned(),
+            },
+        ]));
+        assert!(decrypt_batch_succeeded(&[]));
+    }
+}
+
+#[cfg(all(test, not(feature = "clipboard")))]
+mod clipboard_feature_tests {
+    #[tokio::test]
+    async fn unsupported_clipboard_returns_failure_to_dispatch() {
+        let (timeout, _timer_r) = crate::timeout::Timeout::new();
+        let (sync_timeout, _sync_timer_r) = crate::timeout::Timeout::new();
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(
+            crate::state::State {
+                accounts: std::collections::HashMap::default(),
+                timeout,
+                timeout_duration: std::time::Duration::ZERO,
+                sync_timeout,
+                sync_timeout_duration: std::time::Duration::ZERO,
+                notifications_handler: crate::notifications::Handler::new(),
+                last_environment: rbw::protocol::Environment::default(),
+            },
+        ));
+        let (_client, agent) = tokio::net::UnixStream::pair().unwrap();
+        let mut sock = crate::sock::Sock::new(agent);
+
+        let error = super::clipboard_store(&mut sock, state, "test")
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "clipboard not supported");
+    }
 }

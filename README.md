@@ -77,6 +77,7 @@ rest. On bitwarden.com, run `rbw register` first
 | [Installation](docs/install.md) | Cargo and release verification |
 | [Nix](docs/nix.md) | Flake, overlay, Home Manager module, browser setup |
 | [Configuration](docs/configuration.md) | `config.yaml`, accounts, aliases, profiles |
+| [Audit log](docs/audit-log.md) | Secret-free operation events and retention |
 | [Usage](docs/usage.md) | Everyday commands, search, attachments, 2FA, `rbw security` |
 | [Passkeys](docs/passkeys.md) | Counters and browser injection |
 | [Organizations](docs/organizations.md) | `rbw org` and `rbw collection` |

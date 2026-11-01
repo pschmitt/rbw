@@ -235,6 +235,51 @@ pub struct ApiConfig {
     pub hostname: String,
 }
 
+/// Controls the local security audit log. The log is enabled by default and
+/// retains 15 calendar days of secret-free operation metadata.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditConfig {
+    #[serde(default = "default_audit_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_audit_retention_days")]
+    pub retention_days: u16,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_audit_enabled(),
+            retention_days: default_audit_retention_days(),
+        }
+    }
+}
+
+impl AuditConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    fn validate(&self) -> Result<()> {
+        if !(1..=3650).contains(&self.retention_days) {
+            return Err(Error::ConfigInvalidAuditRetention {
+                days: self.retention_days,
+            });
+        }
+        Ok(())
+    }
+}
+
+const fn default_audit_enabled() -> bool {
+    true
+}
+
+const fn default_audit_retention_days() -> u16 {
+    15
+}
+
 impl Default for ApiConfig {
     fn default() -> Self {
         Self {
@@ -885,6 +930,8 @@ pub struct Config {
     pub agent: AgentConfig,
     #[serde(default, skip_serializing_if = "ApiConfig::is_default")]
     pub api: ApiConfig,
+    #[serde(default, skip_serializing_if = "AuditConfig::is_default")]
+    pub audit: AuditConfig,
     #[serde(default)]
     pub pinentry: PinentryConfig,
     #[serde(default, skip_serializing_if = "UnlockUi::is_auto")]
@@ -994,6 +1041,7 @@ impl Config {
             log::warn!("lock_timeout must be greater than 0");
             slf.agent.lock_timeout = default_lock_timeout();
         }
+        slf.audit.validate()?;
         Ok(slf)
     }
 
@@ -1019,6 +1067,7 @@ impl Config {
             log::warn!("lock_timeout must be greater than 0");
             slf.agent.lock_timeout = default_lock_timeout();
         }
+        slf.audit.validate()?;
         Ok(slf)
     }
 
@@ -1865,6 +1914,28 @@ mod test {
         assert_eq!(config.tui.lock_timeout, 10);
         assert!(!config.hide.archived);
         assert!(config.hide.trashed);
+    }
+
+    #[test]
+    fn audit_config_defaults_and_validates_retention() {
+        let config: Config = serde_yaml::from_str("{}").unwrap();
+        assert!(config.audit.enabled);
+        assert_eq!(config.audit.retention_days, 15);
+
+        let config: Config = serde_yaml::from_str(
+            "audit:\n  enabled: false\n  retentionDays: 30\n",
+        )
+        .unwrap();
+        assert!(!config.audit.enabled);
+        assert_eq!(config.audit.retention_days, 30);
+        assert!(config.audit.validate().is_ok());
+
+        let config: Config =
+            serde_yaml::from_str("audit:\n  retentionDays: 0\n").unwrap();
+        assert!(matches!(
+            config.audit.validate(),
+            Err(Error::ConfigInvalidAuditRetention { days: 0 })
+        ));
     }
 
     #[test]

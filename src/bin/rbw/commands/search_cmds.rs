@@ -195,7 +195,7 @@ pub(super) fn search_from_file(
                 && std::env::var_os("NO_COLOR").is_none();
             let msg = format!("no entries found matching '{term}'");
             eprintln!("{}", style::warning(&msg, c));
-            std::process::exit(1);
+            return Err(NoEntriesFound.into());
         }
         if redact_enabled() {
             entries = entries.iter().map(DecryptedCipher::redacted).collect();
@@ -243,7 +243,7 @@ pub(super) fn search_from_file(
             && std::env::var_os("NO_COLOR").is_none();
         let msg = format!("no entries found matching '{term}'");
         eprintln!("{}", style::warning(&msg, c));
-        std::process::exit(1);
+        return Err(NoEntriesFound.into());
     }
 
     print_entry_list(&entries, &fields, explicit_fields, output, term)?;
@@ -340,7 +340,7 @@ pub fn search(
                 && std::env::var_os("NO_COLOR").is_none();
             let msg = format!("no entries found matching '{term}'");
             eprintln!("{}", style::warning(&msg, c));
-            std::process::exit(1);
+            return Err(NoEntriesFound.into());
         }
         if redact_enabled() {
             entries = entries.iter().map(DecryptedCipher::redacted).collect();
@@ -440,7 +440,7 @@ pub fn search(
             && std::env::var_os("NO_COLOR").is_none();
         let msg = format!("no entries found matching '{term}'");
         eprintln!("{}", style::warning(&msg, c));
-        std::process::exit(1);
+        return Err(NoEntriesFound.into());
     }
 
     print_entry_list(&entries, &fields, explicit_fields, output, term)?;
@@ -745,7 +745,7 @@ pub fn search_url(
             format!("no entries found matching '{term}'")
         };
         eprintln!("{}", style::warning(&msg, c));
-        std::process::exit(1);
+        return Err(NoEntriesFound.into());
     }
     if output_is_structured(output) {
         return write_serialized_pretty(

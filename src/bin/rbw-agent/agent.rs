@@ -1,5 +1,33 @@
 use futures_util::StreamExt as _;
 
+async fn record_agent_event(operation: &'static str, success: bool) {
+    record_event("agent", operation, success).await;
+}
+
+async fn record_socket_event(operation: &'static str, success: bool) {
+    record_event("local-agent-socket", operation, success).await;
+}
+
+async fn record_event(
+    actor: &'static str,
+    operation: &'static str,
+    success: bool,
+) {
+    let Ok(config) = rbw::config::Config::load_async().await else {
+        log::warn!("audit event could not read rbw configuration");
+        return;
+    };
+    rbw::audit::record_async_best_effort(
+        config.audit,
+        rbw::audit::Event::new(
+            actor,
+            operation,
+            if success { "success" } else { "failure" },
+        ),
+    )
+    .await;
+}
+
 pub struct Agent {
     timer_r: tokio::sync::mpsc::UnboundedReceiver<()>,
     sync_timer_r: tokio::sync::mpsc::UnboundedReceiver<()>,
@@ -102,6 +130,10 @@ impl Agent {
                 }
                 Event::Timeout(()) => {
                     self.state.lock().await.clear();
+                    tokio::spawn(record_agent_event(
+                        "agent.timeout_lock",
+                        true,
+                    ));
                 }
                 Event::Sync(()) => {
                     let state = self.state.clone();
@@ -109,7 +141,8 @@ impl Agent {
                         // Syncs every configured account; failures (e.g.
                         // accounts we aren't logged in to) are logged and
                         // skipped inside sync_all.
-                        crate::actions::sync_all(state).await;
+                        let success = crate::actions::sync_all(state).await;
+                        record_agent_event("agent.sync", success).await;
                     });
                     self.state.lock().await.set_sync_timeout();
                 }
@@ -117,6 +150,38 @@ impl Agent {
         }
         Ok(())
     }
+}
+
+fn socket_audit_operation(
+    action: &rbw::protocol::Action,
+) -> Option<&'static str> {
+    use rbw::protocol::Action;
+
+    Some(match action {
+        Action::Register { .. } => "socket.register",
+        Action::Login { .. } => "socket.login",
+        Action::Unlock { .. } => "socket.unlock",
+        Action::CheckLock | Action::Version | Action::Quit => return None,
+        Action::Lock => "socket.lock",
+        Action::Sync => "socket.sync",
+        Action::PurgeVault { .. } => "socket.purge_vault",
+        Action::ChangePassword { .. } => "socket.change_password",
+        Action::ChangeKdf { .. } => "socket.change_kdf",
+        Action::RotateKey { .. } => "socket.rotate_key",
+        Action::CreateOrg { .. } => "socket.create_org",
+        Action::ConfirmOrgUser { .. } => "socket.confirm_org_user",
+        Action::DeleteOrg { .. } => "socket.delete_org",
+        Action::Decrypt { .. } => "socket.decrypt",
+        Action::DecryptBatch { .. } => "socket.decrypt_batch",
+        Action::DecryptAttachment { .. } => "socket.decrypt_attachment",
+        Action::EncryptAttachment { .. } => "socket.encrypt_attachment",
+        Action::Encrypt { .. } => "socket.encrypt",
+        Action::VerifyMasterPassword { .. } => {
+            "socket.verify_master_password"
+        }
+        Action::CryptBytes { .. } => "socket.crypt_bytes",
+        Action::ClipboardStore { .. } => "socket.clipboard_store",
+    })
 }
 
 async fn handle_request(
@@ -132,24 +197,38 @@ async fn handle_request(
         }
     };
     let (action, environment, account_name) = req.into_parts();
+    let audit_operation = socket_audit_operation(&action);
     // Resolve the target account (by name, or the primary account when the
     // client didn't specify one) and run the whole dispatch within its scope
     // so that any server-bound lib call targets that account's server.
-    let account =
-        crate::actions::resolve_account(account_name.as_deref()).await?;
-    let set_timeout = rbw::actions::AGENT_ACCOUNT
-        .scope(
-            account.clone(),
-            dispatch(
-                action,
-                sock,
-                state.clone(),
-                &environment,
-                &account,
-                account_name.as_deref(),
-            ),
-        )
-        .await?;
+    let dispatch_result = async {
+        let account =
+            crate::actions::resolve_account(account_name.as_deref()).await?;
+        let mut operation_succeeded = true;
+        let set_timeout = rbw::actions::AGENT_ACCOUNT
+            .scope(
+                account.clone(),
+                dispatch(
+                    action,
+                    sock,
+                    state.clone(),
+                    &environment,
+                    &account,
+                    account_name.as_deref(),
+                    &mut operation_succeeded,
+                ),
+            )
+            .await?;
+        Ok::<_, anyhow::Error>((set_timeout, operation_succeeded))
+    }
+    .await;
+    if let Some(operation) = audit_operation {
+        let succeeded = dispatch_result
+            .as_ref()
+            .is_ok_and(|(_, succeeded)| *succeeded);
+        tokio::spawn(record_socket_event(operation, succeeded));
+    }
+    let (set_timeout, _) = dispatch_result?;
 
     let mut state = state.lock().await;
     state.set_last_environment(environment);
@@ -171,6 +250,7 @@ async fn dispatch(
     // `Lock` uses the distinction to decide between locking one account and
     // locking all of them.
     requested_account: Option<&str>,
+    operation_succeeded: &mut bool,
 ) -> anyhow::Result<bool> {
     let set_timeout = match action {
         rbw::protocol::Action::Register {
@@ -413,7 +493,7 @@ async fn dispatch(
             true
         }
         rbw::protocol::Action::DecryptBatch { entries } => {
-            crate::actions::decrypt_batch(
+            *operation_succeeded = crate::actions::decrypt_batch(
                 sock,
                 state.clone(),
                 environment,
@@ -521,4 +601,48 @@ fn locked_password(mut password: String) -> rbw::locked::Password {
     v.extend(password.as_bytes().iter().copied());
     zeroize::Zeroize::zeroize(&mut password);
     rbw::locked::Password::new(v)
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::socket_audit_operation;
+    use rbw::protocol::Action;
+
+    #[test]
+    fn socket_audit_uses_fixed_labels_and_skips_status_probes() {
+        assert_eq!(socket_audit_operation(&Action::CheckLock), None);
+        assert_eq!(socket_audit_operation(&Action::Version), None);
+        assert_eq!(socket_audit_operation(&Action::Quit), None);
+        let all_succeeded = Ok::<_, anyhow::Error>((false, true));
+        let partial_failure = Ok::<_, anyhow::Error>((false, false));
+        assert!(all_succeeded
+            .as_ref()
+            .is_ok_and(|(_, succeeded)| *succeeded));
+        assert!(!partial_failure
+            .as_ref()
+            .is_ok_and(|(_, succeeded)| *succeeded));
+        let login = Action::Login {
+            password: Some("sensitive-password".to_owned()),
+            totp: Some("sensitive-code".to_owned()),
+        };
+        let operation = socket_audit_operation(&login).unwrap();
+        assert_eq!(operation, "socket.login");
+        let serialized = serde_json::to_string(&rbw::audit::Event::new(
+            "local-agent-socket",
+            operation,
+            "failure",
+        ))
+        .unwrap();
+        assert!(!serialized.contains("sensitive-password"));
+        assert!(!serialized.contains("sensitive-code"));
+        assert_eq!(
+            socket_audit_operation(&Action::Decrypt {
+                cipherstring: "sensitive-ciphertext".to_owned(),
+                entry_key: Some("sensitive-key".to_owned()),
+                org_id: None,
+                attachment_key: None,
+            }),
+            Some("socket.decrypt")
+        );
+    }
 }

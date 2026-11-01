@@ -323,6 +323,10 @@
                 hostname = "localhost";
                 listen = "127.0.0.1:24871";
               };
+              audit = {
+                enabled = true;
+                retentionDays = 15;
+              };
               pinentry = {
                 command = "pinentry-gtk2";
                 timeout = 300;

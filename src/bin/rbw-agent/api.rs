@@ -438,6 +438,9 @@ async fn read_field(
     Extension(certificates): Extension<PeerCertificates>,
     Path((item_id, field_token)): Path<(String, String)>,
 ) -> Response {
+    let actor =
+        audit_actor(certificates.leaf().map(std::convert::AsRef::as_ref))
+            .await;
     let result = read_field_inner(
         &state,
         certificates.leaf().map(std::convert::AsRef::as_ref),
@@ -445,6 +448,8 @@ async fn read_field(
         &field_token,
     )
     .await;
+    let outcome = api_audit_outcome(&result);
+    record_api_event(actor, "api.field_read", Some(&item_id), outcome).await;
     api_response(result)
 }
 
@@ -452,13 +457,76 @@ async fn read_status(
     State(state): State<ApiState>,
     Extension(certificates): Extension<PeerCertificates>,
 ) -> Response {
-    api_response(
-        read_status_inner(
-            &state,
-            certificates.leaf().map(std::convert::AsRef::as_ref),
-        )
-        .await,
+    let actor =
+        audit_actor(certificates.leaf().map(std::convert::AsRef::as_ref))
+            .await;
+    let result = read_status_inner(
+        &state,
+        certificates.leaf().map(std::convert::AsRef::as_ref),
     )
+    .await;
+    let outcome = api_audit_outcome(&result);
+    record_api_event(actor, "api.status_read", None, outcome).await;
+    api_response(result)
+}
+
+async fn audit_actor(certificate_der: Option<&[u8]>) -> String {
+    let Some(certificate_der) = certificate_der else {
+        return "unauthenticated".to_owned();
+    };
+    let fingerprint =
+        rbw::remote_api::certificate_fingerprint(certificate_der);
+    let fallback = fingerprint.clone();
+    tokio::task::spawn_blocking(move || {
+        rbw::remote_api::load_policy_store()
+            .ok()
+            .and_then(|store| {
+                store
+                    .clients
+                    .values()
+                    .find(|client| client.fingerprint == fingerprint)
+                    .map(|client| client.id.clone())
+            })
+            .unwrap_or(fallback)
+    })
+    .await
+    .unwrap_or_else(|_| "unknown-client".to_owned())
+}
+
+fn api_audit_outcome<T>(result: &Result<T, ApiError>) -> &'static str {
+    result.as_ref().map_or_else(
+        |error| match error.code {
+            ErrorCode::InvalidRequest => "failure.invalid_request",
+            ErrorCode::Unauthorized => "failure.unauthorized",
+            ErrorCode::Forbidden => "failure.forbidden",
+            ErrorCode::NotFound => "failure.not_found",
+            ErrorCode::VaultLocked => "failure.vault_locked",
+            ErrorCode::ReauthenticationRequired => {
+                "failure.reauthentication_required"
+            }
+            ErrorCode::Unavailable => "failure.unavailable",
+        },
+        |_| "success",
+    )
+}
+
+async fn record_api_event(
+    actor: String,
+    operation: &'static str,
+    item_id: Option<&str>,
+    outcome: &'static str,
+) {
+    let Ok(config) = rbw::config::Config::load_async().await else {
+        log::warn!("audit event could not read rbw configuration");
+        return;
+    };
+    let config = config.audit;
+    let event = match item_id {
+        Some(item_id) => rbw::audit::Event::new(actor, operation, outcome)
+            .with_item_id(item_id),
+        None => rbw::audit::Event::new(actor, operation, outcome),
+    };
+    rbw::audit::record_async_best_effort(config, event).await;
 }
 
 fn api_response<T: serde::Serialize>(

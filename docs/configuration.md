@@ -12,6 +12,9 @@ The main sections are:
   account exclusions under `excludeFrom`, and the account's `color`.
 * `agent`: `syncInterval` controls background synchronization and
   `lockTimeout` controls how long unlocked keys remain in memory.
+* `audit`: local security event logging, enabled by default; `retentionDays`
+  keeps 15 calendar days by default (valid range: 1–3650). See
+  [Audit log](audit-log.md) for event coverage and privacy details.
 * `pinentry`: `command` selects the pinentry executable and `timeout` sets
   its input timeout.
 * `tui`: `lockTimeout` controls inactivity locking and `keys` contains

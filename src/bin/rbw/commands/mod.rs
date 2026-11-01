@@ -33,6 +33,17 @@ use std::{fmt::Write as _, io::Write as _, os::unix::ffi::OsStrExt as _};
 use anyhow::Context as _;
 use is_terminal::IsTerminal as _;
 
+/// Search/list command completed normally but found no matching entries.
+#[derive(Debug)]
+pub struct NoEntriesFound;
+
+impl std::fmt::Display for NoEntriesFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("no entries found")
+    }
+}
+impl std::error::Error for NoEntriesFound {}
+
 /// A remote write succeeded; repeating it can overwrite data or create duplicates.
 #[derive(Debug)]
 struct WriteCommitted;
@@ -51,10 +62,22 @@ pub fn write_committed_error(err: anyhow::Error) -> anyhow::Error {
 pub fn exit_status(err: &anyhow::Error) -> i32 {
     if err.is::<WriteCommitted>() {
         2
+    } else if let Some(child) = err.downcast_ref::<ChildExit>() {
+        child.0
     } else {
         1
     }
 }
+
+#[derive(Debug)]
+pub struct ChildExit(pub i32);
+
+impl std::fmt::Display for ChildExit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "child process exited with status {}", self.0)
+    }
+}
+impl std::error::Error for ChildExit {}
 
 pub fn after_server_write(
     db: &mut rbw::db::Db,

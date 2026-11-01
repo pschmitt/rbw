@@ -4829,3 +4829,17 @@ fn browser_search_matches_words_like_the_cli() {
     assert!(!find("strick nope"));
     assert!(!find("u:nope"));
 }
+
+#[test]
+fn run_child_status_becomes_auditable_error_with_original_exit_code() {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    let failed = std::process::ExitStatus::from_raw(7 << 8);
+    let err = super::run_status_result(failed).unwrap_err();
+    assert_eq!(super::exit_status(&err), 7);
+    assert!(err.is::<super::ChildExit>());
+
+    let signaled = std::process::ExitStatus::from_raw(9);
+    let err = super::run_status_result(signaled).unwrap_err();
+    assert_eq!(super::exit_status(&err), 137);
+}

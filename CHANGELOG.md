@@ -10,6 +10,10 @@
   explicitly granted rbw accounts through the status API, without accessing
   item data or prompting to unlock.
 
+* Optional local audit log, enabled by default, records secret-free metadata
+  for CLI, agent API, browser and SSH-agent operations. Retention is configurable
+  from 1 to 3650 days and defaults to 15 days. See [docs/audit-log.md](docs/audit-log.md).
+
 ### Fixed
 
 * New and rotated rbw API server certificates include an Authority Key

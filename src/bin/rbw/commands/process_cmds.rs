@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt as _;
 
 // Locks the active account when one is selected via --account/RBW_ACCOUNT
 // (the request carries the account name, and the agent only clears that
@@ -79,6 +81,21 @@ pub fn inject(
     }
 
     Ok(())
+}
+
+pub fn run_status_result(
+    status: std::process::ExitStatus,
+) -> anyhow::Result<()> {
+    if status.success() {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    let code = status
+        .signal()
+        .map_or_else(|| status.code().unwrap_or(1), |signal| 128 + signal);
+    #[cfg(not(unix))]
+    let code = status.code().unwrap_or(1);
+    Err(ChildExit(code).into())
 }
 
 pub fn run(

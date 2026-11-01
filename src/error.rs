@@ -11,6 +11,9 @@ pub enum Error {
     #[error("browser.passkeyAaguid {value:?} is not a UUID")]
     ConfigInvalidPasskeyAaguid { value: String },
 
+    #[error("audit.retentionDays must be between 1 and 3650 (got {days})")]
+    ConfigInvalidAuditRetention { days: u16 },
+
     #[error("no account named {name:?} is configured")]
     UnknownAccount { name: String },
 

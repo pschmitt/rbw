@@ -175,11 +175,49 @@ enum Operation {
     },
 }
 
+impl Operation {
+    fn audit_operation(&self) -> &'static str {
+        match self {
+            Self::Status => "browser.status",
+            Self::Unlock { .. } => "browser.unlock",
+            Self::Lock => "browser.lock",
+            Self::Sync => "browser.sync",
+            Self::Search { .. } => "browser.search",
+            Self::Credential { .. } => "browser.credential",
+            Self::Totp { .. } => "browser.totp",
+            Self::Copy { .. } => "browser.copy",
+            Self::PasskeyCandidates { .. } => "browser.passkey_candidates",
+            Self::PasskeyGet { .. } => "browser.passkey_get",
+            Self::PasskeyVerify { .. } => "browser.passkey_verify",
+            Self::PasskeyCreate { .. } => "browser.passkey_create",
+            Self::Detail { .. } => "browser.detail",
+            Self::Save { .. } => "browser.save",
+            Self::Mutate { .. } => "browser.mutate",
+            Self::Export { .. } => "browser.export",
+            Self::Import { .. } => "browser.import",
+            Self::AgentSettings => "browser.agent_settings",
+            Self::Folders { .. } => "browser.folders",
+            Self::SetCollections { .. } => "browser.set_collections",
+            Self::CopyText { .. } => "browser.copy_text",
+            Self::AttachmentDownload { .. } => "browser.attachment_download",
+            Self::AttachmentDelete { .. } => "browser.attachment_delete",
+            Self::UploadBegin { .. } => "browser.upload_begin",
+            Self::UploadChunk { .. } => "browser.upload_chunk",
+            Self::UploadFinish { .. } => "browser.upload_finish",
+            Self::UploadCancel { .. } => "browser.upload_cancel",
+            Self::Send { .. } => "browser.send",
+            Self::Audit => "browser.audit",
+            Self::Move { .. } => "browser.move",
+            Self::Generate { .. } => "browser.generate",
+        }
+    }
+}
+
 // Browser-supplied identities are trusted only when the immediate parent is
 // an explicitly enrolled executable. This is not an OS sandbox against the
 // same Unix user, who can already invoke the regular rbw CLI.
 #[cfg(target_os = "linux")]
-fn authorize(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
+fn authorize(arguments: &[std::ffi::OsString]) -> anyhow::Result<String> {
     use rbw::config::BrowserKind;
     let denied = || {
         anyhow::anyhow!(
@@ -192,7 +230,7 @@ fn authorize(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
     .map_err(|_| denied())?;
     {
         let config = rbw::config::Config::load()?;
-        for client in config.browser.clients.values() {
+        for (client_name, client) in &config.browser.clients {
             let identity = match client.browser {
                 BrowserKind::Firefox
                     if arguments.len() == 2
@@ -219,7 +257,7 @@ fn authorize(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
                             || (root.is_dir() && executable.starts_with(root))
                     })
                 {
-                    return Ok(());
+                    return Ok(client_name.clone());
                 }
             }
             // A browser still running from before a Nix upgrade replaced
@@ -229,7 +267,7 @@ fn authorize(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
                 .iter()
                 .any(|root| superseded_by(&executable, root))
             {
-                return Ok(());
+                return Ok(client_name.clone());
             }
         }
         Err(denied())
@@ -289,7 +327,7 @@ fn store_package_name(entry: &std::ffi::OsStr) -> Option<&str> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn authorize(_arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
+fn authorize(_arguments: &[std::ffi::OsString]) -> anyhow::Result<String> {
     anyhow::bail!("Native messaging browser allowlist requires Linux")
 }
 
@@ -369,27 +407,53 @@ fn write_response(
 fn authorize_or_report(
     arguments: &[std::ffi::OsString],
     output: &mut impl std::io::Write,
-) -> anyhow::Result<()> {
-    if authorize(arguments).is_err() {
-        // A fixed protocol error lets the UI distinguish policy denial from
-        // a missing/crashed host without disclosing caller or config details.
-        write_response(
-            output,
-            &json!({
-                "id": null,
-                "code": "browser_not_authorized",
-                "error": "Browser access denied. This browser or extension is not authorized by rbw. Add it to browser.clients in your rbw configuration, then restart the browser."
-            }),
-        )?;
-        anyhow::bail!("Native messaging browser authorization denied");
+) -> anyhow::Result<String> {
+    if let Ok(client) = authorize(arguments) {
+        return Ok(client);
     }
-    Ok(())
+    record_browser_event(
+        "unauthorized",
+        "browser.authorization",
+        "failure",
+        None,
+    );
+    // A fixed protocol error lets the UI distinguish policy denial from
+    // a missing/crashed host without disclosing caller or config details.
+    write_response(
+        output,
+        &json!({
+            "id": null,
+            "code": "browser_not_authorized",
+            "error": "Browser access denied. This browser or extension is not authorized by rbw. Add it to browser.clients in your rbw configuration, then restart the browser."
+        }),
+    )?;
+    anyhow::bail!("Native messaging browser authorization denied");
+}
+
+fn record_browser_event(
+    actor: &str,
+    operation: &'static str,
+    outcome: &'static str,
+    item_id: Option<&str>,
+) {
+    let Ok(config) = rbw::config::Config::load() else {
+        log::warn!("audit event could not read rbw configuration");
+        return;
+    };
+    let event = item_id.map_or_else(
+        || rbw::audit::Event::new(actor, operation, outcome),
+        |item_id| {
+            rbw::audit::Event::new(actor, operation, outcome)
+                .with_item_id(item_id)
+        },
+    );
+    rbw::audit::record_best_effort(&config.audit, &event);
 }
 
 pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
-    authorize_or_report(arguments, &mut output)?;
+    let _client_name = authorize_or_report(arguments, &mut output)?;
     let mut attachments = attachments::Transfers::default();
     loop {
         let mut header = [0; 4];
@@ -405,32 +469,45 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
         );
         let mut bytes = zeroize::Zeroizing::new(vec![0; length]);
         input.read_exact(&mut bytes)?;
-        authorize_or_report(arguments, &mut output)?;
+        let client_name = authorize_or_report(arguments, &mut output)?;
         let parsed = serde_json::from_slice::<Request>(&bytes);
-        let response = match parsed {
-            Ok(request) => {
-                let id = request.id;
-                let unlocking =
-                    matches!(&request.operation, Operation::Unlock { .. });
-                let fingerprint = matches!(
-                    &request.operation,
-                    Operation::Unlock {
-                        fingerprint: true,
-                        ..
-                    }
-                );
-                let moving =
-                    matches!(&request.operation, Operation::Move { .. });
-                // Backend errors can contain vault data; never forward them.
-                dispatch(request, &mut attachments).map_or_else(
-                    |error| {
-                        log_error(&error);
-                        json!({"id": id, "error": if commands::exit_status(&error) == 2 { "The server write succeeded, but synchronization failed. Sync and inspect your vault before retrying to avoid duplicates." } else if moving { "Could not move the item; it was not deleted. Both accounts must be unlocked, and the other account must not already have an item with the same name and username." } else if fingerprint { "Fingerprint unlock failed. Scan again, or unlock with your master password." } else if format!("{error:#}").contains("site mismatch") { "This item has no URI matching this page. Use Autofill from the item's menu to fill it anyway." } else if unlocking { "Could not unlock this account. Check your master password and account configuration." } else { "Operation failed. Unlock this account or sync your vault, then try again." }})
-                    },
-                    |result| json!({"id": id, "result": result}),
-                )
-            }
-            Err(_) => json!({"id": null, "error": "Invalid browser request"}),
+        let response = if let Ok(request) = parsed {
+            let id = request.id;
+            let operation = request.operation.audit_operation();
+            let item_id = request_item(&request.operation).map(str::to_owned);
+            let unlocking =
+                matches!(&request.operation, Operation::Unlock { .. });
+            let fingerprint = matches!(
+                &request.operation,
+                Operation::Unlock {
+                    fingerprint: true,
+                    ..
+                }
+            );
+            let moving = matches!(&request.operation, Operation::Move { .. });
+            // Backend errors can contain vault data; never forward them.
+            let result = dispatch(request, &mut attachments);
+            record_browser_event(
+                &client_name,
+                operation,
+                if result.is_ok() { "success" } else { "failure" },
+                item_id.as_deref(),
+            );
+            result.map_or_else(
+                |error| {
+                    log_error(&error);
+                    json!({"id": id, "error": if commands::exit_status(&error) == 2 { "The server write succeeded, but synchronization failed. Sync and inspect your vault before retrying to avoid duplicates." } else if moving { "Could not move the item; it was not deleted. Both accounts must be unlocked, and the other account must not already have an item with the same name and username." } else if fingerprint { "Fingerprint unlock failed. Scan again, or unlock with your master password." } else if format!("{error:#}").contains("site mismatch") { "This item has no URI matching this page. Use Autofill from the item's menu to fill it anyway." } else if unlocking { "Could not unlock this account. Check your master password and account configuration." } else { "Operation failed. Unlock this account or sync your vault, then try again." }})
+                },
+                |result| json!({"id": id, "result": result}),
+            )
+        } else {
+            record_browser_event(
+                &client_name,
+                "browser.invalid_request",
+                "failure",
+                None,
+            );
+            json!({"id": null, "error": "Invalid browser request"})
         };
         write_response(&mut output, &response)?;
         run_after_response();
@@ -2093,6 +2170,23 @@ fn detail(entry: &rbw::db::Entry) -> anyhow::Result<Value> {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
+    #[test]
+    fn browser_audit_operations_are_fixed_labels() {
+        use super::Operation;
+
+        assert_eq!(Operation::Lock.audit_operation(), "browser.lock");
+        assert_eq!(
+            Operation::Credential {
+                item: "private item name".to_owned(),
+                url: "https://private.invalid".to_owned(),
+                match_default: None,
+                manual: false,
+            }
+            .audit_operation(),
+            "browser.credential"
+        );
+    }
+
     #[test]
     fn hit_ranges_are_utf16_merged_and_scoped() {
         use super::{commands::SearchField as F, hit_ranges};

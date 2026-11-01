@@ -82,6 +82,11 @@ pub fn remote_api_dir() -> std::path::PathBuf {
     data_dir().join("remote-api")
 }
 
+/// Directory for rbw's local security audit log.
+pub fn audit_dir() -> std::path::PathBuf {
+    data_dir().join("audit")
+}
+
 pub fn socket_file() -> std::path::PathBuf {
     runtime_dir().join("socket")
 }

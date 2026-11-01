@@ -4,9 +4,6 @@ use std::io::Write as _;
 
 use is_terminal::IsTerminal as _;
 
-#[cfg(unix)]
-use std::os::unix::process::ExitStatusExt as _;
-
 use anyhow::Context as _;
 use clap::{CommandFactory as _, FromArgMatches as _};
 
@@ -2381,6 +2378,61 @@ enum Passkey {
 }
 
 impl Opt {
+    fn audit_operation(&self) -> Option<String> {
+        if let Self::Config { config } = self {
+            return match config {
+                Config::Set { .. } => Some("config.set".to_string()),
+                Config::Unset { .. } => Some("config.unset".to_string()),
+                Config::Edit => Some("config.edit".to_string()),
+                Config::Show { .. } | Config::Get { .. } => None,
+            };
+        }
+        matches!(
+            self,
+            Self::Register { .. }
+                | Self::Login { .. }
+                | Self::Unlock { .. }
+                | Self::Unlocked
+                | Self::Status { .. }
+                | Self::Sync { .. }
+                | Self::Tui { .. }
+                | Self::Export { .. }
+                | Self::Import { .. }
+                | Self::List { .. }
+                | Self::Get { .. }
+                | Self::Show { .. }
+                | Self::Search { .. }
+                | Self::Attachment { .. }
+                | Self::Send { .. }
+                | Self::Code { .. }
+                | Self::Inject { .. }
+                | Self::Run { .. }
+                | Self::Add { .. }
+                | Self::Generate { name: Some(_), .. }
+                | Self::Edit { .. }
+                | Self::Passkey { .. }
+                | Self::Set { .. }
+                | Self::Remove { .. }
+                | Self::Move { .. }
+                | Self::Copy { .. }
+                | Self::Archive { .. }
+                | Self::Unarchive { .. }
+                | Self::Restore { .. }
+                | Self::Collection { .. }
+                | Self::Org { .. }
+                | Self::History { .. }
+                | Self::Audit { .. }
+                | Self::Lock { .. }
+                | Self::Purge { .. }
+                | Self::PurgeVault { .. }
+                | Self::Security { .. }
+                | Self::Mirror { .. }
+                | Self::Api { .. }
+                | Self::SecretService { .. }
+        )
+        .then(|| self.subcommand_name())
+    }
+
     fn subcommand_name(&self) -> String {
         match self {
             Self::NativeMessaging { .. } => "native-messaging".to_string(),
@@ -4206,9 +4258,42 @@ fn route_to_entry_account(opt: &Opt) -> anyhow::Result<()> {
     }
 }
 
+fn record_cli_failure(operation: Option<&str>) {
+    let Some(operation) = operation else {
+        return;
+    };
+    match rbw::config::Config::load() {
+        Ok(config) => rbw::audit::record_best_effort(
+            &config.audit,
+            &rbw::audit::Event::new("cli", operation, "failure"),
+        ),
+        Err(_) => log::warn!("audit event could not read rbw configuration"),
+    }
+}
+
+fn audit_config_after_change<'a>(
+    prior: Option<&'a rbw::config::AuditConfig>,
+    current: Option<&'a rbw::config::AuditConfig>,
+) -> Option<&'a rbw::config::AuditConfig> {
+    match (prior, current) {
+        (Some(before), Some(after)) if before.enabled => {
+            Some(if after.enabled { after } else { before })
+        }
+        (Some(before), _) if before.enabled => Some(before),
+        (_, Some(after)) if after.enabled => Some(after),
+        _ => None,
+    }
+}
+
 fn main() {
     let cli = parse_cli();
     let opt = cli.command;
+    let audit_operation = opt.audit_operation();
+    let prior_audit_config = audit_operation
+        .as_deref()
+        .filter(|operation| operation.starts_with("config."))
+        .and_then(|_| rbw::config::Config::load().ok())
+        .map(|config| config.audit);
 
     // Resolve the target account: --account, else $RBW_ACCOUNT, else the
     // primary account (None). This is threaded into every request sent to the
@@ -4258,15 +4343,11 @@ fn main() {
     .init();
 
     commands::set_redact(cli.redact || commands::redact_requested());
-    if let Err(e) = redact_guard(&opt) {
-        eprintln!(
-            "{}",
-            commands::style_error(
-                &format!("{e:#}"),
-                std::io::stderr().is_terminal()
-                    && std::env::var_os("NO_COLOR").is_none()
-            )
-        );
+    if let Err(error) = redact_guard(&opt) {
+        record_cli_failure(audit_operation.as_deref());
+        let c = std::io::stderr().is_terminal()
+            && std::env::var_os("NO_COLOR").is_none();
+        eprintln!("{}", commands::style_error(&format!("{error:#}"), c));
         std::process::exit(1);
     }
 
@@ -4927,15 +5008,7 @@ fn main() {
             commands::inject(input.as_deref(), output.as_deref())
         }
         Opt::Run { env_file, command } => commands::run(&env_file, &command)
-            .map(|status| {
-                if !status.success() {
-                    #[cfg(unix)]
-                    if let Some(signal) = status.signal() {
-                        std::process::exit(128 + signal);
-                    }
-                    std::process::exit(status.code().unwrap_or(1));
-                }
-            }),
+            .and_then(commands::run_status_result),
         Opt::Add {
             name,
             user,
@@ -5676,11 +5749,40 @@ fn main() {
     }
     .with_context(|| format!("rbw {subcommand_name}"));
 
+    if let Some(operation) = audit_operation {
+        let current_audit_config =
+            rbw::config::Config::load().ok().map(|config| config.audit);
+        let audit_config = if operation.starts_with("config.") {
+            audit_config_after_change(
+                prior_audit_config.as_ref(),
+                current_audit_config.as_ref(),
+            )
+        } else {
+            current_audit_config.as_ref()
+        };
+        if let Some(config) = audit_config {
+            rbw::audit::record_best_effort(
+                config,
+                &rbw::audit::Event::new(
+                    "cli",
+                    &operation,
+                    if res.is_ok() { "success" } else { "failure" },
+                ),
+            );
+        } else {
+            log::warn!("audit event could not read rbw configuration");
+        }
+    }
+
     if let Err(e) = res {
-        let c = std::io::stderr().is_terminal()
-            && std::env::var_os("NO_COLOR").is_none();
-        let msg = format!("{e:#}");
-        eprintln!("{}", commands::style_error(&msg, c));
+        if !e.is::<commands::ChildExit>()
+            && !e.is::<commands::NoEntriesFound>()
+        {
+            let c = std::io::stderr().is_terminal()
+                && std::env::var_os("NO_COLOR").is_none();
+            let msg = format!("{e:#}");
+            eprintln!("{}", commands::style_error(&msg, c));
+        }
         std::process::exit(commands::exit_status(&e));
     }
 }
@@ -5696,6 +5798,52 @@ mod test {
     #[test]
     fn test_cli_definition_is_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn audit_policy_keeps_disable_event_and_records_enable_event() {
+        use rbw::config::AuditConfig;
+        let on = AuditConfig {
+            enabled: true,
+            retention_days: 15,
+        };
+        let off = AuditConfig {
+            enabled: false,
+            retention_days: 15,
+        };
+        let longer = AuditConfig {
+            enabled: true,
+            retention_days: 30,
+        };
+
+        assert_eq!(
+            audit_config_after_change(Some(&on), Some(&off)),
+            Some(&on)
+        );
+        assert_eq!(
+            audit_config_after_change(Some(&off), Some(&on)),
+            Some(&on)
+        );
+        assert_eq!(
+            audit_config_after_change(Some(&on), Some(&longer)),
+            Some(&longer)
+        );
+        assert!(audit_config_after_change(Some(&off), Some(&off)).is_none());
+        assert!(audit_config_after_change(None, Some(&off)).is_none());
+    }
+
+    #[test]
+    fn audit_classifies_operations_without_recording_arguments() {
+        let cli =
+            Cli::try_parse_from(["rbw", "get", "private-item-name"]).unwrap();
+        assert_eq!(cli.command.audit_operation().as_deref(), Some("get"));
+
+        let cli = Cli::try_parse_from(["rbw", "generate"]).unwrap();
+        assert_eq!(cli.command.audit_operation(), None);
+
+        let cli =
+            Cli::try_parse_from(["rbw", "--redact", "code", "item"]).unwrap();
+        assert_eq!(cli.command.audit_operation().as_deref(), Some("code"));
     }
 
     #[test]

@@ -446,6 +446,24 @@ let
         default = { };
         description = "Authenticated remote field API settings.";
       };
+      audit = mkOption {
+        type = types.submodule {
+          options = {
+            enabled = mkOption {
+              type = types.bool;
+              default = true;
+              description = "Record secret-free rbw operation metadata in a local audit log.";
+            };
+            retentionDays = mkOption {
+              type = types.ints.between 1 3650;
+              default = 15;
+              description = "Number of calendar days to retain audit events (1–3650).";
+            };
+          };
+        };
+        default = { };
+        description = "Local security audit log settings.";
+      };
       unlockNoEcho = mkOption {
         type = types.bool;
         default = false;
