@@ -227,6 +227,7 @@
               nativeBuildInputs = craneArgs.nativeBuildInputs ++ [ pkgs.wrapGAppsHook4 ];
               buildInputs = craneArgs.buildInputs ++ [ pkgs.gtk4 ];
               doCheck = true;
+              nativeCheckInputs = [ pkgs.python3 ];
               postInstall = rbw.postInstall + ''
                 install -Dm644 assets/rbw.png "$out/share/icons/hicolor/128x128/apps/rbw.png"
                 install -Dm644 ${
