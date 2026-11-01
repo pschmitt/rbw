@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import re
+from collections.abc import Callable
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
@@ -20,6 +22,7 @@ from .const import DOMAIN
 from .coordinator import RbwStatusCoordinator
 
 PARALLEL_UPDATES = 0
+_DEFAULT_LOCK_ENTITY_ID = re.compile(r"^binary_sensor\.rbw_lock(?:_[2-9]|_[1-9][0-9]+)?$")
 
 
 async def async_setup_entry(
@@ -36,8 +39,6 @@ async def async_setup_entry(
         model="Policy API",
         configuration_url=runtime.configuration_url,
     )
-    async_add_entities([RbwConnectedSensor(runtime.coordinator, entry.entry_id, device)])
-
     def async_update_device_info() -> None:
         """Update registered device metadata from permitted status data."""
         data = runtime.coordinator.data
@@ -62,6 +63,16 @@ async def async_setup_entry(
 
     entry.async_on_unload(runtime.coordinator.async_add_listener(async_update_device_info))
     async_update_device_info()
+    async_add_entities(
+        [
+            RbwConnectedSensor(
+                runtime.coordinator,
+                entry.entry_id,
+                device,
+                async_update_device_info,
+            )
+        ]
+    )
 
     entities: dict[str, RbwVaultLockedSensor] = {}
 
@@ -172,6 +183,26 @@ class RbwConnectedSensor(RbwStatusBinarySensor):
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_icon = "mdi:cloud-check-outline"
 
+    def __init__(
+        self,
+        coordinator: RbwStatusCoordinator,
+        entry_id: str,
+        device_info: DeviceInfo,
+        update_device_info: Callable[[], None],
+    ) -> None:
+        """Initialize the entity and metadata refresh callback."""
+        super().__init__(coordinator, entry_id, device_info)
+        self._update_device_info = update_device_info
+
+    async def async_added_to_hass(self) -> None:
+        """Apply metadata when the device registry entry actually exists."""
+        await super().async_added_to_hass()
+        self._update_device_info()
+
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Handle in-place registry ID changes in current Home Assistant."""
+        super().async_entity_id_changed(old_entity_id)
+
     @property
     def is_on(self) -> bool | None:
         """A denied status request still proves that the endpoint is reachable."""
@@ -218,7 +249,7 @@ class RbwVaultLockedSensor(RbwStatusBinarySensor):
         if (
             current is not None
             and current.entity_id != target
-            and current.entity_id == f"binary_sensor.{current.suggested_object_id}"
+            and _DEFAULT_LOCK_ENTITY_ID.fullmatch(current.entity_id)
         ):
             # Updating the existing registry entry preserves its name, area,
             # disabled/hidden state, labels, and other user customizations.

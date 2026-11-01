@@ -106,19 +106,22 @@ class FakeEntityRegistry:
 
 
 class FakeDeviceRegistry:
-    def __init__(self, sw_version: str | None = None) -> None:
-        self.device = SimpleNamespace(
-            id="device", sw_version=sw_version, configuration_url=None
+    def __init__(self, sw_version: str | None = None, *, registered: bool = True) -> None:
+        self.device = (
+            SimpleNamespace(id="device", sw_version=sw_version, configuration_url=None)
+            if registered
+            else None
         )
         self.updates: list[tuple[str, dict[str, object]]] = []
 
     def async_get_device_by_identifier(
         self, identifier: tuple[str, str], config_entry_id: str
-    ) -> object:
+    ) -> object | None:
         self.lookup = (identifier, config_entry_id)
         return self.device
 
     def async_update_device(self, device_id: str, **kwargs: object) -> None:
+        assert self.device is not None
         self.updates.append((device_id, kwargs))
         for key, value in kwargs.items():
             setattr(self.device, key, value)
@@ -242,30 +245,39 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
                 status=api.RbwApiStatus(1, "2.40.0", (api.RbwAccountStatus("ai", "locked"),)),
             )
         )
-        old = SimpleNamespace(
-            entity_id="binary_sensor.rbw_vault_locked_ai",
-            unique_id="stable",
-            suggested_object_id="rbw_vault_locked_ai",
-        )
-        registry = FakeEntityRegistry({old.entity_id: old})
-        entity = binary_module.RbwVaultLockedSensor(
-            coordinator, "entry", FakeDeviceInfo(identifiers={("rbw", "entry")}), "ai", "rbw_ai_locked"
-        )
-        entity.hass = SimpleNamespace(entity_registry=registry)
-        entity.entity_id = old.entity_id
+        for old_id in ("binary_sensor.rbw_lock", "binary_sensor.rbw_lock_2", "binary_sensor.rbw_lock_4"):
+            with self.subTest(old_id=old_id):
+                entity = binary_module.RbwVaultLockedSensor(
+                    coordinator,
+                    "entry",
+                    FakeDeviceInfo(identifiers={("rbw", "entry")}),
+                    "ai",
+                    "rbw_ai_locked",
+                )
+                old = SimpleNamespace(entity_id=old_id, unique_id=entity._attr_unique_id)
+                registry = FakeEntityRegistry({old.entity_id: old})
+                entity.hass = SimpleNamespace(entity_registry=registry)
+                entity.entity_id = old.entity_id
 
-        await entity.async_added_to_hass()
+                await entity.async_added_to_hass()
 
-        self.assertEqual(
-            registry.updates,
-            [(old.entity_id, {"new_entity_id": "binary_sensor.rbw_ai_locked"})],
-        )
+                self.assertEqual(
+                    registry.updates,
+                    [(old.entity_id, {"new_entity_id": "binary_sensor.rbw_ai_locked"})],
+                )
 
         customized = SimpleNamespace(
             entity_id="binary_sensor.my_custom_lock_id",
             unique_id="stable",
             suggested_object_id="rbw_vault_locked_ai",
         )
+        registry = FakeEntityRegistry({customized.entity_id: customized})
+        entity.hass = SimpleNamespace(entity_registry=registry)
+        entity.entity_id = customized.entity_id
+        await entity.async_added_to_hass()
+        self.assertEqual(registry.updates, [])
+
+        customized.entity_id = "binary_sensor.rbw_lock_manual"
         registry = FakeEntityRegistry({customized.entity_id: customized})
         entity.hass = SimpleNamespace(entity_registry=registry)
         entity.entity_id = customized.entity_id
@@ -417,6 +429,40 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
             device_registry.updates[-1], ("device", {"sw_version": "2.41.0"})
         )
 
+    async def test_metadata_is_applied_when_device_registers_after_first_refresh(self) -> None:
+        coordinator_module, binary_module, _ = load_entities()
+        coordinator = FakeCoordinator(
+            coordinator_module.RbwStatusData(
+                connected=True,
+                status=api.RbwApiStatus(1, "2.40.0", ()),
+            )
+        )
+        device_registry = FakeDeviceRegistry(registered=False)
+        runtime = SimpleNamespace(
+            coordinator=coordinator,
+            configuration_url="https://api.example:24871",
+        )
+        hass = SimpleNamespace(
+            data={"rbw": {"entry": runtime}},
+            entity_registry=FakeEntityRegistry(),
+            device_registry=device_registry,
+        )
+        entry = FakeEntry("entry")
+        entities: list[object] = []
+
+        await binary_module.async_setup_entry(hass, entry, entities.extend)
+        self.assertIsNone(device_registry.device)
+
+        device_registry.device = SimpleNamespace(
+            id="device", sw_version=None, configuration_url=None
+        )
+        await entities[0].async_added_to_hass()
+
+        self.assertEqual(device_registry.device.sw_version, "2.40.0")
+        self.assertEqual(
+            device_registry.device.configuration_url, "https://api.example:24871"
+        )
+
     async def test_status_permission_denial_is_connected_but_lock_remains_unknown(self) -> None:
         coordinator_module, binary_module, sensor_module = load_entities()
         coordinator = FakeCoordinator(
@@ -431,6 +477,7 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
             device_registry=FakeDeviceRegistry(),
         )
         entry = FakeEntry("entry")
+        entry.data["base_url"] = "https://example.invalid/path"
         binary_entities: list[object] = []
         sensor_entities: list[object] = []
 
