@@ -1,4 +1,4 @@
-"""mTLS client for the rbw policy API."""
+"""mTLS client for rbw item reads and safe API status."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ import re
 import ssl
 import stat
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from urllib.parse import quote, urlsplit
 
 import aiohttp
@@ -26,12 +28,23 @@ class RbwApiError(Exception):
         retryable: bool,
         authentication_error: bool = False,
         retry_after_seconds: float | None = None,
+        http_status: int | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
         self.authentication_error = authentication_error
         self.retry_after_seconds = retry_after_seconds
+        self.http_status = http_status
+
+
+@dataclass(frozen=True, slots=True)
+class RbwApiStatus:
+    """Safe, non-secret status returned by the API."""
+
+    api_version: int
+    agent_version: str
+    vault_state: Literal["locked", "unlocked", "unconfigured"]
 
 
 class RbwApiClient:
@@ -100,11 +113,7 @@ class RbwApiClient:
                 authentication_error=True,
             )
 
-        if self._not_before_until:
-            delay = self._not_before_until - time.monotonic()
-            if delay > 0:
-                await asyncio.sleep(delay)
-            self._not_before_until = 0.0
+        await self._async_wait_for_retry_after()
 
         url = (
             f"{self._base_url}/v1/items/{quote(item_id, safe='')}"
@@ -161,6 +170,7 @@ class RbwApiClient:
                             retryable=retryable,
                             authentication_error=response.status == 401,
                             retry_after_seconds=retry_after,
+                            http_status=response.status,
                         )
 
                     if (
@@ -195,3 +205,108 @@ class RbwApiClient:
             raise RbwApiError(
                 "connection_error", "Could not connect to the rbw API", retryable=True
             ) from None
+
+    async def async_get_status(self) -> RbwApiStatus:
+        """Return safe API and vault status for a client with status permission."""
+        if self._ssl_context is None:
+            raise RbwApiError(
+                "client_certificate",
+                "The mTLS client certificate configuration needs attention",
+                retryable=False,
+                authentication_error=True,
+            )
+
+        await self._async_wait_for_retry_after()
+        url = f"{self._base_url}/v1/status"
+        try:
+            async with asyncio.timeout(5):
+                async with self._session.get(url, ssl=self._ssl_context) as response:
+                    try:
+                        payload = await response.json(content_type="application/json")
+                    except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                        raise RbwApiError(
+                            "invalid_response",
+                            "The rbw API returned an invalid response",
+                            retryable=True,
+                            http_status=response.status,
+                        ) from None
+
+                    if response.status >= 400:
+                        code = payload.get("code") if isinstance(payload, dict) else None
+                        if not isinstance(code, str) or not re.fullmatch(
+                            r"[a-z][a-z0-9_]{0,63}", code
+                        ):
+                            code = f"http_{response.status}"
+                        payload_retryable = (
+                            payload.get("retryable") if isinstance(payload, dict) else None
+                        )
+                        retryable = (
+                            payload_retryable
+                            if isinstance(payload_retryable, bool)
+                            else response.status in (423, 503)
+                        )
+                        retry_after: float | None = None
+                        if retryable:
+                            try:
+                                retry_after = min(
+                                    60.0,
+                                    max(0.0, float(response.headers.get("Retry-After", "0"))),
+                                )
+                            except ValueError:
+                                retry_after = None
+                            if retry_after is not None:
+                                self._not_before_until = max(
+                                    self._not_before_until,
+                                    time.monotonic() + retry_after,
+                                )
+                        raise RbwApiError(
+                            code,
+                            "The rbw API request failed",
+                            retryable=retryable,
+                            authentication_error=response.status == 401,
+                            retry_after_seconds=retry_after,
+                            http_status=response.status,
+                        )
+
+                    vault = payload.get("vault") if isinstance(payload, dict) else None
+                    api_version = payload.get("apiVersion") if isinstance(payload, dict) else None
+                    agent_version = (
+                        payload.get("agentVersion") if isinstance(payload, dict) else None
+                    )
+                    vault_state = vault.get("state") if isinstance(vault, dict) else None
+                    if (
+                        isinstance(api_version, bool)
+                        or not isinstance(api_version, int)
+                        or api_version < 1
+                        or not isinstance(agent_version, str)
+                        or not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,63}", agent_version)
+                        or vault_state not in ("locked", "unlocked", "unconfigured")
+                    ):
+                        raise RbwApiError(
+                            "invalid_response",
+                            "The rbw API returned an invalid status response",
+                            retryable=True,
+                            http_status=response.status,
+                        )
+                    return RbwApiStatus(api_version, agent_version, vault_state)
+        except TimeoutError:
+            raise RbwApiError("timeout", "The rbw API request timed out", retryable=True) from None
+        except aiohttp.ClientSSLError:
+            raise RbwApiError(
+                "tls_error",
+                "TLS verification or client authentication failed",
+                retryable=False,
+                authentication_error=True,
+            ) from None
+        except aiohttp.ClientError:
+            raise RbwApiError(
+                "connection_error", "Could not connect to the rbw API", retryable=True
+            ) from None
+
+    async def _async_wait_for_retry_after(self) -> None:
+        """Avoid issuing requests before the server's retry deadline."""
+        if self._not_before_until:
+            delay = self._not_before_until - time.monotonic()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            self._not_before_until = 0.0

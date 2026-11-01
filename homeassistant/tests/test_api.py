@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import ssl
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -12,6 +13,7 @@ API_PATH = Path(__file__).parents[1] / "custom_components" / "rbw" / "api.py"
 SPEC = importlib.util.spec_from_file_location("rbw_test_api", API_PATH)
 assert SPEC and SPEC.loader
 api = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = api
 SPEC.loader.exec_module(api)
 
 
@@ -50,6 +52,23 @@ def success(field_id: str, value: str | None, *, sensitive: bool = True) -> Fake
     return FakeResponse(
         200,
         {"field": field_id, "value": value, "sensitive": sensitive},
+    )
+
+
+def status_success(
+    state: str = "unlocked",
+    *,
+    api_version: int = 1,
+    agent_version: str = "2.39.0",
+) -> FakeResponse:
+    """Build a safe status response from the backend contract."""
+    return FakeResponse(
+        200,
+        {
+            "apiVersion": api_version,
+            "agentVersion": agent_version,
+            "vault": {"state": state},
+        },
     )
 
 
@@ -204,6 +223,69 @@ class RbwApiClientTests(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaises(ValueError):
             api.RbwApiClient.validate_base_url("https://vault.example/api")
+
+    async def test_status_request_returns_only_safe_status_and_uses_mtls(self) -> None:
+        context = ssl.create_default_context()
+        session = FakeSession(status_success("locked"))
+        client = api.RbwApiClient(session, "https://vault.example", context)
+
+        result = await client.async_get_status()
+
+        self.assertEqual(
+            result,
+            api.RbwApiStatus(api_version=1, agent_version="2.39.0", vault_state="locked"),
+        )
+        url, kwargs = session.requests[0]
+        self.assertEqual(url, "https://vault.example/v1/status")
+        self.assertIs(kwargs["ssl"], context)
+
+    async def test_status_supports_unconfigured_vault_without_calling_it_unlocked(self) -> None:
+        client = api.RbwApiClient(
+            FakeSession(status_success("unconfigured")),
+            "https://vault.example",
+            ssl.create_default_context(),
+        )
+
+        result = await client.async_get_status()
+
+        self.assertEqual(result.vault_state, "unconfigured")
+
+    async def test_status_forbidden_preserves_reachability_and_error_code(self) -> None:
+        client = api.RbwApiClient(
+            FakeSession(
+                FakeResponse(
+                    403,
+                    {"code": "forbidden", "message": "not granted", "retryable": False},
+                )
+            ),
+            "https://vault.example",
+            ssl.create_default_context(),
+        )
+
+        with self.assertRaises(api.RbwApiError) as raised:
+            await client.async_get_status()
+
+        self.assertEqual(raised.exception.code, "forbidden")
+        self.assertEqual(raised.exception.http_status, 403)
+        self.assertFalse(raised.exception.retryable)
+        self.assertNotIn("not granted", str(raised.exception))
+
+    async def test_status_rejects_invalid_version_or_vault_state(self) -> None:
+        for payload in (
+            {"apiVersion": True, "agentVersion": "2.39.0", "vault": {"state": "locked"}},
+            {"apiVersion": 1, "agentVersion": "2.39.0", "vault": {"state": "maybe"}},
+            {"apiVersion": 1, "agentVersion": "2.39.0\nsecret", "vault": {"state": "locked"}},
+        ):
+            with self.subTest(payload=payload):
+                client = api.RbwApiClient(
+                    FakeSession(FakeResponse(200, payload)),
+                    "https://vault.example",
+                    ssl.create_default_context(),
+                )
+                with self.assertRaises(api.RbwApiError) as raised:
+                    await client.async_get_status()
+                self.assertEqual(raised.exception.code, "invalid_response")
+                self.assertEqual(raised.exception.http_status, 200)
 
 
 if __name__ == "__main__":

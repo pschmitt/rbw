@@ -18,6 +18,7 @@ ROOT = Path(__file__).parents[1] / "custom_components" / "rbw"
 API_SPEC = importlib.util.spec_from_file_location("rbw_public_test_api", ROOT / "api.py")
 assert API_SPEC and API_SPEC.loader
 api = importlib.util.module_from_spec(API_SPEC)
+sys.modules[API_SPEC.name] = api
 API_SPEC.loader.exec_module(api)
 
 
@@ -40,6 +41,8 @@ def load_integration() -> types.ModuleType:
 
     config_entries = types.ModuleType("homeassistant.config_entries")
     config_entries.ConfigEntry = object
+    const_module = types.ModuleType("homeassistant.const")
+    const_module.Platform = SimpleNamespace(BINARY_SENSOR="binary_sensor", SENSOR="sensor")
     core = types.ModuleType("homeassistant.core")
     core.HomeAssistant = object
     exceptions = types.ModuleType("homeassistant.exceptions")
@@ -54,12 +57,20 @@ def load_integration() -> types.ModuleType:
     issue_registry.async_create_issue = lambda *args, **kwargs: None
     aiohttp_client = types.ModuleType("homeassistant.helpers.aiohttp_client")
     aiohttp_client.async_get_clientsession = lambda hass: None
+    coordinator = types.ModuleType("rbw_public_test.coordinator")
+
+    class RbwStatusCoordinator:
+        pass
+
+    coordinator.RbwStatusCoordinator = RbwStatusCoordinator
     modules = {
         "rbw_public_test": package,
         "rbw_public_test.api": api,
+        "rbw_public_test.coordinator": coordinator,
         "rbw_public_test.const": const,
         "homeassistant": types.ModuleType("homeassistant"),
         "homeassistant.config_entries": config_entries,
+        "homeassistant.const": const_module,
         "homeassistant.core": core,
         "homeassistant.exceptions": exceptions,
         "homeassistant.helpers": types.ModuleType("homeassistant.helpers"),

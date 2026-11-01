@@ -32,6 +32,14 @@
     }
   },
   "issues": {
+    "status_permission_required": {
+      "title": "rbw status permission required",
+      "description": "This client can reach the rbw API, but its separate status permission is missing. Run rbw api client list, then grant status access for the existing client and configured account with rbw api status-grant <client-id> --account <account-name>."
+    },
+    "status_unavailable": {
+      "title": "rbw status API unavailable",
+      "description": "Home Assistant could not read safe status from the rbw API. The status sensors will retry automatically."
+    },
     "api_unavailable": {
       "title": "rbw API request failed",
       "description": "A requested field could not be fetched. Retry the same request after the API or vault is available.",
@@ -89,6 +97,27 @@
           "reauthentication_required": "The item still requires an interactive master password prompt."
         }
       }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "api_connected": {"name": "API connected"},
+      "vault_locked": {"name": "Vault locked"}
+    },
+    "sensor": {
+      "vault_status": {
+        "name": "Vault status",
+        "state": {
+          "locked": "Locked",
+          "unlocked": "Unlocked",
+          "unconfigured": "Unconfigured",
+          "status_permission_required": "Status permission required",
+          "authentication_failed": "Authentication failed",
+          "unavailable": "Unavailable"
+        }
+      },
+      "api_version": {"name": "API version"},
+      "agent_version": {"name": "Agent version"}
     }
   }
 }

@@ -100,13 +100,16 @@ where
     }
 }
 
-use rbw::remote_api::{ApiError, ErrorCode, FieldReadResponse};
+use rbw::remote_api::{
+    ApiError, ErrorCode, FieldReadResponse, StatusResponse, VaultLockState,
+};
 
 type PolicyFuture = BoxFuture<
     'static,
     Result<(bool, rbw::remote_api::PolicyStore), ApiError>,
 >;
 type ReaderFuture = BoxFuture<'static, Result<FieldReadResponse, ApiError>>;
+type StatusFuture = BoxFuture<'static, Result<VaultLockState, ApiError>>;
 
 #[derive(Clone)]
 struct ApiState {
@@ -116,6 +119,8 @@ struct ApiState {
             + Send
             + Sync,
     >,
+    status_reader:
+        std::sync::Arc<dyn Fn(Option<String>) -> StatusFuture + Send + Sync>,
 }
 
 impl ApiState {
@@ -133,12 +138,13 @@ impl ApiState {
                     Ok((config.api.enabled, store))
                 })
             });
+        let reader_agent = agent.clone();
         let reader: std::sync::Arc<
             dyn Fn(rbw::remote_api::FieldReadRequest, String) -> ReaderFuture
                 + Send
                 + Sync,
         > = std::sync::Arc::new(move |request, account: String| {
-            let agent = agent.clone();
+            let agent = reader_agent.clone();
             Box::pin(async move {
                 let environment = rbw::protocol::Environment::default();
                 crate::actions::read_remote_field(
@@ -150,7 +156,33 @@ impl ApiState {
                 .await
             })
         });
-        Self { policy, reader }
+        let status_reader: std::sync::Arc<
+            dyn Fn(Option<String>) -> StatusFuture + Send + Sync,
+        > = std::sync::Arc::new(move |account| {
+            let agent = agent.clone();
+            Box::pin(async move {
+                let Some(account) = account else {
+                    return Ok(VaultLockState::Unconfigured);
+                };
+                let config = rbw::config::Config::load_async()
+                    .await
+                    .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
+                if config.account(Some(&account)).is_err() {
+                    return Ok(VaultLockState::Unconfigured);
+                }
+                let locked = agent.lock().await.needs_unlock(&account);
+                Ok(if locked {
+                    VaultLockState::Locked
+                } else {
+                    VaultLockState::Unlocked
+                })
+            })
+        });
+        Self {
+            policy,
+            reader,
+            status_reader,
+        }
     }
 }
 
@@ -398,6 +430,7 @@ fn tls_config_at(
 fn router(state: ApiState) -> Router {
     Router::new()
         .route("/v1/items/{item_id}/fields/{*field}", get(read_field))
+        .route("/v1/status", get(read_status))
         .with_state(state)
 }
 
@@ -413,6 +446,25 @@ async fn read_field(
         &field_token,
     )
     .await;
+    api_response(result)
+}
+
+async fn read_status(
+    State(state): State<ApiState>,
+    Extension(certificates): Extension<PeerCertificates>,
+) -> Response {
+    api_response(
+        read_status_inner(
+            &state,
+            certificates.leaf().map(std::convert::AsRef::as_ref),
+        )
+        .await,
+    )
+}
+
+fn api_response<T: serde::Serialize>(
+    result: Result<T, ApiError>,
+) -> Response {
     let mut response = match result {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(error) => {
@@ -432,6 +484,21 @@ async fn read_field(
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+async fn read_status_inner(
+    state: &ApiState,
+    certificate_der: Option<&[u8]>,
+) -> Result<StatusResponse, ApiError> {
+    let (enabled, store) = (state.policy)().await?;
+    let account =
+        authorized_status_account(enabled, &store, certificate_der)?;
+    let vault_state = (state.status_reader)(account).await?;
+    Ok(StatusResponse {
+        api_version: 1,
+        agent_version: env!("CARGO_PKG_VERSION").to_owned(),
+        vault: rbw::remote_api::VaultStatus { state: vault_state },
+    })
 }
 
 async fn read_field_inner(
@@ -495,6 +562,29 @@ fn authorized_account(
         return Err(ApiError::new(ErrorCode::Forbidden));
     }
     Ok(account)
+}
+
+fn authorized_status_account(
+    enabled: bool,
+    store: &rbw::remote_api::PolicyStore,
+    certificate_der: Option<&[u8]>,
+) -> Result<Option<String>, ApiError> {
+    if !enabled {
+        return Err(ApiError::new(ErrorCode::Unauthorized));
+    }
+    let certificate_der = certificate_der
+        .ok_or_else(|| ApiError::new(ErrorCode::Unauthorized))?;
+    let fingerprint =
+        rbw::remote_api::certificate_fingerprint(certificate_der);
+    let client = store
+        .clients
+        .values()
+        .find(|client| client.fingerprint == fingerprint)
+        .ok_or_else(|| ApiError::new(ErrorCode::Unauthorized))?;
+    if !client.status {
+        return Err(ApiError::new(ErrorCode::Forbidden));
+    }
+    Ok(client.account.clone())
 }
 
 #[cfg(test)]
@@ -569,7 +659,11 @@ mod tests {
         certificate_der: &[u8],
         enabled: bool,
         calls: Arc<std::sync::atomic::AtomicUsize>,
-    ) -> (ApiState, Arc<tokio::sync::RwLock<(bool, PolicyStore)>>) {
+    ) -> (
+        ApiState,
+        Arc<tokio::sync::RwLock<(bool, PolicyStore)>>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
         use std::sync::atomic::Ordering;
 
         let fingerprint =
@@ -579,6 +673,7 @@ mod tests {
             name: "synthetic client".to_owned(),
             fingerprint,
             account: Some("personal".to_owned()),
+            status: true,
             items: std::collections::BTreeMap::from([(
                 "item-1".to_owned(),
                 vec![FieldRef::Password],
@@ -620,7 +715,35 @@ mod tests {
                 })
             },
         );
-        (ApiState { policy, reader }, state_value)
+        let status_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let status_reader: Arc<
+            dyn Fn(Option<String>) -> StatusFuture + Send + Sync,
+        > = Arc::new({
+            let status_calls = status_calls.clone();
+            move |account| {
+                let status_calls = status_calls.clone();
+                Box::pin(async move {
+                    status_calls.fetch_add(1, Ordering::SeqCst);
+                    match account.as_deref() {
+                        Some("personal") => Ok(VaultLockState::Locked),
+                        Some("work") => Ok(VaultLockState::Unlocked),
+                        Some("unavailable") => {
+                            Err(ApiError::new(ErrorCode::Unavailable))
+                        }
+                        _ => Ok(VaultLockState::Unconfigured),
+                    }
+                })
+            }
+        });
+        (
+            ApiState {
+                policy,
+                reader,
+                status_reader,
+            },
+            state_value,
+            status_calls,
+        )
     }
 
     async fn https_request(
@@ -628,7 +751,12 @@ mod tests {
         ca_pem: String,
         client_identity: Option<Vec<u8>>,
         path: &'static str,
-    ) -> anyhow::Result<(reqwest::StatusCode, Option<String>, String)> {
+    ) -> anyhow::Result<(
+        reqwest::StatusCode,
+        Option<String>,
+        String,
+        Option<String>,
+    )> {
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let ca = reqwest::Certificate::from_pem(ca_pem.as_bytes())?;
             let mut builder =
@@ -645,8 +773,13 @@ mod tests {
                 .get(header::CACHE_CONTROL)
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned);
+            let retry_after = response
+                .headers()
+                .get(header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
             let body = response.text()?;
-            Ok((status, cache_control, body))
+            Ok((status, cache_control, body, retry_after))
         })
         .await
         .unwrap()
@@ -658,7 +791,7 @@ mod tests {
         let fixture = tls_fixture();
         let tls = tls_config_at(fixture.pki_dir.path()).unwrap();
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let (state, policy) =
+        let (state, policy, status_calls) =
             test_state(&fixture.client_cert_der, true, calls.clone());
         let app = router(state);
         let listener =
@@ -698,6 +831,124 @@ mod tests {
             serde_json::from_str(&response.2).unwrap();
         assert_eq!(payload.value.as_deref(), Some("synthetic-secret-value"));
 
+        // Status permission is distinct from item fields and reports only
+        // the account scoped to this client.
+        policy
+            .write()
+            .await
+            .1
+            .clients
+            .get_mut("client-1")
+            .unwrap()
+            .items
+            .clear();
+        let response = https_request(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/status",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1.as_deref(), Some("no-store"));
+        let payload: StatusResponse =
+            serde_json::from_str(&response.2).unwrap();
+        assert_eq!(payload.api_version, 1);
+        assert_eq!(payload.agent_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(payload.vault.state, VaultLockState::Locked);
+        assert!(!response.2.contains("personal"));
+        assert!(!response.2.contains("client-1"));
+
+        // A differently scoped account reports that account's state.
+        policy
+            .write()
+            .await
+            .1
+            .clients
+            .get_mut("client-1")
+            .unwrap()
+            .account = Some("work".to_owned());
+        let response = https_request(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/status",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::OK);
+        let payload: StatusResponse =
+            serde_json::from_str(&response.2).unwrap();
+        assert_eq!(payload.vault.state, VaultLockState::Unlocked);
+        assert!(!response.2.contains("work"));
+
+        // A client without an account scope sees only an unconfigured state.
+        policy
+            .write()
+            .await
+            .1
+            .clients
+            .get_mut("client-1")
+            .unwrap()
+            .account = None;
+        let response = https_request(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/status",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::OK);
+        let payload: StatusResponse =
+            serde_json::from_str(&response.2).unwrap();
+        assert_eq!(payload.vault.state, VaultLockState::Unconfigured);
+        assert!(!response.2.contains("personal"));
+
+        // Temporary config failures use the shared retryable error contract.
+        policy
+            .write()
+            .await
+            .1
+            .clients
+            .get_mut("client-1")
+            .unwrap()
+            .account = Some("unavailable".to_owned());
+        let response = https_request(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/status",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.3.as_deref(), Some("5"));
+        let error: ApiError = serde_json::from_str(&response.2).unwrap();
+        assert!(matches!(error.code, ErrorCode::Unavailable));
+        assert!(error.retryable);
+
+        // Status authorization defaults to deny, independently of mTLS.
+        policy
+            .write()
+            .await
+            .1
+            .clients
+            .get_mut("client-1")
+            .unwrap()
+            .status = false;
+        let response = https_request(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/status",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::FORBIDDEN);
+        assert_eq!(response.1.as_deref(), Some("no-store"));
+
         let response = https_request(
             url.clone(),
             fixture.ca_pem.clone(),
@@ -721,9 +972,19 @@ mod tests {
         .unwrap();
         assert_eq!(response.0, StatusCode::UNAUTHORIZED);
 
+        let response = https_request(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/status",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::UNAUTHORIZED);
+
         policy.write().await.0 = false;
         let response = https_request(
-            url,
+            url.clone(),
             fixture.ca_pem.clone(),
             Some(fixture.client_identity.clone()),
             "/v1/items/item-1/fields/password",
@@ -731,7 +992,18 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(response.0, StatusCode::UNAUTHORIZED);
+
+        let response = https_request(
+            url,
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/status",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::UNAUTHORIZED);
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(status_calls.load(std::sync::atomic::Ordering::SeqCst), 4);
 
         server_task.abort();
     }

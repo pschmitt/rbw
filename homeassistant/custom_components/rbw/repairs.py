@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import issue_registry as ir
 
-from .api import RbwApiClient, RbwApiError
+from .api import RbwApiError
 from .const import (
     DOMAIN,
     ISSUE_API_UNAVAILABLE,
@@ -54,7 +54,8 @@ class RbwRepairFlow(RepairsFlow):
             return self.async_abort(reason="request_not_available")
 
         if user_input is not None:
-            client: RbwApiClient | None = self.hass.data.get(DOMAIN, {}).get(entry_id)
+            runtime = self.hass.data.get(DOMAIN, {}).get(entry_id)
+            client = getattr(runtime, "client", runtime)
             if client is None:
                 return self.async_show_form(
                     step_id="retry",

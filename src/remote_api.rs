@@ -195,7 +195,7 @@ pub struct PolicyStore {
     pub clients: std::collections::BTreeMap<String, ClientPolicy>,
 }
 
-/// One rbw-managed mTLS client and the fields it may read.
+/// One rbw-managed mTLS client and its explicitly granted capabilities.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClientPolicy {
@@ -204,8 +204,45 @@ pub struct ClientPolicy {
     pub fingerprint: String,
     #[serde(default)]
     pub account: Option<String>,
+    /// Whether this client may read non-secret, scoped vault status.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub status: bool,
     #[serde(default)]
     pub items: std::collections::BTreeMap<String, Vec<FieldRef>>,
+}
+
+/// Account lock state visible to a status-authorized client.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultLockState {
+    /// The client has no configured account scope or its scope no longer exists.
+    Unconfigured,
+    /// The configured account does not have usable keys in the agent.
+    Locked,
+    /// The configured account has usable keys in the agent.
+    Unlocked,
+}
+
+/// Non-secret remote agent and scoped vault status.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatusResponse {
+    pub api_version: u32,
+    pub agent_version: String,
+    pub vault: VaultStatus,
+}
+
+/// The account-scoped portion of [`StatusResponse`].
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VaultStatus {
+    pub state: VaultLockState,
 }
 
 /// Current state of the remote listener, for the local CLI only.
@@ -569,6 +606,7 @@ pub fn create_client(name: &str) -> anyhow::Result<ClientPolicy> {
         name: name.to_owned(),
         fingerprint,
         account: None,
+        status: false,
         items: std::collections::BTreeMap::new(),
     };
     if let Err(error) = update_policy_store(|store| {
@@ -595,18 +633,78 @@ pub fn grant_fields(
             .clients
             .get_mut(client_id)
             .context("remote API client was not found")?;
-        if let Some(existing) = &client.account {
-            anyhow::ensure!(existing == account, "a client can be scoped to one account; revoke and recreate it to change accounts");
+        grant_fields_policy(client, account, item_id, fields)
+    })
+}
+
+fn grant_fields_policy(
+    client: &mut ClientPolicy,
+    account: &str,
+    item_id: &str,
+    fields: &[FieldRef],
+) -> anyhow::Result<()> {
+    anyhow::ensure!(!fields.is_empty(), "at least one field is required");
+    if let Some(existing) = &client.account {
+        anyhow::ensure!(
+            existing == account,
+            "a client can be scoped to one account; revoke and recreate it to change accounts"
+        );
+    }
+    client.account = Some(account.to_owned());
+    let allowed = client.items.entry(item_id.to_owned()).or_default();
+    for field in fields {
+        if !allowed.contains(field) {
+            allowed.push(field.clone());
         }
-        client.account = Some(account.to_owned());
-        let allowed = client.items.entry(item_id.to_owned()).or_default();
-        for field in fields {
-            if !allowed.contains(field) {
-                allowed.push(field.clone());
-            }
-        }
+    }
+    Ok(())
+}
+
+/// Grant a client access to non-secret status for one configured account.
+/// This does not grant access to any item fields.
+pub fn grant_status(client_id: &str, account: &str) -> anyhow::Result<()> {
+    crate::config::Config::load()?.account(Some(account))?;
+    update_policy_store(|store| {
+        let client = store
+            .clients
+            .get_mut(client_id)
+            .context("remote API client was not found")?;
+        grant_status_policy(client, account)
+    })
+}
+
+fn grant_status_policy(
+    client: &mut ClientPolicy,
+    account: &str,
+) -> anyhow::Result<()> {
+    if let Some(existing) = &client.account {
+        anyhow::ensure!(
+            existing == account,
+            "a client can be scoped to one account; revoke and recreate it to change accounts"
+        );
+    }
+    client.account = Some(account.to_owned());
+    client.status = true;
+    Ok(())
+}
+
+/// Revoke a client's non-secret status permission without changing item grants.
+pub fn revoke_status(client_id: &str) -> anyhow::Result<()> {
+    update_policy_store(|store| {
+        let client = store
+            .clients
+            .get_mut(client_id)
+            .context("remote API client was not found")?;
+        revoke_status_policy(client);
         Ok(())
     })
+}
+
+fn revoke_status_policy(client: &mut ClientPolicy) {
+    client.status = false;
+    if client.items.is_empty() {
+        client.account = None;
+    }
 }
 
 /// Remove fields from an item grant, deleting the item grant when no fields
@@ -621,29 +719,37 @@ pub fn revoke_fields(
             .clients
             .get_mut(client_id)
             .context("remote API client was not found")?;
-        if fields.is_empty() {
-            anyhow::ensure!(
-                client.items.remove(item_id).is_some(),
-                "item grant was not found"
-            );
-        } else {
-            let empty = {
-                let allowed = client
-                    .items
-                    .get_mut(item_id)
-                    .context("item grant was not found")?;
-                allowed.retain(|field| !fields.contains(field));
-                allowed.is_empty()
-            };
-            if empty {
-                client.items.remove(item_id);
-            }
-        }
-        if client.items.is_empty() {
-            client.account = None;
-        }
-        Ok(())
+        revoke_fields_policy(client, item_id, fields)
     })
+}
+
+fn revoke_fields_policy(
+    client: &mut ClientPolicy,
+    item_id: &str,
+    fields: &[FieldRef],
+) -> anyhow::Result<()> {
+    if fields.is_empty() {
+        anyhow::ensure!(
+            client.items.remove(item_id).is_some(),
+            "item grant was not found"
+        );
+    } else {
+        let empty = {
+            let allowed = client
+                .items
+                .get_mut(item_id)
+                .context("item grant was not found")?;
+            allowed.retain(|field| !fields.contains(field));
+            allowed.is_empty()
+        };
+        if empty {
+            client.items.remove(item_id);
+        }
+    }
+    if client.items.is_empty() && !client.status {
+        client.account = None;
+    }
+    Ok(())
 }
 
 /// Revoke a client immediately by removing its fingerprint from the policy
@@ -680,7 +786,7 @@ impl ErrorCode {
                 ("Client certificate is not authorized", false)
             }
             Self::Forbidden => {
-                ("Client policy does not allow this field", false)
+                ("Client policy does not allow this request", false)
             }
             Self::NotFound => ("Item or field was not found", false),
             Self::VaultLocked => ("Vault is locked", true),
@@ -741,6 +847,108 @@ mod tests {
                 "sensitive": true
             })
         );
+    }
+
+    #[test]
+    fn status_response_matches_http_json_contract() {
+        let response = StatusResponse {
+            api_version: 1,
+            agent_version: "2.39.0".to_owned(),
+            vault: VaultStatus {
+                state: VaultLockState::Unconfigured,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            serde_json::json!({
+                "apiVersion": 1,
+                "agentVersion": "2.39.0",
+                "vault": { "state": "unconfigured" }
+            })
+        );
+    }
+
+    #[test]
+    fn old_client_policy_deserializes_with_status_denied() {
+        let policy: ClientPolicy =
+            serde_json::from_value(serde_json::json!({
+                "id": "client-1",
+                "name": "old client",
+                "fingerprint": "fingerprint",
+                "account": "personal",
+                "items": {}
+            }))
+            .unwrap();
+        assert!(!policy.status);
+        assert!(serde_json::to_value(policy)
+            .unwrap()
+            .get("status")
+            .is_none());
+    }
+
+    #[test]
+    fn status_grants_do_not_add_item_fields_and_revoke_keeps_item_scope() {
+        let mut client = ClientPolicy {
+            id: "client-1".to_owned(),
+            name: "status client".to_owned(),
+            fingerprint: "fingerprint".to_owned(),
+            account: None,
+            status: false,
+            items: std::collections::BTreeMap::new(),
+        };
+
+        grant_status_policy(&mut client, "personal").unwrap();
+        assert_eq!(client.account.as_deref(), Some("personal"));
+        assert!(client.status);
+        assert!(client.items.is_empty());
+        assert!(grant_status_policy(&mut client, "work").is_err());
+        assert_eq!(client.account.as_deref(), Some("personal"));
+
+        revoke_status_policy(&mut client);
+        assert_eq!(client.account, None);
+        assert!(!client.status);
+
+        grant_status_policy(&mut client, "personal").unwrap();
+        client
+            .items
+            .insert("item-1".to_owned(), vec![FieldRef::Username]);
+        revoke_status_policy(&mut client);
+        assert_eq!(client.account.as_deref(), Some("personal"));
+        assert!(!client.status);
+        assert_eq!(client.items["item-1"], [FieldRef::Username]);
+    }
+
+    #[test]
+    fn revoking_last_item_grant_preserves_active_status_account_scope() {
+        let mut client = ClientPolicy {
+            id: "client-1".to_owned(),
+            name: "status client".to_owned(),
+            fingerprint: "fingerprint".to_owned(),
+            account: Some("personal".to_owned()),
+            status: true,
+            items: std::collections::BTreeMap::from([(
+                "item-1".to_owned(),
+                vec![FieldRef::Username],
+            )]),
+        };
+
+        revoke_fields_policy(&mut client, "item-1", &[]).unwrap();
+        assert!(client.items.is_empty());
+        assert_eq!(client.account.as_deref(), Some("personal"));
+        assert!(client.status);
+        assert!(grant_status_policy(&mut client, "work").is_err());
+        assert!(grant_fields_policy(
+            &mut client,
+            "work",
+            "item-2",
+            &[FieldRef::Username]
+        )
+        .is_err());
+        assert_eq!(client.account.as_deref(), Some("personal"));
+        assert!(client.items.is_empty());
+
+        revoke_status_policy(&mut client);
+        assert_eq!(client.account, None);
     }
 
     #[test]

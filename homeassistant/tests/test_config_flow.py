@@ -15,6 +15,7 @@ ROOT = Path(__file__).parents[1] / "custom_components" / "rbw"
 API_SPEC = importlib.util.spec_from_file_location("rbw_config_test_api", ROOT / "api.py")
 assert API_SPEC and API_SPEC.loader
 api = importlib.util.module_from_spec(API_SPEC)
+sys.modules[API_SPEC.name] = api
 API_SPEC.loader.exec_module(api)
 
 

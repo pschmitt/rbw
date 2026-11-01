@@ -82,7 +82,7 @@ pub fn api_client_create(name: &str) -> anyhow::Result<()> {
     let client = rbw::remote_api::create_client(name)?;
     let (ca, cert, key) = rbw::remote_api::client_export_paths(&client.id);
     println!(
-        "Created client {} ({}) with no item grants",
+        "Created client {} ({}) with no grants",
         client.name, client.id
     );
     println!("CA certificate: {}", ca.display());
@@ -104,13 +104,35 @@ pub fn api_client_list() -> anyhow::Result<()> {
     for client in store.clients.values() {
         let fields: usize = client.items.values().map(Vec::len).sum();
         println!(
-            "{}\t{}\t{}\t{} item(s), {fields} field grant(s)",
+            "{}\t{}\t{}\t{} item(s), {fields} field grant(s), status {}",
             client.id,
             client.name,
             client.account.as_deref().unwrap_or("unscoped"),
-            client.items.len()
+            client.items.len(),
+            if client.status {
+                "granted"
+            } else {
+                "not granted"
+            },
         );
     }
+    Ok(())
+}
+
+pub fn api_status_grant(
+    client_id: &str,
+    account: &str,
+) -> anyhow::Result<()> {
+    rbw::remote_api::grant_status(client_id, account)?;
+    println!(
+        "Granted non-secret status for account {account} to client {client_id}; no item fields were granted"
+    );
+    Ok(())
+}
+
+pub fn api_status_revoke(client_id: &str) -> anyhow::Result<()> {
+    rbw::remote_api::revoke_status(client_id)?;
+    println!("Revoked non-secret status permission for client {client_id}");
     Ok(())
 }
 

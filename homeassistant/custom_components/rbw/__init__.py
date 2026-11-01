@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import ssl
+from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
@@ -23,9 +25,19 @@ from .const import (
     ISSUE_CLIENT_CERT,
     ISSUE_REAUTHENTICATION_REQUIRED,
 )
+from .coordinator import RbwStatusCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+PLATFORMS = (Platform.BINARY_SENSOR, Platform.SENSOR)
 __all__ = ["async_get_field"]
+
+
+@dataclass(slots=True)
+class RbwRuntimeData:
+    """Runtime client and diagnostic status coordinator for one config entry."""
+
+    client: RbwApiClient
+    coordinator: RbwStatusCoordinator
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -41,16 +53,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         base_url = entry.data.get(CONF_BASE_URL, "https://invalid.local")
         context = None
         _create_issue(hass, entry.entry_id, ISSUE_CLIENT_CERT)
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = RbwApiClient(
+    client = RbwApiClient(
         async_get_clientsession(hass),
         base_url,
         context,
+    )
+    coordinator = RbwStatusCoordinator(hass, entry, client)
+    runtime = RbwRuntimeData(client, coordinator)
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # Do not hold HA startup open for a remote status request.
+    entry.async_create_background_task(
+        hass,
+        coordinator.async_refresh(),
+        f"rbw status refresh {entry.entry_id}",
     )
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Drop the client when its config entry unloads."""
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        return False
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     return True
 
@@ -68,7 +92,7 @@ async def async_get_field(
     and raises ``HomeAssistantError`` on any denial or transport failure.
     The result includes the server's ``sensitive`` flag for caller handling.
     """
-    client: RbwApiClient | None = hass.data.get(DOMAIN, {}).get(entry_id)
+    client = _get_client(hass, entry_id)
     if client is None:
         raise HomeAssistantError("The selected rbw config entry is not loaded")
 
@@ -117,6 +141,12 @@ async def async_get_field(
     )
     ir.async_delete_issue(hass, DOMAIN, _issue_id(entry_id, ISSUE_CLIENT_CERT))
     return result
+
+
+def _get_client(hass: HomeAssistant, entry_id: str) -> RbwApiClient | None:
+    """Return the runtime client, accepting direct clients used by API consumers/tests."""
+    runtime = hass.data.get(DOMAIN, {}).get(entry_id)
+    return runtime.client if isinstance(runtime, RbwRuntimeData) else runtime
 
 
 def _issue_id(entry_id: str, issue: str) -> str:

@@ -1,10 +1,10 @@
 # Remote field API
 
-The optional remote field API lets an explicitly provisioned client read
-specific fields from specific vault items. The API is disabled by default and
-binds to `127.0.0.1:24871` when enabled without options. The agent keeps
-serving its normal local and SSH-agent clients when the API is enabled or
-disabled.
+The optional remote API lets an explicitly provisioned client read non-secret
+vault status or specifically granted fields from vault items. The API is
+disabled by default and binds to `127.0.0.1:24871` when enabled without options.
+The agent keeps serving its normal local and SSH-agent clients when the API is
+enabled or disabled.
 
 ## Enable and configure
 
@@ -46,6 +46,25 @@ and present the client certificate and private key for every request. Client
 identity comes from the verified TLS certificate; a request parameter cannot
 choose or impersonate a client.
 
+## Grant status without item access
+
+Grant a client non-secret lock status for one configured account without
+granting any item fields:
+
+```sh
+rbw api status-grant '<client-id>' --account '<account-name>'
+```
+
+Status reports only `locked`, `unlocked`, or `unconfigured`. It does not return
+the account name, enumerate other accounts, or inspect vault items. The state
+is read from the agent's existing per-account unlocked-key state; this request
+does not unlock, prompt, or change timeouts. Revoke status separately from item
+permissions:
+
+```sh
+rbw api status-revoke '<client-id>'
+```
+
 ## Grant the minimum fields
 
 Grant a client exact fields on an item, scoped to a configured account:
@@ -61,7 +80,8 @@ needs current one-time codes. The API returns a current code, never the stored
 TOTP seed or its provisioning URI. Custom field names and identity field names
 are case-sensitive.
 
-Review client identities and their grant counts with `rbw api client list`.
+Review client identities, status permission, and field grant counts with
+`rbw api client list`.
 Remove a field grant with `rbw api revoke '<client-id>' --item-id
 '<item-uuid>' --field password`, or remove every grant for an item by omitting
 `--field`. Revoke a client identity to invalidate its certificate:
@@ -75,7 +95,17 @@ that is already connected. Disable the listener with `rbw api disable`.
 
 ## HTTP contract
 
-The API supports one field read per request:
+The API supports non-secret status and one field read per request:
+
+```text
+GET /v1/status
+```
+
+This endpoint requires a registered mTLS client with the explicit status grant.
+Its response has `apiVersion`, `agentVersion`, and a `vault.state` property.
+Clients without an account scope, or with an account that is no longer
+configured, receive `vault.state: "unconfigured"` rather than global account
+information.
 
 ```text
 GET /v1/items/{item-id}/fields/{field-token}

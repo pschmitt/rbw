@@ -2474,6 +2474,24 @@ enum ApiCmd {
     Disable,
     #[command(about = "Show API listener status")]
     Status,
+    #[command(
+        name = "status-grant",
+        about = "Grant a client non-secret status for one account"
+    )]
+    StatusGrant {
+        #[arg(help = "Client ID from `rbw api client create`")]
+        client_id: String,
+        #[arg(long, help = "Configured account name")]
+        account: String,
+    },
+    #[command(
+        name = "status-revoke",
+        about = "Revoke a client's non-secret status permission"
+    )]
+    StatusRevoke {
+        #[arg(help = "Client ID")]
+        client_id: String,
+    },
     #[command(about = "Manage mTLS client credentials")]
     Client {
         #[command(subcommand)]
@@ -2510,7 +2528,7 @@ enum ApiCmd {
 
 #[derive(Debug, clap::Subcommand)]
 enum ApiClientCmd {
-    #[command(about = "Create a client certificate with no field grants")]
+    #[command(about = "Create a client certificate with no access grants")]
     Create {
         #[arg(help = "Human-readable client name")]
         name: String,
@@ -2530,6 +2548,8 @@ impl ApiCmd {
             Self::Enable { .. } => "enable".to_owned(),
             Self::Disable => "disable".to_owned(),
             Self::Status => "status".to_owned(),
+            Self::StatusGrant { .. } => "status-grant".to_owned(),
+            Self::StatusRevoke { .. } => "status-revoke".to_owned(),
             Self::Client { .. } => "client".to_owned(),
             Self::Grant { .. } => "grant".to_owned(),
             Self::Revoke { .. } => "revoke".to_owned(),
@@ -4307,6 +4327,12 @@ fn main() {
             }
             ApiCmd::Disable => commands::api_disable(),
             ApiCmd::Status => commands::api_status(),
+            ApiCmd::StatusGrant { client_id, account } => {
+                commands::api_status_grant(&client_id, &account)
+            }
+            ApiCmd::StatusRevoke { client_id } => {
+                commands::api_status_revoke(&client_id)
+            }
             ApiCmd::Client { client } => match client {
                 ApiClientCmd::Create { name } => {
                     commands::api_client_create(&name)

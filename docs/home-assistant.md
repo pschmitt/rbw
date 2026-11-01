@@ -3,8 +3,8 @@
 The custom integration source lives in this repository at
 [`homeassistant/custom_components/rbw`](../homeassistant/custom_components/rbw).
 It is intended for other Home Assistant integrations that need one explicitly
-granted field. It does not list items, poll the vault, cache results, or expose
-a secret-returning Home Assistant service.
+granted field. It never lists items or polls vault contents, does not cache
+field results, and does not expose a secret-returning Home Assistant service.
 
 The integration bundles the rbw icon at
 [`brand/icon.png`](../homeassistant/custom_components/rbw/brand/icon.png),
@@ -111,6 +111,31 @@ flow repeats the request and discards its value to confirm recovery; call
 master-password reprompt, the repair explains that Home Assistant cannot
 provide the prompt and keeps the issue open until that setting is removed or
 the item is read through local interactive rbw.
+
+## Status device
+
+The integration also creates one diagnostic **rbw Policy API** device. It polls
+`GET /v1/status` once per minute and exposes API connectivity, whether the
+configured account is locked, the vault status, and the API and agent versions.
+The response contains no item fields, account names, or credentials. A denied
+status request still reports the API as reachable; the vault lock sensor stays
+unknown until the separate status permission is granted. An unconfigured
+account is reported as unconfigured, never as unlocked.
+
+Status access is a separate, account-scoped permission. Grant it to the same
+client identity and account used by the integration:
+
+```sh
+rbw api client list
+rbw api status-grant '<client-id>' --account '<account-name>'
+```
+
+The integration reports a persistent repair when the permission is missing and
+clears it when status becomes available. Network errors retry automatically.
+The status permission grants no access to item fields; grant those separately
+only when another integration needs to read a specific field. Remove the status
+permission with `rbw api status-revoke '<client-id>'` when it is no longer
+needed.
 
 ## Tests
 
