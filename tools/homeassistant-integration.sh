@@ -75,6 +75,7 @@ install_archive() {
   local port="${3:-}"
   local archive
   local archive_id
+  local remote_stage
   local port_number
   local -a ssh_options=(-o BatchMode=yes)
   local -a scp_options=(-o BatchMode=yes)
@@ -121,18 +122,34 @@ install_archive() {
     return 1
   }
 
-  if ! scp "${scp_options[@]}" -- "$archive" "$target:/tmp/rbw-ha-$archive_id.tar"
+  remote_stage="$(ssh "${ssh_options[@]}" "$target" \
+    'umask 077; mktemp -d /tmp/rbw-ha.XXXXXXXXXX')" || {
+    rm -f "$archive"
+    return 1
+  }
+  if [[ ! "$remote_stage" =~ ^/tmp/rbw-ha\.[A-Za-z0-9]+$ ]]
+  then
+    printf 'HA host returned an invalid private staging path\n' >&2
+    rm -f "$archive"
+    return 1
+  fi
+
+  if ! scp "${scp_options[@]}" -- "$archive" "$target:$remote_stage/archive.tar"
   then
     rm -f "$archive"
+    # The staging path was validated against the strict mktemp output format.
+    # shellcheck disable=SC2029
+    ssh "${ssh_options[@]}" "$target" "rm -rf '$remote_stage'" >/dev/null 2>&1 || true
     return 1
   fi
   rm -f "$archive"
 
   # The digest is generated locally and contains only lowercase hexadecimal.
   # shellcheck disable=SC2029
-  if ! ssh "${ssh_options[@]}" "$target" "sh -s $archive_id" <<'REMOTE_SCRIPT'
+  if ! ssh "${ssh_options[@]}" "$target" "sh -s $archive_id $remote_stage" <<'REMOTE_SCRIPT'
 set -eu
 archive_id="$1"
+remote_stage="$2"
 case "$archive_id" in
   ''|*[!0-9a-f]*)
     printf 'Invalid archive identifier\n' >&2
@@ -144,38 +161,73 @@ then
   printf 'Invalid archive identifier\n' >&2
   exit 2
 fi
+case "$remote_stage" in
+  /tmp/rbw-ha.*)
+    ;;
+  *)
+    printf 'Invalid private staging directory\n' >&2
+    exit 2
+    ;;
+esac
+stage_suffix="${remote_stage#/tmp/rbw-ha.}"
+case "$stage_suffix" in
+  ''|*[!A-Za-z0-9]*)
+    printf 'Invalid private staging directory\n' >&2
+    exit 2
+    ;;
+esac
 
 root=/config/custom_components-local
 versioned="$root/rbw-integration-$archive_id"
 link=/config/custom_components/rbw
 link_target="../custom_components-local/rbw-integration-$archive_id/custom_components/rbw"
-archive="/tmp/rbw-ha-$archive_id.tar"
+archive="$remote_stage/archive.tar"
 stage="$root/.rbw-stage-$archive_id-$$"
+stage_created=0
+git_root=/config/.git
+git_info="$git_root/info"
+ignore_file="$git_info/exclude"
+ignore_pattern='/custom_components-local/rbw-integration-*'
 
 cleanup() {
-  if [ -n "$stage" ]
+  if [ "$stage_created" -eq 1 ] && [ -n "$stage" ]
   then
     rm -rf "$stage"
   fi
-  rm -f "$archive"
+  rm -rf "$remote_stage"
 }
-trap cleanup EXIT HUP INT TERM
-install -d -m 0755 "$root" /config/custom_components
-if [ ! -d "$versioned/custom_components/rbw" ]
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+actual_hash="$(sha256sum "$archive" | cut -d ' ' -f1)"
+if [ "$actual_hash" != "$archive_id" ]
 then
-  mkdir -m 0700 "$stage"
-  tar -xf "$archive" -C "$stage"
-  if [ ! -d "$stage/custom_components/rbw" ]
-  then
-    printf 'Archive does not contain the rbw integration\n' >&2
-    exit 1
-  fi
-  chmod -R go-w "$stage/custom_components/rbw"
-  chmod 0755 "$stage"
-  mv "$stage" "$versioned"
-  stage=
+  printf 'Integration archive checksum did not match\n' >&2
+  exit 1
 fi
 
+for metadata_dir in "$git_root" "$git_info"
+do
+  if [ -L "$metadata_dir" ] || { [ -e "$metadata_dir" ] && [ ! -d "$metadata_dir" ]; }
+  then
+    printf 'Refusing to use a symlink or non-directory Git metadata path: %s\n' \
+      "$metadata_dir" >&2
+    exit 1
+  fi
+done
+if [ -L "$ignore_file" ] || { [ -e "$ignore_file" ] && [ ! -f "$ignore_file" ]; }
+then
+  printf 'Refusing to append to a non-regular Git exclude file\n' >&2
+  exit 1
+fi
+for install_root in "$root" /config/custom_components
+do
+  if [ -L "$install_root" ] || { [ -e "$install_root" ] && [ ! -d "$install_root" ]; }
+  then
+    printf 'Refusing to use a symlink or non-directory install root: %s\n' \
+      "$install_root" >&2
+    exit 1
+  fi
+done
 if [ -e "$link" ] && [ ! -L "$link" ]
 then
   printf 'Refusing to replace a non-symlink at %s\n' "$link" >&2
@@ -193,9 +245,41 @@ then
       ;;
   esac
 fi
+
+install -d -m 0755 "$root" /config/custom_components
+for package_path in "$versioned" "$versioned/custom_components" \
+  "$versioned/custom_components/rbw"
+do
+  if [ -L "$package_path" ] || { [ -e "$package_path" ] && [ ! -d "$package_path" ]; }
+  then
+    printf 'Refusing to use a symlink or non-directory version path: %s\n' \
+      "$package_path" >&2
+    exit 1
+  fi
+done
+if [ -e "$versioned" ] && [ ! -d "$versioned/custom_components/rbw" ]
+then
+  printf 'Refusing to use an incomplete version directory\n' >&2
+  exit 1
+fi
+if [ ! -d "$versioned/custom_components/rbw" ]
+then
+  mkdir -m 0700 "$stage"
+  stage_created=1
+  tar -xf "$archive" -C "$stage"
+  if [ ! -d "$stage/custom_components/rbw" ]
+  then
+    printf 'Archive does not contain the rbw integration\n' >&2
+    exit 1
+  fi
+  chmod -R go-w "$stage/custom_components/rbw"
+  chmod 0755 "$stage"
+  mv "$stage" "$versioned"
+  stage=
+  stage_created=0
+fi
+
 ln -sfn "$link_target" "$link"
-ignore_file=/config/.git/info/exclude
-ignore_pattern='/custom_components-local/rbw-integration-*'
 if [ -f "$ignore_file" ] && ! grep -Fqx "$ignore_pattern" "$ignore_file"
 then
   printf '\n# rbw Home Assistant integration deployment copies\n%s\n' \
@@ -204,6 +288,9 @@ fi
 printf 'Installed rbw integration version %s\n' "$archive_id"
 REMOTE_SCRIPT
   then
+    # The staging path was validated against the strict mktemp output format.
+    # shellcheck disable=SC2029
+    ssh "${ssh_options[@]}" "$target" "rm -rf '$remote_stage'" >/dev/null 2>&1 || true
     return 1
   fi
 }
