@@ -22,6 +22,18 @@ class FakeConfigFlow:
     def __init_subclass__(cls, *, domain: str, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
 
+    async def async_set_unique_id(self, unique_id: str) -> None:
+        self.unique_id = unique_id
+
+    def _abort_if_unique_id_mismatch(self) -> None:
+        self.checked_unique_id = True
+
+    def _get_reconfigure_entry(self) -> object:
+        return "existing-entry"
+
+    def async_update_reload_and_abort(self, entry: object, *, data_updates: dict[str, str]):
+        return {"entry": entry, "data_updates": data_updates}
+
 
 def load_config_flow() -> types.ModuleType:
     """Import config_flow.py with only its base HA classes stubbed."""
@@ -88,6 +100,29 @@ class ConfigFlowSecretHandlingTests(unittest.TestCase):
         load_certificates.assert_called_once_with(
             paths["ca_cert"], paths["client_cert"], paths["client_key"]
         )
+
+
+class ConfigFlowReconfigureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reconfigure_preserves_server_unique_id(self) -> None:
+        config_flow = load_config_flow()
+        flow = config_flow.RbwConfigFlow()
+        flow.hass = object()
+        entry = types.SimpleNamespace(
+            data={
+                "base_url": "https://vault.example",
+                "ca_cert": "/config/rbw/ca.pem",
+                "client_cert": "/config/rbw/client.pem",
+                "client_key": "/config/rbw/client-key.pem",
+            }
+        )
+        flow._get_reconfigure_entry = lambda: entry
+        with patch.object(api.RbwApiClient, "create_ssl_context"):
+            result = await flow.async_step_reconfigure(entry.data)
+
+        self.assertEqual(flow.unique_id, "https://vault.example")
+        self.assertTrue(flow.checked_unique_id)
+        self.assertEqual(result["entry"], entry)
+        self.assertEqual(result["data_updates"], entry.data)
 
 
 if __name__ == "__main__":

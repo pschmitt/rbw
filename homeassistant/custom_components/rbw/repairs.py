@@ -6,7 +6,7 @@ import hashlib
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.components.repairs import RepairsFlow
+from homeassistant.components.repairs import FlowType, RepairsFlow
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import issue_registry as ir
@@ -23,10 +23,6 @@ from .const import (
 class RbwRepairFlow(RepairsFlow):
     """Retry a failed request or reconfigure the mTLS client."""
 
-    def __init__(self, issue_id: str, data: dict[str, Any] | None) -> None:
-        self.issue_id = issue_id
-        self.data = data or {}
-
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Offer a request retry or certificate reconfiguration."""
         if self.issue_id.startswith(f"{ISSUE_CLIENT_CERT}_"):
@@ -40,11 +36,14 @@ class RbwRepairFlow(RepairsFlow):
         entry_id = self.data.get("entry_id")
         if not entry_id or not self.hass.config_entries.async_get_entry(entry_id):
             return self.async_abort(reason="entry_not_found")
-        await self.hass.config_entries.flow.async_init(
+        result = await self.hass.config_entries.flow.async_init(
             DOMAIN,
             context={"source": "reconfigure", "entry_id": entry_id},
         )
-        return self.async_abort(reason="reconfigure_started")
+        return self.async_abort(
+            reason="reconfigure_started",
+            next_flow=(FlowType.CONFIG_FLOW, result["flow_id"]),
+        )
 
     async def async_step_retry(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Retry the exact request and discard its value if it succeeds."""
@@ -139,4 +138,4 @@ async def async_create_fix_flow(
     data: dict[str, Any] | None,
 ) -> RepairsFlow:
     """Create a repair flow for an rbw issue."""
-    return RbwRepairFlow(issue_id, data)
+    return RbwRepairFlow()

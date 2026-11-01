@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Added
+
+* Optional remote field API, disabled by default, with rbw-managed TLS
+  certificates, mutual TLS client identities, and per-client account, item and
+  field grants. Policy is checked on every request before the field is read;
+  TOTP access returns the current code, never the stored seed. See
+  [docs/remote-api.md](docs/remote-api.md).
+* Policy-only `rbw mcp` mode exposes one explicitly granted remote field read
+  over mutual TLS, with the existing sensitive-field masking controls. See
+  [docs/mcp.md](docs/mcp.md).
+* Home Assistant integration for explicit, policy-checked field reads, with
+  repair flows for API and authentication failures. See
+  [docs/home-assistant.md](docs/home-assistant.md).
+
+### Changed
+
+* Updated the `zip` Rust dependency to 9.2.1 and the browser lint `globals`
+  dependency to 17.14.0.
+
 ## [2.37.0] - 2026-10-31
 
 ### Added

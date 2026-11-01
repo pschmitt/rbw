@@ -76,6 +76,8 @@ class RbwConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except (ValueError, OSError, ssl.SSLError):
                 errors["base"] = "invalid_connection"
             else:
+                await self.async_set_unique_id(validated[CONF_BASE_URL])
+                self._abort_if_unique_id_mismatch()
                 return self.async_update_reload_and_abort(entry, data_updates=validated)
 
         return self.async_show_form(

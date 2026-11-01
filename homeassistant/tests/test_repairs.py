@@ -23,8 +23,11 @@ class FakeRepairsFlow:
     ):
         return {"type": "form", "step_id": step_id, "errors": errors or {}}
 
-    def async_abort(self, *, reason: str):
-        return {"type": "abort", "reason": reason}
+    def async_abort(self, *, reason: str, next_flow: object | None = None):
+        result = {"type": "abort", "reason": reason}
+        if next_flow is not None:
+            result["next_flow"] = next_flow
+        return result
 
     def async_create_entry(self, *, title: str, data: dict[str, object]):
         return {"type": "create_entry", "title": title, "data": data}
@@ -57,6 +60,7 @@ def load_repair_module(issue_calls: list[tuple[object, ...]]) -> types.ModuleTyp
 
     repairs_base = types.ModuleType("homeassistant.components.repairs")
     repairs_base.RepairsFlow = FakeRepairsFlow
+    repairs_base.FlowType = SimpleNamespace(CONFIG_FLOW="config_flow")
     core = types.ModuleType("homeassistant.core")
     core.HomeAssistant = object
     data_entry_flow = types.ModuleType("homeassistant.data_entry_flow")
@@ -89,16 +93,54 @@ def load_repair_module(issue_calls: list[tuple[object, ...]]) -> types.ModuleTyp
 
 
 class RepairRetryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reconfigure_hands_off_to_config_flow(self) -> None:
+        issue_calls: list[tuple[object, ...]] = []
+        repairs = load_repair_module(issue_calls)
+
+        class FlowManager:
+            async def async_init(self, domain: str, *, context: dict[str, str]):
+                self.domain = domain
+                self.context = context
+                return {"flow_id": "reconfigure-flow"}
+
+        entry = object()
+        flow_manager = FlowManager()
+        hass = SimpleNamespace(
+            data={},
+            config_entries=SimpleNamespace(
+                async_get_entry=lambda entry_id: entry if entry_id == "entry" else None,
+                flow=flow_manager,
+            ),
+        )
+        flow = repairs.RbwRepairFlow()
+        flow.data = {"entry_id": "entry"}
+        flow.hass = hass
+
+        result = await flow.async_step_reconfigure()
+
+        self.assertEqual(
+            result,
+            {
+                "type": "abort",
+                "reason": "reconfigure_started",
+                "next_flow": ("config_flow", "reconfigure-flow"),
+            },
+        )
+        self.assertEqual(flow_manager.domain, "rbw")
+        self.assertEqual(
+            flow_manager.context,
+            {"source": "reconfigure", "entry_id": "entry"},
+        )
+
     async def test_retry_success_discards_secret_and_clears_issue(self) -> None:
         issue_calls: list[tuple[object, ...]] = []
         repairs = load_repair_module(issue_calls)
         secret = "test-only-vault-value"
         client = FakeClient({"field": "password", "value": secret, "sensitive": True})
         hass = SimpleNamespace(data={"rbw": {"entry": client}})
-        flow = repairs.RbwRepairFlow(
-            "api_unavailable_entry_hash",
-            {"entry_id": "entry", "item_id": "item", "field_id": "password"},
-        )
+        flow = repairs.RbwRepairFlow()
+        flow.issue_id = "api_unavailable_entry_hash"
+        flow.data = {"entry_id": "entry", "item_id": "item", "field_id": "password"}
         flow.hass = hass
 
         result = await flow.async_step_retry({})
@@ -114,10 +156,9 @@ class RepairRetryTests(unittest.IsolatedAsyncioTestCase):
         repairs = load_repair_module(issue_calls)
         client = FakeClient(api.RbwApiError("vault_locked", "Vault is locked", retryable=True))
         hass = SimpleNamespace(data={"rbw": {"entry": client}})
-        flow = repairs.RbwRepairFlow(
-            "api_unavailable_entry_hash",
-            {"entry_id": "entry", "item_id": "item", "field_id": "totp"},
-        )
+        flow = repairs.RbwRepairFlow()
+        flow.issue_id = "api_unavailable_entry_hash"
+        flow.data = {"entry_id": "entry", "item_id": "item", "field_id": "totp"}
         flow.hass = hass
 
         result = await flow.async_step_retry({})
@@ -137,10 +178,9 @@ class RepairRetryTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         hass = SimpleNamespace(data={"rbw": {"entry": client}})
-        flow = repairs.RbwRepairFlow(
-            "reauthentication_required_entry_hash",
-            {"entry_id": "entry", "item_id": "item", "field_id": "password"},
-        )
+        flow = repairs.RbwRepairFlow()
+        flow.issue_id = "reauthentication_required_entry_hash"
+        flow.data = {"entry_id": "entry", "item_id": "item", "field_id": "password"}
         flow.hass = hass
 
         menu = await flow.async_step_init()
@@ -166,10 +206,9 @@ class RepairRetryTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         hass = SimpleNamespace(data={"rbw": {"entry": client}})
-        flow = repairs.RbwRepairFlow(
-            "api_unavailable_entry_hash",
-            {"entry_id": "entry", "item_id": "item", "field_id": "password"},
-        )
+        flow = repairs.RbwRepairFlow()
+        flow.issue_id = "api_unavailable_entry_hash"
+        flow.data = {"entry_id": "entry", "item_id": "item", "field_id": "password"}
         flow.hass = hass
 
         result = await flow.async_step_retry({})

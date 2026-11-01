@@ -13,7 +13,7 @@
       },
       "reconfigure": {
         "title": "Reconfigure rbw connection",
-        "description": "Update the API URL or mTLS certificate file paths.",
+        "description": "Update mTLS certificate file paths for this rbw server. To change servers, remove this entry and add the new one.",
         "data": {
           "base_url": "HTTPS API origin printed by rbw",
           "ca_cert": "Server CA certificate file",
@@ -27,6 +27,7 @@
     },
     "abort": {
       "already_configured": "This rbw API URL is already configured.",
+      "unique_id_mismatch": "The API origin identifies a different rbw server. Remove this entry and add the new server instead.",
       "reconfigure_successful": "The rbw connection was updated."
     }
   },

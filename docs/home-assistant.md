@@ -18,6 +18,9 @@ cp -a homeassistant/custom_components/rbw /path/to/ha-config/custom_components/
 
 After the rbw API is deployed and enabled, restart Home Assistant to load the
 integration. This checkout does not activate or restart Home Assistant.
+When updating the integration, copy the directory again and restart Home
+Assistant. Changing the API origin identifies a different server; remove the
+existing config entry and add a new one for that server.
 
 ## Configure the connection
 
@@ -68,7 +71,7 @@ From this repository root:
 
 ```sh
 cd homeassistant
-python -m unittest discover -s tests -v
+python -m unittest discover -s tests -t . -v
 ```
 
 The environment needs Python 3.13 or later, `aiohttp`, and `voluptuous`.
