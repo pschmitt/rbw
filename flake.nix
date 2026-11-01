@@ -310,6 +310,11 @@
                 syncInterval = 3600;
                 lockTimeout = 120;
               };
+              api = {
+                enabled = false;
+                hostname = "localhost";
+                listen = "127.0.0.1:24871";
+              };
               pinentry = {
                 command = "pinentry-gtk2";
                 timeout = 300;
