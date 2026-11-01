@@ -365,13 +365,12 @@ async fn prepare(
 ) -> anyhow::Result<
     impl std::future::Future<Output = anyhow::Result<()>> + Send,
 > {
-    rbw::remote_api::ensure_tls_material(&config.hostname)?;
-
     let listen: std::net::SocketAddr = config
         .listen
         .parse()
         .context("invalid remote API listen address")?;
-    let tls = tls_config()?;
+    let tls =
+        rbw::remote_api::with_tls_material(&config.hostname, tls_config_at)?;
     let router = router(ApiState::production(agent));
     let acceptor = PeerCertAcceptor::new(
         axum_server::tls_rustls::RustlsAcceptor::new(tls),
@@ -391,10 +390,6 @@ async fn prepare(
             .await
             .context("remote API listener failed")
     })
-}
-
-fn tls_config() -> anyhow::Result<axum_server::tls_rustls::RustlsConfig> {
-    tls_config_at(&rbw::dirs::remote_api_dir().join("pki"))
 }
 
 fn tls_config_at(

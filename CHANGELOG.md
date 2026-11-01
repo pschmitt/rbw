@@ -10,6 +10,13 @@
   explicitly granted rbw accounts through the status API, without accessing
   item data or prompting to unlock.
 
+### Fixed
+
+* New and rotated rbw API server certificates include an Authority Key
+  Identifier. Existing certificates missing it are rotated on startup without
+  replacing the CA, client certificates or grants, so strict TLS clients such
+  as Home Assistant can verify the API.
+
 ## [2.39.0] - 2026-11-01
 
 ### Added

@@ -428,9 +428,48 @@ pub fn certificate_fingerprint(certificate_der: &[u8]) -> String {
 /// Ensure rbw-owned CA and HTTPS server certificates exist. A hostname change
 /// rotates only the server certificate; client certificates keep their trust.
 pub fn ensure_tls_material(hostname: &str) -> anyhow::Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    anyhow::ensure!(!hostname.trim().is_empty(), "API hostname is empty");
+    with_tls_material(hostname, |_| Ok(()))
+}
+
+/// Ensure the HTTPS identity is complete, then use its files while holding the
+/// interprocess PKI lock so certificate and private-key reads cannot interleave
+/// with a rotation.
+pub fn with_tls_material<T>(
+    hostname: &str,
+    use_material: impl FnOnce(&std::path::Path) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
     let api_dir = ensure_private_dir()?;
+    with_tls_material_at(&api_dir, hostname, use_material)
+}
+
+fn with_tls_material_at<T>(
+    api_dir: &std::path::Path,
+    hostname: &str,
+    use_material: impl FnOnce(&std::path::Path) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    use fs2::FileExt as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    anyhow::ensure!(!hostname.trim().is_empty(), "API hostname is empty");
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(api_dir.join("pki.lock"))
+        .context("failed to open remote API PKI lock")?;
+    lock.lock_exclusive()
+        .context("failed to lock remote API certificate material")?;
+
+    ensure_tls_material_unlocked(hostname, api_dir)?;
+    use_material(&api_dir.join("pki"))
+}
+
+fn ensure_tls_material_unlocked(
+    hostname: &str,
+    api_dir: &std::path::Path,
+) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
     let pki_dir = api_dir.join("pki");
     if !pki_dir.exists() {
         let tmp = api_dir.join(format!("pki.{}.tmp", std::process::id()));
@@ -457,10 +496,19 @@ pub fn ensure_tls_material(hostname: &str) -> anyhow::Result<()> {
             pki_dir.display()
         );
     }
+    ensure_server_certificate(&pki_dir, hostname)
+}
+
+fn ensure_server_certificate(
+    pki_dir: &std::path::Path,
+    hostname: &str,
+) -> anyhow::Result<()> {
     let current_hostname = std::fs::read_to_string(pki_dir.join("hostname"))
         .context("failed to read remote API certificate hostname")?;
-    if current_hostname != hostname {
-        rotate_server_certificate(&pki_dir, hostname)?;
+    if current_hostname != hostname
+        || server_certificate_needs_rotation(pki_dir)?
+    {
+        rotate_server_certificate(pki_dir, hostname)?;
     }
     Ok(())
 }
@@ -500,6 +548,7 @@ fn rotate_server_certificate(
         rcgen::CertificateParams::new(vec![hostname.to_owned()])?;
     params.extended_key_usages =
         vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+    params.use_authority_key_identifier_extension = true;
     let cert = params.signed_by(&server_key, &issuer)?;
     replace_private_file(pki_dir, "server.pem", cert.pem().as_bytes())?;
     replace_private_file(
@@ -523,6 +572,7 @@ fn write_server_certificate(
     let mut params =
         rcgen::CertificateParams::new(vec![hostname.to_owned()])?;
     params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    params.use_authority_key_identifier_extension = true;
     let cert = params.signed_by(&server_key, &issuer)?;
     write_private_file(&dir.join("server.pem"), cert.pem().as_bytes())?;
     write_private_file(
@@ -530,6 +580,80 @@ fn write_server_certificate(
         server_key.serialize_pem().as_bytes(),
     )?;
     Ok(())
+}
+
+/// Detect server certificates that strict TLS clients reject because they lack
+/// the RFC 5280 Authority Key Identifier extension.
+fn server_certificate_needs_rotation(
+    pki_dir: &std::path::Path,
+) -> anyhow::Result<bool> {
+    use rcgen::PublicKeyData as _;
+    use x509_parser::extensions::ParsedExtension;
+
+    let ca_pem = std::fs::read(pki_dir.join("ca.pem"))
+        .context("failed to read remote API CA certificate")?;
+    let (_, ca_pem) =
+        x509_parser::pem::parse_x509_pem(&ca_pem).map_err(|error| {
+            anyhow::anyhow!(
+                "failed to parse remote API CA certificate: {error}"
+            )
+        })?;
+    let (_, ca) = x509_parser::parse_x509_certificate(&ca_pem.contents)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "failed to parse remote API CA certificate: {error}"
+            )
+        })?;
+    let ca_key_identifier = ca.extensions().iter().find_map(|extension| {
+        if let ParsedExtension::SubjectKeyIdentifier(identifier) =
+            extension.parsed_extension()
+        {
+            Some(identifier.0)
+        } else {
+            None
+        }
+    });
+    let Some(ca_key_identifier) = ca_key_identifier else {
+        anyhow::bail!(
+            "remote API CA certificate has no subject key identifier"
+        );
+    };
+
+    let server_pem = std::fs::read(pki_dir.join("server.pem"))
+        .context("failed to read remote API server certificate")?;
+    let (_, server_pem) = x509_parser::pem::parse_x509_pem(&server_pem)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "failed to parse remote API server certificate: {error}"
+            )
+        })?;
+    let (_, server) = x509_parser::parse_x509_certificate(
+        &server_pem.contents,
+    )
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "failed to parse remote API server certificate: {error}"
+        )
+    })?;
+    let server_key_identifier =
+        server.extensions().iter().find_map(|extension| {
+            if let ParsedExtension::AuthorityKeyIdentifier(identifier) =
+                extension.parsed_extension()
+            {
+                identifier
+                    .key_identifier
+                    .as_ref()
+                    .map(|key_identifier| key_identifier.0)
+            } else {
+                None
+            }
+        });
+    let server_key = std::fs::read_to_string(pki_dir.join("server-key.pem"))
+        .context("failed to read remote API server private key")?;
+    let server_key = rcgen::KeyPair::from_pem(&server_key)
+        .context("failed to parse remote API server private key")?;
+    Ok(server_key_identifier != Some(ca_key_identifier)
+        || server_key.subject_public_key_info() != server.public_key().raw)
 }
 
 fn replace_private_file(
@@ -846,6 +970,239 @@ impl ErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_legacy_server_certificate(dir: &std::path::Path) {
+        let ca_pem = std::fs::read_to_string(dir.join("ca.pem")).unwrap();
+        let ca_key = std::fs::read_to_string(dir.join("ca-key.pem")).unwrap();
+        let issuer = rcgen::Issuer::from_ca_cert_pem(
+            &ca_pem,
+            rcgen::KeyPair::from_pem(&ca_key).unwrap(),
+        )
+        .unwrap();
+        let key = rcgen::KeyPair::generate().unwrap();
+        let mut params =
+            rcgen::CertificateParams::new(vec!["localhost".into()]).unwrap();
+        params.extended_key_usages =
+            vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+        // Deliberately model the pre-fix profile, which omitted the AKI.
+        let certificate = params.signed_by(&key, &issuer).unwrap();
+        std::fs::write(dir.join("server.pem"), certificate.pem()).unwrap();
+        std::fs::write(dir.join("server-key.pem"), key.serialize_pem())
+            .unwrap();
+    }
+
+    fn certificate_has_aki(path: &std::path::Path) -> bool {
+        let pem = std::fs::read(path).unwrap();
+        let (_, pem) = x509_parser::pem::parse_x509_pem(&pem).unwrap();
+        let (_, certificate) =
+            x509_parser::parse_x509_certificate(&pem.contents).unwrap();
+        certificate.extensions().iter().any(|extension| {
+            matches!(
+                extension.parsed_extension(),
+                x509_parser::extensions::ParsedExtension::AuthorityKeyIdentifier(identifier)
+                    if identifier.key_identifier.is_some()
+            )
+        })
+    }
+
+    fn write_test_client_identity(dir: &std::path::Path) {
+        let ca_pem = std::fs::read_to_string(dir.join("ca.pem")).unwrap();
+        let ca_key = std::fs::read_to_string(dir.join("ca-key.pem")).unwrap();
+        let issuer = rcgen::Issuer::from_ca_cert_pem(
+            &ca_pem,
+            rcgen::KeyPair::from_pem(&ca_key).unwrap(),
+        )
+        .unwrap();
+        let key = rcgen::KeyPair::generate().unwrap();
+        let mut params = rcgen::CertificateParams::default();
+        params.extended_key_usages =
+            vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
+        params.use_authority_key_identifier_extension = true;
+        let certificate = params.signed_by(&key, &issuer).unwrap();
+        std::fs::write(dir.join("client.pem"), certificate.pem()).unwrap();
+        std::fs::write(dir.join("client-key.pem"), key.serialize_pem())
+            .unwrap();
+    }
+
+    fn python_verifies_server_certificate(dir: &std::path::Path) -> bool {
+        let script = r#"
+import socket, ssl, sys, threading
+ca, server_cert, server_key, client_cert, client_key = sys.argv[1:]
+server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+server_context.load_cert_chain(server_cert, server_key)
+server_context.verify_mode = ssl.CERT_REQUIRED
+server_context.load_verify_locations(cafile=ca)
+client_context = ssl.create_default_context(cafile=ca)
+client_context.verify_flags |= ssl.VERIFY_X509_STRICT
+client_context.load_cert_chain(client_cert, client_key)
+left, right = socket.socketpair()
+errors = []
+def serve():
+    try:
+        with server_context.wrap_socket(left, server_side=True) as conn:
+            conn.recv(1)
+    except Exception as error:
+        errors.append(type(error).__name__)
+thread = threading.Thread(target=serve)
+thread.start()
+with client_context.wrap_socket(right, server_hostname="localhost") as conn:
+    conn.send(b"x")
+thread.join()
+if errors:
+    raise SystemExit("TLS server handshake failed: " + ",".join(errors))
+"#;
+        let output = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .arg(dir.join("ca.pem"))
+            .arg(dir.join("server.pem"))
+            .arg(dir.join("server-key.pem"))
+            .arg(dir.join("client.pem"))
+            .arg(dir.join("client-key.pem"))
+            .output()
+            .expect("Python 3 is required for the strict TLS certificate regression test");
+        output.status.success()
+    }
+
+    #[test]
+    fn server_certificate_has_aki_and_strict_python_tls_accepts_it() {
+        let dir = tempfile::tempdir().unwrap();
+        create_pki(dir.path(), "localhost").unwrap();
+        write_test_client_identity(dir.path());
+
+        assert!(certificate_has_aki(&dir.path().join("server.pem")));
+        assert!(python_verifies_server_certificate(dir.path()));
+    }
+
+    #[test]
+    fn existing_server_certificate_is_rotated_without_replacing_ca_or_clients(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        create_pki(dir.path(), "localhost").unwrap();
+        let ca_before = std::fs::read(dir.path().join("ca.pem")).unwrap();
+        let ca_key_before =
+            std::fs::read(dir.path().join("ca-key.pem")).unwrap();
+        write_test_client_identity(dir.path());
+        let client_before =
+            std::fs::read(dir.path().join("client.pem")).unwrap();
+        write_legacy_server_certificate(dir.path());
+
+        assert!(!certificate_has_aki(&dir.path().join("server.pem")));
+        assert!(!python_verifies_server_certificate(dir.path()));
+        ensure_server_certificate(dir.path(), "localhost").unwrap();
+
+        assert!(certificate_has_aki(&dir.path().join("server.pem")));
+        assert_eq!(
+            std::fs::read(dir.path().join("ca.pem")).unwrap(),
+            ca_before
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("ca-key.pem")).unwrap(),
+            ca_key_before
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("client.pem")).unwrap(),
+            client_before
+        );
+        let server_before =
+            std::fs::read(dir.path().join("server.pem")).unwrap();
+        let key_before =
+            std::fs::read(dir.path().join("server-key.pem")).unwrap();
+        ensure_server_certificate(dir.path(), "localhost").unwrap();
+        assert_eq!(
+            std::fs::read(dir.path().join("server.pem")).unwrap(),
+            server_before
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("server-key.pem")).unwrap(),
+            key_before
+        );
+        assert!(python_verifies_server_certificate(dir.path()));
+    }
+
+    #[test]
+    fn mismatched_server_key_is_rotated_even_when_certificate_aki_is_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        create_pki(dir.path(), "localhost").unwrap();
+        write_test_client_identity(dir.path());
+        let client_key_before =
+            std::fs::read(dir.path().join("client-key.pem")).unwrap();
+        std::fs::copy(
+            dir.path().join("client-key.pem"),
+            dir.path().join("server-key.pem"),
+        )
+        .unwrap();
+
+        assert!(certificate_has_aki(&dir.path().join("server.pem")));
+        ensure_server_certificate(dir.path(), "localhost").unwrap();
+
+        assert!(python_verifies_server_certificate(dir.path()));
+        assert_eq!(
+            std::fs::read(dir.path().join("client-key.pem")).unwrap(),
+            client_key_before
+        );
+    }
+
+    #[test]
+    fn tls_material_rotation_and_read_are_serialized_across_callers() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Barrier, Mutex,
+        };
+
+        let api_dir = tempfile::tempdir().unwrap();
+        with_tls_material_at(api_dir.path(), "localhost", |_| Ok(()))
+            .unwrap();
+        let pki_dir = api_dir.path().join("pki");
+        write_test_client_identity(&pki_dir);
+        std::fs::copy(
+            pki_dir.join("client-key.pem"),
+            pki_dir.join("server-key.pem"),
+        )
+        .unwrap();
+
+        let first_entered = Arc::new(Barrier::new(2));
+        let release_first = Arc::new(Barrier::new(2));
+        let second_started = Arc::new(AtomicBool::new(false));
+        let order = Arc::new(Mutex::new(Vec::new()));
+
+        let first_dir = api_dir.path().to_path_buf();
+        let first_entered_thread = Arc::clone(&first_entered);
+        let release_first_thread = Arc::clone(&release_first);
+        let first_order = Arc::clone(&order);
+        let first = std::thread::spawn(move || {
+            with_tls_material_at(&first_dir, "localhost", |pki_dir| {
+                anyhow::ensure!(!server_certificate_needs_rotation(pki_dir)?);
+                first_order.lock().unwrap().push("first");
+                first_entered_thread.wait();
+                release_first_thread.wait();
+                Ok(())
+            })
+        });
+
+        first_entered.wait();
+        let second_dir = api_dir.path().to_path_buf();
+        let second_started_thread = Arc::clone(&second_started);
+        let second_order = Arc::clone(&order);
+        let second = std::thread::spawn(move || {
+            second_started_thread.store(true, Ordering::SeqCst);
+            with_tls_material_at(&second_dir, "localhost", |pki_dir| {
+                anyhow::ensure!(!server_certificate_needs_rotation(pki_dir)?);
+                second_order.lock().unwrap().push("second");
+                Ok(())
+            })
+        });
+        while !second_started.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(*order.lock().unwrap(), ["first"]);
+
+        release_first.wait();
+        first.join().unwrap().unwrap();
+        second.join().unwrap().unwrap();
+        assert_eq!(*order.lock().unwrap(), ["first", "second"]);
+    }
 
     #[test]
     fn field_tokens_round_trip_as_strings() {

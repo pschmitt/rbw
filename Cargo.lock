@@ -4017,6 +4017,7 @@ dependencies = [
  "unicode-width",
  "url",
  "urlencoding",
+ "x509-parser",
  "uuid",
  "yansi",
  "zbus 6.2.1",
