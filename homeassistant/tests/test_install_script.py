@@ -265,6 +265,9 @@ class HomeAssistantPackageTests(unittest.TestCase):
             self.assertIn("sha256 ", first.stdout)
             with tarfile.open(first_archive) as archive:
                 names = archive.getnames()
+                packaged_icon = archive.extractfile("custom_components/rbw/brand/icon.png")
+                self.assertIsNotNone(packaged_icon)
+                packaged_icon_bytes = packaged_icon.read()
 
         self.assertTrue(names)
         self.assertTrue(
@@ -275,6 +278,12 @@ class HomeAssistantPackageTests(unittest.TestCase):
         )
         self.assertIn("custom_components/rbw/manifest.json", names)
         self.assertIn("custom_components/rbw/api.py", names)
+        icon_path = "custom_components/rbw/brand/icon.png"
+        self.assertIn(icon_path, names)
+        self.assertEqual(
+            packaged_icon_bytes,
+            (REPO_ROOT / "assets/icons/rbw-256.png").read_bytes(),
+        )
         self.assertFalse(any(name.endswith((".pem", ".key", ".crt")) for name in names))
         self.assertFalse(any("__pycache__" in name or name.endswith(".pyc") for name in names))
 

@@ -6,6 +6,12 @@ It is intended for other Home Assistant integrations that need one explicitly
 granted field. It does not list items, poll the vault, cache results, or expose
 a secret-returning Home Assistant service.
 
+The integration bundles the rbw icon at
+[`brand/icon.png`](../homeassistant/custom_components/rbw/brand/icon.png),
+copied byte-for-byte from the canonical [`rbw-256.png`](../assets/icons/rbw-256.png)
+asset. Home Assistant Core 2026.3 and later reads local custom-integration brand
+images directly from this directory; the installer archive includes the image.
+
 ## Install
 
 The source stays in this monorepo. Export a deterministic, source-only archive
