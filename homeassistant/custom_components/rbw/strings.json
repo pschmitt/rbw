@@ -1,0 +1,93 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "rbw",
+        "description": "Connect to an rbw policy API using an mTLS client certificate. Certificate files stay on this Home Assistant host.",
+        "data": {
+          "base_url": "HTTPS API origin printed by rbw",
+          "ca_cert": "Server CA certificate file",
+          "client_cert": "Client certificate file",
+          "client_key": "Client private key file"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure rbw connection",
+        "description": "Update the API URL or mTLS certificate file paths.",
+        "data": {
+          "base_url": "HTTPS API origin printed by rbw",
+          "ca_cert": "Server CA certificate file",
+          "client_cert": "Client certificate file",
+          "client_key": "Client private key file"
+        }
+      }
+    },
+    "error": {
+      "invalid_connection": "The HTTPS URL or certificate files are invalid. Check the paths, PEM files, and key pair."
+    },
+    "abort": {
+      "already_configured": "This rbw API URL is already configured.",
+      "reconfigure_successful": "The rbw connection was updated."
+    }
+  },
+  "issues": {
+    "api_unavailable": {
+      "title": "rbw API request failed",
+      "description": "A requested field could not be fetched. Retry the same request after the API or vault is available.",
+      "fix_flow": {
+        "step": {
+          "init": {"title": "Retry rbw request", "menu_options": {"retry": "Retry request", "reconfigure": "Update connection"}},
+          "retry": {"title": "Retry rbw request", "description": "The requested value is discarded after checking that the request now succeeds."}
+        },
+        "error": {
+          "still_unavailable": "The API or vault is still unavailable. Try again later.",
+          "integration_unavailable": "Reload the rbw integration, then retry."
+        },
+        "abort": {
+          "entry_not_found": "The rbw config entry no longer exists.",
+          "request_not_available": "The failed request details are no longer available.",
+          "request_not_retryable": "The request now fails for a permanent reason. Check the item and field policy.",
+          "credentials_need_update": "The client certificate was rejected. Update the connection credentials."
+        }
+      }
+    },
+    "client_certificate": {
+      "title": "rbw client certificate needs attention",
+      "description": "Home Assistant could not authenticate with the rbw API. Update the client certificate or CA file paths.",
+      "fix_flow": {
+        "step": {
+          "init": {"title": "Update rbw connection", "menu_options": {"reconfigure": "Update connection"}}
+        },
+        "abort": {
+          "entry_not_found": "The rbw config entry no longer exists.",
+          "reconfigure_started": "The rbw connection form was opened."
+        }
+      }
+    },
+    "reauthentication_required": {
+      "title": "rbw item requires interactive unlock",
+      "description": "This item requires the Bitwarden master password again. Remove its reprompt setting, or read it with the local interactive rbw client.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Handle item reprompt",
+            "description": "Home Assistant cannot provide the master password prompt. Remove the item reprompt setting in Bitwarden, or use the local interactive rbw client, then retry to verify access.",
+            "menu_options": {
+              "manual_action": "Retry after handling reprompt"
+            }
+          },
+          "manual_action": {
+            "title": "Retry item read",
+            "description": "After removing the reprompt setting, retry the request. The returned value is discarded."
+          }
+        },
+        "error": {
+          "reauthentication_required": "The item still requires an interactive master password prompt."
+        },
+        "abort": {
+          "reauthentication_required": "The item still requires an interactive master password prompt."
+        }
+      }
+    }
+  }
+}

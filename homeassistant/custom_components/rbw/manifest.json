@@ -1,0 +1,11 @@
+{
+  "domain": "rbw",
+  "name": "rbw",
+  "codeowners": ["@pschmitt"],
+  "config_flow": true,
+  "documentation": "https://github.com/pschmitt/rbw/blob/main/docs/home-assistant.md",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/pschmitt/rbw/issues",
+  "version": "0.1.0"
+}

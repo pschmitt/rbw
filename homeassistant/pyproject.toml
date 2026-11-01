@@ -1,0 +1,18 @@
+[project]
+name = "homeassistant-rbw"
+version = "0.1.0"
+description = "Home Assistant client for the rbw policy API"
+requires-python = ">=3.13"
+dependencies = ["aiohttp>=3.9.0", "voluptuous>=0.13.0"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E501"]

@@ -37,6 +37,8 @@ timeout.
   fingerprint confirmation or the Termux Android Keystore.
 - **MCP server** (`rbw mcp`) so AI agents can search and edit the vault with
   secrets masked. See [docs/mcp.md](docs/mcp.md).
+- **Home Assistant client** for explicit, policy-checked field reads over
+  mutual TLS. See [docs/home-assistant.md](docs/home-assistant.md).
 - **Home Manager module**.
 
 ## Install
@@ -83,6 +85,7 @@ rest. On bitwarden.com, run `rbw register` first
 | [MCP server](docs/mcp.md) | `rbw mcp` for AI agents |
 | [SSH agent](docs/ssh-agent.md) | Using vault SSH keys |
 | [Remote field API](docs/remote-api.md) | Authenticated, per-field access for remote clients |
+| [Home Assistant](docs/home-assistant.md) | Install the custom integration and use its async client API |
 | [Termux](docs/termux.md) | Android Keystore unlock |
 | [Desktop unlock](docs/desktop-unlock.md) | Secret Service and fingerprint confirmation |
 | [Browser extension](browser/README.md) | Firefox and Chromium |
