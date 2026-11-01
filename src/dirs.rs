@@ -77,6 +77,11 @@ pub fn device_id_file() -> std::path::PathBuf {
     data_dir().join("device_id")
 }
 
+/// Directory for rbw's generated remote API CA, server certificate and client credentials.
+pub fn remote_api_dir() -> std::path::PathBuf {
+    data_dir().join("remote-api")
+}
+
 pub fn socket_file() -> std::path::PathBuf {
     runtime_dir().join("socket")
 }

@@ -82,6 +82,7 @@ rest. On bitwarden.com, run `rbw register` first
 | [Injection](docs/inject.md) | `rbw inject` and `rbw run` |
 | [MCP server](docs/mcp.md) | `rbw mcp` for AI agents |
 | [SSH agent](docs/ssh-agent.md) | Using vault SSH keys |
+| [Remote field API](docs/remote-api.md) | Authenticated, per-field access for remote clients |
 | [Termux](docs/termux.md) | Android Keystore unlock |
 | [Desktop unlock](docs/desktop-unlock.md) | Secret Service and fingerprint confirmation |
 | [Browser extension](browser/README.md) | Firefox and Chromium |

@@ -1,0 +1,651 @@
+use anyhow::Context as _;
+use axum::{
+    extract::{Extension, Path, State},
+    http::{header, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
+use futures::future::BoxFuture;
+
+use rbw::remote_api::{ApiError, ErrorCode, FieldReadResponse};
+
+type PolicyFuture = BoxFuture<
+    'static,
+    Result<(bool, rbw::remote_api::PolicyStore), ApiError>,
+>;
+type ReaderFuture = BoxFuture<'static, Result<FieldReadResponse, ApiError>>;
+
+#[derive(Clone)]
+struct ApiState {
+    policy: std::sync::Arc<dyn Fn() -> PolicyFuture + Send + Sync>,
+    reader: std::sync::Arc<
+        dyn Fn(rbw::remote_api::FieldReadRequest, String) -> ReaderFuture
+            + Send
+            + Sync,
+    >,
+}
+
+impl ApiState {
+    fn production(
+        agent: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    ) -> Self {
+        let policy: std::sync::Arc<dyn Fn() -> PolicyFuture + Send + Sync> =
+            std::sync::Arc::new(|| {
+                Box::pin(async {
+                    let config = rbw::config::Config::load_async()
+                        .await
+                        .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
+                    let store = rbw::remote_api::load_policy_store()
+                        .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
+                    Ok((config.api.enabled, store))
+                })
+            });
+        let reader: std::sync::Arc<
+            dyn Fn(rbw::remote_api::FieldReadRequest, String) -> ReaderFuture
+                + Send
+                + Sync,
+        > = std::sync::Arc::new(move |request, account: String| {
+            let agent = agent.clone();
+            Box::pin(async move {
+                let environment = rbw::protocol::Environment::default();
+                crate::actions::read_remote_field(
+                    agent,
+                    request,
+                    &account,
+                    &environment,
+                )
+                .await
+            })
+        });
+        Self { policy, reader }
+    }
+}
+
+struct RunningListener {
+    listen: String,
+    hostname: String,
+    cancel: tokio_util::sync::CancellationToken,
+    task: tokio::task::JoinHandle<()>,
+}
+
+pub async fn supervise(
+    agent: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+) {
+    let mut interval =
+        tokio::time::interval(std::time::Duration::from_millis(500));
+    let mut running: Option<RunningListener> = None;
+    let mut last_status: Option<rbw::remote_api::ListenerStatus> = None;
+    loop {
+        interval.tick().await;
+        let config = match rbw::config::Config::load_async().await {
+            Ok(config) => config,
+            Err(error) => {
+                log::warn!("remote API config reload failed: {error:#}");
+                continue;
+            }
+        };
+        let desired_listen = config.api.listen.clone();
+        let desired_hostname = config.api.hostname.clone();
+        let same_config = running.as_ref().is_some_and(|listener| {
+            listener.listen == desired_listen
+                && listener.hostname == desired_hostname
+                && !listener.task.is_finished()
+        });
+
+        if !config.api.enabled {
+            if let Some(listener) = running.take() {
+                stop_listener(listener).await;
+            }
+            save_status_if_changed(
+                &mut last_status,
+                rbw::remote_api::ListenerStatus {
+                    enabled: false,
+                    listening: false,
+                    listen: desired_listen,
+                    hostname: desired_hostname,
+                    pid: std::process::id(),
+                    error: None,
+                },
+            );
+            continue;
+        }
+
+        if same_config {
+            continue;
+        }
+        if let Some(listener) = running.take() {
+            stop_listener(listener).await;
+        }
+
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let listener_config = config.api.clone();
+        let listener_cancel = cancel.clone();
+        let listener_agent = agent.clone();
+        let task = tokio::spawn(async move {
+            if let Err(error) = run(
+                listener_agent,
+                listener_config,
+                ready_tx,
+                listener_cancel,
+            )
+            .await
+            {
+                log::error!("remote API stopped: {error:#}");
+            }
+        });
+
+        match ready_rx.await {
+            Ok(Ok(())) => {
+                save_status_if_changed(
+                    &mut last_status,
+                    rbw::remote_api::ListenerStatus {
+                        enabled: true,
+                        listening: true,
+                        listen: desired_listen.clone(),
+                        hostname: desired_hostname.clone(),
+                        pid: std::process::id(),
+                        error: None,
+                    },
+                );
+                running = Some(RunningListener {
+                    listen: desired_listen,
+                    hostname: desired_hostname,
+                    cancel,
+                    task,
+                });
+            }
+            Ok(Err(error)) => {
+                log::error!("remote API did not start: {error}");
+                save_status_if_changed(
+                    &mut last_status,
+                    rbw::remote_api::ListenerStatus {
+                        enabled: true,
+                        listening: false,
+                        listen: desired_listen,
+                        hostname: desired_hostname,
+                        pid: std::process::id(),
+                        error: Some(error),
+                    },
+                );
+                let _ = task.await;
+            }
+            Err(_) => {
+                log::error!("remote API did not report startup");
+                let _ = task.await;
+            }
+        }
+    }
+}
+
+fn save_status_if_changed(
+    last_status: &mut Option<rbw::remote_api::ListenerStatus>,
+    status: rbw::remote_api::ListenerStatus,
+) {
+    let changed = last_status.as_ref().is_none_or(|previous| {
+        previous.enabled != status.enabled
+            || previous.listening != status.listening
+            || previous.listen != status.listen
+            || previous.hostname != status.hostname
+            || previous.error != status.error
+    });
+    if changed {
+        if let Err(error) = rbw::remote_api::save_listener_status(&status) {
+            log::warn!(
+                "failed to save remote API listener status: {error:#}"
+            );
+        }
+        *last_status = Some(status);
+    }
+}
+
+async fn stop_listener(listener: RunningListener) {
+    listener.cancel.cancel();
+    if tokio::time::timeout(std::time::Duration::from_secs(2), listener.task)
+        .await
+        .is_err()
+    {
+        log::warn!("remote API listener did not stop promptly");
+    }
+}
+
+async fn run(
+    agent: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    config: rbw::config::ApiConfig,
+    ready: tokio::sync::oneshot::Sender<Result<(), String>>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<()> {
+    let prepared = prepare(agent, &config).await;
+    let server = match prepared {
+        Ok(server) => server,
+        Err(error) => {
+            let _ = ready.send(Err(format!("{error:#}")));
+            return Err(error);
+        }
+    };
+    let _ = ready.send(Ok(()));
+    tokio::select! {
+        () = cancel.cancelled() => Ok(()),
+        result = server => result.context("remote API listener failed"),
+    }
+}
+
+async fn prepare(
+    agent: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    config: &rbw::config::ApiConfig,
+) -> anyhow::Result<
+    impl std::future::Future<Output = anyhow::Result<()>> + Send,
+> {
+    rbw::remote_api::ensure_tls_material(&config.hostname)?;
+
+    let listen: std::net::SocketAddr = config
+        .listen
+        .parse()
+        .context("invalid remote API listen address")?;
+    let tls = tls_config()?;
+    let router = router(ApiState::production(agent));
+    let acceptor = axum_server_mtls::MtlsAcceptor::new(
+        axum_server::tls_rustls::RustlsAcceptor::new(tls),
+    );
+
+    let listener = tokio::net::TcpListener::bind(listen)
+        .await
+        .context("failed to bind remote API listener")?;
+    let listener = listener
+        .into_std()
+        .context("failed to prepare remote API listener")?;
+    let server = axum_server::from_tcp(listener)?.acceptor(acceptor);
+    log::info!("rbw remote field API listening on {listen}");
+    Ok(async move {
+        server
+            .serve(router.into_make_service())
+            .await
+            .context("remote API listener failed")
+    })
+}
+
+fn tls_config() -> anyhow::Result<axum_server::tls_rustls::RustlsConfig> {
+    tls_config_at(&rbw::dirs::remote_api_dir().join("pki"))
+}
+
+fn tls_config_at(
+    pki_dir: &std::path::Path,
+) -> anyhow::Result<axum_server::tls_rustls::RustlsConfig> {
+    use rustls::{
+        pki_types::{CertificateDer, PrivateKeyDer},
+        server::WebPkiClientVerifier,
+        RootCertStore,
+    };
+    use std::io::BufReader;
+
+    let ca_file = std::fs::File::open(pki_dir.join("ca.pem"))?;
+    let ca = rustls_pemfile::certs(&mut BufReader::new(ca_file))
+        .next()
+        .transpose()?
+        .context("remote API CA certificate is missing")?;
+    let mut roots = RootCertStore::empty();
+    roots.add(ca).context("invalid remote API CA certificate")?;
+    let verifier = WebPkiClientVerifier::builder(std::sync::Arc::new(roots))
+        .build()
+        .context("failed to configure required mTLS client verification")?;
+
+    let cert_file = std::fs::File::open(pki_dir.join("server.pem"))?;
+    let cert_chain: Vec<CertificateDer<'static>> =
+        rustls_pemfile::certs(&mut BufReader::new(cert_file))
+            .collect::<Result<_, _>>()?;
+    let key_file = std::fs::File::open(pki_dir.join("server-key.pem"))?;
+    let key: PrivateKeyDer<'static> =
+        rustls_pemfile::private_key(&mut BufReader::new(key_file))?
+            .context("remote API server key is missing")?;
+    let mut server = rustls::ServerConfig::builder()
+        .with_client_cert_verifier(verifier)
+        .with_single_cert(cert_chain, key)
+        .context("failed to configure remote API TLS identity")?;
+    server.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(axum_server::tls_rustls::RustlsConfig::from_config(
+        std::sync::Arc::new(server),
+    ))
+}
+
+fn router(state: ApiState) -> Router {
+    Router::new()
+        .route("/v1/items/{item_id}/fields/{*field}", get(read_field))
+        .with_state(state)
+}
+
+async fn read_field(
+    State(state): State<ApiState>,
+    Extension(certificates): Extension<axum_server_mtls::PeerCertificates>,
+    Path((item_id, field_token)): Path<(String, String)>,
+) -> Response {
+    let result = read_field_inner(
+        &state,
+        certificates.leaf().map(std::convert::AsRef::as_ref),
+        &item_id,
+        &field_token,
+    )
+    .await;
+    let mut response = match result {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => {
+            let status = error.code.status();
+            let retryable = error.retryable;
+            let mut response = (status, Json(error)).into_response();
+            if retryable {
+                response.headers_mut().insert(
+                    header::RETRY_AFTER,
+                    HeaderValue::from_static("5"),
+                );
+            }
+            response
+        }
+    };
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+async fn read_field_inner(
+    state: &ApiState,
+    certificate_der: Option<&[u8]>,
+    item_id: &str,
+    field_token: &str,
+) -> Result<FieldReadResponse, ApiError> {
+    use rbw::remote_api::{FieldReadRequest, FieldRef};
+
+    let (enabled, store) = (state.policy)().await?;
+    let field = field_token
+        .parse::<FieldRef>()
+        .map_err(|_| ApiError::new(ErrorCode::InvalidRequest))?;
+    let account = authorized_account(
+        enabled,
+        &store,
+        certificate_der,
+        item_id,
+        &field,
+    )?;
+
+    (state.reader)(
+        FieldReadRequest {
+            item_id: item_id.to_owned(),
+            field,
+        },
+        account,
+    )
+    .await
+}
+
+fn authorized_account(
+    enabled: bool,
+    store: &rbw::remote_api::PolicyStore,
+    certificate_der: Option<&[u8]>,
+    item_id: &str,
+    field: &rbw::remote_api::FieldRef,
+) -> Result<String, ApiError> {
+    if !enabled {
+        return Err(ApiError::new(ErrorCode::Unauthorized));
+    }
+    let certificate_der = certificate_der
+        .ok_or_else(|| ApiError::new(ErrorCode::Unauthorized))?;
+    let fingerprint =
+        rbw::remote_api::certificate_fingerprint(certificate_der);
+    let client = store
+        .clients
+        .values()
+        .find(|client| client.fingerprint == fingerprint)
+        .ok_or_else(|| ApiError::new(ErrorCode::Unauthorized))?;
+    let account = client
+        .account
+        .clone()
+        .ok_or_else(|| ApiError::new(ErrorCode::Forbidden))?;
+    let allowed_fields = client
+        .items
+        .get(item_id)
+        .ok_or_else(|| ApiError::new(ErrorCode::Forbidden))?;
+    if !allowed_fields.contains(field) {
+        return Err(ApiError::new(ErrorCode::Forbidden));
+    }
+    Ok(account)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rbw::remote_api::{ClientPolicy, FieldRef, PolicyStore};
+    use rcgen::{
+        CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
+    };
+    use std::sync::Arc;
+
+    struct TlsFixture {
+        pki_dir: tempfile::TempDir,
+        ca_pem: String,
+        client_identity: Vec<u8>,
+        client_cert_der: Vec<u8>,
+    }
+
+    fn tls_fixture() -> TlsFixture {
+        let mut ca_params = CertificateParams::default();
+        ca_params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        ca_params.key_usages = vec![rcgen::KeyUsagePurpose::KeyCertSign];
+        let ca_key = KeyPair::generate().unwrap();
+        let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+
+        let server_key = KeyPair::generate().unwrap();
+        let mut server_params =
+            CertificateParams::new(vec!["localhost".to_owned()]).unwrap();
+        server_params.extended_key_usages =
+            vec![ExtendedKeyUsagePurpose::ServerAuth];
+        let server_issuer = Issuer::from_ca_cert_pem(
+            &ca_cert.pem(),
+            KeyPair::from_pem(&ca_key.serialize_pem()).unwrap(),
+        )
+        .unwrap();
+        let server_cert = server_params
+            .signed_by(&server_key, &server_issuer)
+            .unwrap();
+
+        let client_key = KeyPair::generate().unwrap();
+        let mut client_params = CertificateParams::default();
+        client_params.extended_key_usages =
+            vec![ExtendedKeyUsagePurpose::ClientAuth];
+        let client_issuer = Issuer::from_ca_cert_pem(
+            &ca_cert.pem(),
+            KeyPair::from_pem(&ca_key.serialize_pem()).unwrap(),
+        )
+        .unwrap();
+        let client_cert = client_params
+            .signed_by(&client_key, &client_issuer)
+            .unwrap();
+        let pki_dir = tempfile::tempdir().unwrap();
+        std::fs::write(pki_dir.path().join("ca.pem"), ca_cert.pem()).unwrap();
+        std::fs::write(pki_dir.path().join("server.pem"), server_cert.pem())
+            .unwrap();
+        std::fs::write(
+            pki_dir.path().join("server-key.pem"),
+            server_key.serialize_pem(),
+        )
+        .unwrap();
+        let mut identity = client_cert.pem().into_bytes();
+        identity.extend_from_slice(client_key.serialize_pem().as_bytes());
+        TlsFixture {
+            pki_dir,
+            ca_pem: ca_cert.pem(),
+            client_identity: identity,
+            client_cert_der: client_cert.der().to_vec(),
+        }
+    }
+
+    fn test_state(
+        certificate_der: &[u8],
+        enabled: bool,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> (ApiState, Arc<tokio::sync::RwLock<(bool, PolicyStore)>>) {
+        use std::sync::atomic::Ordering;
+
+        let fingerprint =
+            rbw::remote_api::certificate_fingerprint(certificate_der);
+        let client = ClientPolicy {
+            id: "client-1".to_owned(),
+            name: "synthetic client".to_owned(),
+            fingerprint,
+            account: Some("personal".to_owned()),
+            items: std::collections::BTreeMap::from([(
+                "item-1".to_owned(),
+                vec![FieldRef::Password],
+            )]),
+        };
+        let state_value = Arc::new(tokio::sync::RwLock::new((
+            enabled,
+            PolicyStore {
+                clients: std::collections::BTreeMap::from([(
+                    client.id.clone(),
+                    client,
+                )]),
+            },
+        )));
+        let policy_source = state_value.clone();
+        let policy: Arc<dyn Fn() -> PolicyFuture + Send + Sync> =
+            Arc::new(move || {
+                let source = policy_source.clone();
+                Box::pin(async move {
+                    let (enabled, store) = source.read().await.clone();
+                    Ok((enabled, store))
+                })
+            });
+        let reader: Arc<
+            dyn Fn(rbw::remote_api::FieldReadRequest, String) -> ReaderFuture
+                + Send
+                + Sync,
+        > = Arc::new(
+            move |request: rbw::remote_api::FieldReadRequest,
+                  _account: String| {
+                let calls = calls.clone();
+                Box::pin(async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(FieldReadResponse {
+                        field: request.field,
+                        value: Some("synthetic-secret-value".to_owned()),
+                        sensitive: true,
+                    })
+                })
+            },
+        );
+        (ApiState { policy, reader }, state_value)
+    }
+
+    async fn https_request(
+        url: String,
+        ca_pem: String,
+        client_identity: Option<Vec<u8>>,
+        path: &'static str,
+    ) -> anyhow::Result<(reqwest::StatusCode, Option<String>, String)> {
+        tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let ca = reqwest::Certificate::from_pem(ca_pem.as_bytes())?;
+            let mut builder =
+                reqwest::blocking::Client::builder().add_root_certificate(ca);
+            if let Some(identity) = client_identity {
+                builder =
+                    builder.identity(reqwest::Identity::from_pem(&identity)?);
+            }
+            let response =
+                builder.build()?.get(format!("{url}{path}")).send()?;
+            let status = response.status();
+            let cache_control = response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            let body = response.text()?;
+            Ok((status, cache_control, body))
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn https_handler_enforces_grants_revocation_and_disabled_state() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let fixture = tls_fixture();
+        let tls = tls_config_at(fixture.pki_dir.path()).unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (state, policy) =
+            test_state(&fixture.client_cert_der, true, calls.clone());
+        let app = router(state);
+        let listener =
+            tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let listener = listener.into_std().unwrap();
+        let acceptor = axum_server_mtls::MtlsAcceptor::new(
+            axum_server::tls_rustls::RustlsAcceptor::new(tls),
+        );
+        let server =
+            axum_server::from_tcp(listener).unwrap().acceptor(acceptor);
+        let server_task = tokio::spawn(async move {
+            server.serve(app.into_make_service()).await
+        });
+        let url = format!("https://localhost:{}", address.port());
+
+        assert!(https_request(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            None,
+            "/v1/items/item-1/fields/password",
+        )
+        .await
+        .is_err());
+
+        let response = https_request(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/items/item-1/fields/password",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1.as_deref(), Some("no-store"));
+        let payload: FieldReadResponse =
+            serde_json::from_str(&response.2).unwrap();
+        assert_eq!(payload.value.as_deref(), Some("synthetic-secret-value"));
+
+        let response = https_request(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/items/item-1/fields/username",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::FORBIDDEN);
+
+        // Removing the client from the current policy denies a subsequent
+        // request using the same established client identity.
+        policy.write().await.1 = PolicyStore::default();
+        let response = https_request(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/items/item-1/fields/password",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::UNAUTHORIZED);
+
+        policy.write().await.0 = false;
+        let response = https_request(
+            url,
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/items/item-1/fields/password",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        server_task.abort();
+    }
+}

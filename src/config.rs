@@ -224,6 +224,49 @@ pub struct AgentConfig {
     pub lock_timeout: u64,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_api_listen")]
+    pub listen: String,
+    #[serde(default = "default_api_hostname")]
+    pub hostname: String,
+}
+
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: default_api_listen(),
+            hostname: default_api_hostname(),
+        }
+    }
+}
+
+impl ApiConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+impl PartialEq for ApiConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.enabled == other.enabled
+            && self.listen == other.listen
+            && self.hostname == other.hostname
+    }
+}
+
+pub fn default_api_listen() -> String {
+    "127.0.0.1:24871".to_owned()
+}
+
+pub fn default_api_hostname() -> String {
+    "localhost".to_owned()
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -840,6 +883,8 @@ pub struct Config {
     // ---- grouped global preferences ---------------------------------------
     #[serde(default)]
     pub agent: AgentConfig,
+    #[serde(default, skip_serializing_if = "ApiConfig::is_default")]
+    pub api: ApiConfig,
     #[serde(default)]
     pub pinentry: PinentryConfig,
     #[serde(default, skip_serializing_if = "UnlockUi::is_auto")]

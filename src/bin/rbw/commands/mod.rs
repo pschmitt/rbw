@@ -302,6 +302,13 @@ pub use process_cmds::*;
     clippy::wildcard_imports,
     reason = "the command modules share one namespace, as they did in a single file"
 )]
+mod remote_api_cmds;
+pub use remote_api_cmds::*;
+
+#[allow(
+    clippy::wildcard_imports,
+    reason = "the command modules share one namespace, as they did in a single file"
+)]
 mod find;
 pub use find::*;
 

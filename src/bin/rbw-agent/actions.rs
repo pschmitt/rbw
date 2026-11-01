@@ -1753,6 +1753,253 @@ pub async fn decrypt(
     Ok(())
 }
 
+/// Read one pre-authorized item field for the remote API. This intentionally
+/// performs the item lookup and decryption inside the agent; callers never
+/// provide cipherstrings or encryption keys.
+pub async fn read_remote_field(
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    request: rbw::remote_api::FieldReadRequest,
+    account_name: &str,
+    environment: &rbw::protocol::Environment,
+) -> Result<rbw::remote_api::FieldReadResponse, rbw::remote_api::ApiError> {
+    use rbw::remote_api::{ApiError, ErrorCode, FieldReadResponse, FieldRef};
+
+    let account = resolve_account(Some(account_name))
+        .await
+        .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
+    let db = load_db(&account)
+        .await
+        .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
+    let entry = db
+        .entries
+        .iter()
+        .find(|entry| entry.id == request.item_id && !entry.deleted)
+        .ok_or_else(|| ApiError::new(ErrorCode::NotFound))?;
+    if entry.master_password_reprompt() {
+        return Err(ApiError::new(ErrorCode::ReauthenticationRequired));
+    }
+    if state
+        .lock()
+        .await
+        .key(&account.name, entry.org_id.as_deref())
+        .is_none()
+    {
+        return Err(ApiError::new(ErrorCode::VaultLocked));
+    }
+
+    let field = request.field;
+    let mut sensitive = field.is_sensitive();
+    let encrypted = match (&field, &entry.data) {
+        (FieldRef::Name, _) => Some(entry.name.as_str()),
+        (
+            FieldRef::Username,
+            rbw::db::EntryData::Login { username, .. }
+            | rbw::db::EntryData::Identity { username, .. },
+        ) => username.as_deref(),
+        (FieldRef::Password, rbw::db::EntryData::Login { password, .. }) => {
+            password.as_deref()
+        }
+        (FieldRef::Totp, rbw::db::EntryData::Login { totp, .. }) => {
+            let seed = decrypt_remote_value(
+                state.clone(),
+                environment,
+                totp.as_deref(),
+                entry,
+                &account,
+            )
+            .await?;
+            let value = seed
+                .map(|mut seed| {
+                    let result = generate_remote_totp(&seed);
+                    zeroize::Zeroize::zeroize(&mut seed);
+                    result
+                })
+                .transpose()
+                .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
+            return Ok(FieldReadResponse {
+                field,
+                value,
+                sensitive: true,
+            });
+        }
+        (FieldRef::Uri(index), rbw::db::EntryData::Login { uris, .. }) => {
+            let Some(uri) = uris.get(*index) else {
+                return Err(ApiError::new(ErrorCode::NotFound));
+            };
+            Some(uri.uri.as_str())
+        }
+        (FieldRef::Notes, _) => entry.notes.as_deref(),
+        (FieldRef::Custom(expected), _) => {
+            let mut found = None;
+            for custom in &entry.fields {
+                let name = decrypt_remote_value(
+                    state.clone(),
+                    environment,
+                    custom.name.as_deref(),
+                    entry,
+                    &account,
+                )
+                .await?;
+                if name.as_deref() == Some(expected.as_str()) {
+                    if found.is_some() {
+                        return Err(ApiError::new(ErrorCode::NotFound));
+                    }
+                    found = Some(custom);
+                }
+            }
+            let Some(custom) = found else {
+                return Err(ApiError::new(ErrorCode::NotFound));
+            };
+            sensitive = custom.ty == Some(rbw::api::FieldType::Hidden);
+            custom.value.as_deref()
+        }
+        (
+            FieldRef::CardholderName,
+            rbw::db::EntryData::Card {
+                cardholder_name, ..
+            },
+        ) => cardholder_name.as_deref(),
+        (FieldRef::CardNumber, rbw::db::EntryData::Card { number, .. }) => {
+            number.as_deref()
+        }
+        (FieldRef::CardBrand, rbw::db::EntryData::Card { brand, .. }) => {
+            brand.as_deref()
+        }
+        (
+            FieldRef::CardExpMonth,
+            rbw::db::EntryData::Card { exp_month, .. },
+        ) => exp_month.as_deref(),
+        (
+            FieldRef::CardExpYear,
+            rbw::db::EntryData::Card { exp_year, .. },
+        ) => exp_year.as_deref(),
+        (FieldRef::CardCode, rbw::db::EntryData::Card { code, .. }) => {
+            code.as_deref()
+        }
+        (FieldRef::Identity(name), rbw::db::EntryData::Identity { .. }) => {
+            identity_value(&entry.data, name)
+        }
+        (
+            FieldRef::SshPrivateKey,
+            rbw::db::EntryData::SshKey { private_key, .. },
+        ) => private_key.as_deref(),
+        (
+            FieldRef::SshPublicKey,
+            rbw::db::EntryData::SshKey { public_key, .. },
+        ) => public_key.as_deref(),
+        (
+            FieldRef::SshFingerprint,
+            rbw::db::EntryData::SshKey { fingerprint, .. },
+        ) => fingerprint.as_deref(),
+        _ => return Err(ApiError::new(ErrorCode::NotFound)),
+    };
+
+    let value =
+        decrypt_remote_value(state, environment, encrypted, entry, &account)
+            .await?;
+    Ok(FieldReadResponse {
+        field,
+        value,
+        sensitive,
+    })
+}
+
+async fn decrypt_remote_value(
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    environment: &rbw::protocol::Environment,
+    cipherstring: Option<&str>,
+    entry: &rbw::db::Entry,
+    account: &rbw::config::Account,
+) -> Result<Option<String>, rbw::remote_api::ApiError> {
+    let Some(cipherstring) = cipherstring else {
+        return Ok(None);
+    };
+    decrypt_cipher(
+        state,
+        environment,
+        cipherstring,
+        entry.key.as_deref(),
+        entry.org_id.as_deref(),
+        None,
+        None,
+        account,
+    )
+    .await
+    .map(Some)
+    .map_err(|_| {
+        rbw::remote_api::ApiError::new(
+            rbw::remote_api::ErrorCode::Unavailable,
+        )
+    })
+}
+
+fn identity_value<'a>(
+    data: &'a rbw::db::EntryData,
+    name: &str,
+) -> Option<&'a str> {
+    let rbw::db::EntryData::Identity {
+        title,
+        first_name,
+        middle_name,
+        last_name,
+        address1,
+        address2,
+        address3,
+        city,
+        state,
+        postal_code,
+        country,
+        phone,
+        email,
+        ssn,
+        license_number,
+        passport_number,
+        username,
+    } = data
+    else {
+        return None;
+    };
+    match name {
+        "title" => title.as_deref(),
+        "first_name" => first_name.as_deref(),
+        "middle_name" => middle_name.as_deref(),
+        "last_name" => last_name.as_deref(),
+        "address1" => address1.as_deref(),
+        "address2" => address2.as_deref(),
+        "address3" => address3.as_deref(),
+        "city" => city.as_deref(),
+        "state" => state.as_deref(),
+        "postal_code" => postal_code.as_deref(),
+        "country" => country.as_deref(),
+        "phone" => phone.as_deref(),
+        "email" => email.as_deref(),
+        "ssn" => ssn.as_deref(),
+        "license_number" => license_number.as_deref(),
+        "passport_number" => passport_number.as_deref(),
+        "username" => username.as_deref(),
+        _ => None,
+    }
+}
+
+fn generate_remote_totp(secret: &str) -> anyhow::Result<String> {
+    let url = if secret.starts_with("otpauth://") {
+        zeroize::Zeroizing::new(secret.to_owned())
+    } else if let Some(secret) = secret.strip_prefix("steam://") {
+        zeroize::Zeroizing::new(format!(
+            "otpauth://totp/rbw?secret={}&algorithm=STEAM",
+            urlencoding::encode(secret)
+        ))
+    } else {
+        let secret = zeroize::Zeroizing::new(secret.trim().replace(' ', ""));
+        zeroize::Zeroizing::new(format!(
+            "otpauth://totp/rbw?secret={}",
+            urlencoding::encode(secret.as_str())
+        ))
+    };
+    let totp = totp_rs::Totp::from_url_unchecked(url.as_str())?;
+    Ok(totp.generate_current().to_string())
+}
+
 pub async fn decrypt_batch(
     sock: &mut crate::sock::Sock,
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,

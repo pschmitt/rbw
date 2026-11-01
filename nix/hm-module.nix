@@ -418,6 +418,34 @@ let
         default = { };
         description = "Agent synchronization and key-retention settings.";
       };
+      api = mkOption {
+        type = types.submodule {
+          options = {
+            enabled = mkOption {
+              type = types.bool;
+              default = false;
+              description = ''
+                Enable rbw's remote field API. This API uses TLS client
+                certificates and listens only on the loopback interface by
+                default. Set `listen` and `hostname` explicitly for remote
+                clients.
+              '';
+            };
+            listen = mkOption {
+              type = types.str;
+              default = "127.0.0.1:24871";
+              description = "TCP address for the HTTPS field API listener.";
+            };
+            hostname = mkOption {
+              type = types.str;
+              default = "localhost";
+              description = "DNS name placed in the generated HTTPS server certificate.";
+            };
+          };
+        };
+        default = { };
+        description = "Authenticated remote field API settings.";
+      };
       unlockNoEcho = mkOption {
         type = types.bool;
         default = false;

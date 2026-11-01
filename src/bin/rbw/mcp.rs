@@ -15,7 +15,9 @@
 // `--read-only` removes every tool that changes something.
 
 use std::io::{Read as _, Write as _};
+use std::str::FromStr as _;
 
+use anyhow::Context as _;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
     Implementation, ListToolsResult, PaginatedRequestParams,
@@ -27,6 +29,8 @@ use serde_json::{json, Map, Value};
 const MASKED_SECRET: &str = "••••••••";
 const MAX_OUTPUT: usize = 256 * 1024;
 const DEFAULT_LIST_LIMIT: u64 = 500;
+const POLICY_TOOL_NAME: &str = "read_granted_field";
+const POLICY_API_INSTRUCTIONS: &str = "rbw policy-only MCP server. It exposes one read-only field API tool. Server-side client identity and field grants decide which fields this client can read. No local vault commands or fallback tools are available. Sensitive values are masked unless the call asks for `reveal: true` and this server was started with `--allow-secrets`.";
 
 const INSTRUCTIONS: &str = "\
 rbw: a Bitwarden/Vaultwarden vault (unofficial `rbw` CLI).
@@ -53,12 +57,20 @@ pub fn run(
     allow_secrets: bool,
     read_only: bool,
     timeout: u64,
+    policy_api: Option<&PolicyApiOptions>,
 ) -> anyhow::Result<()> {
+    let policy_api = policy_api.map(PolicyApi::new).transpose()?;
+    let exe = if policy_api.is_none() {
+        Some(std::env::current_exe()?)
+    } else {
+        None
+    };
     let server = Server {
-        exe: std::env::current_exe()?,
+        exe,
         allow_secrets,
         read_only,
         timeout: std::time::Duration::from_secs(timeout),
+        policy_api,
     };
     tokio::runtime::Runtime::new()?.block_on(async {
         let service = server
@@ -70,23 +82,233 @@ pub fn run(
     })
 }
 
+fn policy_tool_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "item_id": string("Vault item UUID"),
+            "field": string("Field token granted by rbw policy: name, username, password, totp, notes, uri/0, custom/Exact name, card_number, identity/first_name, ssh_private_key, and related supported fields"),
+            "reveal": boolean("Return a sensitive value in plain text (requires --allow-secrets); otherwise sensitive values are masked"),
+        },
+        "required": ["item_id", "field"],
+        "additionalProperties": false,
+    })
+}
+
+fn policy_read_field(
+    api: &PolicyApi,
+    allow_secrets: bool,
+    args: &Args,
+) -> anyhow::Result<String> {
+    let item_id = args.require("item_id")?.to_owned();
+    let field = rbw::remote_api::FieldRef::from_str(args.require("field")?)
+        .map_err(|_| anyhow::anyhow!("unsupported field token"))?;
+    let request = rbw::remote_api::FieldReadRequest { item_id, field };
+    api.read_field(&request, allow_secrets, args.bool("reveal"))
+}
+
+fn policy_tool_name_allowed(name: &str) -> bool {
+    name == POLICY_TOOL_NAME
+}
+
+fn policy_error_message(error: &rbw::remote_api::ApiError) -> String {
+    // Do not echo a server-supplied error message into the MCP transcript.
+    // The stable code is sufficient for the caller and cannot carry vault data.
+    format!("remote API error {:?}", error.code)
+}
+
+fn read_private_key(
+    path: &std::path::Path,
+) -> anyhow::Result<zeroize::Zeroizing<Vec<u8>>> {
+    let mut file = std::fs::File::open(path).with_context(|| {
+        format!("failed to read client key {}", path.display())
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = file.metadata()?.permissions().mode();
+        anyhow::ensure!(
+            mode.trailing_zeros() >= 6,
+            "client key {} is accessible by other users; refusing to use it",
+            path.display()
+        );
+    }
+    let mut key = zeroize::Zeroizing::new(Vec::new());
+    file.read_to_end(&mut key).with_context(|| {
+        format!("failed to read client key {}", path.display())
+    })?;
+    Ok(key)
+}
+
+pub struct PolicyApiOptions {
+    pub url: String,
+    pub ca_cert: std::path::PathBuf,
+    pub client_cert: std::path::PathBuf,
+    pub client_key: std::path::PathBuf,
+}
+
+#[derive(Clone)]
+struct PolicyApi {
+    base_url: url::Url,
+    client: reqwest::blocking::Client,
+}
+
+impl PolicyApi {
+    fn new(options: &PolicyApiOptions) -> anyhow::Result<Self> {
+        let mut base_url = url::Url::parse(&options.url)
+            .context("invalid remote API URL")?;
+        anyhow::ensure!(
+            base_url.scheme() == "https"
+                && base_url.host_str().is_some()
+                && base_url.username().is_empty()
+                && base_url.password().is_none()
+                && base_url.query().is_none()
+                && base_url.fragment().is_none()
+                && base_url.path() == "/",
+            "remote API URL must be an HTTPS origin without credentials, path, query or fragment"
+        );
+
+        let ca_pem = std::fs::read(&options.ca_cert).with_context(|| {
+            format!(
+                "failed to read CA certificate {}",
+                options.ca_cert.display()
+            )
+        })?;
+        let ca = reqwest::Certificate::from_pem(&ca_pem)
+            .context("invalid remote API CA certificate")?;
+        let cert =
+            std::fs::read(&options.client_cert).with_context(|| {
+                format!(
+                    "failed to read client certificate {}",
+                    options.client_cert.display()
+                )
+            })?;
+        let key = read_private_key(&options.client_key)?;
+        let mut identity_pem = zeroize::Zeroizing::new(cert);
+        identity_pem.extend_from_slice(b"\n");
+        identity_pem.extend_from_slice(key.as_slice());
+        let identity =
+            reqwest::Identity::from_pem(identity_pem.as_slice())
+                .context("invalid remote API client certificate/key pair")?;
+        let client = reqwest::blocking::Client::builder()
+            .tls_built_in_root_certs(false)
+            .add_root_certificate(ca)
+            .identity(identity)
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .context("failed to configure remote API client")?;
+        // `path_segments_mut` accepts only hierarchical URLs; the HTTPS
+        // origin validation above guarantees that this URL is hierarchical.
+        base_url.set_path("/");
+        Ok(Self { base_url, client })
+    }
+
+    fn read_field(
+        &self,
+        request: &rbw::remote_api::FieldReadRequest,
+        allow_secrets: bool,
+        reveal: bool,
+    ) -> anyhow::Result<String> {
+        anyhow::ensure!(
+            !reveal || allow_secrets,
+            "`reveal` is disabled: this server was started without --allow-secrets"
+        );
+        let mut url = self.base_url.clone();
+        {
+            let mut segments = url
+                .path_segments_mut()
+                .map_err(|()| anyhow::anyhow!("invalid remote API URL"))?;
+            segments.clear();
+            segments.extend([
+                "v1",
+                "items",
+                request.item_id.as_str(),
+                "fields",
+            ]);
+            segments.extend(request.field.path_token().split('/'));
+        }
+        let response = self.client.get(url).send()?;
+        let status = response.status();
+        let no_store = response
+            .headers()
+            .get(reqwest::header::CACHE_CONTROL)
+            .and_then(|header| header.to_str().ok())
+            .is_some_and(|header| {
+                header.split(',').any(|directive| {
+                    directive.trim().eq_ignore_ascii_case("no-store")
+                })
+            });
+        anyhow::ensure!(
+            no_store,
+            "remote API response omitted required Cache-Control: no-store"
+        );
+        if !status.is_success() {
+            let error: rbw::remote_api::ApiError = response
+                .json()
+                .context("remote API returned an invalid error response")?;
+            anyhow::bail!("{}", policy_error_message(&error));
+        }
+        let response: rbw::remote_api::FieldReadResponse = response
+            .json()
+            .context("remote API returned an invalid field response")?;
+        format_policy_response(request, response, reveal)
+    }
+}
+
+fn format_policy_response(
+    request: &rbw::remote_api::FieldReadRequest,
+    response: rbw::remote_api::FieldReadResponse,
+    reveal: bool,
+) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        response.field == request.field,
+        "remote API returned a different field than requested"
+    );
+    let sensitive = response.sensitive || request.field.is_sensitive();
+    let value = if sensitive && !reveal {
+        response.value.map(|_| MASKED_SECRET.to_owned())
+    } else {
+        response.value
+    };
+    Ok(serde_json::to_string_pretty(&json!({
+        "item_id": request.item_id,
+        "field": request.field.path_token(),
+        "value": value,
+        "sensitive": sensitive,
+    }))?)
+}
+
 #[derive(Clone)]
 struct Server {
-    exe: std::path::PathBuf,
+    exe: Option<std::path::PathBuf>,
     allow_secrets: bool,
     read_only: bool,
     timeout: std::time::Duration,
+    policy_api: Option<PolicyApi>,
 }
 
 impl rmcp::ServerHandler for Server {
     fn get_info(&self) -> ServerConfig {
-        let mut instructions = INSTRUCTIONS.to_string();
+        let mut instructions = if self.policy_api.is_some() {
+            POLICY_API_INSTRUCTIONS.to_owned()
+        } else {
+            INSTRUCTIONS.to_string()
+        };
         if self.allow_secrets {
-            instructions.push_str(
-                "\n- This server allows `reveal: true` on get/history/code \
-                 and returning generated passwords. Only reveal what the \
-                 task needs.",
-            );
+            if self.policy_api.is_some() {
+                instructions.push_str(
+                    "\n- This server allows `reveal: true` on \
+                     read_granted_field. Only reveal the field the task \
+                     needs.",
+                );
+            } else {
+                instructions.push_str(
+                    "\n- This server allows `reveal: true` on \
+                     get/history/code and returning generated passwords. \
+                     Only reveal what the task needs.",
+                );
+            }
         }
         if self.read_only {
             instructions.push_str(
@@ -120,17 +342,36 @@ impl rmcp::ServerHandler for Server {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let tool = self.tool(&request.name).ok_or_else(|| {
-            ErrorData::invalid_params(
+        if self.policy_api.is_some() {
+            if !policy_tool_name_allowed(&request.name) {
+                return Err(ErrorData::invalid_params(
+                    format!("unknown tool {}", request.name),
+                    None,
+                ));
+            }
+        } else if self.tool(&request.name).is_none() {
+            return Err(ErrorData::invalid_params(
                 format!("unknown tool {}", request.name),
                 None,
-            )
-        })?;
+            ));
+        }
         let arguments = request.arguments.unwrap_or_default();
         // The tools run `rbw` and wait for it; keep that off the runtime.
         let server = self.clone();
+        let tool_name = request.name;
         let result = tokio::task::spawn_blocking(move || {
-            (tool.handler)(&server, &Args(&arguments))
+            if let Some(policy_api) = &server.policy_api {
+                policy_read_field(
+                    policy_api,
+                    server.allow_secrets,
+                    &Args(&arguments),
+                )
+            } else {
+                let tool = server.tool(&tool_name).ok_or_else(|| {
+                    anyhow::anyhow!("unknown tool {tool_name}")
+                })?;
+                (tool.handler)(&server, &Args(&arguments))
+            }
         })
         .await
         .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
@@ -148,6 +389,9 @@ impl rmcp::ServerHandler for Server {
 
 impl Server {
     fn tool(&self, name: &str) -> Option<&'static Tool> {
+        if self.policy_api.is_some() {
+            return None;
+        }
         TOOLS
             .iter()
             .find(|t| t.name == name)
@@ -155,6 +399,23 @@ impl Server {
     }
 
     fn tool_list(&self) -> Vec<rmcp::model::Tool> {
+        if self.policy_api.is_some() {
+            let Value::Object(schema) = policy_tool_schema() else {
+                unreachable!("policy tool schema is an object")
+            };
+            return vec![rmcp::model::Tool::new(
+                POLICY_TOOL_NAME,
+                "Read one field from an item authorized by the rbw remote API policy.",
+                schema,
+            )
+            .with_annotations(
+                ToolAnnotations::with_title("Read granted field")
+                    .read_only(true)
+                    .destructive(false)
+                    .idempotent(false)
+                    .open_world(false),
+            )];
+        }
         TOOLS
             .iter()
             .filter(|tool| !(self.read_only && tool.kind.writes()))
@@ -180,7 +441,11 @@ impl Server {
     }
 
     fn rbw(&self, cmd: Cmd) -> anyhow::Result<Output> {
-        let mut command = std::process::Command::new(&self.exe);
+        let exe = self
+            .exe
+            .as_ref()
+            .context("local rbw tools are disabled in policy-only mode")?;
+        let mut command = std::process::Command::new(exe);
         if cmd.redact {
             command.arg("--redact");
         }
@@ -1967,6 +2232,35 @@ fn update(server: &Server, args: &Args) -> anyhow::Result<String> {
 mod test {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn private_key_requires_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("client.key");
+        std::fs::write(&path, "private key contents").unwrap();
+
+        std::fs::set_permissions(
+            &path,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        assert_eq!(
+            read_private_key(&path).unwrap().as_slice(),
+            b"private key contents"
+        );
+
+        std::fs::set_permissions(
+            &path,
+            std::fs::Permissions::from_mode(0o640),
+        )
+        .unwrap();
+        let error = read_private_key(&path).unwrap_err().to_string();
+        assert!(error.contains("accessible by other users"));
+        assert!(!error.contains("private key contents"));
+    }
+
     fn args(value: &Value) -> Args<'_> {
         Args(value.as_object().unwrap())
     }
@@ -2051,10 +2345,11 @@ mod test {
     #[test]
     fn read_only_hides_writes() {
         let server = Server {
-            exe: "rbw".into(),
+            exe: Some("rbw".into()),
             allow_secrets: false,
             read_only: true,
             timeout: std::time::Duration::from_secs(1),
+            policy_api: None,
         };
         let names: Vec<String> = server
             .tool_list()
@@ -2066,13 +2361,117 @@ mod test {
         assert!(!names.contains(&"rbw".to_string()));
     }
 
+    fn policy_server(allow_secrets: bool) -> Server {
+        Server {
+            exe: None,
+            allow_secrets,
+            read_only: false,
+            timeout: std::time::Duration::from_secs(1),
+            policy_api: Some(PolicyApi {
+                base_url: url::Url::parse("https://localhost").unwrap(),
+                client: reqwest::blocking::Client::new(),
+            }),
+        }
+    }
+
+    #[test]
+    fn policy_only_offers_no_local_tools_or_fallback() {
+        let server = policy_server(false);
+        let tools = server.tool_list();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, POLICY_TOOL_NAME);
+        assert!(server.tool("get").is_none());
+        assert!(server.tool("rbw").is_none());
+        assert!(!policy_tool_name_allowed("get"));
+        assert!(!policy_tool_name_allowed("rbw"));
+        assert!(policy_tool_name_allowed(POLICY_TOOL_NAME));
+        let schema = policy_tool_schema();
+        assert_eq!(schema["properties"].get("account"), None);
+    }
+
+    #[test]
+    fn policy_response_masks_sensitive_values_by_default() {
+        let request = rbw::remote_api::FieldReadRequest {
+            item_id: "item-id".to_owned(),
+            field: rbw::remote_api::FieldRef::Password,
+        };
+        let response = rbw::remote_api::FieldReadResponse {
+            field: rbw::remote_api::FieldRef::Password,
+            value: Some("secret".to_owned()),
+            sensitive: false,
+        };
+        let value: Value = serde_json::from_str(
+            &format_policy_response(&request, response, false).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value["value"], MASKED_SECRET);
+        assert_eq!(value["sensitive"], true);
+    }
+
+    #[test]
+    fn policy_response_reveals_only_when_explicitly_enabled() {
+        let server = policy_server(false);
+        let request = rbw::remote_api::FieldReadRequest {
+            item_id: "item-id".to_owned(),
+            field: rbw::remote_api::FieldRef::Password,
+        };
+        assert!(server
+            .policy_api
+            .as_ref()
+            .unwrap()
+            .read_field(&request, false, true)
+            .is_err());
+
+        let request = rbw::remote_api::FieldReadRequest {
+            item_id: "item-id".to_owned(),
+            field: rbw::remote_api::FieldRef::Password,
+        };
+        let response = rbw::remote_api::FieldReadResponse {
+            field: rbw::remote_api::FieldRef::Password,
+            value: Some("secret".to_owned()),
+            sensitive: true,
+        };
+        let value: Value = serde_json::from_str(
+            &format_policy_response(&request, response, true).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value["value"], "secret");
+    }
+
+    #[test]
+    fn policy_response_rejects_mismatched_field() {
+        let request = rbw::remote_api::FieldReadRequest {
+            item_id: "item-id".to_owned(),
+            field: rbw::remote_api::FieldRef::Password,
+        };
+        let response = rbw::remote_api::FieldReadResponse {
+            field: rbw::remote_api::FieldRef::Username,
+            value: Some("username".to_owned()),
+            sensitive: false,
+        };
+        assert!(format_policy_response(&request, response, true).is_err());
+    }
+
+    #[test]
+    fn remote_api_error_text_cannot_echo_server_supplied_data() {
+        let error = rbw::remote_api::ApiError {
+            code: rbw::remote_api::ErrorCode::Forbidden,
+            message: "sensitive-value-must-not-appear".to_owned(),
+            retryable: false,
+        };
+        let message = policy_error_message(&error);
+        assert!(!message.contains("sensitive-value-must-not-appear"));
+        assert!(message.contains("Forbidden"));
+    }
+
     #[test]
     fn info_advertises_tools() {
         let server = Server {
-            exe: "rbw".into(),
+            exe: Some("rbw".into()),
             allow_secrets: false,
             read_only: true,
             timeout: std::time::Duration::from_secs(1),
+            policy_api: None,
         };
         let info = rmcp::ServerHandler::get_info(&server);
         assert!(info.capabilities.tools.is_some());

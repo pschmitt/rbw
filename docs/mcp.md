@@ -12,6 +12,31 @@ claude mcp add rbw -- rbw mcp
 With Home Manager, `programs.rbw.mcp.enable = true;` registers it
 as `programs.mcp.servers.rbw` (see [Nix](nix.md)).
 
+## Policy-only remote API mode
+
+To let an MCP client read fields through an rbw-managed remote API, start a
+separate policy-only server with its HTTPS endpoint and mTLS files:
+
+```sh
+rbw mcp --policy-only \
+  --remote-api-url https://vault.example:24871 \
+  --remote-api-ca /path/to/ca.pem \
+  --remote-api-client-cert /path/to/client.pem \
+  --remote-api-client-key /path/to/client-key.pem
+```
+
+This mode exposes only `read_granted_field`, which takes an `item_id` and a
+field token such as `password`, `totp`, `uri/0`, or
+`custom/Recovery code`. The server checks the client certificate and the
+item/field grant on every request. This MCP process does not expose local vault
+tools or a local-command fallback. Give it the CA certificate and client
+keypair exported by `rbw api client create`; keep the private key protected on
+the MCP host.
+
+Sensitive fields are masked unless the call passes `reveal: true` and this
+process starts with `--allow-secrets`. The API grant still limits which fields
+the client can read. This is a distinct mode from the local `rbw mcp` server.
+
 ## Tools
 
 | Tool | Does |

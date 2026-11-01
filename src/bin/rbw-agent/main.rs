@@ -2,6 +2,7 @@ use anyhow::Context as _;
 
 mod actions;
 mod agent;
+mod api;
 mod daemon;
 mod debugger;
 mod notifications;
@@ -55,6 +56,8 @@ async fn tokio_main(
         crate::agent::Agent::new(timer_r, sync_timer_r, state.clone());
 
     let ssh_agent = crate::ssh_agent::SshAgent::new(state.clone());
+
+    tokio::spawn(crate::api::supervise(state.clone()));
 
     tokio::try_join!(agent.run(listener), ssh_agent.run())?;
 

@@ -340,6 +340,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
             "purge",
             "purge-vault",
             "agent",
+            "api",
             "stop-agent",
             "completions",
             "native-messaging",
@@ -502,6 +503,11 @@ enum Opt {
     Agent {
         #[command(subcommand)]
         agent: AgentCmd,
+    },
+    #[command(about = "Manage the authenticated remote field API")]
+    Api {
+        #[command(subcommand)]
+        api: ApiCmd,
     },
 
     // Kept for compatibility; `rbw security unlock` is the documented
@@ -2243,6 +2249,25 @@ enum Opt {
     Mcp {
         #[arg(
             long,
+            requires_all = [
+                "remote_api_url",
+                "remote_api_ca",
+                "remote_api_client_cert",
+                "remote_api_client_key"
+            ],
+            help = "Run only the policy-controlled remote field API tool; local vault and CLI tools are disabled"
+        )]
+        policy_only: bool,
+        #[arg(long, requires = "policy_only", value_name = "HTTPS_URL")]
+        remote_api_url: Option<String>,
+        #[arg(long, requires = "policy_only", value_name = "PEM_FILE")]
+        remote_api_ca: Option<std::path::PathBuf>,
+        #[arg(long, requires = "policy_only", value_name = "PEM_FILE")]
+        remote_api_client_cert: Option<std::path::PathBuf>,
+        #[arg(long, requires = "policy_only", value_name = "PEM_FILE")]
+        remote_api_client_key: Option<std::path::PathBuf>,
+        #[arg(
+            long,
             help = "Let get/history/code return secrets in plain text when \
                 a tool call asks for it (`reveal`), and generate return \
                 passwords"
@@ -2366,6 +2391,7 @@ impl Opt {
             Self::Agent { agent } => {
                 format!("agent {}", agent.subcommand_name())
             }
+            Self::Api { api } => format!("api {}", api.subcommand_name()),
             Self::SecretService { .. } => "secret-service".to_string(),
             Self::Termux { .. } => "termux".to_string(),
             Self::Register { .. } => "register".to_string(),
@@ -2433,6 +2459,82 @@ enum AgentCmd {
         )]
         kill: bool,
     },
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ApiCmd {
+    #[command(about = "Enable HTTPS field reads (loopback by default)")]
+    Enable {
+        #[arg(long, help = "TCP listener address (default 127.0.0.1:24871)")]
+        listen: Option<String>,
+        #[arg(long, help = "HTTPS certificate name (default localhost)")]
+        hostname: Option<String>,
+    },
+    #[command(about = "Disable the API and stop its listener immediately")]
+    Disable,
+    #[command(about = "Show API listener status")]
+    Status,
+    #[command(about = "Manage mTLS client credentials")]
+    Client {
+        #[command(subcommand)]
+        client: ApiClientCmd,
+    },
+    #[command(about = "Grant a client access to exact fields on one item")]
+    Grant {
+        #[arg(help = "Client ID from `rbw api client create`")]
+        client_id: String,
+        #[arg(long, help = "Configured account name")]
+        account: String,
+        #[arg(long, help = "Vault item UUID")]
+        item_id: String,
+        #[arg(
+            long,
+            required = true,
+            help = "Field token; repeat to add multiple fields"
+        )]
+        field: Vec<String>,
+    },
+    #[command(about = "Remove a client's item or field grants")]
+    Revoke {
+        #[arg(help = "Client ID")]
+        client_id: String,
+        #[arg(long, help = "Vault item UUID")]
+        item_id: String,
+        #[arg(
+            long,
+            help = "Field token to remove; omit to remove the whole item grant"
+        )]
+        field: Vec<String>,
+    },
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ApiClientCmd {
+    #[command(about = "Create a client certificate with no field grants")]
+    Create {
+        #[arg(help = "Human-readable client name")]
+        name: String,
+    },
+    #[command(about = "List client identities and grant counts")]
+    List,
+    #[command(about = "Revoke a client and remove its local keypair")]
+    Revoke {
+        #[arg(help = "Client ID")]
+        id: String,
+    },
+}
+
+impl ApiCmd {
+    fn subcommand_name(&self) -> String {
+        match self {
+            Self::Enable { .. } => "enable".to_owned(),
+            Self::Disable => "disable".to_owned(),
+            Self::Status => "status".to_owned(),
+            Self::Client { .. } => "client".to_owned(),
+            Self::Grant { .. } => "grant".to_owned(),
+            Self::Revoke { .. } => "revoke".to_owned(),
+        }
+    }
 }
 
 impl AgentCmd {
@@ -4199,6 +4301,33 @@ fn main() {
                 }
             }
         },
+        Opt::Api { api } => match api {
+            ApiCmd::Enable { listen, hostname } => {
+                commands::api_enable(listen.as_deref(), hostname.as_deref())
+            }
+            ApiCmd::Disable => commands::api_disable(),
+            ApiCmd::Status => commands::api_status(),
+            ApiCmd::Client { client } => match client {
+                ApiClientCmd::Create { name } => {
+                    commands::api_client_create(&name)
+                }
+                ApiClientCmd::List => commands::api_client_list(),
+                ApiClientCmd::Revoke { id } => {
+                    commands::api_client_revoke(&id)
+                }
+            },
+            ApiCmd::Grant {
+                client_id,
+                account,
+                item_id,
+                field,
+            } => commands::api_grant(&client_id, &account, &item_id, &field),
+            ApiCmd::Revoke {
+                client_id,
+                item_id,
+                field,
+            } => commands::api_revoke(&client_id, &item_id, &field),
+        },
         Opt::Register { stdin } => {
             let (client_id, client_secret) = if stdin {
                 (Some(read_stdin_password()), Some(read_stdin_password()))
@@ -5387,10 +5516,43 @@ fn main() {
             }
         }
         Opt::Mcp {
+            policy_only,
+            remote_api_url,
+            remote_api_ca,
+            remote_api_client_cert,
+            remote_api_client_key,
             allow_secrets,
             read_only,
             timeout,
-        } => mcp::run(allow_secrets, read_only, timeout),
+        } => (|| -> anyhow::Result<()> {
+            let remote_api = if policy_only {
+                Some(mcp::PolicyApiOptions {
+                    url: remote_api_url.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "--policy-only requires --remote-api-url"
+                        )
+                    })?,
+                    ca_cert: remote_api_ca.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "--policy-only requires --remote-api-ca"
+                        )
+                    })?,
+                    client_cert: remote_api_client_cert.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "--policy-only requires --remote-api-client-cert"
+                        )
+                    })?,
+                    client_key: remote_api_client_key.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "--policy-only requires --remote-api-client-key"
+                        )
+                    })?,
+                })
+            } else {
+                None
+            };
+            mcp::run(allow_secrets, read_only, timeout, remote_api.as_ref())
+        })(),
         Opt::StopAgent { kill } => {
             if kill {
                 commands::kill_agent()
@@ -5485,6 +5647,19 @@ mod test {
     #[test]
     fn test_cli_definition_is_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn policy_only_mcp_requires_all_mtls_inputs() {
+        assert!(Cli::try_parse_from(["rbw", "mcp", "--policy-only"]).is_err());
+        assert!(Cli::try_parse_from([
+            "rbw",
+            "mcp",
+            "--remote-api-url",
+            "https://localhost:24871",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from(["rbw", "mcp"]).is_ok());
     }
 
     #[test]
