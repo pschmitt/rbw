@@ -113,6 +113,7 @@
               cargoArtifacts = rbwDeps;
               # The test suite still runs here, reusing the cached dependencies.
               doCheck = true;
+              nativeCheckInputs = [ pkgs.python3 ];
 
               postInstall = ''
                 install -Dm755 bin/git-credential-rbw -t "$out/bin"
