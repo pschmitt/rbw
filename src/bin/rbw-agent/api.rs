@@ -7,6 +7,98 @@ use axum::{
     Json, Router,
 };
 use futures::future::BoxFuture;
+use rustls::pki_types::CertificateDer;
+use std::{future::Future, io, pin::Pin};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_rustls::server::TlsStream;
+
+#[derive(Clone, Debug, Default)]
+struct PeerCertificates(Vec<CertificateDer<'static>>);
+
+impl PeerCertificates {
+    fn leaf(&self) -> Option<&CertificateDer<'static>> {
+        self.0.first()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PeerCertAcceptor<A = axum_server::accept::DefaultAcceptor> {
+    inner: axum_server::tls_rustls::RustlsAcceptor<A>,
+}
+
+impl PeerCertAcceptor {
+    fn new(inner: axum_server::tls_rustls::RustlsAcceptor) -> Self {
+        Self { inner }
+    }
+}
+
+impl<I, S, A> axum_server::accept::Accept<I, S> for PeerCertAcceptor<A>
+where
+    A: axum_server::accept::Accept<I, S> + Clone + Send + 'static,
+    A::Stream: AsyncRead + AsyncWrite + Unpin + Send,
+    A::Service: Send,
+    A::Future: Send,
+    I: Send + 'static,
+    S: Send + 'static,
+{
+    type Stream = TlsStream<A::Stream>;
+    type Service = PeerCertService<A::Service>;
+    type Future = Pin<
+        Box<
+            dyn Future<Output = io::Result<(Self::Stream, Self::Service)>>
+                + Send,
+        >,
+    >;
+
+    fn accept(&self, stream: I, service: S) -> Self::Future {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            let (tls_stream, service) = inner.accept(stream, service).await?;
+            let (_, connection) = tls_stream.get_ref();
+            let certs = connection
+                .peer_certificates()
+                .unwrap_or_default()
+                .iter()
+                .map(|cert| cert.clone().into_owned())
+                .collect();
+            Ok((
+                tls_stream,
+                PeerCertService {
+                    inner: service,
+                    certs: PeerCertificates(certs),
+                },
+            ))
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PeerCertService<S> {
+    inner: S,
+    certs: PeerCertificates,
+}
+
+impl<S, B> tower_service::Service<axum::http::Request<B>>
+    for PeerCertService<S>
+where
+    S: tower_service::Service<axum::http::Request<B>>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut request: axum::http::Request<B>) -> Self::Future {
+        request.extensions_mut().insert(self.certs.clone());
+        self.inner.call(request)
+    }
+}
 
 use rbw::remote_api::{ApiError, ErrorCode, FieldReadResponse};
 
@@ -245,7 +337,7 @@ async fn prepare(
         .context("invalid remote API listen address")?;
     let tls = tls_config()?;
     let router = router(ApiState::production(agent));
-    let acceptor = axum_server_mtls::MtlsAcceptor::new(
+    let acceptor = PeerCertAcceptor::new(
         axum_server::tls_rustls::RustlsAcceptor::new(tls),
     );
 
@@ -311,7 +403,7 @@ fn router(state: ApiState) -> Router {
 
 async fn read_field(
     State(state): State<ApiState>,
-    Extension(certificates): Extension<axum_server_mtls::PeerCertificates>,
+    Extension(certificates): Extension<PeerCertificates>,
     Path((item_id, field_token)): Path<(String, String)>,
 ) -> Response {
     let result = read_field_inner(
@@ -573,7 +665,7 @@ mod tests {
             tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let listener = listener.into_std().unwrap();
-        let acceptor = axum_server_mtls::MtlsAcceptor::new(
+        let acceptor = PeerCertAcceptor::new(
             axum_server::tls_rustls::RustlsAcceptor::new(tls),
         );
         let server =

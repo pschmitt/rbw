@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from test_api import FakeResponse, FakeSession
+from .test_api import FakeResponse, FakeSession
 
 ROOT = Path(__file__).parents[1] / "custom_components" / "rbw"
 API_SPEC = importlib.util.spec_from_file_location("rbw_public_test_api", ROOT / "api.py")
