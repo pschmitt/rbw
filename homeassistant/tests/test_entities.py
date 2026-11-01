@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 import types
 import unittest
@@ -154,6 +155,35 @@ def load_entities() -> tuple[types.ModuleType, types.ModuleType, types.ModuleTyp
 
 
 class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_custom_integration_translations_include_account_names_and_all_states(self) -> None:
+        _, binary_module, sensor_module = load_entities()
+        source = json.loads((ROOT / "strings.json").read_text())
+        packaged = json.loads(
+            (ROOT / "translations" / "en.json").read_text()
+        )
+
+        self.assertEqual(packaged, source)
+        self.assertIn(
+            "{account}",
+            packaged["entity"]["binary_sensor"]["vault_locked"]["name"],
+        )
+        self.assertIn(
+            "{account}",
+            packaged["entity"]["sensor"]["vault_status"]["name"],
+        )
+        self.assertEqual(
+            set(packaged["entity"]["sensor"]["vault_status"]["state"]),
+            set(sensor_module.VAULT_STATUS_OPTIONS),
+        )
+        self.assertEqual(
+            packaged["entity"]["binary_sensor"]["vault_locked"]["name"],
+            "Vault locked ({account})",
+        )
+        self.assertEqual(
+            packaged["entity"]["sensor"]["vault_status"]["name"],
+            "Vault status ({account})",
+        )
+
     async def test_platforms_create_shared_and_per_account_diagnostic_entities(self) -> None:
         coordinator_module, binary_module, sensor_module = load_entities()
         coordinator = FakeCoordinator(
@@ -163,8 +193,10 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
                     1,
                     "2.40.0",
                     (
-                        api.RbwAccountStatus("personal", "locked"),
-                        api.RbwAccountStatus("work", "unlocked"),
+                        api.RbwAccountStatus("ai", "locked"),
+                        api.RbwAccountStatus("bw", "unlocked"),
+                        api.RbwAccountStatus("default", "locked"),
+                        api.RbwAccountStatus("wiit", "unlocked"),
                     ),
                 ),
             )
@@ -183,8 +215,8 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
         await binary_module.async_setup_entry(hass, entry, binary_entities.extend)
         await sensor_module.async_setup_entry(hass, entry, sensor_entities.extend)
 
-        self.assertEqual(len(binary_entities), 3)
-        self.assertEqual(len(sensor_entities), 4)
+        self.assertEqual(len(binary_entities), 5)
+        self.assertEqual(len(sensor_entities), 6)
         entities = binary_entities + sensor_entities
         self.assertTrue(all(entity.entity_category == "diagnostic" for entity in entities))
         self.assertTrue(
@@ -193,21 +225,55 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
                 for entity in entities
             )
         )
-        connected, locked_personal, locked_work = binary_entities
-        api_version, agent_version, status_personal, status_work = sensor_entities
+        connected = binary_entities[0]
+        locked_by_account = {
+            entity.account: entity for entity in binary_entities[1:]
+        }
+        api_version, agent_version = sensor_entities[:2]
+        status_by_account = {
+            entity.account: entity for entity in sensor_entities[2:]
+        }
         self.assertTrue(connected.is_on)
-        self.assertTrue(locked_personal.is_on)
-        self.assertFalse(locked_work.is_on)
-        self.assertEqual(status_personal.native_value, "locked")
-        self.assertEqual(status_work.native_value, "unlocked")
-        self.assertTrue(locked_personal.available)
         self.assertEqual(
-            locked_personal._attr_unique_id,
+            set(locked_by_account), {"ai", "bw", "default", "wiit"}
+        )
+        self.assertEqual(set(status_by_account), set(locked_by_account))
+        for account, expected_state in {
+            "ai": "locked",
+            "bw": "unlocked",
+            "default": "locked",
+            "wiit": "unlocked",
+        }.items():
+            self.assertEqual(
+                locked_by_account[account].is_on,
+                expected_state == "locked",
+            )
+            self.assertEqual(
+                status_by_account[account].native_value, expected_state
+            )
+            self.assertTrue(locked_by_account[account].available)
+            self.assertEqual(
+                locked_by_account[account]._attr_translation_placeholders,
+                {"account": account},
+            )
+            self.assertEqual(
+                status_by_account[account]._attr_translation_placeholders,
+                {"account": account},
+            )
+        self.assertEqual(
+            locked_by_account["ai"]._attr_unique_id,
             binary_module.RbwVaultLockedSensor(
-                coordinator, "entry", locked_personal.device_info, "personal"
+                coordinator, "entry", locked_by_account["ai"].device_info, "ai"
             )._attr_unique_id,
         )
-        self.assertEqual(locked_personal._attr_translation_placeholders, {"account": "personal"})
+        self.assertEqual(
+            len({entity._attr_unique_id for entity in locked_by_account.values()}),
+            4,
+        )
+        self.assertEqual(
+            len({entity._attr_unique_id for entity in status_by_account.values()}),
+            4,
+        )
         self.assertEqual(api_version.native_value, 1)
         self.assertEqual(agent_version.native_value, "2.40.0")
 

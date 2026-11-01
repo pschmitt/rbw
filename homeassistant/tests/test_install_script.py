@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -268,6 +269,11 @@ class HomeAssistantPackageTests(unittest.TestCase):
                 packaged_icon = archive.extractfile("custom_components/rbw/brand/icon.png")
                 self.assertIsNotNone(packaged_icon)
                 packaged_icon_bytes = packaged_icon.read()
+                packaged_translation = archive.extractfile(
+                    "custom_components/rbw/translations/en.json"
+                )
+                self.assertIsNotNone(packaged_translation)
+                packaged_translation_bytes = packaged_translation.read()
 
         self.assertTrue(names)
         self.assertTrue(
@@ -278,6 +284,13 @@ class HomeAssistantPackageTests(unittest.TestCase):
         )
         self.assertIn("custom_components/rbw/manifest.json", names)
         self.assertIn("custom_components/rbw/api.py", names)
+        self.assertIn("custom_components/rbw/translations/en.json", names)
+        self.assertEqual(
+            json.loads(packaged_translation_bytes),
+            json.loads(
+                (REPO_ROOT / "homeassistant/custom_components/rbw/strings.json").read_text()
+            ),
+        )
         icon_path = "custom_components/rbw/brand/icon.png"
         self.assertIn(icon_path, names)
         self.assertEqual(
