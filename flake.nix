@@ -36,6 +36,8 @@
           ./Cargo.lock
           ./src
           ./bin
+          # Agent protocol fixtures, read by test_protocol_fixtures.
+          ./tests/protocol
           ./assets/rbw.png
           ./LICENSE
           ./README.md
