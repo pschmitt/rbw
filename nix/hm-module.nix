@@ -341,56 +341,59 @@ let
         `accounts` ordering caveat above) when unset.
       '';
 
-      browser.clients = mkOption {
-        type = types.attrsOf (
-          types.submodule {
-            options = {
-              browser = mkOption {
-                type = types.enum [
-                  "firefox"
-                  "chromium"
-                ];
-                description = "Native messaging identity format.";
+      browser = {
+        clients = mkOption {
+          type = types.attrsOf (
+            types.submodule {
+              options = {
+                browser = mkOption {
+                  type = types.enum [
+                    "firefox"
+                    "chromium"
+                  ];
+                  description = "Native messaging identity format.";
+                };
+                extensions = mkOption {
+                  type = types.listOf types.str;
+                  default = [ ];
+                  description = "Allowed extension IDs for this browser.";
+                };
+                executableRoots = mkOption {
+                  type = types.listOf types.str;
+                  default = [ ];
+                  description = "Absolute executable paths or package directories allowed to launch the native bridge (Linux).";
+                };
               };
-              extensions = mkOption {
-                type = types.listOf types.str;
-                default = [ ];
-                description = "Allowed extension IDs for this browser.";
-              };
-              executableRoots = mkOption {
-                type = types.listOf types.str;
-                default = [ ];
-                description = "Absolute executable paths or package directories allowed to launch the native bridge (Linux).";
-              };
-            };
-          }
-        );
-        default = { };
-        description = "Explicit native messaging allowlist. Empty denies all browser access; changes apply to every request.";
-      };
+            }
+          );
+          default = { };
+          description = "Explicit native messaging allowlist. Empty denies all browser access; changes apply to every request.";
+        };
 
-      browser.passkeyAaguid = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        example = "00000000-0000-0000-0000-000000000000";
-        description = ''
-          AAGUID reported when the browser extension registers a passkey;
-          sites use it to label the passkey. `null` uses Bitwarden's
-          (`d548826e-79b4-db40-a3d8-11116f7e8349`), all zeros reports an
-          anonymous authenticator.
-        '';
-      };
+        passkeyAaguid = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "00000000-0000-0000-0000-000000000000";
+          description = ''
+            AAGUID reported when the browser extension registers a passkey;
+            sites use it to label the passkey. `null` uses Bitwarden's
+            (`d548826e-79b4-db40-a3d8-11116f7e8349`), all zeros reports an
+            anonymous authenticator.
+          '';
+        };
 
-      browser.fingerprintAutoStart = mkOption {
-        type = types.nullOr types.bool;
-        default = null;
-        example = true;
-        description = ''
-          Start the fingerprint scan as soon as the browser extension popup
-          opens on a locked account with fingerprint unlock enrolled
-          (`rbw security unlock enroll --keyring --fingerprint`). `null`
-          keeps rbw's default (off).
-        '';
+        fingerprintAutoStart = mkOption {
+          type = types.nullOr types.bool;
+          default = null;
+          example = true;
+          description = ''
+            Start the fingerprint scan as soon as the browser extension popup
+            opens on a locked account with fingerprint unlock enrolled
+            (`rbw security unlock enroll --keyring --fingerprint`). `null`
+            keeps rbw's default (off).
+          '';
+        };
+
       };
 
       # ---- grouped global preferences ---------------------------------
