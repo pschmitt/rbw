@@ -23,6 +23,13 @@ async fn tokio_main(
     }
 
     let config = rbw::config::Config::load()?;
+    rbw::audit::record_async_best_effort(
+        config.audit.clone(),
+        rbw::audit::Event::new("agent", "agent.start", "success")
+            .with_version(env!("CARGO_PKG_VERSION")),
+    )
+    .await;
+    tokio::spawn(stop_on_signal());
     let timeout_duration =
         std::time::Duration::from_secs(config.agent.lock_timeout);
     let sync_timeout_duration =
@@ -62,6 +69,27 @@ async fn tokio_main(
     tokio::try_join!(agent.run(listener), ssh_agent.run())?;
 
     Ok(())
+}
+
+// Record why the agent ends when a signal stops it (a service stop or
+// restart, a reboot, Ctrl+C with --no-daemonize). SIGKILL can't be caught;
+// the next start without a stop record shows it.
+async fn stop_on_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+    let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (
+        signal(SignalKind::terminate()),
+        signal(SignalKind::interrupt()),
+        signal(SignalKind::hangup()),
+    ) else {
+        log::warn!("failed to install signal handlers");
+        return;
+    };
+    let reason = tokio::select! {
+        _ = term.recv() => "sigterm",
+        _ = int.recv() => "sigint",
+        _ = hup.recv() => "sighup",
+    };
+    crate::agent::stop("agent", reason);
 }
 
 fn real_main() -> anyhow::Result<()> {

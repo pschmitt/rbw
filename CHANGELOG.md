@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+* The audit log now says why the vault was locked: the agent records when
+  it starts and stops (with the reason: `rbw stop-agent`, replaced by a newer
+  client, a config change, a signal such as a service restart, ...), a
+  server logout separately from the idle timeout, key-rotation locks, and
+  whether `rbw lock` locked one account or all. `rbw status` shows the most
+  recent lock while an account is locked. See
+  [docs/audit-log.md](docs/audit-log.md#why-the-vault-was-locked).
+
+### Changed
+
+* Agent protocol: `Quit` carries an optional reason (a minor protocol
+  change; older agents ignore it).
+
 ## [2.42.0] - 2026-11-03
 
 ### Changed

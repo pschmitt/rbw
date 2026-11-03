@@ -18,6 +18,10 @@ pub struct Event {
     outcome: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     item_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
 }
 
 impl Event {
@@ -33,7 +37,24 @@ impl Event {
             operation: operation.into(),
             outcome: outcome.into(),
             item_id: None,
+            reason: None,
+            version: None,
         }
+    }
+
+    /// Attach a fixed reason label (why an agent stopped, which accounts a
+    /// lock cleared). Only static labels, so no caller data can reach it.
+    #[must_use]
+    pub fn with_reason(mut self, reason: &'static str) -> Self {
+        self.reason = Some(reason.to_owned());
+        self
+    }
+
+    /// Attach the version of the rbw binary that recorded the event.
+    #[must_use]
+    pub fn with_version(mut self, version: &'static str) -> Self {
+        self.version = Some(version.to_owned());
+        self
     }
 
     /// Attach a canonical UUID target without accepting names or arbitrary
@@ -120,6 +141,146 @@ pub async fn record_async_best_effort(config: AuditConfig, event: Event) {
     }
 }
 
+/// The most recent event that locked the vault, as far as the audit log
+/// knows: an explicit lock, an idle timeout, a server logout, a key
+/// rotation, or the agent stopping.
+#[derive(Debug, PartialEq, Eq)]
+pub struct LastLock {
+    pub timestamp: String,
+    pub operation: String,
+    pub reason: Option<String>,
+}
+
+impl LastLock {
+    /// A short human-readable explanation of the lock.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let reason = self.reason.as_deref();
+        match (self.operation.as_str(), reason) {
+            ("agent.timeout_lock", _) => {
+                "locked after the idle timeout".to_owned()
+            }
+            ("agent.server_logout", _) => {
+                "the server ended the session (logout notification)"
+                    .to_owned()
+            }
+            ("agent.key_rotation_lock", _) => {
+                "locked after the account key was rotated".to_owned()
+            }
+            ("socket.lock", Some("one_account")) => {
+                "locked by `rbw lock` (one account)".to_owned()
+            }
+            ("socket.lock", _) => "locked by `rbw lock`".to_owned(),
+            ("agent.stop", Some(reason)) => {
+                format!("the agent stopped: {}", describe_stop(reason))
+            }
+            ("agent.stop", None) => "the agent stopped".to_owned(),
+            ("agent.start", _) => "the previous agent ended without a stop \
+                 record (killed, crashed, or an rbw older than 2.43)"
+                .to_owned(),
+            (operation, _) => operation.to_owned(),
+        }
+    }
+}
+
+fn describe_stop(reason: &str) -> &str {
+    match reason {
+        "stop_agent" => "`rbw stop-agent`",
+        "outdated" => "replaced by a newer rbw client",
+        "unresponsive" => "a client could not get its version",
+        "config_change" => "the configuration or an account changed",
+        "purge" => "`rbw purge`",
+        "native_unlock_change" => "a native unlock setting changed",
+        "sigterm" => "SIGTERM (service stop or restart)",
+        "sigint" => "SIGINT",
+        "sighup" => "SIGHUP",
+        "unspecified" => "quit request from an rbw older than 2.43",
+        other => other,
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RecordedEvent {
+    timestamp: String,
+    operation: String,
+    outcome: String,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+const LOCK_OPERATIONS: &[&str] = &[
+    "agent.timeout_lock",
+    "agent.server_logout",
+    "agent.key_rotation_lock",
+    "agent.stop",
+    "socket.lock",
+];
+
+/// Find the most recent lock in the audit log, if it recorded one.
+#[must_use]
+pub fn last_lock() -> Option<LastLock> {
+    last_lock_in(&crate::dirs::audit_dir())
+}
+
+fn last_lock_in(directory: &std::path::Path) -> Option<LastLock> {
+    let mut days = std::fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()?
+                .strip_prefix("audit-")?
+                .strip_suffix(".jsonl")?
+                .parse::<u32>()
+                .ok()
+        })
+        .collect::<Vec<_>>();
+    days.sort_unstable_by(|a, b| b.cmp(a));
+
+    // A start whose agent's predecessor left no stop record: report the
+    // start unless an older stop explains it.
+    let mut pending_start: Option<LastLock> = None;
+    for day in days {
+        let Ok(content) = std::fs::read_to_string(
+            directory.join(format!("audit-{day}.jsonl")),
+        ) else {
+            continue;
+        };
+        for line in content.lines().rev() {
+            let Ok(event) = serde_json::from_str::<RecordedEvent>(line)
+            else {
+                continue;
+            };
+            if event.outcome != "success" {
+                continue;
+            }
+            let record = LastLock {
+                timestamp: event.timestamp,
+                operation: event.operation,
+                reason: event.reason,
+            };
+            if record.operation == "agent.start" {
+                if pending_start.is_some() {
+                    // Two starts in a row: the newer one is unexplained.
+                    return pending_start;
+                }
+                pending_start = Some(record);
+                continue;
+            }
+            if record.operation == "agent.stop" {
+                return Some(record);
+            }
+            if LOCK_OPERATIONS.contains(&record.operation.as_str()) {
+                // A lock while the newest agent was already running wins;
+                // one from before its start is older than the restart.
+                return Some(pending_start.unwrap_or(record));
+            }
+        }
+    }
+    pending_start
+}
+
 fn open_private(
     path: &std::path::Path,
     create: bool,
@@ -200,6 +361,8 @@ mod tests {
             operation: "get".to_owned(),
             outcome: "success".to_owned(),
             item_id: None,
+            reason: None,
+            version: None,
         };
 
         let serialized = serde_json::to_string(&event).unwrap();
@@ -222,6 +385,102 @@ mod tests {
                 .as_deref(),
             Some("550e8400-e29b-41d4-a716-446655440000")
         );
+    }
+
+    #[test]
+    fn reason_and_version_are_serialized_when_set() {
+        let event = Event::new("agent", "agent.stop", "success")
+            .with_reason("sigterm")
+            .with_version("2.43.0");
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["reason"], "sigterm");
+        assert_eq!(value["version"], "2.43.0");
+    }
+
+    fn write_events(directory: &std::path::Path, day: u32, events: &[&str]) {
+        let mut content = events.join("\n");
+        content.push('\n');
+        std::fs::write(directory.join(format!("audit-{day}.jsonl")), content)
+            .unwrap();
+    }
+
+    fn event(time: &str, operation: &str, reason: Option<&str>) -> String {
+        let mut value = serde_json::json!({
+            "timestamp": time,
+            "actor": "agent",
+            "operation": operation,
+            "outcome": "success",
+        });
+        if let Some(reason) = reason {
+            value["reason"] = reason.into();
+        }
+        value.to_string()
+    }
+
+    #[test]
+    fn last_lock_explains_a_restart_with_the_stop_before_it() {
+        let directory = tempfile::tempdir().unwrap();
+        write_events(
+            directory.path(),
+            100,
+            &[
+                &event("t1", "agent.timeout_lock", None),
+                &event("t2", "socket.unlock", None),
+                &event("t3", "agent.stop", Some("outdated")),
+            ],
+        );
+        write_events(
+            directory.path(),
+            101,
+            &[
+                &event("t4", "agent.start", None),
+                &event("t5", "socket.unlock", None),
+                &serde_json::json!({
+                    "timestamp": "t6",
+                    "actor": "cli",
+                    "operation": "unlocked",
+                    "outcome": "failure",
+                })
+                .to_string(),
+            ],
+        );
+        let lock = last_lock_in(directory.path()).unwrap();
+        assert_eq!(lock.timestamp, "t3");
+        assert_eq!(lock.reason.as_deref(), Some("outdated"));
+        assert!(lock.describe().contains("newer rbw client"));
+    }
+
+    #[test]
+    fn last_lock_prefers_a_lock_after_the_agent_started() {
+        let directory = tempfile::tempdir().unwrap();
+        write_events(
+            directory.path(),
+            100,
+            &[
+                &event("t1", "agent.stop", Some("sigterm")),
+                &event("t2", "agent.start", None),
+                &event("t3", "socket.lock", Some("all_accounts")),
+            ],
+        );
+        let lock = last_lock_in(directory.path()).unwrap();
+        assert_eq!(lock.operation, "socket.lock");
+    }
+
+    #[test]
+    fn last_lock_reports_an_unexplained_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        write_events(
+            directory.path(),
+            100,
+            &[
+                &event("t1", "agent.start", None),
+                &event("t2", "agent.start", None),
+            ],
+        );
+        let lock = last_lock_in(directory.path()).unwrap();
+        assert_eq!(lock.timestamp, "t2");
+        assert!(lock.describe().contains("without a stop record"));
+        assert_eq!(last_lock_in(&directory.path().join("missing")), None);
     }
 
     fn enabled_config(retention_days: u16) -> AuditConfig {

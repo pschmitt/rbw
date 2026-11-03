@@ -174,14 +174,18 @@ pub fn lock_all() -> anyhow::Result<()> {
     simple_action_as(None, rbw::protocol::Action::Lock)
 }
 
-pub fn quit() -> anyhow::Result<()> {
+// Stop the agent. `reason` is one of the fixed labels the agent records in
+// the audit log (see `quit_reason` in rbw-agent).
+pub fn quit(reason: &'static str) -> anyhow::Result<()> {
     match crate::sock::Sock::connect() {
         Ok(mut sock) => {
             let pid = agent_pid()?;
             sock.send(&rbw::protocol::Request::with_account(
                 get_environment(),
                 current_account(),
-                rbw::protocol::Action::Quit,
+                rbw::protocol::Action::Quit {
+                    reason: Some(reason.to_owned()),
+                },
             ))?;
             wait_for_exit(pid);
             Ok(())

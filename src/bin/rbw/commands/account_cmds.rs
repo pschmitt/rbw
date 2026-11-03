@@ -124,7 +124,7 @@ pub fn account_add(
     if now_primary != old_primary {
         // Primary changed, so any keys the agent holds are for the wrong
         // account; drop them (mirrors `config set email`).
-        stop_agent()?;
+        stop_agent_for("config_change")?;
     }
     let suffix = if now_primary == name {
         " (primary)"
@@ -157,7 +157,7 @@ pub fn account_remove(name: &str) -> anyhow::Result<()> {
     config.save()?;
 
     if config.primary_account_name() != old_primary {
-        stop_agent()?;
+        stop_agent_for("config_change")?;
     }
     println!("removed account '{name}'");
     Ok(())
@@ -175,7 +175,7 @@ pub fn account_set_primary(name: &str) -> anyhow::Result<()> {
     config.save()?;
 
     if old_primary != name {
-        stop_agent()?;
+        stop_agent_for("config_change")?;
     }
     println!("primary account is now '{name}'");
     Ok(())

@@ -35,7 +35,7 @@ pub fn purge(yes: bool) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    stop_agent()?;
+    stop_agent_for("purge")?;
 
     remove_db()?;
     termux_remove(true)?;
@@ -45,7 +45,12 @@ pub fn purge(yes: bool) -> anyhow::Result<()> {
 }
 
 pub fn stop_agent() -> anyhow::Result<()> {
-    crate::actions::quit()?;
+    stop_agent_for("stop_agent")
+}
+
+// Stop the agent, telling it why (a fixed label for its audit log).
+pub fn stop_agent_for(reason: &'static str) -> anyhow::Result<()> {
+    crate::actions::quit(reason)?;
 
     Ok(())
 }
@@ -53,7 +58,7 @@ pub fn stop_agent() -> anyhow::Result<()> {
 // Replaces the running agent (which locks every account) with this build's.
 pub fn restart_agent() -> anyhow::Result<()> {
     check_config()?;
-    crate::actions::quit()?;
+    crate::actions::quit("outdated")?;
     run_agent()?;
     check_agent_version()
 }
@@ -150,7 +155,7 @@ pub(super) fn check_agent_version() -> anyhow::Result<()> {
     // Any patch of this minor, or a newer minor of this major, serves this
     // client (see `protocol::compatible`); an older one is replaced.
     if !rbw::protocol::compatible(agent_version) {
-        crate::actions::quit()?;
+        crate::actions::quit("outdated")?;
         return Err(anyhow::anyhow!(
             "client protocol version is {} but agent protocol version is {}",
             env!("CARGO_PKG_VERSION"),
@@ -162,6 +167,6 @@ pub(super) fn check_agent_version() -> anyhow::Result<()> {
 
 pub(super) fn version_or_quit() -> anyhow::Result<u32> {
     crate::actions::version().inspect_err(|_| {
-        let _ = crate::actions::quit();
+        let _ = crate::actions::quit("unresponsive");
     })
 }

@@ -353,7 +353,14 @@ pub enum Action {
     ClipboardStore {
         text: String,
     },
-    Quit,
+    // Stop the agent. `reason` is a fixed label for the audit log
+    // (`stop_agent`, `restart`, `outdated`, ...); the agent records an
+    // unknown one as `other` and a missing one (from rbw before 2.43) as
+    // `unspecified`. Agents before 2.43 ignore the field.
+    Quit {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     Version,
 }
 
@@ -435,6 +442,26 @@ fn test_version_encoding() {
     // An older minor, or another major.
     assert!(!compatible(minor - 1));
     assert!(!compatible(major + 1_000_000) && !compatible(major - 1));
+}
+
+// An agent before 2.43 had a unit `Quit`; a newer client replacing it sends
+// `Quit` with a reason, which the old agent must still accept.
+#[test]
+fn test_quit_reason_is_accepted_by_older_agents() {
+    #[derive(serde::Deserialize, Debug)]
+    #[serde(tag = "type")]
+    enum OldAction {
+        Quit,
+    }
+    let new = serde_json::to_value(Action::Quit {
+        reason: Some("outdated".to_owned()),
+    })
+    .unwrap();
+    assert_eq!(new["reason"], "outdated");
+    assert!(matches!(
+        serde_json::from_value::<OldAction>(new).unwrap(),
+        OldAction::Quit
+    ));
 }
 
 // Every request and response a released client sends or reads (one file

@@ -50,6 +50,38 @@ The rbw agent records timeout locks and periodic/server-notified syncs with
 the actor `agent`. A sync event reports success only when every configured
 account sync completes successfully; it does not include account names.
 
+## Why the vault was locked
+
+Every way the agent drops its keys leaves an event, so the log can say why
+the vault is locked. `rbw status` shows the most recent one as "last lock"
+while an account is locked (`last_lock` in `rbw status --json`).
+
+| Operation | Actor | Meaning |
+|---|---|---|
+| `agent.timeout_lock` | `agent` | The idle timeout (`agent.lockTimeout`) locked every account. |
+| `agent.server_logout` | `agent` | The server sent a logout notification. |
+| `agent.key_rotation_lock` | `agent` | A key rotation (`rbw security rotate-key`, `change-password --rotate-key`) dropped the old key. |
+| `socket.lock` | `local-agent-socket` | `rbw lock`; `reason` is `one_account` or `all_accounts`. |
+| `agent.start` | `agent` | The agent started, with no keys; `version` is its rbw version. |
+| `agent.stop` | `agent` or `local-agent-socket` | The agent stopped; `reason` says why, `version` is its rbw version. |
+
+The `agent.stop` reasons are fixed labels:
+
+- `stop_agent`: `rbw stop-agent` or `rbw agent stop`.
+- `outdated`: a newer client (`rbw`, `rbw-browser`) replaced an older agent.
+- `unresponsive`: a client could not get the agent's version and replaced it.
+- `config_change`: the configuration or the primary account changed.
+- `native_unlock_change`: a native unlock setting changed.
+- `purge`: `rbw purge`.
+- `sigterm`, `sigint`, `sighup`: a signal, such as a service stop or restart
+  or a reboot.
+- `unspecified`: a quit request from an rbw older than 2.43; `other`: a reason
+  this agent doesn't know.
+
+`SIGKILL` and crashes can't be recorded. An `agent.start` without an
+`agent.stop` before it shows that the previous agent ended that way (or ran
+an rbw older than 2.43).
+
 Local MCP tools run the rbw CLI as a subprocess, so their operations are
 recorded at the CLI boundary. Policy-only MCP field reads use the remote API
 and are recorded there.
@@ -68,8 +100,8 @@ socket requests are logged only after their action type has been decoded.
 Direct local agent-socket requests that dispatch a vault or key operation are
 recorded with actor `local-agent-socket`, a fixed action label and outcome,
 without payloads, item IDs or caller-supplied strings. The socket has no caller
-identity, so these events identify only the local agent boundary. Frequent lock-state probes, version
-queries, and the quit action are omitted. Connections and malformed requests
+identity, so these events identify only the local agent boundary. Frequent lock-state probes and version
+queries are omitted; the quit action is recorded as `agent.stop`. Connections and malformed requests
 that fail before an action can be classified are not recorded; normal CLI
 operations that use the socket are also covered at the CLI boundary, while
 agent-initiated timeout locks and background syncs are recorded. TLS handshakes

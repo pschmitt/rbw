@@ -125,12 +125,22 @@ fn ago(time: std::time::SystemTime) -> String {
     format!("{} ago", humantime::format_duration(elapsed))
 }
 
+// Why the vault was last locked, from the audit log: "the agent stopped:
+// `rbw stop-agent` (2h 5m ago)".
+fn lock_summary(lock: &rbw::audit::LastLock) -> String {
+    humantime::parse_rfc3339_weak(&lock.timestamp).map_or_else(
+        |_| lock.describe(),
+        |time| format!("{} ({})", lock.describe(), ago(time)),
+    )
+}
+
 // `rbw status` without `--full`: rbw and its agent on one line, then one
-// line per account.
+// line per account, then why the vault was last locked if one is locked.
 fn print_short(
     accounts: &[AccountStatus],
     pid: Option<u32>,
     stale_agent: Option<u32>,
+    last_lock: Option<&rbw::audit::LastLock>,
     c: bool,
 ) {
     let agent = match (pid, stale_agent) {
@@ -205,6 +215,13 @@ fn print_short(
             account_name(a, c)
         );
     }
+    if let Some(lock) = last_lock {
+        println!(
+            "{} {}",
+            style::dim("last lock:", c),
+            style::dim(&lock_summary(lock), c)
+        );
+    }
 }
 
 pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
@@ -226,6 +243,13 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
         .collect::<Vec<_>>();
     // Primary first; the sort is stable, so the rest keep their config order.
     accounts.sort_by_key(|a| !a.primary);
+    // The audit log doesn't record accounts, so this is the agent's most
+    // recent lock; shown only while an account is locked.
+    let last_lock = accounts
+        .iter()
+        .any(|a| !a.unlocked)
+        .then(rbw::audit::last_lock)
+        .flatten();
 
     if json {
         let accounts = accounts
@@ -267,6 +291,12 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
             },
             "primary_account": primary,
             "accounts": accounts,
+            "last_lock": last_lock.as_ref().map(|lock| serde_json::json!({
+                "timestamp": lock.timestamp,
+                "operation": lock.operation,
+                "reason": lock.reason,
+                "description": lock.describe(),
+            })),
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
@@ -274,7 +304,7 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
 
     let c = stdout_supports_color();
     if !full {
-        print_short(&accounts, pid, stale_agent, c);
+        print_short(&accounts, pid, stale_agent, last_lock.as_ref(), c);
         return Ok(());
     }
     // Labels are padded before they are painted so the escape codes don't
@@ -339,6 +369,9 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
         style::uri(&rbw::dirs::socket_file().display().to_string(), c),
     );
     row("", "lock timeout:", duration(config.agent.lock_timeout));
+    if let Some(lock) = &last_lock {
+        row("", "last lock:", style::dim(&lock_summary(lock), c));
+    }
     row(
         "",
         "sync interval:",

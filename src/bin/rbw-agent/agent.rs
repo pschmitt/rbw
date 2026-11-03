@@ -1,31 +1,74 @@
 use futures_util::StreamExt as _;
 
 async fn record_agent_event(operation: &'static str, success: bool) {
-    record_event("agent", operation, success).await;
+    record_event("agent", operation, success, None).await;
 }
 
-async fn record_socket_event(operation: &'static str, success: bool) {
-    record_event("local-agent-socket", operation, success).await;
+async fn record_socket_event(
+    operation: &'static str,
+    success: bool,
+    reason: Option<&'static str>,
+) {
+    record_event("local-agent-socket", operation, success, reason).await;
+}
+
+/// Record an agent event that locked accounts, with a fixed reason label.
+pub async fn record_agent_lock(
+    operation: &'static str,
+    reason: Option<&'static str>,
+) {
+    record_event("agent", operation, true, reason).await;
 }
 
 async fn record_event(
     actor: &'static str,
     operation: &'static str,
     success: bool,
+    reason: Option<&'static str>,
 ) {
     let Ok(config) = rbw::config::Config::load_async().await else {
         log::warn!("audit event could not read rbw configuration");
         return;
     };
-    rbw::audit::record_async_best_effort(
-        config.audit,
-        rbw::audit::Event::new(
-            actor,
-            operation,
-            if success { "success" } else { "failure" },
-        ),
-    )
-    .await;
+    let mut event = rbw::audit::Event::new(
+        actor,
+        operation,
+        if success { "success" } else { "failure" },
+    );
+    if let Some(reason) = reason {
+        event = event.with_reason(reason);
+    }
+    rbw::audit::record_async_best_effort(config.audit, event).await;
+}
+
+/// Record that the agent is stopping, then exit. Written synchronously so
+/// the event lands before the process ends.
+pub fn stop(actor: &'static str, reason: &'static str) -> ! {
+    log::info!("agent stopping: {reason}");
+    if let Ok(config) = rbw::config::Config::load() {
+        rbw::audit::record_best_effort(
+            &config.audit,
+            &rbw::audit::Event::new(actor, "agent.stop", "success")
+                .with_reason(reason)
+                .with_version(env!("CARGO_PKG_VERSION")),
+        );
+    }
+    std::process::exit(0)
+}
+
+// Map a client's quit reason to a fixed label: the audit log never stores
+// caller-supplied strings.
+fn quit_reason(reason: Option<&str>) -> &'static str {
+    match reason {
+        None => "unspecified",
+        Some("stop_agent") => "stop_agent",
+        Some("outdated") => "outdated",
+        Some("unresponsive") => "unresponsive",
+        Some("config_change") => "config_change",
+        Some("purge") => "purge",
+        Some("native_unlock_change") => "native_unlock_change",
+        Some(_) => "other",
+    }
 }
 
 pub struct Agent {
@@ -54,6 +97,7 @@ impl Agent {
         pub enum Event {
             Request(std::io::Result<tokio::net::UnixStream>),
             Timeout(()),
+            Logout,
             Sync(()),
         }
 
@@ -69,7 +113,7 @@ impl Agent {
                 notifications,
             )
             .map(|message| match message {
-                crate::notifications::Message::Logout => Event::Timeout(()),
+                crate::notifications::Message::Logout => Event::Logout,
                 crate::notifications::Message::Sync => Event::Sync(()),
             })
             .boxed();
@@ -135,6 +179,13 @@ impl Agent {
                         true,
                     ));
                 }
+                Event::Logout => {
+                    self.state.lock().await.clear();
+                    tokio::spawn(record_agent_event(
+                        "agent.server_logout",
+                        true,
+                    ));
+                }
                 Event::Sync(()) => {
                     let state = self.state.clone();
                     tokio::spawn(async move {
@@ -161,7 +212,9 @@ fn socket_audit_operation(
         Action::Register { .. } => "socket.register",
         Action::Login { .. } => "socket.login",
         Action::Unlock { .. } => "socket.unlock",
-        Action::CheckLock | Action::Version | Action::Quit => return None,
+        Action::CheckLock | Action::Version | Action::Quit { .. } => {
+            return None
+        }
         Action::Lock => "socket.lock",
         Action::Sync => "socket.sync",
         Action::PurgeVault { .. } => "socket.purge_vault",
@@ -198,6 +251,14 @@ async fn handle_request(
     };
     let (action, environment, account_name) = req.into_parts();
     let audit_operation = socket_audit_operation(&action);
+    let audit_reason =
+        matches!(action, rbw::protocol::Action::Lock).then(|| {
+            if account_name.is_some() {
+                "one_account"
+            } else {
+                "all_accounts"
+            }
+        });
     // Resolve the target account (by name, or the primary account when the
     // client didn't specify one) and run the whole dispatch within its scope
     // so that any server-bound lib call targets that account's server.
@@ -226,7 +287,7 @@ async fn handle_request(
         let succeeded = dispatch_result
             .as_ref()
             .is_ok_and(|(_, succeeded)| *succeeded);
-        tokio::spawn(record_socket_event(operation, succeeded));
+        tokio::spawn(record_socket_event(operation, succeeded, audit_reason));
     }
     let (set_timeout, _) = dispatch_result?;
 
@@ -584,7 +645,9 @@ async fn dispatch(
                 .await?;
             true
         }
-        rbw::protocol::Action::Quit => std::process::exit(0),
+        rbw::protocol::Action::Quit { reason } => {
+            stop("local-agent-socket", quit_reason(reason.as_deref()))
+        }
         rbw::protocol::Action::Version => {
             crate::actions::version(sock).await?;
             false
@@ -612,7 +675,10 @@ mod audit_tests {
     fn socket_audit_uses_fixed_labels_and_skips_status_probes() {
         assert_eq!(socket_audit_operation(&Action::CheckLock), None);
         assert_eq!(socket_audit_operation(&Action::Version), None);
-        assert_eq!(socket_audit_operation(&Action::Quit), None);
+        assert_eq!(
+            socket_audit_operation(&Action::Quit { reason: None }),
+            None
+        );
         let all_succeeded = Ok::<_, anyhow::Error>((false, true));
         let partial_failure = Ok::<_, anyhow::Error>((false, false));
         assert!(all_succeeded
@@ -643,6 +709,17 @@ mod audit_tests {
                 attachment_key: None,
             }),
             Some("socket.decrypt")
+        );
+    }
+
+    #[test]
+    fn quit_reasons_are_fixed_labels() {
+        assert_eq!(super::quit_reason(None), "unspecified");
+        assert_eq!(super::quit_reason(Some("outdated")), "outdated");
+        assert_eq!(super::quit_reason(Some("stop_agent")), "stop_agent");
+        assert_eq!(
+            super::quit_reason(Some("anything else, verbatim")),
+            "other"
         );
     }
 }

@@ -1171,6 +1171,10 @@ pub async fn change_master_key(
     if rotate_key {
         // The unlocked state still holds the old user key.
         state.lock().await.clear_account(&account.name);
+        tokio::spawn(crate::agent::record_agent_lock(
+            "agent.key_rotation_lock",
+            None,
+        ));
     }
 
     // The server rotates the account's security stamp, which may end the

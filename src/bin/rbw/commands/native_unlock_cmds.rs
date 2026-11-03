@@ -505,7 +505,7 @@ pub fn termux_enroll(validity: u32) -> anyhow::Result<()> {
             }
             return Err(anyhow::Error::new(error));
         }
-        let _ = stop_agent();
+        let _ = stop_agent_for("native_unlock_change");
         println!(
             "Termux unlock enrolled for account {account_name:?}.\n\
              Key: {key_alias} ({})\n\
@@ -578,7 +578,7 @@ pub fn termux_remove(yes: bool) -> anyhow::Result<()> {
         })?;
     account.unlock.termux = None;
     config.save()?;
-    let _ = stop_agent();
+    let _ = stop_agent_for("native_unlock_change");
 
     println!(
         "Removed Termux unlock for account {account_name:?} (key: {key_alias})."

@@ -120,7 +120,7 @@ pub fn config_edit() -> anyhow::Result<()> {
     // See `config_set`'s comment: not using lock() because we don't want to
     // require the agent to be running, and stop_agent() already handles
     // that gracefully.
-    stop_agent()?;
+    stop_agent_for("config_change")?;
 
     println!("updated config");
     Ok(())
@@ -289,7 +289,7 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
     // be running (since this may be the user running `rbw config set
     // base_url` as the first operation), and stop_agent() already handles the
     // agent not running case gracefully.
-    stop_agent()?;
+    stop_agent_for("config_change")?;
 
     Ok(())
 }
@@ -377,7 +377,7 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
     // be running (since this may be the user running `rbw config set
     // base_url` as the first operation), and stop_agent() already handles the
     // agent not running case gracefully.
-    stop_agent()?;
+    stop_agent_for("config_change")?;
 
     Ok(())
 }
