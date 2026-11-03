@@ -577,7 +577,9 @@ async function refresh(knownStatus = null, skipList = false) {
   $("unlock-title").hidden = Boolean(stale);
   const staleNote = $("locked").querySelector("p");
   staleNote.hidden = !stale;
-  staleNote.textContent = stale ? `rbw-agent is ${status.staleAgent}, but this browser still runs rbw ${status.hostVersion}. Restart the browser.` : "";
+  // rbw already started a fresh host for this browser; it is still the old
+  // one, so the native host manifest points to an old rbw-browser.
+  staleNote.textContent = stale ? `rbw-agent is ${status.staleAgent}, but this browser's rbw host is still ${status.hostVersion}: its native messaging manifest points to an older rbw. Update the manifest (or reinstall rbw-browser), then reopen this window.` : "";
   if (!unlocked) {
     show("locked"); if (several) $("account-menu").hidden = false;
     // The master password is what the popup is for; leave focus alone only if

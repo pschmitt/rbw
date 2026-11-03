@@ -1,0 +1,42 @@
+{
+  "_comment": "What rbw 2.41 clients send to rbw-agent and what they read back. Never edit a released file: a later minor must still accept these requests and still send these responses' fields (see protocol::compatible). Add a file for each minor that changes the protocol.",
+  "requests": [
+    {"tty": null, "environment": {"tty": "L2Rldi9wdHMvMQ==", "env_vars": [["VEVSTQ==", "eHRlcm0="], ["TEFORw==", "Qy5VVEYtOA=="]]}, "account": "work", "action": {"type": "Login", "password": "pw", "totp": "123456"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "Register", "client_id": "user.id", "client_secret": "secret"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "Unlock", "password": "pw"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": null, "action": {"type": "CheckLock"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": null, "action": {"type": "Lock"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": null, "action": {"type": "Sync"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "PurgeVault", "password": "pw"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "ChangePassword", "current_password": "old", "new_password": "new", "hint": "hint", "rotate_key": true}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "ChangeKdf", "password": "pw", "kdf": 1, "iterations": 3, "memory": 64, "parallelism": 4}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "RotateKey", "password": "pw"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "CreateOrg", "name": "Org"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "ConfirmOrgUser", "org_id": "org", "user_id": "user", "public_key_der_b64": "a2V5"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "DeleteOrg", "org_id": "org", "password": "pw"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "Decrypt", "cipherstring": "2.a|b|c", "entry_key": "ek", "org_id": "org", "attachment_key": "ak"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "DecryptBatch", "entries": [{"cipherstring": "2.a|b|c", "entry_key": "ek", "org_id": "org"}]}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "DecryptAttachment", "data": [1, 2, 3], "attachment_key": "ak", "entry_key": "ek", "org_id": "org"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "EncryptAttachment", "data": [1, 2, 3], "filename": "a.txt", "entry_key": "ek", "org_id": "org"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "Encrypt", "plaintext": "text", "entry_key": "ek", "org_id": "org"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "VerifyMasterPassword", "password": "pw"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "CryptBytes", "data": [1, 2, 3], "decrypt": true}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": null, "action": {"type": "ClipboardStore", "text": "text"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": null, "action": {"type": "Quit"}},
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": null, "action": {"type": "Version"}},
+    {"tty": "/dev/pts/1", "environment": null, "action": {"type": "Version"}}
+  ],
+  "responses": [
+    {"type": "Bytes", "data": [1, 2, 3]},
+    {"type": "Ack"},
+    {"type": "Progress", "message": "Syncing"},
+    {"type": "Error", "error": "failed"},
+    {"type": "Decrypt", "plaintext": "text"},
+    {"type": "DecryptBatch", "results": [{"type": "Success", "plaintext": "text"}, {"type": "Failure", "error": "failed"}]},
+    {"type": "DecryptAttachment", "data": [1, 2, 3]},
+    {"type": "EncryptAttachment", "encrypted_data": [1, 2, 3], "encrypted_key": "key", "encrypted_filename": "name"},
+    {"type": "Encrypt", "cipherstring": "2.a|b|c"},
+    {"type": "Version", "version": 2041000},
+    {"type": "CreateOrg", "id": "org"}
+  ]
+}

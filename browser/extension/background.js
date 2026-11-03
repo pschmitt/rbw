@@ -329,48 +329,105 @@ function native(request) {
   if (request.action === "sync") call.then(() => setPasskeySyncFailure(null), () => {});
   return call;
 }
-function nativeCall(request) {
-  if (!nativePort) {
-    try { nativePort = api.runtime.connectNative("org.rbw.browser"); }
-    catch (cause) {
-      const error = new Error(`Could not open the rbw native host connection. Check its manifest and installation, then check browser.clients.${cause?.message ? ` Browser detail: ${cause.message}` : ""}`);
-      error.diagnostic = { kind: "native-host-connect-error", occurredAt: new Date().toISOString(), host: "org.rbw.browser", browserDetail: cause?.message || null };
-      throw error;
-    }
-    nativePort.onMessage.addListener(response => {
-      if (response.code === "browser_not_authorized") {
-        clearMetadata(); popupStates.clear(); editDraft = null; unsavedLogins = [];
-        const error = new Error(response.error);
-        error.diagnostic = { kind: "native-host-authorization-denied", occurredAt: new Date().toISOString(), host: "org.rbw.browser", browserDetail: response.error };
-        for (const entry of nativeRequests.values()) entry.reject(error);
-        nativeRequests.clear();
-        return;
-      }
-      const entry = nativeRequests.get(response.id); if (!entry) return;
-      nativeRequests.delete(response.id);
-      if (response.error) entry.reject(new Error(response.error)); else entry.resolve(response.result);
-    });
-    nativePort.onDisconnect.addListener(() => {
-      const browserError = api.runtime.lastError?.message;
-      nativePort = null; clearMetadata(); popupStates.clear(); editDraft = null; unsavedLogins = [];
-      const detail = browserError ? ` Browser detail: ${browserError}` : "";
-      const error = new Error(`The rbw native host disconnected before replying. Check that rbw-browser, rbw, and rbw-agent are installed together, that the native host manifest points to rbw-browser, and that this extension is allowed by browser.clients.${detail}`);
-      error.diagnostic = {
-        kind: "native-host-disconnect",
-        occurredAt: new Date().toISOString(),
-        host: "org.rbw.browser",
-        browserDetail: browserError || null,
-      };
-      for (const entry of nativeRequests.values()) entry.reject(error);
-      nativeRequests.clear();
-    });
+// The rbw-browser process lives as long as its port, so after an upgrade the
+// browser keeps talking to the old one. The manifest already points to the
+// new rbw-browser, and connectNative reads it each time: a fresh port starts
+// the current host. A retired port is closed once its requests have answered.
+function connectNativePort() {
+  let port;
+  try { port = api.runtime.connectNative("org.rbw.browser"); }
+  catch (cause) {
+    const error = new Error(`Could not open the rbw native host connection. Check its manifest and installation, then check browser.clients.${cause?.message ? ` Browser detail: ${cause.message}` : ""}`);
+    error.diagnostic = { kind: "native-host-connect-error", occurredAt: new Date().toISOString(), host: "org.rbw.browser", browserDetail: cause?.message || null };
+    throw error;
   }
+  const rejectPort = error => {
+    for (const [id, entry] of nativeRequests) if (entry.port === port) { nativeRequests.delete(id); entry.reject(error); }
+  };
+  port.onMessage.addListener(response => {
+    if (response.code === "browser_not_authorized") {
+      clearMetadata(); popupStates.clear(); editDraft = null; unsavedLogins = [];
+      const error = new Error(response.error);
+      error.diagnostic = { kind: "native-host-authorization-denied", occurredAt: new Date().toISOString(), host: "org.rbw.browser", browserDetail: response.error };
+      rejectPort(error);
+      return;
+    }
+    const entry = nativeRequests.get(response.id); if (!entry || entry.port !== port) return;
+    nativeRequests.delete(response.id);
+    if (response.error) entry.reject(new Error(response.error)); else entry.resolve(response.result);
+    closeIfRetired(port);
+  });
+  port.onDisconnect.addListener(() => {
+    const browserError = api.runtime.lastError?.message;
+    if (nativePort === port) nativePort = null;
+    clearMetadata(); popupStates.clear(); editDraft = null; unsavedLogins = [];
+    const detail = browserError ? ` Browser detail: ${browserError}` : "";
+    const error = new Error(`The rbw native host disconnected before replying. Check that rbw-browser, rbw, and rbw-agent are installed together, that the native host manifest points to rbw-browser, and that this extension is allowed by browser.clients.${detail}`);
+    error.diagnostic = {
+      kind: "native-host-disconnect",
+      occurredAt: new Date().toISOString(),
+      host: "org.rbw.browser",
+      browserDetail: browserError || null,
+    };
+    rejectPort(error);
+  });
+  return port;
+}
+const retiredPorts = new Set();
+function closeIfRetired(port) {
+  if (!retiredPorts.has(port) || [...nativeRequests.values()].some(entry => entry.port === port)) return;
+  retiredPorts.delete(port); port.disconnect();
+}
+function retireNativePort() {
+  if (!nativePort) return;
+  const port = nativePort; nativePort = null;
+  retiredPorts.add(port); closeIfRetired(port);
+}
+function nativeSend(request) {
+  if (!nativePort) nativePort = connectNativePort();
+  const port = nativePort;
   return new Promise((resolve, reject) => {
-    const id = ++serial; nativeRequests.set(id, { resolve, reject });
+    const id = ++serial; nativeRequests.set(id, { resolve, reject, port });
     // URI matching follows this browser's override of rbw's default, if set.
     if (["search", "credential"].includes(request.action) && request.match_default === undefined) request = { ...request, match_default: uriMatchOverride };
-    try { nativePort.postMessage({ ...request, id }); } catch (error) { nativeRequests.delete(id); reject(error); }
+    try { port.postMessage({ ...request, id }); } catch (error) { nativeRequests.delete(id); reject(error); }
   });
+}
+// "2.41.0" -> [2, 41, 0]; compares the way rbw orders its versions.
+const versionParts = value => String(value || "").split(".").map(part => Number.parseInt(part, 10) || 0);
+const versionBefore = (a, b) => {
+  const [x, y] = [versionParts(a), versionParts(b)];
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0);
+  return false;
+};
+// The host predates what it talks to: an agent it cannot use that is newer
+// than the host (it replaces older ones itself), or this extension from a
+// newer minor. Both come from an upgrade the host process outlived.
+function hostOutdated(status) {
+  const host = status?.hostVersion;
+  if (!host) return false;
+  if (status.staleAgent && versionBefore(host, status.staleAgent)) return true;
+  const [major, minor] = versionParts(api.runtime.getManifest()?.version);
+  return versionBefore(host, `${major}.${minor}.0`);
+}
+// Start a fresh host at most once per outdated version and ten minutes: if
+// the manifest still points to the old rbw-browser, a new port won't help,
+// and the extension says so instead.
+let hostRestart = null;
+async function nativeCall(request) {
+  let result;
+  try { result = await nativeSend(request); }
+  catch (error) {
+    // The host went away (an upgrade can garbage-collect its binary): one
+    // more try on a fresh port, for the read-only status only.
+    if (request.action !== "status" || error.diagnostic?.kind !== "native-host-disconnect") throw error;
+    result = await nativeSend(request);
+  }
+  if (request.action !== "status" || !hostOutdated(result)) return result;
+  if (hostRestart?.from === result.hostVersion && Date.now() - hostRestart.at < 600000) return result;
+  hostRestart = { from: result.hostVersion, at: Date.now() };
+  retireNativePort();
+  return nativeSend(request);
 }
 
 // The native host handles one request at a time, so a pending fingerprint
@@ -380,8 +437,7 @@ function cancelNative(reason) {
   if (!nativePort) return;
   const port = nativePort; nativePort = null;
   port.disconnect();
-  for (const entry of nativeRequests.values()) entry.reject(new Error(reason));
-  nativeRequests.clear();
+  for (const [id, entry] of nativeRequests) if (entry.port === port) { nativeRequests.delete(id); entry.reject(new Error(reason)); }
 }
 
 // A popup holds an "rbw-fingerprint" port while its scan runs; closing the

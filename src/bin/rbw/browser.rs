@@ -734,12 +734,14 @@ fn account_colors(config: &rbw::config::Config) -> Value {
         .collect::<std::collections::BTreeMap<_, _>>())
 }
 
-// The running agent's protocol version. An agent from an older major.minor
-// (one started before an upgrade keeps running; another patch release is
-// compatible) can't serve this host, and the CLI would replace it on its
-// next command anyway, so it is replaced here too; that locks every
-// account. A newer one is left alone: then this host is the stale one (a
-// browser still running the old one) and the extension says so.
+// The running agent's protocol version. An agent from an older minor (one
+// started before an upgrade keeps running) may not understand this host,
+// and the CLI would replace it on its next command anyway, so it is
+// replaced here too; that locks every account. A newer minor of the same
+// major serves this host (see `protocol::compatible`). An agent of a newer
+// major is left alone: then this host is the stale one (a browser still
+// running the old one), and the extension reconnects to get the current
+// host or says so.
 fn agent_version() -> Option<u32> {
     let version = actions::version().ok()?;
     if !rbw::protocol::compatible(version) && version < rbw::protocol::VERSION

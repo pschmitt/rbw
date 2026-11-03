@@ -5,7 +5,14 @@ import json, os, struct, sys
 LOGIN = {"id": "login-1", "name": "Test Login", "username": "alice", "iconOrigin": None, "matched": True, "type": "login", "passkeys": 0, "favorite": False, "folder": None, "archived": False, "deleted": False, "protected": False}
 CARD = {"id": "card-1", "name": "Test Visa", "username": "Visa, •1111", "iconOrigin": None, "matched": False, "type": "card", "passkeys": 0, "favorite": False, "folder": None, "archived": False, "deleted": False, "protected": False}
 generated = set()  # Logins saved with a generated password.
-log = open(os.environ.get("RBW_E2E_LOG", sys.argv[0] + ".log"), "a")
+log_path = os.environ.get("RBW_E2E_LOG", sys.argv[0] + ".log")
+log = open(log_path, "a")
+# The first host the browser starts is an old one left over from before an
+# upgrade; the extension should replace it with a fresh (current) one.
+first = not os.path.exists(log_path + ".spawned")
+open(log_path + ".spawned", "a").close()
+host_version = "0.0.1" if first else "999.0.0"
+log.write(f"spawn:{host_version}\n"); log.flush()
 
 def reply(message):
     data = json.dumps(message).encode()
@@ -16,7 +23,7 @@ while True:
     if len(header) < 4: break
     request = json.loads(sys.stdin.buffer.read(struct.unpack("@I", header)[0]))
     action = request.get("action"); log.write(f"{action}:{request.get('item') or ''}\n"); log.flush()
-    if action == "status": result = {"unlocked": True, "accounts": ["test"], "primary": "test"}
+    if action == "status": result = {"unlocked": True, "accounts": ["test"], "primary": "test", "hostVersion": host_version, "staleAgent": None}
     elif action == "search":
         logins = [LOGIN] + [{**LOGIN, "id": f"login-{n}", "name": f"Other Login {n}", "username": f"user{n}"} for n in range(2, 8)]
         items = [CARD] if request.get("kind") == "card" else logins if request.get("kind") in (None, "login") else []

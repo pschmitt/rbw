@@ -4,6 +4,18 @@
 
 ### Changed
 
+* An `rbw-agent` from a newer minor release (one started after an upgrade)
+  now serves clients and browser hosts that still run the previous minor
+  of the same major, instead of each side treating the other as stale and
+  replacing it (which locked the vault). Within a major the agent protocol
+  only grows; `tests/protocol/` pins what each release sends and receives.
+
+* Browser extension: after an upgrade the extension starts a fresh native
+  host by itself when the running one is older than the extension or than
+  the agent, so it no longer asks for a browser restart. It only reports
+  the host as out of date when its manifest still points to an old
+  `rbw-browser`.
+
 * rbw-auto is now part of the repository's layout: its documentation is
   [docs/auto.md](docs/auto.md), its Nix packages and NixOS module moved to
   `nix/`, and its packages and container image carry rbw's version (a

@@ -54,11 +54,21 @@ default users or state directories (`bw-backup`, `bw-sync`,
 
 ## Agent protocol
 
-`rbw`, `rbw-browser` and `rbw-agent` work together when they share
-`major.minor` (`rbw::protocol::compatible`): an agent from another patch
-release keeps running across an upgrade. So any change to the agent
-protocol (`src/protocol.rs`: actions, responses, their fields) needs at
-least a minor version bump, never just a patch release.
+A client (`rbw`, `rbw-browser`) works with an `rbw-agent` of the same
+major and the same or a newer minor (`rbw::protocol::compatible`), so an
+agent that outlived an upgrade keeps serving clients and browser hosts still
+running the previous release. That only holds while the protocol
+(`src/protocol.rs`: actions, responses, their fields) grows additively
+within a major:
+
+- A protocol change needs at least a minor version bump, never a patch.
+- Within a major, only add: new actions, new responses (sent only in reply
+  to new actions), new fields as `Option` or `#[serde(default)]`. Never
+  remove, rename or change the meaning or type of an existing one; that
+  needs a major bump.
+- When a minor changes the protocol, add `tests/protocol/X.Y.json` with
+  what it sends and receives (never edit a released one);
+  `test_protocol_fixtures` keeps every earlier file working.
 
 ## Deploy
 

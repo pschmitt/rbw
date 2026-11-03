@@ -183,6 +183,12 @@ def main():
         if opened:
             click_in("save"); check("update prompt updates the stored login", logged("save:login-1"))
 
+        # The first host was left over from an "upgrade" (older than the
+        # extension): the extension started a fresh one and used that.
+        with open(os.environ["RBW_E2E_LOG"]) as log:
+            spawns = [line.split(":", 1)[1] for line in log.read().split() if line.startswith("spawn:")]
+        check("an outdated native host is replaced by a fresh one", spawns[:2] == ["0.0.1", "999.0.0"], str(spawns))
+
         # A set-password step (Keycloak's UPDATE_PASSWORD): only new-password fields.
         fresh(); page.click("#newpw"); opened = host()
         check("set-password chooser opens", opened is not None)

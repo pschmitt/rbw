@@ -212,9 +212,10 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
         .unwrap_or_else(|_| rbw::config::Config::new());
     let primary = config.primary_account_name();
     let pid = agent_pid_if_running();
-    // An agent from another major.minor (one that outlived an upgrade)
-    // can't serve this rbw: shown in red so it's clear why commands
-    // replace it, or why the browser extension says it's out of date.
+    // An agent from an older minor or another major (one that outlived an
+    // upgrade) can't serve this rbw: shown in red so it's clear why commands
+    // replace it, or why the browser extension says it's out of date. A
+    // newer minor of the same major serves it (see `protocol::compatible`).
     let agent_version = pid.and_then(|_| crate::actions::version().ok());
     let stale_agent =
         agent_version.filter(|v| !rbw::protocol::compatible(*v));

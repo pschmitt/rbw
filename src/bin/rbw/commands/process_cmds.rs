@@ -147,7 +147,8 @@ pub(super) fn check_config() -> anyhow::Result<()> {
 
 pub(super) fn check_agent_version() -> anyhow::Result<()> {
     let agent_version = version_or_quit()?;
-    // Another patch release of the same major.minor speaks this protocol.
+    // Any patch of this minor, or a newer minor of this major, serves this
+    // client (see `protocol::compatible`); an older one is replaced.
     if !rbw::protocol::compatible(agent_version) {
         crate::actions::quit()?;
         return Err(anyhow::anyhow!(
