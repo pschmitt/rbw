@@ -51,3 +51,18 @@ test("one-time-code fields are recognized by autocomplete or name", () => {
   const otp = input({name: "signInMFA"}, form);
   assert.equal(loginTargets([input({type: "password"}, form), otp]).otp, otp);
 });
+
+test("a set-password step fills its new-password fields", () => {
+  const fresh = input({type: "password", name: "password-new", autocomplete: "new-password"}, form);
+  const confirm = input({type: "password", name: "password-confirm", autocomplete: "new-password"}, form);
+  const found = loginTargets([fresh, confirm, input({type: "checkbox", name: "logout-sessions"}, form)]);
+  assert.equal(found.password, undefined);
+  assert.deepEqual([...found.newPasswords], [fresh, confirm]);
+});
+
+test("a change-password form fills only the current password", () => {
+  const current = input({type: "password", autocomplete: "current-password"}, form);
+  const found = loginTargets([current, input({type: "password", autocomplete: "new-password"}, form), input({type: "password", autocomplete: "new-password"}, form)]);
+  assert.equal(found.password, current);
+  assert.equal(found.newPasswords.length, 0);
+});

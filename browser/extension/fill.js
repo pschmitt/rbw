@@ -85,11 +85,13 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     const otp = fields.find(isOtpField);
     put(otp, data.totpCode); otp?.focus();
   } else if (data.type === "login") {
-    const { user, password, otp, scoped: loginScope } = loginTargets(fields);
+    const { user, password, newPasswords, otp, scoped: loginScope } = loginTargets(fields);
     scoped = loginScope;
     put(user, data.username); put(password, data.password);
+    // Never set a password on page load: only a fill the user asked for.
+    if (!options.automatic) for (const el of newPasswords) put(el, data.password);
     if (data.totpCode) put(otp, data.totpCode);
-    if (password) password.focus(); else user?.focus();
+    if (password) password.focus(); else if (!options.automatic && newPasswords.length) newPasswords.at(-1).focus(); else user?.focus();
   } else {
     const names = data.type === "card" ? { "cc-name": "cardholder_name", "cc-number": "number", "cc-exp-month": "exp_month", "cc-exp-year": "exp_year", "cc-type": "brand" } : { "given-name": "first_name", "additional-name": "middle_name", "family-name": "last_name", "address-line1": "address1", "address-line2": "address2", "address-line3": "address3", "address-level2": "city", "address-level1": "state", "postal-code": "postal_code", "country": "country", "country-name": "country", "tel": "phone", "email": "email", "username": "username", "honorific-prefix": "title" };
     if (data.type === "card" && options.cardSecurityCode === "fill") names["cc-csc"] = "code";
