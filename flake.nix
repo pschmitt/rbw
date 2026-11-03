@@ -315,6 +315,7 @@
           hm = mkHm rbwConfig;
           renderedConfigFile = hm.config.programs.rbw.renderedConfigFile;
           mcpArgs = hm.config.programs.mcp.servers.rbw.args;
+          profileRbw = "${hm.config.home.profileDirectory}/bin/rbw";
           expected =
             builtins.toJSON {
               agent = {
@@ -383,8 +384,11 @@
                 "mcp"
                 "--timeout"
                 "120"
+                "--cli"
+                profileRbw
                 "--read-only"
-              ];
+              ]
+              && hm.config.programs.mcp.servers.rbw.command == profileRbw;
             pkgs.runCommand "rbw-hm-module-mcp-check" { } "touch $out";
         }
         // {

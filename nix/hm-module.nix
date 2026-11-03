@@ -892,12 +892,17 @@ in
       # Only set where Home Manager has `programs.mcp`; the assertion above
       # reports the rest.
       (lib.optionalAttrs (options ? programs.mcp.servers) {
+        # Through the profile's bin/rbw, which an upgrade updates: an MCP
+        # server lives as long as the agent session that started it, and a
+        # store path would keep it on the rbw it started with.
         programs.mcp.servers.rbw = mkIf cfg.mcp.enable {
-          command = lib.getExe' cfg.package "rbw";
+          command = "${config.home.profileDirectory}/bin/rbw";
           args = [
             "mcp"
             "--timeout"
             (toString cfg.mcp.timeout)
+            "--cli"
+            "${config.home.profileDirectory}/bin/rbw"
           ]
           ++ lib.optional cfg.mcp.allowSecrets "--allow-secrets"
           ++ lib.optional cfg.mcp.readOnly "--read-only";

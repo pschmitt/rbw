@@ -14,6 +14,8 @@
 * `rbw mcp --cli PATH`: the rbw binary the tools run. Point it at a path an
   upgrade updates (a profile's `bin/rbw`) so a long-running MCP server uses
   the installed rbw instead of the one it started with.
+  The Home Manager module's `programs.rbw.mcp` server now runs rbw from the
+  profile's `bin/rbw` and passes it as `--cli`.
 
 * The audit log records which program stopped or locked the agent (`client`,
   e.g. `rbw-2.40.0/bin/rbw`, on Linux); `rbw status` shows it with the last
