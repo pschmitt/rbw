@@ -76,7 +76,10 @@ Never release a version with failing CI. Before publishing a version tag or
 release, updating the consumer's flake pin, or deploying that version, verify
 that every release CI workflow (`build`, `lint`, `test`, and `docker`) has completed
 successfully for the exact commit being released. Pending, running, cancelled,
-or missing checks do not count as green. A version-bump commit may be pushed
+or missing checks do not count as green. The exception is the macOS jobs
+(`build-macos`, `test-macos`), which often wait hours for a runner: don't
+wait for them, and tag with `git tag -s` once every other job is green
+(`just release-tag` waits for them too). A version-bump commit may be pushed
 to trigger CI; fix failures and wait for green checks before releasing it.
 
 Before every release, try to land the open dependency PRs (Renovate,
@@ -90,7 +93,9 @@ The browser extension shares rbw's version (from `Cargo.toml`). Release with
 `tools/release.sh`); the tag must be GPG-signed, so unlock GPG first. The
 tag's release workflow signs the extension (AMO, CRX), publishes it,
 and commits the hashes of the signed packages (`browser/packages/metadata.json`;
-the packages themselves are only release assets) to `main`. Signing, pinning and
+the packages themselves are only release assets) to `main`. The macOS build
+(`build-macos`) runs after the release and adds its tarball to it, so an
+unavailable macOS runner never holds up a release. Signing, pinning and
 the pin check come from the reusable workflows in `pschmitt/ci-workflows`,
 shared with browser-daemon and bruvtab, and `tools/release.sh` is a verbatim
 copy of that repository's script. Any extension source change needs a new
