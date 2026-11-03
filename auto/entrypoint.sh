@@ -9,7 +9,7 @@ RBW_CONFIG_FILE="${RBW_CONFIG_DIR}/config.json"
 
 # Renders one account entry (name/email/baseUrl) as JSON. rbw's config.json
 # only ever holds this non-secret connection metadata -- master passwords
-# and register API keys stay in env vars, read by bw-backup.sh/bw-sync.sh
+# and register API keys stay in env vars, read by rbw-auto-backup.sh/rbw-auto-sync.sh
 # and piped to `rbw ... --stdin`, never written to disk here.
 account_json() {
   local name="$1"

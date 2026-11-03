@@ -40,6 +40,18 @@ rather than fork the logic. The bundle's files are listed twice: `SHARED` in
 `browser/build.py` and the fileset of `browser-daemon-extension` in
 `nix/browser.nix`; keep them in step, or the flake check fails on a missing file.
 
+## rbw-auto
+
+rbw-auto (scheduled backup and sync, documented in `docs/auto.md`) is
+licensed GPL-3.0, unlike the rest of rbw: the scripts and container files in
+`auto/` (with its `LICENSE`) and the Nix files `nix/rbw-auto-*.nix` and
+`nix/auto-module.nix` (SPDX headers). Keep new rbw-auto code in those places
+and keep rbw's own code out of them. Its packages and image carry rbw's
+version; `docker-auto` builds the image after `docker` succeeds, and a
+release tag also publishes it as `rbw-auto:X.Y.Z`. Never rename the module's
+default users or state directories (`bw-backup`, `bw-sync`,
+`/var/lib/bw-*`): deployed hosts keep their state there.
+
 ## Agent protocol
 
 `rbw`, `rbw-browser` and `rbw-agent` work together when they share

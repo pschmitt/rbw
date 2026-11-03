@@ -79,3 +79,16 @@ jobs:
           else
             echo "Skipping latest: rbw:latest moved while rbw-auto was building"
           fi
+      # A release tag publishes the image under rbw's version too, like rbw's own.
+      - name: Publish the release version
+        if: >-
+          steps.ancestry.outputs.is_ancestor == 'true' &&
+          steps.current.outputs.is_current == 'true' &&
+          startsWith(github.event.workflow_run.head_branch, 'v')
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          docker buildx imagetools create \
+            --tag "ghcr.io/pschmitt/rbw-auto:${TAG#v}" \
+            "ghcr.io/pschmitt/rbw-auto:sha-$SOURCE_SHA"

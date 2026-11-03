@@ -12,8 +12,8 @@ RUN apt-get update && \
 
 COPY --from=rbw /usr/bin/rbw /usr/local/bin/rbw
 COPY --from=rbw /usr/bin/rbw-agent /usr/local/bin/rbw-agent
-COPY bw-backup.sh /usr/local/bin/rbw-auto-backup
-COPY bw-sync.sh /usr/local/bin/rbw-auto-sync
+COPY rbw-auto-backup.sh /usr/local/bin/rbw-auto-backup
+COPY rbw-auto-sync.sh /usr/local/bin/rbw-auto-sync
 COPY entrypoint.sh /entrypoint.sh
 COPY lib.sh /usr/local/bin/lib.sh
 

@@ -292,20 +292,20 @@ main() {
 
   require_vars SRC_ACCOUNT DEST_ACCOUNT SRC_BW_PASSWORD DEST_BW_PASSWORD
 
-  healthcheck_ping start "Starting bw-sync (mode: $BW_SYNC_MODE)"
+  healthcheck_ping start "Starting rbw-auto-sync (mode: $BW_SYNC_MODE)"
 
   mkdir -p "$WORKDIR"
   trap cleanup EXIT INT TERM
 
   if ! rbw_prepare_account "$SRC_ACCOUNT" "$SRC_BW_PASSWORD" "${SRC_BW_TOTP_SECRET:-}"
   then
-    healthcheck_ping fail "bw-sync source login failed"
+    healthcheck_ping fail "rbw-auto-sync source login failed"
     return 1
   fi
 
   if ! rbw_prepare_account "$DEST_ACCOUNT" "$DEST_BW_PASSWORD" "${DEST_BW_TOTP_SECRET:-}"
   then
-    healthcheck_ping fail "bw-sync destination login failed"
+    healthcheck_ping fail "rbw-auto-sync destination login failed"
     return 1
   fi
 
@@ -325,13 +325,13 @@ main() {
 
   if [[ "$rc" -ne 0 ]]
   then
-    healthcheck_ping fail "bw-sync failed"
+    healthcheck_ping fail "rbw-auto-sync failed"
     return 1
   fi
 
   echo_info "Sync complete."
   write_last_sync
-  healthcheck_ping "" "bw-sync successful"
+  healthcheck_ping "" "rbw-auto-sync successful"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]

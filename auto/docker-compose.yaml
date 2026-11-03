@@ -8,8 +8,8 @@ x-rbw-auto-base: &rbw-auto-base
     # persistent storage
     - ./data:/data
     # devel
-    - ./bw-backup.sh:/usr/local/bin/rbw-auto-backup:ro
-    - ./bw-sync.sh:/usr/local/bin/rbw-auto-sync:ro
+    - ./rbw-auto-backup.sh:/usr/local/bin/rbw-auto-backup:ro
+    - ./rbw-auto-sync.sh:/usr/local/bin/rbw-auto-sync:ro
     - ./entrypoint.sh:/entrypoint.sh:ro
     - ./lib.sh:/usr/local/bin/lib.sh:ro
 

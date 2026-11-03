@@ -44,7 +44,7 @@ bw_export() {
 
   if ! rbw_prepare_account "$ACCOUNT" "$BW_PASSWORD" "${BW_TOTP_SECRET:-}"
   then
-    healthcheck_ping fail "Login/unlock failed (bw-backup)"
+    healthcheck_ping fail "Login/unlock failed (rbw-auto-backup)"
     exit 1
   fi
 
@@ -77,7 +77,7 @@ bw_export() {
   if ! rbw --account "$ACCOUNT" "${export_args[@]}" --output "$BW_CURRENT_BACKUP_FILE"
   then
     echo_error "Export failed."
-    healthcheck_ping fail "Export failed (bw-backup)"
+    healthcheck_ping fail "Export failed (rbw-auto-backup)"
     exit 1
   fi
 
@@ -134,7 +134,7 @@ then
   echo "pid: $$ date: $(date -Iseconds)" > "$LOCKFILE"
   trap cleanup EXIT INT TERM ERR
 
-  healthcheck_ping start "Starting bw-backup"
+  healthcheck_ping start "Starting rbw-auto-backup"
 
   if ! bw_export "$@"
   then

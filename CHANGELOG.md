@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed
+
+* rbw-auto is now part of the repository's layout: its documentation is
+  [docs/auto.md](docs/auto.md), its Nix packages and NixOS module moved to
+  `nix/`, and its packages and container image carry rbw's version (a
+  release also publishes `ghcr.io/pschmitt/rbw-auto:X.Y.Z`). The scripts are
+  now `auto/rbw-auto-backup.sh` and `auto/rbw-auto-sync.sh`; installed names,
+  module options, users and state directories are unchanged.
+
+### Removed
+
+* rbw-auto's legacy `decrypt.sh`: read backups with `rbw --from-file` or
+  `rbw import --decrypt` (see [docs/auto.md](docs/auto.md#restoring)).
+
 ## [2.41.0] - 2026-11-03
 
 ### Added

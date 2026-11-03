@@ -130,8 +130,8 @@
               '';
             }
           );
-          rbwAutoBackup = pkgs.callPackage ./auto/nix/rbw-auto-backup.nix { rbw = rbw; };
-          rbwAutoSync = pkgs.callPackage ./auto/nix/rbw-auto-sync.nix { rbw = rbw; };
+          rbwAutoBackup = pkgs.callPackage ./nix/rbw-auto-backup.nix { inherit rbw; };
+          rbwAutoSync = pkgs.callPackage ./nix/rbw-auto-sync.nix { inherit rbw; };
 
           rbwTermux =
             let
@@ -259,7 +259,7 @@
       homeManagerModules.default = import ./nix/hm-module.nix { inherit self; };
 
       nixosModules.default = import ./nix/nixos-module.nix { inherit self; };
-      nixosModules.auto = import ./auto/nix/module.nix { inherit self; };
+      nixosModules.auto = import ./nix/auto-module.nix { inherit self; };
 
       # Smoke test: build a minimal home-manager configuration exercising
       # `programs.rbw`, and assert the rendered `config.yaml`
@@ -389,7 +389,7 @@
           inherit (self.packages.${system}) browser-daemon-extension;
         }
         // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-          # Evaluates a representative rbw-auto backup service and checks
+          # Evaluates representative rbw-auto backup and sync services and checks
           # that the module uses the packages from this flake.
           nixos-module-auto =
             let
@@ -402,6 +402,17 @@
                       account = {
                         name = "smoke";
                         email = "smoke@example.invalid";
+                      };
+                    };
+                    services.rbw-auto.syncJobs.smoke = {
+                      sourceAccount = {
+                        name = "smoke-source";
+                        email = "source@example.invalid";
+                      };
+                      destAccount = {
+                        name = "smoke-dest";
+                        email = "dest@example.invalid";
+                        baseUrl = "https://vault.example.invalid";
                       };
                     };
                     boot.loader.grub.enable = false;
@@ -419,9 +430,16 @@
                 nixpkgs.lib.length (nixpkgs.lib.splitString " " start) - 1
               );
               backup = self.packages.${system}.rbw-auto-backup;
+              sync = self.packages.${system}.rbw-auto-sync;
+              syncStart = builtins.unsafeDiscardStringContext nixos.config.systemd.services.rbw-auto-sync.serviceConfig.ExecStart;
             in
             assert nixos.config.services.rbw-auto.backupPackage == backup;
             assert startProgram == builtins.unsafeDiscardStringContext "${backup}/bin/rbw-auto-backup";
+            assert nixos.config.services.rbw-auto.syncPackage == sync;
+            assert nixpkgs.lib.hasInfix (builtins.unsafeDiscardStringContext "${sync}/bin/rbw-auto-sync")
+              syncStart;
+            # The packages carry rbw's own version.
+            assert backup.version == self.packages.${system}.default.version;
             pkgs.runCommand "rbw-auto-nixos-module-check" { } "touch $out";
 
           # Evaluates (without building rbw) a NixOS system enabling

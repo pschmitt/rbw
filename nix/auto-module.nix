@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Part of rbw-auto (auto/), licensed GPL-3.0 unlike the rest of rbw; see auto/LICENSE.
 { self }:
 {
   config,
