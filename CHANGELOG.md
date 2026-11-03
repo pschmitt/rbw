@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.42.0] - 2026-11-03
+
 ### Changed
 
 * An `rbw-agent` from a newer minor release (one started after an upgrade)
