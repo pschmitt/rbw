@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+2.43.0 was tagged but never published (its release waited on a macOS
+runner); its changes ship with this release.
+
 ### Changed
 
 * A client never stops an `rbw-agent` newer than itself anymore. A program
