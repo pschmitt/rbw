@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [2.41.0] - 2026-11-03
+
+### Added
+
+* Browser extension: set-password pages that have only new-password fields
+  (for example Keycloak's "Update password" step) can now be filled. Filling
+  a login puts its password into the new and confirm fields, and the inline
+  menu's "New" action generates a password, saves it to the login (the old
+  one moves to the password history) and then fills it. Automatic fills on
+  page load never touch these fields.
+
 ## [2.40.0] - 2026-11-01
 
 ### Added
