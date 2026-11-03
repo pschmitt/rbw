@@ -85,7 +85,12 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     const otp = fields.find(isOtpField);
     put(otp, data.totpCode); otp?.focus();
   } else if (data.type === "login") {
-    const { user, password, newPasswords, otp, scoped: loginScope } = loginTargets(fields);
+    // Focus in a new-password field (a set-password step chosen in the inline
+    // menu) picks its form, even when the page also has a sign-in form.
+    let focused = document.activeElement;
+    while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+    const settingPassword = !options.automatic && fields.includes(focused) && focused.type === "password" && focused.autocomplete.split(/\s+/).includes("new-password") && focused.form;
+    const { user, password, newPasswords, otp, scoped: loginScope } = loginTargets(settingPassword ? fields.filter(el => el.form === focused.form) : fields);
     scoped = loginScope;
     put(user, data.username); put(password, data.password);
     // Never set a password on page load: only a fill the user asked for.

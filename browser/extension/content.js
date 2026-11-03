@@ -201,7 +201,10 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
     if (cardField && !explicit && (performance.now() - lastInteraction.at > 1000 || (lastInteraction.el && lastInteraction.el !== input))) { close(); return; }
     const kind = cardField ? "card" : "login";
     close(); const current = generation;
-    const response = await api.runtime.sendMessage({ action: "inline_open", kind, explicit }).catch(() => null);
+    // A set-password step (only new-password fields in the form) can get a
+    // freshly generated password for the chosen login.
+    const setPassword = kind === "login" && input.type === "password" && autocomplete.includes("new-password") && ![...(input.form || document).querySelectorAll('input[type="password"]')].some(el => !el.autocomplete.split(/\s+/).includes("new-password"));
+    const response = await api.runtime.sendMessage({ action: "inline_open", kind, explicit, setPassword }).catch(() => null);
     let focused = document.activeElement; while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
     if (current !== generation || typeof response?.result !== "string" || focused !== input) return;
     open(input, kind, response.result, response.appIcon);

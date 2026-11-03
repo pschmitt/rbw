@@ -49,7 +49,16 @@ function itemButton(item, kind) {
   if (subtitle) textCol.append(element("small", subtitle));
   button.append(iconCol, textCol);
   button.addEventListener("click", event => act(event, { type: "fill", item: item.id }));
-  return button;
+  if (!session?.setPassword || kind === "card") return button;
+  // A set-password page: fill the stored password, or generate a new one,
+  // save it to this login and fill that.
+  const row = element("div", null, "item-row");
+  const generate = element("button", null, "row-action"); generate.type = "button";
+  generate.title = `Generate a new password, save it to ${item.name} and fill it`; generate.setAttribute("aria-label", generate.title);
+  generate.append(icon("generator"), element("span", "New"));
+  generate.addEventListener("click", event => act(event, { type: "generate_fill", item: item.id }));
+  row.append(button, generate);
+  return row;
 }
 function updateState(state) {
   for (const [id, button] of rows) {
@@ -64,12 +73,12 @@ function updateState(state) {
   if (!banner) return;
   banner.hidden = !state.name && !state.error;
   banner.classList.toggle("is-filling", !!state.active); banner.classList.toggle("is-error", !!state.error);
-  banner.textContent = state.error || (state.active ? `Filling ${state.name}…` : state.filled ? `Filled ${state.name}` : "");
+  banner.textContent = state.error || (state.active ? state.text || `Filling ${state.name}…` : state.filled ? `Filled ${state.name}` : "");
 }
 // Logins search only this site's matches (rbw never fills another site's
 // login); cards are not tied to a site, so their search covers all cards.
 function renderChoices(data) {
-  root.className = "choices"; rows.clear();
+  root.className = "choices"; rows.clear(); session.setPassword = data.setPassword === true;
   const card = data.kind === "card";
   const noun = (count = 2) => card ? (count === 1 ? "card" : "cards") : (count === 1 ? "login" : "logins");
   banner = element("div", null, "fill-banner"); banner.hidden = true;
@@ -101,6 +110,7 @@ function renderChoices(data) {
   new MutationObserver(() => { active = -1; }).observe(list, { childList: true });
   controls.append(query);
   root.replaceChildren(banner, controls, count, list, notice);
+  if (session.setPassword) controls.after(element("p", "“New” saves a generated password, then fills it.", "set-password-hint"));
   if (Number(data.total) > data.items.length) {
     const more = element("div", null, "more"); more.append(element("span", `Showing ${data.items.length} of ${data.total} ${noun()} · Search to find another`)); list.after(more);
   }

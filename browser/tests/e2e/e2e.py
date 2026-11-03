@@ -15,7 +15,8 @@ import time
 # host in the page and click at fixed offsets inside it.
 HOST_JS = """(save) => { const el = [...document.documentElement.children].filter(e => e.tagName === 'DIV' && (e.getAttribute('style') || '').includes('2147483647') && (e.getAttribute('style') || '').includes('inset') === !!save).pop();
   if (!el || getComputedStyle(el).visibility !== 'visible') return null; const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; }"""
-OFFSETS = {"login": (60, 102), "card": (60, 102), "search": (60, 40), "result": (60, 130), "save": (70, 102)}
+# A set-password chooser has a hint line above its rows; "New" sits at their right end.
+OFFSETS = {"setpw": (60, 140), "setpw-new": (-30, 140), "login": (60, 102), "card": (60, 102), "search": (60, 40), "result": (60, 130), "save": (70, 102)}
 SHADOW_DECOY = "() => { const h = document.createElement('span'); document.documentElement.append(h); const r = h.attachShadow({ mode: 'closed' }); const d = document.createElement('div'); d.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;background:#fff'; r.append(d); }"
 
 
@@ -89,7 +90,7 @@ def main():
         time.sleep(settle)
         rect = page.evaluate(HOST_JS, kind == "save")
         dx, dy = OFFSETS[kind]
-        page.click_point(rect["x"] + dx, rect["y"] + dy); time.sleep(1.5)
+        page.click_point(rect["x"] + (dx if dx >= 0 else rect["w"] + dx), rect["y"] + dy); time.sleep(1.5)
 
     def fresh(attack=""):
         page.goto(args.url); time.sleep(0.5)
@@ -181,6 +182,18 @@ def main():
         check("update prompt for a stored username with a new password", opened is not None)
         if opened:
             click_in("save"); check("update prompt updates the stored login", logged("save:login-1"))
+
+        # A set-password step (Keycloak's UPDATE_PASSWORD): only new-password fields.
+        fresh(); page.click("#newpw"); opened = host()
+        check("set-password chooser opens", opened is not None)
+        if opened:
+            shoot("set-password", opened)
+            click_in("setpw"); v = values()
+            check("set-password fill puts the stored password in both fields", v["newpw"] == v["confirmpw"] == "pw-from-rbw" and v["pass"] == "", str(v))
+        fresh(); page.click("#newpw")
+        if host():
+            click_in("setpw-new"); time.sleep(1.0); v = values()
+            check("New generates, saves, then fills both fields", v["newpw"] == v["confirmpw"] == "generated-pw" and logged("generate:") and logged("save:login-1"), str(v))
     finally:
         page.close()
     print(f"{sum(results)}/{len(results)} passed")

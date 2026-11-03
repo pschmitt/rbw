@@ -4,6 +4,7 @@ import json, os, struct, sys
 
 LOGIN = {"id": "login-1", "name": "Test Login", "username": "alice", "iconOrigin": None, "matched": True, "type": "login", "passkeys": 0, "favorite": False, "folder": None, "archived": False, "deleted": False, "protected": False}
 CARD = {"id": "card-1", "name": "Test Visa", "username": "Visa, •1111", "iconOrigin": None, "matched": False, "type": "card", "passkeys": 0, "favorite": False, "folder": None, "archived": False, "deleted": False, "protected": False}
+generated = set()  # Logins saved with a generated password.
 log = open(os.environ.get("RBW_E2E_LOG", sys.argv[0] + ".log"), "a")
 
 def reply(message):
@@ -22,8 +23,12 @@ while True:
         query = (request.get("query") or "").lower()
         items = [item for item in items if query in f"{item['name']} {item['username']}".lower()]
         result = {"items": items, "limit": 200, "total": len(items), "folders": [], "collections": []}
-    elif action == "credential": result = {"name": "Test Login", "custom": [], "username": "alice", "password": "pw-from-rbw"}
+    elif action == "credential": result = {"name": "Test Login", "custom": [], "username": "alice", "password": "generated-pw" if request.get("item") in generated else "pw-from-rbw"}
+    elif action == "detail" and str(request.get("item")).startswith("login-"): result = {"cipher": {"name": "Test Login", "data": {"type": "login", "username": "alice", "password": "pw-from-rbw", "uris": []}, "fields": []}, "revision": "r1"}
     elif action == "detail": result = {"cipher": {"name": "Test Visa", "data": {"type": "card", "cardholder_name": "Alice Test", "number": "4111111111111111", "brand": "Visa", "exp_month": "12", "exp_year": "2030", "code": "123"}, "fields": []}, "revision": "r1"}
-    elif action == "save": result = True
+    elif action == "generate": result = "generated-pw"
+    elif action == "save":
+        if ((request.get("cipher") or {}).get("data") or {}).get("password") == "generated-pw": generated.add(request.get("item"))
+        result = True
     else: result = True
     reply({"id": request["id"], "result": result})

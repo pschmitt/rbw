@@ -63,3 +63,10 @@ main.save{box-sizing:border-box;border:1px solid #555;border-radius:10px;overflo
 .save .status:empty{display:none}
 .notice{padding:6px 12px;color:#f0c674;font-size:11px}
 .notice:empty{display:none}
+.item-row{display:flex;border-top:1px solid #383838}
+.item-row:first-of-type{border-top:0}
+.item-row .item-btn{flex:1;min-width:0;border-top:0}
+.row-action{display:flex;align-items:center;gap:5px;flex-shrink:0;border:0;border-left:1px solid #383838;padding:0 12px;background:#282828;color:#d0d0d0;font:12px system-ui,sans-serif;cursor:pointer}
+.row-action:hover,.row-action:focus-visible{background:#383838;color:#efefef;outline:none}
+.row-action svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.set-password-hint{margin:0;padding:0 12px 8px;color:#adadad;font-size:11px}

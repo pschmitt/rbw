@@ -535,14 +535,19 @@ async function inlineMessage(port, message, state) {
         : { id: item.id, name: item.name, username: item.username, favicon: prefs.favicons ? faviconCache.get(item.iconOrigin)?.value || null : null });
       for (const item of items) { session.allowed.add(item.id); session.items.set(item.id, item); }
       port.postMessage({ type: "results", sequence: message.sequence, items, total: Math.max(eligible.length, (result.total ?? result.items.length) - (result.items.length - eligible.length)) });
-    } else if (message.type === "fill" && session.allowed.has(message.item)) {
+    } else if (["fill", "generate_fill"].includes(message.type) && session.allowed.has(message.item)) {
       const item = session.items.get(message.item) || {};
+      const generate = message.type === "generate_fill";
+      if (generate && !session.setPassword) return;
       if (!await verifyInlineClick(session, message.x, message.y)) { port.postMessage({ type: "rejected", error: "rbw could not confirm that its window is fully visible. Click again." }); return; }
       const tab = await activeTab();
       if (tab.id !== session.tabId || new URL(tab.url).origin !== new URL(session.url).origin) throw new Error("Page changed.");
       await api.tabs.sendMessage(session.tabId, { action: "rbw_inline_refocus", token: session.token }, { frameId: session.frameId }).catch(() => {});
-      port.postMessage({ type: "state", item: message.item, active: true, name: item.name });
+      port.postMessage({ type: "state", item: message.item, active: true, name: item.name, text: generate ? `Saving a new password to ${item.name}…` : null });
       try {
+        // Saved before it reaches the page, so a new password is never lost;
+        // the old one moves to the item's password history.
+        if (generate) await saveGeneratedPassword(message.item, tab.url);
         const count = await fill({ item: message.item, type: session.kind, displayName: item.name, expectedTab: tab.id, expectedUrl: tab.url }, account);
         port.postMessage({ type: "state", item: message.item, active: false, filled: count > 0, name: item.name });
       } catch (error) { port.postMessage({ type: "state", item: message.item, active: false, error: error.message || "Could not fill this page." }); }
@@ -620,6 +625,15 @@ async function notifySaveOffer(tabId, offer) {
   return api.tabs.sendMessage(tabId, { action: "rbw_save_offer", token, origin: offer.origin }, { frameId: 0 });
 }
 
+async function saveGeneratedPassword(item, url) {
+  const detail = await native({ action: "detail", account: null, item });
+  if (detail.cipher.data?.type !== "login") throw new Error("Only a login can get a new password.");
+  // Recheck the site with the same native matcher used for fill.
+  await native({ action: "credential", account: null, item, url, manual: true });
+  detail.cipher.data.password = await native({ action: "generate", account: null, length: null, passphrase: false, mode: null });
+  await native({ action: "save", account: null, item, revision: detail.revision, cipher: detail.cipher });
+  clearMetadata();
+}
 async function applySaveOffer(tabId, item, account) {
   const offer = offers.get(tabId); if (!offer) throw new Error("Save suggestion expired.");
   await saveOfferLogin(offer, item, account);
@@ -745,7 +759,8 @@ async function pageMessage(message, sender, respond) {
       const items = eligible.slice(0, 5).map(v => ({ id: v.id, name: v.name, username: v.username, brand: kind === "card" ? String(v.username || "").split(",", 1)[0].trim() : null,
         favicon: kind === "login" && prefs.favicons ? faviconCache.get(v.iconOrigin)?.value || null : null }));
       const total = Math.max(eligible.length, (result.total ?? result.items.length) - (result.items.length - eligible.length));
-      const token = openInlineSession({ mode: "choices", kind, tabId: sender.tab.id, frameId: sender.frameId, url: sender.url, allowed: new Set(items.map(v => v.id)), items: new Map(items.map(v => [v.id, v])), payload: { mode: "choices", kind, items, total } });
+      const setPassword = kind === "login" && message.setPassword === true;
+      const token = openInlineSession({ mode: "choices", kind, setPassword, tabId: sender.tab.id, frameId: sender.frameId, url: sender.url, allowed: new Set(items.map(v => v.id)), items: new Map(items.map(v => [v.id, v])), payload: { mode: "choices", kind, items, total, setPassword } });
       return respond({ result: token, appIcon: await bundledIcon("icons/toolbar-48.png") });
     } catch (_) { return respond({ result: null }); }
   }
