@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.43.0] - 2026-11-03
+
 ### Added
 
 * The audit log now says why the vault was locked: the agent records when
