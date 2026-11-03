@@ -153,8 +153,19 @@ pub(super) fn check_config() -> anyhow::Result<()> {
 pub(super) fn check_agent_version() -> anyhow::Result<()> {
     let agent_version = version_or_quit()?;
     // Any patch of this minor, or a newer minor of this major, serves this
-    // client (see `protocol::compatible`); an older one is replaced.
+    // client (see `protocol::compatible`); an older one is replaced. A newer
+    // major is never stopped: then this rbw is the stale one (a program
+    // started before an upgrade), and replacing the agent would lock the
+    // vault for everyone using the current rbw.
     if !rbw::protocol::compatible(agent_version) {
+        if agent_version > rbw::protocol::VERSION {
+            return Err(anyhow::anyhow!(
+                "this rbw ({}) is older than the running rbw-agent ({}); \
+                 restart the program that runs this rbw",
+                env!("CARGO_PKG_VERSION"),
+                rbw::protocol::version_string(agent_version)
+            ));
+        }
         crate::actions::quit("outdated")?;
         return Err(anyhow::anyhow!(
             "client protocol version is {} but agent protocol version is {}",

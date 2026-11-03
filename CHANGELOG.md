@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Changed
+
+* A client never stops an `rbw-agent` newer than itself anymore. A program
+  still running an old rbw (an MCP server or browser host started before an
+  upgrade) reports that it is out of date instead of replacing the agent,
+  which locked the vault for everyone else.
+
+### Added
+
+* `rbw mcp --cli PATH`: the rbw binary the tools run. Point it at a path an
+  upgrade updates (a profile's `bin/rbw`) so a long-running MCP server uses
+  the installed rbw instead of the one it started with.
+
+* The audit log records which program stopped or locked the agent (`client`,
+  e.g. `rbw-2.40.0/bin/rbw`, on Linux); `rbw status` shows it with the last
+  lock.
+
 ## [2.43.0] - 2026-11-03
 
 ### Added

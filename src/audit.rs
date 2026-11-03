@@ -22,6 +22,8 @@ pub struct Event {
     reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client: Option<String>,
 }
 
 impl Event {
@@ -39,6 +41,7 @@ impl Event {
             item_id: None,
             reason: None,
             version: None,
+            client: None,
         }
     }
 
@@ -47,6 +50,22 @@ impl Event {
     #[must_use]
     pub fn with_reason(mut self, reason: &'static str) -> Self {
         self.reason = Some(reason.to_owned());
+        self
+    }
+
+    /// Attach the program that asked for the event (the agent socket's peer,
+    /// such as `rbw-2.40.0/bin/rbw`). Only path-like characters are kept, so
+    /// it can't carry anything but a program name.
+    #[must_use]
+    pub fn with_client(mut self, client: &str) -> Self {
+        let client = client
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || "._+-/".contains(*c))
+            .take(128)
+            .collect::<String>();
+        if !client.is_empty() {
+            self.client = Some(client);
+        }
         self
     }
 
@@ -149,12 +168,21 @@ pub struct LastLock {
     pub timestamp: String,
     pub operation: String,
     pub reason: Option<String>,
+    pub client: Option<String>,
 }
 
 impl LastLock {
     /// A short human-readable explanation of the lock.
     #[must_use]
     pub fn describe(&self) -> String {
+        let text = self.describe_event();
+        match &self.client {
+            Some(client) => format!("{text} (by {client})"),
+            None => text,
+        }
+    }
+
+    fn describe_event(&self) -> String {
         let reason = self.reason.as_deref();
         match (self.operation.as_str(), reason) {
             ("agent.timeout_lock", _) => {
@@ -206,6 +234,8 @@ struct RecordedEvent {
     outcome: String,
     #[serde(default)]
     reason: Option<String>,
+    #[serde(default)]
+    client: Option<String>,
 }
 
 const LOCK_OPERATIONS: &[&str] = &[
@@ -259,6 +289,7 @@ fn last_lock_in(directory: &std::path::Path) -> Option<LastLock> {
                 timestamp: event.timestamp,
                 operation: event.operation,
                 reason: event.reason,
+                client: event.client,
             };
             if record.operation == "agent.start" {
                 if pending_start.is_some() {
@@ -363,6 +394,7 @@ mod tests {
             item_id: None,
             reason: None,
             version: None,
+            client: None,
         };
 
         let serialized = serde_json::to_string(&event).unwrap();
@@ -391,8 +423,10 @@ mod tests {
     fn reason_and_version_are_serialized_when_set() {
         let event = Event::new("agent", "agent.stop", "success")
             .with_reason("sigterm")
-            .with_version("2.43.0");
+            .with_version("2.43.0")
+            .with_client("rbw-2.40.0/bin/rbw; rm -rf ~");
         let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["client"], "rbw-2.40.0/bin/rbwrm-rf");
         assert_eq!(value["reason"], "sigterm");
         assert_eq!(value["version"], "2.43.0");
     }

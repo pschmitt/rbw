@@ -89,7 +89,7 @@ async fn stop_on_signal() {
         _ = int.recv() => "sigint",
         _ = hup.recv() => "sighup",
     };
-    crate::agent::stop("agent", reason);
+    crate::agent::stop("agent", reason, None);
 }
 
 fn real_main() -> anyhow::Result<()> {

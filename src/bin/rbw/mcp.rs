@@ -58,10 +58,17 @@ pub fn run(
     read_only: bool,
     timeout: u64,
     policy_api: Option<&PolicyApiOptions>,
+    cli: Option<std::path::PathBuf>,
 ) -> anyhow::Result<()> {
     let policy_api = policy_api.map(PolicyApi::new).transpose()?;
+    // Each tool call runs `cli` afresh, so a symlink an upgrade updates
+    // (a profile's bin/rbw) keeps a long-running server on the installed
+    // rbw instead of the one it started with.
     let exe = if policy_api.is_none() {
-        Some(std::env::current_exe()?)
+        Some(match cli {
+            Some(cli) => cli,
+            None => std::env::current_exe()?,
+        })
     } else {
         None
     };

@@ -82,6 +82,12 @@ Options:
 - `--read-only` only offers the tools that don't change the vault.
 - `--timeout SECONDS` limits each rbw command a tool runs (default 120; `unlock`
   waits up to 330 s for a prompt to be answered).
+- `--cli PATH` is the rbw binary the tools run (default: the one serving MCP).
+  An MCP server lives as long as the agent session that started it, so give it
+  a path an upgrade updates, such as `~/.nix-profile/bin/rbw` or
+  `/etc/profiles/per-user/$USER/bin/rbw`; otherwise it keeps running the rbw
+  it started with. An rbw older than the running agent never stops it; it
+  reports that it is out of date instead.
 
 The interactive commands (`tui`, `run`, `login`, ...) aren't available through
 the `rbw` tool, and neither are `--insecure`, `--clipboard` and `--fzf`.

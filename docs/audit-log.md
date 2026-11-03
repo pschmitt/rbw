@@ -61,9 +61,9 @@ while an account is locked (`last_lock` in `rbw status --json`).
 | `agent.timeout_lock` | `agent` | The idle timeout (`agent.lockTimeout`) locked every account. |
 | `agent.server_logout` | `agent` | The server sent a logout notification. |
 | `agent.key_rotation_lock` | `agent` | A key rotation (`rbw security rotate-key`, `change-password --rotate-key`) dropped the old key. |
-| `socket.lock` | `local-agent-socket` | `rbw lock`; `reason` is `one_account` or `all_accounts`. |
+| `socket.lock` | `local-agent-socket` | `rbw lock`; `reason` is `one_account` or `all_accounts`, `client` the program that asked. |
 | `agent.start` | `agent` | The agent started, with no keys; `version` is its rbw version. |
-| `agent.stop` | `agent` or `local-agent-socket` | The agent stopped; `reason` says why, `version` is its rbw version. |
+| `agent.stop` | `agent` or `local-agent-socket` | The agent stopped; `reason` says why, `version` is its rbw version, `client` the program that asked. |
 
 The `agent.stop` reasons are fixed labels:
 
@@ -77,6 +77,11 @@ The `agent.stop` reasons are fixed labels:
   or a reboot.
 - `unspecified`: a quit request from an rbw older than 2.43; `other`: a reason
   this agent doesn't know.
+
+On Linux, `client` names the program on the other end of the agent socket:
+the Nix package and path of its binary (`rbw-2.40.0/bin/rbw`), or the
+binary's file name. It shows which program stopped or locked the agent,
+such as a long-running MCP server still running an old rbw.
 
 `SIGKILL` and crashes can't be recorded. An `agent.start` without an
 `agent.stop` before it shows that the previous agent ended that way (or ran

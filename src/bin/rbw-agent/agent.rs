@@ -8,8 +8,56 @@ async fn record_socket_event(
     operation: &'static str,
     success: bool,
     reason: Option<&'static str>,
+    client: Option<String>,
 ) {
-    record_event("local-agent-socket", operation, success, reason).await;
+    let Ok(config) = rbw::config::Config::load_async().await else {
+        log::warn!("audit event could not read rbw configuration");
+        return;
+    };
+    let mut event = rbw::audit::Event::new(
+        "local-agent-socket",
+        operation,
+        if success { "success" } else { "failure" },
+    );
+    if let Some(reason) = reason {
+        event = event.with_reason(reason);
+    }
+    if let Some(client) = client {
+        event = event.with_client(&client);
+    }
+    rbw::audit::record_async_best_effort(config.audit, event).await;
+}
+
+/// The program on the other end of the agent socket, for the audit log:
+/// the Nix package and path of its binary (`rbw-2.40.0/bin/rbw`), or the
+/// binary's file name. Linux only (`/proc/PID/exe`).
+fn peer_program(sock: &mut crate::sock::Sock) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let pid = sock.inner().peer_cred().ok()?.pid()?;
+        let exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+        Some(program_label(&exe))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = sock;
+        None
+    }
+}
+
+fn program_label(exe: &std::path::Path) -> String {
+    let exe = exe.to_string_lossy();
+    // A replaced binary reads as "/path/rbw (deleted)".
+    let exe = exe.strip_suffix(" (deleted)").unwrap_or(&exe);
+    if let Some(rest) = exe.strip_prefix("/nix/store/") {
+        // "<hash>-rbw-2.40.0/bin/rbw" -> "rbw-2.40.0/bin/rbw"
+        if let Some((_, package)) = rest.split_once('-') {
+            return package.to_owned();
+        }
+    }
+    std::path::Path::new(exe)
+        .file_name()
+        .map_or_else(|| exe.to_owned(), |name| name.to_string_lossy().into())
 }
 
 /// Record an agent event that locked accounts, with a fixed reason label.
@@ -43,15 +91,24 @@ async fn record_event(
 
 /// Record that the agent is stopping, then exit. Written synchronously so
 /// the event lands before the process ends.
-pub fn stop(actor: &'static str, reason: &'static str) -> ! {
-    log::info!("agent stopping: {reason}");
+pub fn stop(
+    actor: &'static str,
+    reason: &'static str,
+    client: Option<&str>,
+) -> ! {
+    log::info!(
+        "agent stopping: {reason}{}",
+        client.map(|c| format!(" (by {c})")).unwrap_or_default()
+    );
     if let Ok(config) = rbw::config::Config::load() {
-        rbw::audit::record_best_effort(
-            &config.audit,
-            &rbw::audit::Event::new(actor, "agent.stop", "success")
+        let mut event =
+            rbw::audit::Event::new(actor, "agent.stop", "success")
                 .with_reason(reason)
-                .with_version(env!("CARGO_PKG_VERSION")),
-        );
+                .with_version(env!("CARGO_PKG_VERSION"));
+        if let Some(client) = client {
+            event = event.with_client(client);
+        }
+        rbw::audit::record_best_effort(&config.audit, &event);
     }
     std::process::exit(0)
 }
@@ -259,6 +316,7 @@ async fn handle_request(
                 "all_accounts"
             }
         });
+    let audit_client = audit_reason.and_then(|_| peer_program(sock));
     // Resolve the target account (by name, or the primary account when the
     // client didn't specify one) and run the whole dispatch within its scope
     // so that any server-bound lib call targets that account's server.
@@ -287,7 +345,12 @@ async fn handle_request(
         let succeeded = dispatch_result
             .as_ref()
             .is_ok_and(|(_, succeeded)| *succeeded);
-        tokio::spawn(record_socket_event(operation, succeeded, audit_reason));
+        tokio::spawn(record_socket_event(
+            operation,
+            succeeded,
+            audit_reason,
+            audit_client,
+        ));
     }
     let (set_timeout, _) = dispatch_result?;
 
@@ -646,7 +709,12 @@ async fn dispatch(
             true
         }
         rbw::protocol::Action::Quit { reason } => {
-            stop("local-agent-socket", quit_reason(reason.as_deref()))
+            let client = peer_program(sock);
+            stop(
+                "local-agent-socket",
+                quit_reason(reason.as_deref()),
+                client.as_deref(),
+            )
         }
         rbw::protocol::Action::Version => {
             crate::actions::version(sock).await?;
@@ -720,6 +788,21 @@ mod audit_tests {
         assert_eq!(
             super::quit_reason(Some("anything else, verbatim")),
             "other"
+        );
+    }
+
+    #[test]
+    fn program_labels_drop_the_store_hash() {
+        use std::path::Path;
+        assert_eq!(
+            super::program_label(Path::new(
+                "/nix/store/489pyl2di4qghgxxj3k12m9shms5j1cz-rbw-2.40.0/bin/rbw"
+            )),
+            "rbw-2.40.0/bin/rbw"
+        );
+        assert_eq!(
+            super::program_label(Path::new("/usr/local/bin/rbw (deleted)")),
+            "rbw"
         );
     }
 }

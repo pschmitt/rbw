@@ -125,6 +125,16 @@ fn ago(time: std::time::SystemTime) -> String {
     format!("{} ago", humantime::format_duration(elapsed))
 }
 
+// What to do about an agent this rbw can't use: an older one is replaced,
+// but a newer one means this rbw is the stale side.
+fn stale_agent_hint(version: u32) -> &'static str {
+    if version > rbw::protocol::VERSION {
+        "newer than this rbw; use the installed rbw"
+    } else {
+        "run `rbw stop-agent` and unlock again"
+    }
+}
+
 // Why the vault was last locked, from the audit log: "the agent stopped:
 // `rbw stop-agent` (2h 5m ago)".
 fn lock_summary(lock: &rbw::audit::LastLock) -> String {
@@ -147,8 +157,9 @@ fn print_short(
         (None, _) => style::danger("agent not running", c),
         (Some(_), Some(version)) => style::danger(
             &format!(
-                "agent {} (run `rbw stop-agent`)",
-                rbw::protocol::version_string(version)
+                "agent {} ({})",
+                rbw::protocol::version_string(version),
+                stale_agent_hint(version)
             ),
             c,
         ),
@@ -295,6 +306,7 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
                 "timestamp": lock.timestamp,
                 "operation": lock.operation,
                 "reason": lock.reason,
+                "client": lock.client,
                 "description": lock.describe(),
             })),
         });
@@ -355,8 +367,9 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
                 style::danger(&rbw::protocol::version_string(version), c),
                 style::warning(
                     &format!(
-                        "(not {}; run `rbw stop-agent` and unlock again)",
-                        env!("CARGO_PKG_VERSION")
+                        "(not {}; {})",
+                        env!("CARGO_PKG_VERSION"),
+                        stale_agent_hint(version)
                     ),
                     c
                 )

@@ -2280,6 +2280,14 @@ enum Opt {
                 waits up to 330s regardless)"
         )]
         timeout: u64,
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "rbw binary the tools run (default: this one). Point it \
+                at a path an upgrade updates, such as a profile's bin/rbw, \
+                so a long-running server uses the installed rbw"
+        )]
+        cli: Option<std::path::PathBuf>,
     },
 
     #[command(name = "stop-agent", about = "Terminate the background agent")]
@@ -5646,6 +5654,7 @@ fn main() {
             allow_secrets,
             read_only,
             timeout,
+            cli,
         } => (|| -> anyhow::Result<()> {
             let remote_api = if policy_only {
                 Some(mcp::PolicyApiOptions {
@@ -5673,7 +5682,13 @@ fn main() {
             } else {
                 None
             };
-            mcp::run(allow_secrets, read_only, timeout, remote_api.as_ref())
+            mcp::run(
+                allow_secrets,
+                read_only,
+                timeout,
+                remote_api.as_ref(),
+                cli,
+            )
         })(),
         Opt::StopAgent { kill } => {
             if kill {
