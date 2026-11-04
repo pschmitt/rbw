@@ -8,7 +8,7 @@ Do not include private hostnames, device identifiers, network addresses or topol
 ## Build/test
 
 Don't run `cargo build`/`test`/`clippy` on the machine the agent runs on (it
-may host live infra; see the `brkn-infra` skill). Do it on a build host instead: `rsync -az --delete
+may host live infra; see the `brkn-infra` skill). Do it on an ad-hoc `rworker` (see the `rworker` skill) or a build host instead: `rsync -az --delete
 --exclude target --exclude .git ./ <host>:~/build/rbw/`, then `nix shell
 nixpkgs#cargo nixpkgs#rustc nixpkgs#clippy nixpkgs#pkg-config
 nixpkgs#openssl nixpkgs#gcc -c cargo <build|test|clippy>`. Run `cargo fmt
