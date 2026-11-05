@@ -1986,15 +1986,37 @@ fn identity_value<'a>(
 }
 
 fn generate_remote_totp(secret: &str) -> anyhow::Result<String> {
-    let url = if secret.starts_with("otpauth://") {
-        zeroize::Zeroizing::new(secret.to_owned())
-    } else if let Some(secret) = secret.strip_prefix("steam://") {
+    let secret = secret.trim();
+    let url = if secret
+        .get(.."otpauth://".len())
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("otpauth://"))
+    {
+        let mut url = url::Url::parse(secret)?;
+        let query = url
+            .query_pairs()
+            .map(|(key, value)| {
+                let value = if key == "secret" {
+                    value.trim().replace(' ', "").to_ascii_uppercase()
+                } else {
+                    value.into_owned()
+                };
+                (key.into_owned(), value)
+            })
+            .collect::<Vec<_>>();
+        url.query_pairs_mut().clear().extend_pairs(query);
+        zeroize::Zeroizing::new(url.to_string())
+    } else if secret
+        .get(.."steam://".len())
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("steam://"))
+    {
+        let secret = &secret["steam://".len()..];
+        let secret = secret.trim().replace(' ', "");
         zeroize::Zeroizing::new(format!(
             "otpauth://totp/rbw?secret={}&algorithm=STEAM",
-            urlencoding::encode(secret)
+            urlencoding::encode(&secret)
         ))
     } else {
-        let secret = zeroize::Zeroizing::new(secret.trim().replace(' ', ""));
+        let secret = zeroize::Zeroizing::new(secret.replace(' ', ""));
         zeroize::Zeroizing::new(format!(
             "otpauth://totp/rbw?secret={}",
             urlencoding::encode(secret.as_str())
@@ -2573,6 +2595,50 @@ pub async fn verify_master_password(
     )?;
     respond_ack(sock).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod remote_totp_tests {
+    use super::generate_remote_totp;
+
+    #[test]
+    fn accepts_case_insensitive_otpauth_scheme() {
+        let code = generate_remote_totp(
+            "OTPAUTH://totp/example?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+        )
+        .unwrap();
+
+        assert_eq!(code.len(), 6);
+    }
+
+    #[test]
+    fn accepts_lowercase_and_spaced_otpauth_secrets() {
+        let code = generate_remote_totp(
+            "otpauth://totp/example?secret=gez dg nbv gy3t qojq gezdgnb vgy3tqojq",
+        )
+        .unwrap();
+
+        assert_eq!(code.len(), 6);
+        assert!(code.bytes().all(|byte| byte.is_ascii_digit()));
+    }
+
+    #[test]
+    fn honors_otpauth_algorithm_digits_and_period() {
+        let code = generate_remote_totp(
+            "otpauth://totp/example?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&algorithm=SHA256&digits=8&period=60",
+        )
+        .unwrap();
+
+        assert_eq!(code.len(), 8);
+        assert!(code.bytes().all(|byte| byte.is_ascii_digit()));
+    }
+
+    #[test]
+    fn accepts_steam_secret_urls() {
+        let code = generate_remote_totp("STEAM://JBSWY3DPEHPK3PXP").unwrap();
+
+        assert_eq!(code.len(), 5);
+    }
 }
 
 #[cfg(test)]
