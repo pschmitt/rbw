@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [2.44.0] - 2026-11-07
+
+### Added
+
+* Home Assistant integration: an audit event entity, and a repair to unlock the
+  default account.
+
+### Fixed
+
+* Remote TOTP URIs accept case-insensitive schemes and spaced or lowercase
+  `otpauth` secrets, keeping token parameters and Steam codes.
+* Home Assistant integration: handle successful audit outcomes, and the first
+  step of the unlock repair.
+
+### Changed
+
+* Update flate2, psl, rmcp and zip.
+
 ## [2.43.1] - 2026-11-03
 
 2.43.0 was tagged but never published (its release waited on a macOS
