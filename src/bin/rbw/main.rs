@@ -2385,6 +2385,17 @@ enum Passkey {
     },
 }
 
+impl Passkey {
+    const fn subcommand_name(&self) -> &'static str {
+        match self {
+            Self::Find { .. } => "find",
+            Self::Assert { .. } => "assert",
+            Self::Counter { .. } => "counter",
+            Self::Inject { .. } => "inject",
+        }
+    }
+}
+
 impl Opt {
     fn audit_operation(&self) -> Option<String> {
         if let Self::Config { config } = self {
@@ -2481,7 +2492,9 @@ impl Opt {
             Self::Add { .. } => "add".to_string(),
             Self::Generate { .. } => "generate".to_string(),
             Self::Edit { .. } => "edit".to_string(),
-            Self::Passkey { .. } => "passkey".to_string(),
+            Self::Passkey { passkey } => {
+                format!("passkey {}", passkey.subcommand_name())
+            }
             Self::Set { .. } => "set".to_string(),
             Self::Remove { .. } => "remove".to_string(),
             Self::Move { .. } => "move".to_string(),
@@ -4266,6 +4279,49 @@ fn route_to_entry_account(opt: &Opt) -> anyhow::Result<()> {
     }
 }
 
+fn cli_caller_client() -> Option<String> {
+    if let Ok(consumer) = std::env::var("RBW_CONSUMER") {
+        let trimmed = consumer.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let ppid = unsafe { libc::getppid() };
+        if let Ok(exe) = std::fs::read_link(format!("/proc/{ppid}/exe")) {
+            let path = exe.to_string_lossy();
+            let path = path.strip_suffix(" (deleted)").unwrap_or(&path);
+            let label = path
+                .strip_prefix("/nix/store/")
+                .and_then(|s| s.split_once('-'))
+                .map_or(path, |(_, rest)| rest);
+            if !label.is_empty() {
+                return Some(label.to_owned());
+            }
+        }
+    }
+    None
+}
+
+fn build_cli_audit_event(
+    operation: &str,
+    outcome: &str,
+) -> rbw::audit::Event {
+    let mut event = rbw::audit::Event::new("cli", operation, outcome);
+    if let Some(client) = cli_caller_client() {
+        event = event.with_client(&client);
+    }
+    if let Some(account) = actions::current_account().or_else(|| {
+        rbw::config::Config::load()
+            .ok()
+            .map(|c| c.primary_account_name())
+    }) {
+        rbw::audit::note_account(&account);
+    }
+    rbw::audit::apply_context(event)
+}
+
 fn record_cli_failure(operation: Option<&str>) {
     let Some(operation) = operation else {
         return;
@@ -4273,7 +4329,7 @@ fn record_cli_failure(operation: Option<&str>) {
     match rbw::config::Config::load() {
         Ok(config) => rbw::audit::record_best_effort(
             &config.audit,
-            &rbw::audit::Event::new("cli", operation, "failure"),
+            &build_cli_audit_event(operation, "failure"),
         ),
         Err(_) => log::warn!("audit event could not read rbw configuration"),
     }
@@ -5776,14 +5832,11 @@ fn main() {
             current_audit_config.as_ref()
         };
         if let Some(config) = audit_config {
-            rbw::audit::record_best_effort(
-                config,
-                &rbw::audit::Event::new(
-                    "cli",
-                    &operation,
-                    if res.is_ok() { "success" } else { "failure" },
-                ),
+            let event = build_cli_audit_event(
+                &operation,
+                if res.is_ok() { "success" } else { "failure" },
             );
+            rbw::audit::record_best_effort(config, &event);
         } else {
             log::warn!("audit event could not read rbw configuration");
         }

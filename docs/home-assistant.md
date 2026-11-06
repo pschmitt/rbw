@@ -112,18 +112,33 @@ master-password reprompt, the repair explains that Home Assistant cannot
 provide the prompt and keeps the issue open until that setting is removed or
 the item is read through local interactive rbw.
 
-## Status device
+## Status device, audit event, and unlock repair
 
 The integration also creates one diagnostic **rbw Policy API** device. It polls
-`GET /v1/status` once per minute and exposes API connectivity and one lock
-binary sensor per account returned by the status API. The device information
-shows the agent version as its software version and the API contract version as
-its model identifier (for example, `API v1`). For example, account `ai` uses
-`binary_sensor.rbw_ai_locked`. Account names appear only for accounts explicitly
-included in this client's status grants. The response contains no item fields
-or credentials. A denied status request still reports the API as reachable. A
-granted account that is no longer configured has an unknown lock state, never
-an unlocked state. The device links to the configured API endpoint.
+`GET /v1/status` once per minute and exposes:
+
+- API connectivity (`binary_sensor.rbw_api_connected`).
+- One lock binary sensor per account returned by the status API (for example,
+  `binary_sensor.rbw_ai_locked`).
+- An audit log event entity (`event.rbw_audit`) that emits events whenever a
+  consumer reads credentials or a TOTP code, uses or registers a passkey,
+  copies a secret, signs with SSH, downloads an attachment, unlocks or locks a
+  granted vault, or is denied access. Each event includes `actor`, `consumer`,
+  `operation`, `outcome`, `account`, `item_id`, `item_name`, `field`, `origin`,
+  `reason`, and a one-line `summary` — never secret values.
+- A fixable repair issue (`default_account_locked`) whenever the granted
+  `default` account is locked. Opening the repair prompts for the master
+  password, sends it over mTLS (`POST /v1/unlock`) to `rbw-agent`, cascades to
+  any configured follower accounts, and never stores the password in Home
+  Assistant.
+
+The device information shows the agent version as its software version and the
+API contract version as its model identifier (for example, `API v1`). Account
+names and audit events appear only for accounts explicitly included in this
+client's status grants. The response contains no secret field values. A denied
+status request still reports the API as reachable. A granted account that is no
+longer configured has an unknown lock state, never an unlocked state. The
+device links to the configured API endpoint.
 
 Status access is a separate permission for one or more accounts. Grant specific
 accounts to the existing client identity:

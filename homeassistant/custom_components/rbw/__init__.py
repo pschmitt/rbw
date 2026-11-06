@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import logging
 import ssl
 from dataclasses import dataclass
@@ -28,7 +29,11 @@ from .const import (
 from .coordinator import RbwStatusCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = (Platform.BINARY_SENSOR, Platform.SENSOR)
+PLATFORMS = (
+    Platform.BINARY_SENSOR,
+    getattr(Platform, "EVENT", "event"),
+    Platform.SENSOR,
+)
 __all__ = ["async_get_field"]
 
 
@@ -87,6 +92,8 @@ async def async_get_field(
     entry_id: str,
     item_id: str,
     field_id: str,
+    *,
+    consumer: str | None = None,
 ) -> dict[str, str | bool | None]:
     """Fetch one rbw field through a configured mTLS client.
 
@@ -99,9 +106,18 @@ async def async_get_field(
     if client is None:
         raise HomeAssistantError("The selected rbw config entry is not loaded")
 
+    resolved_consumer = consumer if consumer is not None else _detect_caller_consumer()
     try:
-        result = await client.async_get_field(item_id, field_id)
+        try:
+            result = await client.async_get_field(
+                item_id,
+                field_id,
+                consumer=resolved_consumer,
+            )
+        except TypeError:
+            result = await client.async_get_field(item_id, field_id)
     except RbwApiError as err:
+        _schedule_audit_refresh(hass, entry_id)
         _LOGGER.warning("rbw API request failed (code=%s, retryable=%s)", err.code, err.retryable)
         if err.authentication_error:
             _create_issue(hass, entry_id, ISSUE_CLIENT_CERT)
@@ -136,6 +152,7 @@ async def async_get_field(
             )
         raise HomeAssistantError(f"rbw request failed ({err.code})") from None
 
+    _schedule_audit_refresh(hass, entry_id)
     ir.async_delete_issue(hass, DOMAIN, _request_issue_id(entry_id, item_id, field_id))
     ir.async_delete_issue(
         hass,
@@ -144,6 +161,41 @@ async def async_get_field(
     )
     ir.async_delete_issue(hass, DOMAIN, _issue_id(entry_id, ISSUE_CLIENT_CERT))
     return result
+
+
+def _detect_caller_consumer() -> str | None:
+    """Identify the calling Home Assistant integration module for audit logging."""
+    frame = inspect.currentframe()
+    try:
+        caller = frame.f_back if frame is not None else None
+        while caller is not None:
+            module_name = caller.f_globals.get("__name__", "")
+            if isinstance(module_name, str) and module_name:
+                if module_name.startswith("custom_components."):
+                    parts = module_name.split(".")
+                    if len(parts) >= 2 and parts[1] != DOMAIN:
+                        return f"custom_components.{parts[1]}"
+                elif module_name.startswith("homeassistant.components."):
+                    parts = module_name.split(".")
+                    if len(parts) >= 3 and parts[2] != DOMAIN:
+                        return f"homeassistant.components.{parts[2]}"
+            caller = caller.f_back
+    finally:
+        del frame
+    return None
+
+
+def _schedule_audit_refresh(hass: HomeAssistant, entry_id: str) -> None:
+    """Refresh status in the background so event.rbw_audit reflects recent reads."""
+    runtime = hass.data.get(DOMAIN, {}).get(entry_id)
+    if not isinstance(runtime, RbwRuntimeData):
+        return
+    refresh = getattr(runtime.coordinator, "async_refresh", None)
+    if not callable(refresh):
+        return
+    create_bg = getattr(hass, "async_create_background_task", None)
+    if callable(create_bg):
+        create_bg(refresh(), f"rbw audit refresh {entry_id}")
 
 
 def _get_client(hass: HomeAssistant, entry_id: str) -> RbwApiClient | None:

@@ -1757,6 +1757,81 @@ pub async fn decrypt(
     Ok(())
 }
 
+/// Unlock an explicitly authorized vault account via the remote API.
+pub async fn unlock_remote_account(
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    account_name: &str,
+    mut password: String,
+) -> Result<rbw::remote_api::UnlockResponse, rbw::remote_api::ApiError> {
+    use rbw::remote_api::{
+        ApiError, ErrorCode, UnlockResponse, VaultLockState,
+    };
+
+    if password.is_empty() || password.len() > 4096 {
+        zeroize::Zeroize::zeroize(&mut password);
+        return Err(ApiError::new(ErrorCode::InvalidRequest));
+    }
+    let mut bytes = rbw::locked::Vec::new();
+    bytes.extend(password.as_bytes().iter().copied());
+    zeroize::Zeroize::zeroize(&mut password);
+    let locked_password = rbw::locked::Password::new(bytes);
+
+    let account = resolve_account(Some(account_name))
+        .await
+        .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
+
+    if !state.lock().await.needs_unlock(&account.name) {
+        state.lock().await.set_timeout();
+        return Ok(UnlockResponse {
+            account: account.name,
+            state: VaultLockState::Unlocked,
+        });
+    }
+
+    let db = load_db(&account)
+        .await
+        .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
+    let kdf = db
+        .kdf
+        .ok_or_else(|| ApiError::new(ErrorCode::Unavailable))?;
+    let iterations = db
+        .iterations
+        .ok_or_else(|| ApiError::new(ErrorCode::Unavailable))?;
+    let memory = db.memory;
+    let parallelism = db.parallelism;
+    let protected_key = db
+        .protected_key
+        .ok_or_else(|| ApiError::new(ErrorCode::Unavailable))?;
+    let protected_private_key = db
+        .protected_private_key
+        .ok_or_else(|| ApiError::new(ErrorCode::Unavailable))?;
+    let email = account_email(&account)
+        .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
+
+    let (keys, org_keys, rsa_private_key) = rbw::actions::unlock(
+        &email,
+        &locked_password,
+        kdf,
+        iterations,
+        memory,
+        parallelism,
+        &protected_key,
+        &protected_private_key,
+        &db.protected_org_keys,
+    )
+    .map_err(|_| ApiError::new(ErrorCode::InvalidPassword))?;
+
+    unlock_success(state.clone(), keys, org_keys, rsa_private_key, &account)
+        .await
+        .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
+    state.lock().await.set_timeout();
+
+    Ok(UnlockResponse {
+        account: account.name,
+        state: VaultLockState::Unlocked,
+    })
+}
+
 /// Read one pre-authorized item field for the remote API. This intentionally
 /// performs the item lookup and decryption inside the agent; callers never
 /// provide cipherstrings or encryption keys.
@@ -1765,7 +1840,10 @@ pub async fn read_remote_field(
     request: rbw::remote_api::FieldReadRequest,
     account_name: &str,
     environment: &rbw::protocol::Environment,
-) -> Result<rbw::remote_api::FieldReadResponse, rbw::remote_api::ApiError> {
+) -> Result<
+    (rbw::remote_api::FieldReadResponse, Option<String>),
+    rbw::remote_api::ApiError,
+> {
     use rbw::remote_api::{ApiError, ErrorCode, FieldReadResponse, FieldRef};
 
     let account = resolve_account(Some(account_name))
@@ -1790,6 +1868,16 @@ pub async fn read_remote_field(
     {
         return Err(ApiError::new(ErrorCode::VaultLocked));
     }
+    let item_name = decrypt_remote_value(
+        state.clone(),
+        environment,
+        Some(entry.name.as_str()),
+        entry,
+        &account,
+    )
+    .await
+    .ok()
+    .flatten();
 
     let field = request.field;
     let mut sensitive = field.is_sensitive();
@@ -1820,11 +1908,14 @@ pub async fn read_remote_field(
                 })
                 .transpose()
                 .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
-            return Ok(FieldReadResponse {
-                field,
-                value,
-                sensitive: true,
-            });
+            return Ok((
+                FieldReadResponse {
+                    field,
+                    value,
+                    sensitive: true,
+                },
+                item_name,
+            ));
         }
         (FieldRef::Uri(index), rbw::db::EntryData::Login { uris, .. }) => {
             let Some(uri) = uris.get(*index) else {
@@ -1901,11 +1992,14 @@ pub async fn read_remote_field(
     let value =
         decrypt_remote_value(state, environment, encrypted, entry, &account)
             .await?;
-    Ok(FieldReadResponse {
-        field,
-        value,
-        sensitive,
-    })
+    Ok((
+        FieldReadResponse {
+            field,
+            value,
+            sensitive,
+        },
+        item_name,
+    ))
 }
 
 async fn decrypt_remote_value(
@@ -2474,10 +2568,17 @@ pub async fn get_ssh_public_keys(
     Ok(pubkeys)
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct SshKeyAuditMeta {
+    pub account: String,
+    pub item_id: String,
+    pub item_name: Option<String>,
+}
+
 pub async fn find_ssh_private_key(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     request_public_key: ssh_agent_lib::ssh_key::PublicKey,
-) -> anyhow::Result<ssh_agent_lib::ssh_key::PrivateKey> {
+) -> anyhow::Result<(ssh_agent_lib::ssh_key::PrivateKey, SshKeyAuditMeta)> {
     let environment = {
         let state = state.lock().await;
         state.set_timeout();
@@ -2537,11 +2638,30 @@ pub async fn find_ssh_private_key(
                     &account,
                 )
                 .await?;
-
-                return ssh_agent_lib::ssh_key::PrivateKey::from_openssh(
+                let item_name = decrypt_cipher(
+                    state.clone(),
+                    &environment,
+                    &entry.name,
+                    entry.key.as_deref(),
+                    entry.org_id.as_deref(),
+                    None,
+                    None,
+                    &account,
+                )
+                .await
+                .ok();
+                let key = ssh_agent_lib::ssh_key::PrivateKey::from_openssh(
                     private_key_plaintext,
                 )
-                .map_err(anyhow::Error::new);
+                .map_err(anyhow::Error::new)?;
+                return Ok((
+                    key,
+                    SshKeyAuditMeta {
+                        account: account.name,
+                        item_id: entry.id,
+                        item_name,
+                    },
+                ));
             }
         }
     }

@@ -47,12 +47,31 @@ class RbwAccountStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class RbwAuditEvent:
+    """One non-secret security audit event returned by the rbw API."""
+
+    timestamp: str
+    actor: str
+    operation: str
+    outcome: str
+    item_id: str | None = None
+    item_name: str | None = None
+    account: str | None = None
+    field: str | None = None
+    origin: str | None = None
+    reason: str | None = None
+    version: str | None = None
+    client: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RbwApiStatus:
     """Safe, non-secret status returned by the API."""
 
     api_version: int
     agent_version: str
     accounts: tuple[RbwAccountStatus, ...]
+    events: tuple[RbwAuditEvent, ...] = ()
 
 
 class RbwApiClient:
@@ -109,7 +128,13 @@ class RbwApiClient:
         context.load_cert_chain(certfile=client_cert, keyfile=client_key)
         return context
 
-    async def async_get_field(self, item_id: str, field_id: str) -> dict[str, str | bool | None]:
+    async def async_get_field(
+        self,
+        item_id: str,
+        field_id: str,
+        *,
+        consumer: str | None = None,
+    ) -> dict[str, str | bool | None]:
         """Return one explicitly requested field without retaining it."""
         if not item_id or not field_id:
             raise RbwApiError("invalid_request", "Item and field IDs are required", retryable=False)
@@ -127,9 +152,12 @@ class RbwApiClient:
             f"{self._base_url}/v1/items/{quote(item_id, safe='')}"
             f"/fields/{'/'.join(quote(part, safe='') for part in field_id.split('/'))}"
         )
+        request_kwargs: dict[str, object] = {"ssl": self._ssl_context}
+        if consumer:
+            request_kwargs["headers"] = {"X-Rbw-Consumer": consumer}
         try:
             async with asyncio.timeout(5):
-                async with self._session.get(url, ssl=self._ssl_context) as response:
+                async with self._session.get(url, **request_kwargs) as response:
                     try:
                         payload = await response.json(content_type="application/json")
                     except (aiohttp.ContentTypeError, json.JSONDecodeError):
@@ -276,11 +304,13 @@ class RbwApiClient:
                             http_status=response.status,
                         )
 
-                    if not isinstance(payload, dict) or set(payload) != {
-                        "apiVersion",
-                        "agentVersion",
-                        "accounts",
-                    }:
+                    if (
+                        not isinstance(payload, dict)
+                        or not {"apiVersion", "agentVersion", "accounts"}.issubset(payload)
+                        or not set(payload).issubset(
+                            {"apiVersion", "agentVersion", "accounts", "events"}
+                        )
+                    ):
                         raise RbwApiError(
                             "invalid_response",
                             "The rbw API returned an invalid status response",
@@ -321,6 +351,43 @@ class RbwApiClient:
                                 )
                             seen_accounts.add(account)
                             accounts.append(RbwAccountStatus(account, state))
+                    events_payload = payload.get("events", [])
+                    events: list[RbwAuditEvent] = []
+                    if not isinstance(events_payload, list):
+                        raise RbwApiError(
+                            "invalid_response",
+                            "The rbw API returned an invalid status response",
+                            retryable=True,
+                            http_status=response.status,
+                        )
+                    for raw_event in events_payload:
+                        if not isinstance(raw_event, dict):
+                            continue
+                        timestamp = raw_event.get("timestamp")
+                        actor = raw_event.get("actor")
+                        operation = raw_event.get("operation")
+                        outcome = raw_event.get("outcome")
+                        if not all(
+                            isinstance(val, str) and val
+                            for val in (timestamp, actor, operation, outcome)
+                        ):
+                            continue
+                        events.append(
+                            RbwAuditEvent(
+                                timestamp=timestamp,
+                                actor=actor,
+                                operation=operation,
+                                outcome=outcome,
+                                item_id=_optional_str(raw_event.get("item_id")),
+                                item_name=_optional_str(raw_event.get("item_name")),
+                                account=_optional_str(raw_event.get("account")),
+                                field=_optional_str(raw_event.get("field")),
+                                origin=_optional_str(raw_event.get("origin")),
+                                reason=_optional_str(raw_event.get("reason")),
+                                version=_optional_str(raw_event.get("version")),
+                                client=_optional_str(raw_event.get("client")),
+                            )
+                        )
                     if (
                         isinstance(api_version, bool)
                         or not isinstance(api_version, int)
@@ -335,7 +402,106 @@ class RbwApiClient:
                             retryable=True,
                             http_status=response.status,
                         )
-                    return RbwApiStatus(api_version, agent_version, tuple(accounts))
+                    return RbwApiStatus(
+                        api_version,
+                        agent_version,
+                        tuple(accounts),
+                        tuple(events),
+                    )
+        except TimeoutError:
+            raise RbwApiError("timeout", "The rbw API request timed out", retryable=True) from None
+        except aiohttp.ClientSSLError:
+            raise RbwApiError(
+                "tls_error",
+                "TLS verification or client authentication failed",
+                retryable=False,
+                authentication_error=True,
+            ) from None
+        except aiohttp.ClientError:
+            raise RbwApiError(
+                "connection_error", "Could not connect to the rbw API", retryable=True
+            ) from None
+
+    async def async_unlock(
+        self,
+        password: str,
+        *,
+        account: str = "default",
+        consumer: str | None = None,
+    ) -> RbwAccountStatus:
+        """Unlock an explicitly authorized account on the rbw agent."""
+        if not password or not account or not account.strip():
+            raise RbwApiError(
+                "invalid_request",
+                "Account and master password are required",
+                retryable=False,
+            )
+        if self._ssl_context is None:
+            raise RbwApiError(
+                "client_certificate",
+                "The mTLS client certificate configuration needs attention",
+                retryable=False,
+                authentication_error=True,
+            )
+
+        await self._async_wait_for_retry_after()
+        url = f"{self._base_url}/v1/unlock"
+        request_kwargs: dict[str, object] = {
+            "ssl": self._ssl_context,
+            "json": {"account": account.strip(), "password": password},
+        }
+        if consumer:
+            request_kwargs["headers"] = {"X-Rbw-Consumer": consumer}
+        try:
+            async with asyncio.timeout(15):
+                async with self._session.post(url, **request_kwargs) as response:
+                    try:
+                        payload = await response.json(content_type="application/json")
+                    except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                        raise RbwApiError(
+                            "invalid_response",
+                            "The rbw API returned an invalid response",
+                            retryable=True,
+                            http_status=response.status,
+                        ) from None
+
+                    if response.status >= 400:
+                        code = payload.get("code") if isinstance(payload, dict) else None
+                        if not isinstance(code, str) or not re.fullmatch(
+                            r"[a-z][a-z0-9_]{0,63}", code
+                        ):
+                            code = f"http_{response.status}"
+                        payload_retryable = (
+                            payload.get("retryable") if isinstance(payload, dict) else None
+                        )
+                        retryable = (
+                            payload_retryable
+                            if isinstance(payload_retryable, bool)
+                            else response.status in (423, 503)
+                        )
+                        if code == "invalid_password":
+                            retryable = False
+                        raise RbwApiError(
+                            code,
+                            "The rbw API unlock request failed",
+                            retryable=retryable,
+                            authentication_error=response.status == 401,
+                            http_status=response.status,
+                        )
+
+                    if (
+                        not isinstance(payload, dict)
+                        or set(payload) != {"account", "state"}
+                        or not isinstance(payload.get("account"), str)
+                        or payload.get("state") not in ("locked", "unlocked", "unconfigured")
+                    ):
+                        raise RbwApiError(
+                            "invalid_response",
+                            "The rbw API returned an invalid unlock response",
+                            retryable=True,
+                            http_status=response.status,
+                        )
+                    return RbwAccountStatus(payload["account"], payload["state"])
         except TimeoutError:
             raise RbwApiError("timeout", "The rbw API request timed out", retryable=True) from None
         except aiohttp.ClientSSLError:
@@ -357,3 +523,11 @@ class RbwApiClient:
             if delay > 0:
                 await asyncio.sleep(delay)
             self._not_before_until = 0.0
+
+
+def _optional_str(value: object) -> str | None:
+    """Return a non-empty string without control characters, or None."""
+    if not isinstance(value, str):
+        return None
+    cleaned = "".join(ch for ch in value if ord(ch) >= 32 and ord(ch) != 127).strip()
+    return cleaned[:128] if cleaned else None

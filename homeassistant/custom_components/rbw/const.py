@@ -9,8 +9,10 @@ CONF_CLIENT_KEY = "client_key"
 
 ISSUE_API_UNAVAILABLE = "api_unavailable"
 ISSUE_CLIENT_CERT = "client_certificate"
+ISSUE_DEFAULT_ACCOUNT_LOCKED = "default_account_locked"
 ISSUE_REAUTHENTICATION_REQUIRED = "reauthentication_required"
 ISSUE_STATUS_PERMISSION = "status_permission_required"
 ISSUE_STATUS_UNAVAILABLE = "status_unavailable"
 
+DEFAULT_ACCOUNT = "default"
 DEFAULT_TIMEOUT = 5

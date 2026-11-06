@@ -104,11 +104,17 @@ class PublicApiSecurityTests(unittest.IsolatedAsyncioTestCase):
         logger = logging.getLogger(integration.__name__)
 
         with self.assertNoLogs(logger, level="INFO"):
-            result = await integration.async_get_field(hass, "entry", "item-id", "password")
+            result = await integration.async_get_field(
+                hass, "entry", "item-id", "password", consumer="custom_components.hrworks"
+            )
 
         self.assertEqual(
             result,
             {"field": "password", "value": secret, "sensitive": True},
+        )
+        self.assertEqual(
+            session.requests[0][1].get("headers"),
+            {"X-Rbw-Consumer": "custom_components.hrworks"},
         )
         self.assertNotIn(secret, repr(client.__dict__))
         self.assertNotIn(secret, repr(hass.data))

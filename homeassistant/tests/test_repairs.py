@@ -41,9 +41,22 @@ class FakeClient:
     def __init__(self, result: dict[str, object] | Exception) -> None:
         self.result = result
         self.requests: list[tuple[str, str]] = []
+        self.unlock_requests: list[tuple[str, str, str | None]] = []
 
     async def async_get_field(self, item_id: str, field_id: str) -> dict[str, object]:
         self.requests.append((item_id, field_id))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+    async def async_unlock(
+        self,
+        password: str,
+        *,
+        account: str = "default",
+        consumer: str | None = None,
+    ) -> object:
+        self.unlock_requests.append((account, password, consumer))
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
@@ -54,9 +67,11 @@ def load_repair_module(issue_calls: list[tuple[object, ...]]) -> types.ModuleTyp
     root_package = types.ModuleType("rbw_repair_test")
     root_package.__path__ = [str(ROOT)]
     const = types.ModuleType("rbw_repair_test.const")
+    const.DEFAULT_ACCOUNT = "default"
     const.DOMAIN = "rbw"
     const.ISSUE_API_UNAVAILABLE = "api_unavailable"
     const.ISSUE_CLIENT_CERT = "client_certificate"
+    const.ISSUE_DEFAULT_ACCOUNT_LOCKED = "default_account_locked"
     const.ISSUE_REAUTHENTICATION_REQUIRED = "reauthentication_required"
 
     repairs_base = types.ModuleType("homeassistant.components.repairs")
@@ -219,6 +234,57 @@ class RepairRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(issue_calls[1][0], "create")
         self.assertEqual(issue_calls[1][4]["translation_key"], "reauthentication_required")
         self.assertEqual(client.requests, [("item", "password")])
+
+    async def test_default_account_locked_repair_unlocks_and_refreshes_coordinator(self) -> None:
+        issue_calls: list[tuple[object, ...]] = []
+        repairs = load_repair_module(issue_calls)
+        master_pw = "never-persist-this-password"
+        client = FakeClient({"account": "default", "state": "unlocked"})
+        refreshed: list[bool] = []
+
+        async def async_refresh() -> None:
+            refreshed.append(True)
+
+        runtime = SimpleNamespace(
+            client=client,
+            coordinator=SimpleNamespace(async_refresh=async_refresh),
+        )
+        hass = SimpleNamespace(data={"rbw": {"entry": runtime}})
+        flow = repairs.RbwRepairFlow()
+        flow.issue_id = "default_account_locked_entry"
+        flow.data = {"entry_id": "entry", "account": "default"}
+        flow.hass = hass
+
+        form = await flow.async_step_init()
+        self.assertEqual(form["step_id"], "unlock")
+
+        result = await flow.async_step_unlock({"password": master_pw})
+        self.assertEqual(result, {"type": "create_entry", "title": "", "data": {}})
+        self.assertEqual(
+            client.unlock_requests,
+            [("default", master_pw, "homeassistant.repairs")],
+        )
+        self.assertEqual(issue_calls, [("delete", hass, "rbw", "default_account_locked_entry")])
+        self.assertEqual(refreshed, [True])
+        self.assertNotIn(master_pw, repr(result))
+        self.assertNotIn(master_pw, repr(flow.data))
+
+    async def test_default_account_locked_repair_handles_invalid_password(self) -> None:
+        issue_calls: list[tuple[object, ...]] = []
+        repairs = load_repair_module(issue_calls)
+        client = FakeClient(
+            api.RbwApiError("invalid_password", "bad password", retryable=False, http_status=422)
+        )
+        hass = SimpleNamespace(data={"rbw": {"entry": client}})
+        flow = repairs.RbwRepairFlow()
+        flow.issue_id = "default_account_locked_entry"
+        flow.data = {"entry_id": "entry", "account": "default"}
+        flow.hass = hass
+
+        result = await flow.async_step_unlock({"password": "wrong"})
+        self.assertEqual(result["step_id"], "unlock")
+        self.assertEqual(result["errors"], {"password": "invalid_password"})
+        self.assertEqual(issue_calls, [])
 
 
 if __name__ == "__main__":

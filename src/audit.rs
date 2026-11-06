@@ -10,20 +10,28 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A secret-free security event. Callers must pass only fixed operation and
 /// outcome labels, never command arguments, item contents, or raw errors.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Event {
-    timestamp: String,
-    actor: String,
-    operation: String,
-    outcome: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    item_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    client: Option<String>,
+    pub timestamp: String,
+    pub actor: String,
+    pub operation: String,
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<String>,
 }
 
 impl Event {
@@ -39,6 +47,10 @@ impl Event {
             operation: operation.into(),
             outcome: outcome.into(),
             item_id: None,
+            item_name: None,
+            account: None,
+            field: None,
+            origin: None,
             reason: None,
             version: None,
             client: None,
@@ -60,7 +72,7 @@ impl Event {
     pub fn with_client(mut self, client: &str) -> Self {
         let client = client
             .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || "._+-/".contains(*c))
+            .filter(|c| c.is_ascii_alphanumeric() || "._+-/:".contains(*c))
             .take(128)
             .collect::<String>();
         if !client.is_empty() {
@@ -88,6 +100,169 @@ impl Event {
         }
         self
     }
+
+    /// Attach a sanitized vault item display name (never secret field values).
+    #[must_use]
+    pub fn with_item_name(mut self, value: &str) -> Self {
+        if let Some(cleaned) = sanitize_label(value, 128) {
+            self.item_name = Some(cleaned);
+        }
+        self
+    }
+
+    /// Attach the vault account name involved in the operation.
+    #[must_use]
+    pub fn with_account(mut self, value: &str) -> Self {
+        if let Some(cleaned) = sanitize_label(value, 64) {
+            self.account = Some(cleaned);
+        }
+        self
+    }
+
+    /// Attach the field name accessed on the vault item (for example
+    /// `password`, `username`, `totp`, or a custom field label).
+    #[must_use]
+    pub fn with_field(mut self, value: &str) -> Self {
+        if let Some(cleaned) = sanitize_label(value, 64) {
+            self.field = Some(cleaned);
+        }
+        self
+    }
+
+    /// Attach a web origin (`https://example.com`) or relying-party ID
+    /// (`example.com`), stripping any URL path, query string, or credentials.
+    #[must_use]
+    pub fn with_origin(mut self, value: &str) -> Self {
+        let trimmed = value.trim();
+        if let Ok(url) = url::Url::parse(trimmed) {
+            if matches!(url.scheme(), "https" | "http")
+                && url.host_str().is_some()
+            {
+                let origin = url.origin().ascii_serialization();
+                if origin != "null" && origin.len() <= 128 {
+                    self.origin = Some(origin);
+                }
+                return self;
+            }
+        }
+        if !trimmed.is_empty()
+            && trimmed.len() <= 128
+            && trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c))
+        {
+            self.origin = Some(trimmed.to_ascii_lowercase());
+        }
+        self
+    }
+}
+
+fn sanitize_label(value: &str, max_chars: usize) -> Option<String> {
+    let cleaned = value
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(max_chars)
+        .collect::<String>();
+    let trimmed = cleaned.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+#[derive(Default)]
+struct AuditContext {
+    item_id: Option<String>,
+    item_name: Option<String>,
+    account: Option<String>,
+    field: Option<String>,
+    origin: Option<String>,
+}
+
+thread_local! {
+    static AUDIT_CONTEXT: std::cell::RefCell<AuditContext> =
+        std::cell::RefCell::new(AuditContext::default());
+}
+
+/// Clear any thread-local audit metadata accumulated during a previous command.
+pub fn clear_context() {
+    AUDIT_CONTEXT.with(|ctx| *ctx.borrow_mut() = AuditContext::default());
+}
+
+/// Record resolved item metadata in the current thread's audit context.
+pub fn note_item(
+    account: Option<&str>,
+    item_id: &str,
+    item_name: Option<&str>,
+) {
+    AUDIT_CONTEXT.with(|ctx| {
+        let mut ctx = ctx.borrow_mut();
+        if let Some(account) = account.filter(|s| !s.trim().is_empty()) {
+            ctx.account = Some(account.to_owned());
+        }
+        if !item_id.is_empty() {
+            ctx.item_id = Some(item_id.to_owned());
+        }
+        if let Some(name) = item_name.filter(|s| !s.trim().is_empty()) {
+            ctx.item_name = Some(name.to_owned());
+        }
+    });
+}
+
+/// Record the vault account name in the current thread's audit context.
+pub fn note_account(account: &str) {
+    if !account.trim().is_empty() {
+        AUDIT_CONTEXT.with(|ctx| {
+            ctx.borrow_mut().account = Some(account.to_owned());
+        });
+    }
+}
+
+/// Record the accessed field name in the current thread's audit context.
+pub fn note_field(field: &str) {
+    if !field.trim().is_empty() {
+        AUDIT_CONTEXT.with(|ctx| {
+            ctx.borrow_mut().field = Some(field.to_owned());
+        });
+    }
+}
+
+/// Record the web origin or relying-party ID in the current thread's audit context.
+pub fn note_origin(origin: &str) {
+    if !origin.trim().is_empty() {
+        AUDIT_CONTEXT.with(|ctx| {
+            ctx.borrow_mut().origin = Some(origin.to_owned());
+        });
+    }
+}
+
+/// Apply and clear any thread-local audit metadata onto `event`.
+#[must_use]
+pub fn apply_context(mut event: Event) -> Event {
+    let ctx = AUDIT_CONTEXT.with(std::cell::RefCell::take);
+    if event.item_id.is_none() {
+        if let Some(id) = ctx.item_id.as_deref() {
+            event = event.with_item_id(id);
+        }
+    }
+    if event.item_name.is_none() {
+        if let Some(name) = ctx.item_name.as_deref() {
+            event = event.with_item_name(name);
+        }
+    }
+    if event.account.is_none() {
+        if let Some(account) = ctx.account.as_deref() {
+            event = event.with_account(account);
+        }
+    }
+    if event.field.is_none() {
+        if let Some(field) = ctx.field.as_deref() {
+            event = event.with_field(field);
+        }
+    }
+    if event.origin.is_none() {
+        if let Some(origin) = ctx.origin.as_deref() {
+            event = event.with_origin(origin);
+        }
+    }
+    event
 }
 
 /// Append an event to the private, profile-scoped audit log and prune expired
@@ -312,6 +487,138 @@ fn last_lock_in(directory: &std::path::Path) -> Option<LastLock> {
     pending_start
 }
 
+const NOTABLE_OPERATIONS: &[&str] = &[
+    "api.field_read",
+    "api.unlock",
+    "api.authorization",
+    "get",
+    "show",
+    "raw",
+    "code",
+    "inject",
+    "run",
+    "passkey",
+    "passkey assert",
+    "passkey inject",
+    "attachment get",
+    "attachment download",
+    "unlock",
+    "login",
+    "lock",
+    "purge",
+    "browser.credential",
+    "browser.totp",
+    "browser.copy",
+    "browser.passkey_get",
+    "browser.passkey_create",
+    "browser.attachment_download",
+    "browser.unlock",
+    "browser.lock",
+    "browser.authorization",
+    "ssh_agent.sign",
+    "agent.timeout_lock",
+    "agent.server_logout",
+    "agent.key_rotation_lock",
+    "agent.stop",
+];
+
+fn is_notable_operation(operation: &str) -> bool {
+    NOTABLE_OPERATIONS.contains(&operation)
+}
+
+fn line_operation(line: &str) -> Option<&str> {
+    let (_, rest) = line.split_once(r#""operation":""#)?;
+    let (operation, _) = rest.split_once('"')?;
+    Some(operation)
+}
+
+/// Return up to `limit` recent notable audit events in chronological order.
+///
+/// Includes credential reads, passkey assertions, TOTP reads, SSH signatures,
+/// lock/unlock events, and authorization denials, filtered to
+/// `allowed_accounts` and with API client IDs resolved via `client_names`.
+#[must_use]
+pub fn recent_events(
+    limit: usize,
+    allowed_accounts: &[String],
+    client_names: &std::collections::BTreeMap<String, String>,
+) -> Vec<Event> {
+    recent_events_in(
+        &crate::dirs::audit_dir(),
+        limit,
+        allowed_accounts,
+        client_names,
+    )
+}
+
+#[must_use]
+pub fn recent_events_in(
+    directory: &std::path::Path,
+    limit: usize,
+    allowed_accounts: &[String],
+    client_names: &std::collections::BTreeMap<String, String>,
+) -> Vec<Event> {
+    if limit == 0 || allowed_accounts.is_empty() {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    let mut days = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()?
+                .strip_prefix("audit-")?
+                .strip_suffix(".jsonl")?
+                .parse::<u32>()
+                .ok()
+        })
+        .collect::<Vec<_>>();
+    days.sort_unstable_by(|a, b| b.cmp(a));
+
+    let mut events = Vec::with_capacity(limit);
+    for day in days.into_iter().take(2) {
+        let Ok(content) = std::fs::read_to_string(
+            directory.join(format!("audit-{day}.jsonl")),
+        ) else {
+            continue;
+        };
+        for line in content.lines().rev() {
+            if let Some(op) = line_operation(line) {
+                if !is_notable_operation(op) {
+                    continue;
+                }
+            }
+            let Ok(mut event) = serde_json::from_str::<Event>(line) else {
+                continue;
+            };
+            if !is_notable_operation(&event.operation) {
+                continue;
+            }
+            if let Some(ref account) = event.account {
+                if !allowed_accounts.iter().any(|allowed| allowed == account)
+                {
+                    continue;
+                }
+            }
+            if let Some(name) =
+                client_names.get(&event.actor).filter(|s| !s.is_empty())
+            {
+                event.actor.clone_from(name);
+            }
+            events.push(event);
+            if events.len() >= limit {
+                events.reverse();
+                return events;
+            }
+        }
+    }
+    events.reverse();
+    events
+}
+
 fn open_private(
     path: &std::path::Path,
     create: bool,
@@ -392,6 +699,10 @@ mod tests {
             operation: "get".to_owned(),
             outcome: "success".to_owned(),
             item_id: None,
+            item_name: None,
+            account: None,
+            field: None,
+            origin: None,
             reason: None,
             version: None,
             client: None,
@@ -429,6 +740,95 @@ mod tests {
         assert_eq!(value["client"], "rbw-2.40.0/bin/rbwrm-rf");
         assert_eq!(value["reason"], "sigterm");
         assert_eq!(value["version"], "2.43.0");
+    }
+
+    #[test]
+    fn context_and_origin_sanitization_strip_paths_and_controls() {
+        clear_context();
+        note_item(
+            Some("wiit\n"),
+            "550e8400-e29b-41d4-a716-446655440000",
+            Some("Microsoft\tAccount"),
+        );
+        note_field("password\r\n");
+        note_origin("https://login.microsoftonline.com/common/oauth2?code=secret#frag");
+
+        let event = apply_context(Event::new(
+            "firefox",
+            "browser.credential",
+            "success",
+        ));
+        assert_eq!(
+            event.item_id.as_deref(),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
+        assert_eq!(event.item_name.as_deref(), Some("MicrosoftAccount"));
+        assert_eq!(event.account.as_deref(), Some("wiit"));
+        assert_eq!(event.field.as_deref(), Some("password"));
+        assert_eq!(
+            event.origin.as_deref(),
+            Some("https://login.microsoftonline.com")
+        );
+    }
+
+    #[test]
+    fn recent_events_filters_noise_and_resolves_client_names() {
+        let directory = tempfile::tempdir().unwrap();
+        let noisy =
+            Event::new("local-agent-socket", "socket.decrypt", "success");
+        let api_event = Event {
+            timestamp: "2026-11-06T12:00:00Z".to_owned(),
+            actor: "08ba601a9f0b4ea19f1ab6d494402342".to_owned(),
+            operation: "api.field_read".to_owned(),
+            outcome: "success".to_owned(),
+            item_id: Some("550e8400-e29b-41d4-a716-446655440000".to_owned()),
+            item_name: Some("Microsoft".to_owned()),
+            account: Some("wiit".to_owned()),
+            field: Some("password".to_owned()),
+            origin: None,
+            reason: None,
+            version: None,
+            client: Some("msteams".to_owned()),
+        };
+        let other_account_event = Event {
+            timestamp: "2026-11-06T12:01:00Z".to_owned(),
+            actor: "firefox".to_owned(),
+            operation: "browser.credential".to_owned(),
+            outcome: "success".to_owned(),
+            item_id: None,
+            item_name: Some("Private".to_owned()),
+            account: Some("secret-acc".to_owned()),
+            field: Some("password".to_owned()),
+            origin: Some("https://example.com".to_owned()),
+            reason: None,
+            version: None,
+            client: None,
+        };
+        write_events(
+            directory.path(),
+            100,
+            &[
+                &serde_json::to_string(&noisy).unwrap(),
+                &serde_json::to_string(&api_event).unwrap(),
+                &serde_json::to_string(&other_account_event).unwrap(),
+            ],
+        );
+
+        let mut names = std::collections::BTreeMap::new();
+        names.insert(
+            "08ba601a9f0b4ea19f1ab6d494402342".to_owned(),
+            "home-assistant".to_owned(),
+        );
+        let events = recent_events_in(
+            directory.path(),
+            10,
+            &["default".to_owned(), "wiit".to_owned()],
+            &names,
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].actor, "home-assistant");
+        assert_eq!(events[0].client.as_deref(), Some("msteams"));
+        assert_eq!(events[0].item_name.as_deref(), Some("Microsoft"));
     }
 
     fn write_events(directory: &std::path::Path, day: u32, events: &[&str]) {

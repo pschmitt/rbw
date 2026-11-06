@@ -32,7 +32,13 @@ pub fn find_entry(
                     && uuid::Uuid::parse_str(&cipher.id) == Ok(uuid)
                     && in_scope(cipher)
                 {
-                    return Ok((cipher.clone(), decrypt_cipher(cipher)?));
+                    let decrypted = decrypt_cipher(cipher)?;
+                    rbw::audit::note_item(
+                        crate::actions::current_account().as_deref(),
+                        &cipher.id,
+                        Some(&decrypted.name),
+                    );
+                    return Ok((cipher.clone(), decrypted));
                 }
             }
             // UUID not found by exact match; fall through to name search
@@ -77,6 +83,11 @@ pub fn find_entry(
         force_exact,
     )?;
     let decrypted_entry = decrypt_cipher(&entry)?;
+    rbw::audit::note_item(
+        crate::actions::current_account().as_deref(),
+        &entry.id,
+        Some(&decrypted_entry.name),
+    );
     Ok((entry, decrypted_entry))
 }
 
@@ -208,6 +219,11 @@ pub(super) fn find_entry_multi(
                 let account = owner[&entry.id].clone();
                 crate::actions::set_active_account(Some(account.clone()))?;
                 let decrypted = decrypt_cipher(&entry)?;
+                rbw::audit::note_item(
+                    Some(&account),
+                    &entry.id,
+                    Some(&decrypted.name),
+                );
                 return Ok((account, entry, decrypted));
             }
             needles = vec![Needle::Name(s.clone())];
@@ -229,6 +245,11 @@ pub(super) fn find_entry_multi(
         let account = owner[&entry.id].clone();
         crate::actions::set_active_account(Some(account.clone()))?;
         let decrypted = decrypt_cipher(&entry)?;
+        rbw::audit::note_item(
+            Some(&account),
+            &entry.id,
+            Some(&decrypted.name),
+        );
         return Ok((account, entry, decrypted));
     };
 
@@ -244,6 +265,7 @@ pub(super) fn find_entry_multi(
         ignore_case,
         force_exact,
     )?;
+    rbw::audit::note_item(Some(account), &entry.id, Some(&decrypted.name));
     Ok((account.clone(), entry, decrypted))
 }
 

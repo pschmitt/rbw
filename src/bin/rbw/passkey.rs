@@ -65,6 +65,15 @@ fn select_cached(
         matches.next().is_none(),
         "ambiguous passkey; select a unique --rp-id"
     );
+    rbw::audit::note_item(
+        actions::current_account().as_deref(),
+        &entry.id,
+        Some(&name),
+    );
+    rbw::audit::note_field("passkey");
+    if let Some(rp) = credential.rp_id.as_deref().or(rp_id) {
+        rbw::audit::note_origin(rp);
+    }
     Ok(Selected {
         entry,
         name,
@@ -751,6 +760,8 @@ fn assertion_value(
     };
 
     log::set_max_level(log::LevelFilter::Off);
+    rbw::audit::note_origin(origin);
+    rbw::audit::note_field("passkey");
     commands::unlocked().context("the vault is locked")?;
     rbw::dirs::make_all()?;
     let narrowed;

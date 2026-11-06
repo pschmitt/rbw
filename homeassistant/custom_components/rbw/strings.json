@@ -97,12 +97,61 @@
           "reauthentication_required": "The item still requires an interactive master password prompt."
         }
       }
+    },
+    "default_account_locked": {
+      "title": "rbw default vault is locked",
+      "description": "The default rbw account is locked. Enter the master password to unlock it and any follower accounts.",
+      "fix_flow": {
+        "step": {
+          "unlock": {
+            "title": "Unlock default rbw vault",
+            "description": "Enter the master password for the default rbw account. The password is sent over mTLS to rbw-agent and is never stored by Home Assistant.",
+            "data": {
+              "password": "Master password"
+            },
+            "data_description": {
+              "password": "Bitwarden master password for the default rbw account"
+            }
+          }
+        },
+        "error": {
+          "invalid_password": "The master password was rejected.",
+          "still_unavailable": "The rbw API could not unlock the vault right now. Try again later.",
+          "integration_unavailable": "Reload the rbw integration, then try again."
+        },
+        "abort": {
+          "entry_not_found": "The rbw config entry no longer exists.",
+          "credentials_need_update": "The client certificate was rejected. Update the connection credentials.",
+          "unlock_not_permitted": "This rbw API client does not have permission for the default account."
+        }
+      }
     }
   },
   "entity": {
     "binary_sensor": {
       "api_connected": {"name": "API connected"},
       "vault_locked": {"name": "Vault locked ({account})"}
+    },
+    "event": {
+      "audit": {
+        "name": "Audit log",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "credential_read": "Credential read",
+              "totp_read": "TOTP read",
+              "passkey_used": "Passkey used",
+              "passkey_created": "Passkey registered",
+              "secret_copied": "Secret copied",
+              "ssh_signed": "SSH signature",
+              "attachment_read": "Attachment read",
+              "vault_unlocked": "Vault unlocked",
+              "vault_locked": "Vault locked",
+              "access_denied": "Access denied"
+            }
+          }
+        }
+      }
     }
   }
 }

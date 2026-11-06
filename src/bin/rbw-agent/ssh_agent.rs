@@ -5,21 +5,31 @@ use rsa::signature::{
     RandomizedSigner as _, SignatureEncoding as _, Signer as _,
 };
 
-async fn record_ssh_agent_event(operation: &'static str, success: bool) {
+async fn record_ssh_agent_event(
+    operation: &'static str,
+    success: bool,
+    meta: Option<crate::actions::SshKeyAuditMeta>,
+) {
     let Ok(config) = rbw::config::Config::load_async().await else {
         log::warn!("audit event could not read rbw configuration");
         return;
     };
     let config = config.audit;
-    rbw::audit::record_async_best_effort(
-        config,
-        rbw::audit::Event::new(
-            "ssh-agent",
-            operation,
-            if success { "success" } else { "failure" },
-        ),
-    )
-    .await;
+    let mut event = rbw::audit::Event::new(
+        "ssh-agent",
+        operation,
+        if success { "success" } else { "failure" },
+    );
+    if let Some(meta) = meta {
+        event = event
+            .with_account(&meta.account)
+            .with_item_id(&meta.item_id)
+            .with_field("ssh_private_key");
+        if let Some(name) = meta.item_name.as_deref() {
+            event = event.with_item_name(name);
+        }
+    }
+    rbw::audit::record_async_best_effort(config, event).await;
 }
 
 const SSH_AGENT_RSA_SHA2_256: u32 = 2;
@@ -72,7 +82,8 @@ impl ssh_agent_lib::agent::Session for SshAgent {
                     })
                     .collect()
             });
-        record_ssh_agent_event("ssh_agent.identities", result.is_ok()).await;
+        record_ssh_agent_event("ssh_agent.identities", result.is_ok(), None)
+            .await;
         result
     }
 
@@ -83,18 +94,20 @@ impl ssh_agent_lib::agent::Session for SshAgent {
         ssh_agent_lib::ssh_key::Signature,
         ssh_agent_lib::error::AgentError,
     > {
+        let mut audit_meta = None;
         let result: Result<_, ssh_agent_lib::error::AgentError> = async {
             let pubkey = ssh_agent_lib::ssh_key::PublicKey::new(
                 request.credential.key_data().clone(),
                 "",
             );
 
-            let private_key = crate::actions::find_ssh_private_key(
+            let (private_key, meta) = crate::actions::find_ssh_private_key(
                 self.state.clone(),
                 pubkey,
             )
             .await
             .map_err(|e| ssh_agent_lib::error::AgentError::Other(e.into()))?;
+            audit_meta = Some(meta);
 
             match private_key.key_data() {
                 ssh_agent_lib::ssh_key::private::KeypairData::Ed25519(
@@ -175,7 +188,8 @@ impl ssh_agent_lib::agent::Session for SshAgent {
             }
         }
         .await;
-        record_ssh_agent_event("ssh_agent.sign", result.is_ok()).await;
+        record_ssh_agent_event("ssh_agent.sign", result.is_ok(), audit_meta)
+            .await;
         result
     }
 }

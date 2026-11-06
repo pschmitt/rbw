@@ -242,6 +242,8 @@ pub fn register(
     password: Option<&str>,
 ) -> anyhow::Result<Value> {
     use p256::pkcs8::{EncodePrivateKey as _, EncodePublicKey as _};
+    rbw::audit::note_origin(origin);
+    rbw::audit::note_field("passkey");
     let rp = relying_party(origin, options, true)?;
     let verified = verification(options, true, password)?;
     ensure!(
@@ -312,6 +314,7 @@ pub fn register(
     else {
         anyhow::bail!("not a login");
     };
+    rbw::audit::note_item(None, item.unwrap_or(""), Some(&editable.name));
     ensure!(
         !fido2_credentials
             .iter()

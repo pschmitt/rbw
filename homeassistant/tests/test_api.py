@@ -47,6 +47,10 @@ class FakeSession:
         self.requests.append((url, kwargs))
         return self.responses.pop(0)
 
+    def post(self, url: str, **kwargs: object) -> FakeResponse:
+        self.requests.append((url, kwargs))
+        return self.responses.pop(0)
+
 
 def success(field_id: str, value: str | None, *, sensitive: bool = True) -> FakeResponse:
     return FakeResponse(
@@ -348,6 +352,56 @@ class RbwApiClientTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(raised.exception.code, "invalid_response")
                 self.assertEqual(raised.exception.http_status, 200)
                 self.assertNotIn("secret", str(raised.exception))
+
+    async def test_status_parses_recent_audit_events_and_unlock_posts_password(self) -> None:
+        session = FakeSession(
+            FakeResponse(
+                200,
+                {
+                    "apiVersion": 1,
+                    "agentVersion": "2.41.0",
+                    "accounts": [{"account": "default", "state": "unlocked"}],
+                    "events": [
+                        {
+                            "timestamp": "12345.000",
+                            "actor": "home-assistant",
+                            "operation": "api.field_read",
+                            "outcome": "allowed",
+                            "account": "default",
+                            "item_id": "item-uuid",
+                            "item_name": "HR WORKS",
+                            "field": "password",
+                            "client": "custom_components.hrworks",
+                        }
+                    ],
+                },
+            ),
+            FakeResponse(
+                200,
+                {"account": "default", "state": "unlocked"},
+            ),
+        )
+        client = api.RbwApiClient(session, "https://vault.example", ssl.create_default_context())
+
+        status = await client.async_get_status()
+        self.assertEqual(len(status.events), 1)
+        self.assertEqual(status.events[0].actor, "home-assistant")
+        self.assertEqual(status.events[0].item_name, "HR WORKS")
+        self.assertEqual(status.events[0].client, "custom_components.hrworks")
+
+        unlocked = await client.async_unlock(
+            "correct-horse-battery-staple",
+            account="default",
+            consumer="homeassistant.repairs",
+        )
+        self.assertEqual(unlocked, api.RbwAccountStatus("default", "unlocked"))
+        post_url, post_kwargs = session.requests[1]
+        self.assertEqual(post_url, "https://vault.example/v1/unlock")
+        self.assertEqual(
+            post_kwargs["json"],
+            {"account": "default", "password": "correct-horse-battery-staple"},
+        )
+        self.assertEqual(post_kwargs["headers"], {"X-Rbw-Consumer": "homeassistant.repairs"})
 
 
 if __name__ == "__main__":

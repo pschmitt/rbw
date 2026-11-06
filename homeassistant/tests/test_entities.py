@@ -32,6 +32,17 @@ class FakeCoordinatorEntity:
     def __init__(self, coordinator: object) -> None:
         self.coordinator = coordinator
 
+    def _handle_coordinator_update(self) -> None:
+        if getattr(self, "hass", None) is not None:
+            self.async_write_ha_state()
+
+    def async_write_ha_state(self) -> None:
+        if not hasattr(self, "written_states"):
+            self.written_states = []
+        self.written_states.append(
+            (getattr(self, "event_type", None), dict(getattr(self, "event_attributes", {}) or {}))
+        )
+
     async def async_remove(self, *, force_remove: bool = False) -> None:
         self.removed = force_remove
 
@@ -56,6 +67,13 @@ class FakeEntity:
     @property
     def available(self) -> bool:
         return True
+
+    def _trigger_event(self, event_type: str, event_attributes: dict[str, object] | None = None) -> None:
+        self.event_type = event_type
+        self.event_attributes = dict(event_attributes or {})
+        if not hasattr(self, "triggered_events"):
+            self.triggered_events = []
+        self.triggered_events.append((event_type, dict(event_attributes or {})))
 
 
 class FakeCoordinator:
@@ -142,9 +160,11 @@ def load_entities() -> tuple[types.ModuleType, types.ModuleType, types.ModuleTyp
     package.__path__ = [str(ROOT)]
     package.RbwRuntimeData = object
     const = types.ModuleType("rbw_entity_test.const")
+    const.DEFAULT_ACCOUNT = "default"
     const.DOMAIN = "rbw"
     const.CONF_BASE_URL = "base_url"
     const.ISSUE_CLIENT_CERT = "client_certificate"
+    const.ISSUE_DEFAULT_ACCOUNT_LOCKED = "default_account_locked"
     const.ISSUE_STATUS_PERMISSION = "status_permission_required"
     const.ISSUE_STATUS_UNAVAILABLE = "status_unavailable"
 
@@ -153,6 +173,8 @@ def load_entities() -> tuple[types.ModuleType, types.ModuleType, types.ModuleTyp
         CONNECTIVITY="connectivity", LOCK="lock"
     )
     binary_sensor.BinarySensorEntity = FakeEntity
+    event_component = types.ModuleType("homeassistant.components.event")
+    event_component.EventEntity = FakeEntity
     sensor = types.ModuleType("homeassistant.components.sensor")
     sensor.SensorDeviceClass = SimpleNamespace(ENUM="enum")
     sensor.SensorEntity = FakeEntity
@@ -160,6 +182,7 @@ def load_entities() -> tuple[types.ModuleType, types.ModuleType, types.ModuleTyp
     config_entries.ConfigEntry = object
     core = types.ModuleType("homeassistant.core")
     core.HomeAssistant = object
+    core.callback = lambda fn: fn
     device_registry = types.ModuleType("homeassistant.helpers.device_registry")
     device_registry.DeviceInfo = FakeDeviceInfo
     device_registry.async_get = lambda hass: hass.device_registry
@@ -185,6 +208,7 @@ def load_entities() -> tuple[types.ModuleType, types.ModuleType, types.ModuleTyp
         "homeassistant": types.ModuleType("homeassistant"),
         "homeassistant.components": types.ModuleType("homeassistant.components"),
         "homeassistant.components.binary_sensor": binary_sensor,
+        "homeassistant.components.event": event_component,
         "homeassistant.components.sensor": sensor,
         "homeassistant.config_entries": config_entries,
         "homeassistant.core": core,
@@ -205,15 +229,22 @@ def load_entities() -> tuple[types.ModuleType, types.ModuleType, types.ModuleTyp
         binary_spec = importlib.util.spec_from_file_location(
             "rbw_entity_test.binary_sensor", ROOT / "binary_sensor.py"
         )
+        event_spec = importlib.util.spec_from_file_location(
+            "rbw_entity_test.event", ROOT / "event.py"
+        )
         sensor_spec = importlib.util.spec_from_file_location(
             "rbw_entity_test.sensor", ROOT / "sensor.py"
         )
         assert binary_spec and binary_spec.loader
+        assert event_spec and event_spec.loader
         assert sensor_spec and sensor_spec.loader
         binary_module = importlib.util.module_from_spec(binary_spec)
+        event_module = importlib.util.module_from_spec(event_spec)
         sensor_module = importlib.util.module_from_spec(sensor_spec)
         binary_spec.loader.exec_module(binary_module)
+        event_spec.loader.exec_module(event_module)
         sensor_spec.loader.exec_module(sensor_module)
+        binary_module.event_module = event_module
     return coordinator_module, binary_module, sensor_module
 
 
@@ -618,6 +649,108 @@ class RbwDiagnosticEntityTests(unittest.IsolatedAsyncioTestCase):
         coordinator.notify()
         await asyncio.sleep(0)
         self.assertTrue(all(getattr(entity, "removed", False) for entity in remaining_locks))
+
+    async def test_audit_event_entity_seeds_latest_and_emits_new_events_in_order(self) -> None:
+        coordinator_module, binary_module, _ = load_entities()
+        event_module = binary_module.event_module
+        ev1 = api.RbwAuditEvent(
+            timestamp="100.000",
+            actor="local",
+            operation="unlock",
+            outcome="allowed",
+            account="default",
+            client="zsh",
+        )
+        ev2 = api.RbwAuditEvent(
+            timestamp="101.000",
+            actor="home-assistant",
+            operation="api.field_read",
+            outcome="allowed",
+            account="default",
+            item_id="uuid-1",
+            item_name="HR WORKS",
+            field="password",
+            client="custom_components.hrworks",
+        )
+        coordinator = FakeCoordinator(
+            coordinator_module.RbwStatusData(
+                connected=True,
+                status=api.RbwApiStatus(
+                    1,
+                    "2.41.0",
+                    (api.RbwAccountStatus("default", "unlocked"),),
+                    (ev1, ev2),
+                ),
+            )
+        )
+        runtime = SimpleNamespace(
+            coordinator=coordinator,
+            configuration_url="https://fnuc.example:24871",
+        )
+        hass = SimpleNamespace(data={"rbw": {"entry": runtime}})
+        entry = FakeEntry("entry")
+        event_entities: list[object] = []
+
+        await event_module.async_setup_entry(hass, entry, event_entities.extend)
+        self.assertEqual(len(event_entities), 1)
+        audit_entity = event_entities[0]
+        audit_entity.hass = hass
+        self.assertEqual(audit_entity.entity_id, "event.rbw_audit")
+        self.assertEqual(audit_entity.event_type, "credential_read")
+        self.assertEqual(audit_entity.event_attributes["item_name"], "HR WORKS")
+        self.assertEqual(
+            audit_entity.event_attributes["consumer"],
+            "custom_components.hrworks",
+        )
+        self.assertEqual(
+            audit_entity.event_attributes["summary"],
+            "home-assistant (custom_components.hrworks) read password from HR WORKS [default]",
+        )
+        self.assertEqual(len(audit_entity.triggered_events), 1)
+
+        ev3 = api.RbwAuditEvent(
+            timestamp="102.000",
+            actor="browser",
+            operation="browser.passkey_get",
+            outcome="allowed",
+            account="default",
+            item_id="uuid-2",
+            item_name="GitHub",
+            origin="https://github.com",
+            client="firefox",
+        )
+        ev4 = api.RbwAuditEvent(
+            timestamp="103.000",
+            actor="ssh-agent",
+            operation="ssh_agent.sign",
+            outcome="allowed",
+            account="default",
+            item_id="uuid-3",
+            item_name="id_ed25519",
+            field="ssh_private_key",
+            client="ssh",
+        )
+        coordinator.data = coordinator_module.RbwStatusData(
+            connected=True,
+            status=api.RbwApiStatus(
+                1,
+                "2.41.0",
+                (api.RbwAccountStatus("default", "unlocked"),),
+                (ev1, ev2, ev3, ev4),
+            ),
+        )
+        audit_entity._handle_coordinator_update()
+        self.assertEqual(len(audit_entity.triggered_events), 3)
+        self.assertEqual(audit_entity.triggered_events[1][0], "passkey_used")
+        self.assertEqual(
+            audit_entity.triggered_events[1][1]["summary"],
+            "browser (firefox) used passkey for GitHub on https://github.com [default]",
+        )
+        self.assertEqual(audit_entity.triggered_events[2][0], "ssh_signed")
+        self.assertEqual(
+            audit_entity.triggered_events[2][1]["summary"],
+            "ssh-agent (ssh) signed with SSH key id_ed25519 [default]",
+        )
 
 
 if __name__ == "__main__":

@@ -13,8 +13,10 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .api import RbwApiClient, RbwApiError, RbwApiStatus
 from .const import (
+    DEFAULT_ACCOUNT,
     DOMAIN,
     ISSUE_CLIENT_CERT,
+    ISSUE_DEFAULT_ACCOUNT_LOCKED,
     ISSUE_STATUS_PERMISSION,
     ISSUE_STATUS_UNAVAILABLE,
 )
@@ -136,6 +138,21 @@ class RbwStatusCoordinator(DataUpdateCoordinator[RbwStatusData]):
             self.hass, DOMAIN, _issue_id(self.entry.entry_id, ISSUE_STATUS_UNAVAILABLE)
         )
         ir.async_delete_issue(self.hass, DOMAIN, _issue_id(self.entry.entry_id, ISSUE_CLIENT_CERT))
+        if any(
+            account.account == DEFAULT_ACCOUNT and account.state == "locked"
+            for account in status.accounts
+        ):
+            _create_status_issue(
+                self.hass,
+                self.entry.entry_id,
+                ISSUE_DEFAULT_ACCOUNT_LOCKED,
+                is_fixable=True,
+                data={"entry_id": self.entry.entry_id, "account": DEFAULT_ACCOUNT},
+            )
+        else:
+            ir.async_delete_issue(
+                self.hass, DOMAIN, _issue_id(self.entry.entry_id, ISSUE_DEFAULT_ACCOUNT_LOCKED)
+            )
         return RbwStatusData(connected=True, status=status)
 
 
@@ -149,6 +166,7 @@ def _create_status_issue(
     issue: str,
     *,
     is_fixable: bool = False,
+    data: dict[str, str] | None = None,
 ) -> None:
     """Create a repair issue that contains no endpoint or credential values."""
     ir.async_create_issue(
@@ -159,5 +177,5 @@ def _create_status_issue(
         is_persistent=True,
         severity=ir.IssueSeverity.WARNING,
         translation_key=issue,
-        data={"entry_id": entry_id},
+        data=data or {"entry_id": entry_id},
     )

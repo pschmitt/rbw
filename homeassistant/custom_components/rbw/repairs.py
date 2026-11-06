@@ -13,23 +13,109 @@ from homeassistant.helpers import issue_registry as ir
 
 from .api import RbwApiError
 from .const import (
+    DEFAULT_ACCOUNT,
     DOMAIN,
     ISSUE_API_UNAVAILABLE,
     ISSUE_CLIENT_CERT,
+    ISSUE_DEFAULT_ACCOUNT_LOCKED,
     ISSUE_REAUTHENTICATION_REQUIRED,
 )
 
 
+def _password_schema() -> vol.Schema:
+    """Build a masked password schema, falling back to str in unit test stubs."""
+    try:
+        from homeassistant.helpers import selector
+
+        field_validator: Any = selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+        )
+    except (ImportError, AttributeError):
+        field_validator = str
+    return vol.Schema({vol.Required("password"): field_validator})
+
+
 class RbwRepairFlow(RepairsFlow):
-    """Retry a failed request or reconfigure the mTLS client."""
+    """Retry a failed request, unlock the default vault, or reconfigure mTLS."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Offer a request retry or certificate reconfiguration."""
+        """Offer a request retry, default vault unlock, or certificate reconfiguration."""
+        if self.issue_id.startswith(f"{ISSUE_DEFAULT_ACCOUNT_LOCKED}_"):
+            return await self.async_step_unlock(user_input)
         if self.issue_id.startswith(f"{ISSUE_CLIENT_CERT}_"):
             return self.async_show_menu(step_id="init", menu_options=["reconfigure"])
         if self.issue_id.startswith(f"{ISSUE_REAUTHENTICATION_REQUIRED}_"):
             return self.async_show_menu(step_id="init", menu_options=["manual_action"])
         return self.async_show_menu(step_id="init", menu_options=["retry", "reconfigure"])
+
+    async def async_step_unlock(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Prompt for the master password to unlock the default account."""
+        data = self.data or {}
+        entry_id = data.get("entry_id")
+        account = str(data.get("account") or DEFAULT_ACCOUNT)
+        if not entry_id:
+            return self.async_abort(reason="entry_not_found")
+
+        schema = _password_schema()
+        if user_input is not None:
+            password = user_input.get("password")
+            if not isinstance(password, str) or not password:
+                return self.async_show_form(
+                    step_id="unlock",
+                    data_schema=schema,
+                    errors={"password": "invalid_password"},
+                )
+            runtime = self.hass.data.get(DOMAIN, {}).get(entry_id)
+            client = getattr(runtime, "client", runtime)
+            if client is None:
+                return self.async_show_form(
+                    step_id="unlock",
+                    data_schema=schema,
+                    errors={"base": "integration_unavailable"},
+                )
+            try:
+                await client.async_unlock(
+                    password,
+                    account=account,
+                    consumer="homeassistant.repairs",
+                )
+            except RbwApiError as err:
+                if err.code == "invalid_password":
+                    return self.async_show_form(
+                        step_id="unlock",
+                        data_schema=schema,
+                        errors={"password": "invalid_password"},
+                    )
+                if err.authentication_error:
+                    ir.async_delete_issue(self.hass, DOMAIN, self.issue_id)
+                    ir.async_create_issue(
+                        self.hass,
+                        DOMAIN,
+                        f"{ISSUE_CLIENT_CERT}_{entry_id}",
+                        is_fixable=True,
+                        is_persistent=True,
+                        severity=ir.IssueSeverity.ERROR,
+                        translation_key=ISSUE_CLIENT_CERT,
+                        data={"entry_id": entry_id},
+                    )
+                    return self.async_abort(reason="credentials_need_update")
+                if err.code == "forbidden":
+                    ir.async_delete_issue(self.hass, DOMAIN, self.issue_id)
+                    return self.async_abort(reason="unlock_not_permitted")
+                return self.async_show_form(
+                    step_id="unlock",
+                    data_schema=schema,
+                    errors={"base": "still_unavailable"},
+                )
+
+            ir.async_delete_issue(self.hass, DOMAIN, self.issue_id)
+            coordinator = getattr(runtime, "coordinator", None)
+            refresh = getattr(coordinator, "async_refresh", None)
+            if callable(refresh):
+                await refresh()
+            return self.async_create_entry(title="", data={})
+
+        return self.async_show_form(step_id="unlock", data_schema=schema)
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Start the integration's reconfigure flow."""

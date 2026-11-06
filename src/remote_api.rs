@@ -154,6 +154,25 @@ pub struct FieldReadResponse {
     pub sensitive: bool,
 }
 
+/// Request body for unlocking an explicitly authorized vault account.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UnlockRequest {
+    #[serde(default)]
+    pub account: Option<String>,
+    pub password: String,
+}
+
+/// Result of a remote vault unlock operation.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UnlockResponse {
+    pub account: String,
+    pub state: VaultLockState,
+}
+
 /// A stable, non-secret API failure.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -181,6 +200,7 @@ pub enum ErrorCode {
     InvalidRequest,
     Unauthorized,
     Forbidden,
+    InvalidPassword,
     NotFound,
     VaultLocked,
     ReauthenticationRequired,
@@ -239,6 +259,8 @@ pub struct StatusResponse {
     pub api_version: u32,
     pub agent_version: String,
     pub accounts: Vec<AccountStatus>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<crate::audit::Event>,
 }
 
 /// The status of an account explicitly granted to the requesting client.
@@ -939,6 +961,9 @@ impl ErrorCode {
             Self::InvalidRequest => axum::http::StatusCode::BAD_REQUEST,
             Self::Unauthorized => axum::http::StatusCode::UNAUTHORIZED,
             Self::Forbidden => axum::http::StatusCode::FORBIDDEN,
+            Self::InvalidPassword => {
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY
+            }
             Self::NotFound => axum::http::StatusCode::NOT_FOUND,
             Self::VaultLocked | Self::ReauthenticationRequired => {
                 axum::http::StatusCode::LOCKED
@@ -956,6 +981,7 @@ impl ErrorCode {
             Self::Forbidden => {
                 ("Client policy does not allow this request", false)
             }
+            Self::InvalidPassword => ("Invalid master password", false),
             Self::NotFound => ("Item or field was not found", false),
             Self::VaultLocked => ("Vault is locked", true),
             Self::ReauthenticationRequired => (
@@ -1259,6 +1285,7 @@ if errors:
                 account: "personal".to_owned(),
                 state: VaultLockState::Locked,
             }],
+            events: Vec::new(),
         };
         assert_eq!(
             serde_json::to_value(response).unwrap(),

@@ -91,9 +91,14 @@ Local MCP tools run the rbw CLI as a subprocess, so their operations are
 recorded at the CLI boundary. Policy-only MCP field reads use the remote API
 and are recorded there.
 
-Audit events never contain passwords, TOTP values or seeds, notes, item names,
-full command lines, or raw error messages. If writing an event fails, rbw
-reports a warning and continues the requested operation.
+Audit events never contain passwords, TOTP values or seeds, notes,
+full command lines, or raw error messages. Notable credential, passkey, TOTP,
+SSH-agent, and lock/unlock events include the sanitized item name, field label,
+account name, consumer/client label, and web origin or relying-party ID (with
+URL paths, query strings, and credentials stripped) so `GET /v1/status` and Home
+Assistant's `event.rbw_audit` entity can attribute activity without exposing
+secrets. If writing an event fails, rbw reports a warning and continues the
+requested operation.
 
 ## Coverage limits
 

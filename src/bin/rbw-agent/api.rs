@@ -102,15 +102,18 @@ where
 
 use rbw::remote_api::{
     AccountStatus, ApiError, ErrorCode, FieldReadResponse, StatusResponse,
-    VaultLockState,
+    UnlockRequest, UnlockResponse, VaultLockState,
 };
 
 type PolicyFuture = BoxFuture<
     'static,
     Result<(bool, rbw::remote_api::PolicyStore), ApiError>,
 >;
-type ReaderFuture = BoxFuture<'static, Result<FieldReadResponse, ApiError>>;
+type ReaderFuture =
+    BoxFuture<'static, Result<(FieldReadResponse, Option<String>), ApiError>>;
 type StatusFuture = BoxFuture<'static, Result<AccountStatus, ApiError>>;
+type EventsFuture = BoxFuture<'static, Vec<rbw::audit::Event>>;
+type UnlockFuture = BoxFuture<'static, Result<UnlockResponse, ApiError>>;
 
 #[derive(Clone)]
 struct ApiState {
@@ -122,6 +125,16 @@ struct ApiState {
     >,
     status_reader:
         std::sync::Arc<dyn Fn(String) -> StatusFuture + Send + Sync>,
+    events_reader: std::sync::Arc<
+        dyn Fn(
+                Vec<String>,
+                std::collections::BTreeMap<String, String>,
+            ) -> EventsFuture
+            + Send
+            + Sync,
+    >,
+    unlocker:
+        std::sync::Arc<dyn Fn(String, String) -> UnlockFuture + Send + Sync>,
 }
 
 impl ApiState {
@@ -157,10 +170,11 @@ impl ApiState {
                 .await
             })
         });
+        let status_agent = agent.clone();
         let status_reader: std::sync::Arc<
             dyn Fn(String) -> StatusFuture + Send + Sync,
         > = std::sync::Arc::new(move |account| {
-            let agent = agent.clone();
+            let agent = status_agent.clone();
             Box::pin(async move {
                 let config = rbw::config::Config::load_async()
                     .await
@@ -182,10 +196,39 @@ impl ApiState {
                 })
             })
         });
+        let events_reader: std::sync::Arc<
+            dyn Fn(
+                    Vec<String>,
+                    std::collections::BTreeMap<String, String>,
+                ) -> EventsFuture
+                + Send
+                + Sync,
+        > = std::sync::Arc::new(move |accounts, client_names| {
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    rbw::audit::recent_events(50, &accounts, &client_names)
+                })
+                .await
+                .unwrap_or_default()
+            })
+        });
+        let unlocker: std::sync::Arc<
+            dyn Fn(String, String) -> UnlockFuture + Send + Sync,
+        > = std::sync::Arc::new(move |account, password| {
+            let agent = agent.clone();
+            Box::pin(async move {
+                crate::actions::unlock_remote_account(
+                    agent, &account, password,
+                )
+                .await
+            })
+        });
         Self {
             policy,
             reader,
             status_reader,
+            events_reader,
+            unlocker,
         }
     }
 }
@@ -430,26 +473,45 @@ fn router(state: ApiState) -> Router {
     Router::new()
         .route("/v1/items/{item_id}/fields/{*field}", get(read_field))
         .route("/v1/status", get(read_status))
+        .route("/v1/unlock", axum::routing::post(unlock_account))
         .with_state(state)
+}
+
+#[derive(Default)]
+struct ApiAuditMeta {
+    item_id: Option<String>,
+    item_name: Option<String>,
+    account: Option<String>,
+    field: Option<String>,
+    client: Option<String>,
+}
+
+fn extract_consumer(headers: &axum::http::HeaderMap) -> Option<String> {
+    let raw = headers.get("x-rbw-consumer")?.to_str().ok()?.trim();
+    let cleaned = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || "._+-/:".contains(*c))
+        .take(64)
+        .collect::<String>();
+    (!cleaned.is_empty()).then_some(cleaned)
 }
 
 async fn read_field(
     State(state): State<ApiState>,
     Extension(certificates): Extension<PeerCertificates>,
+    headers: axum::http::HeaderMap,
     Path((item_id, field_token)): Path<(String, String)>,
 ) -> Response {
-    let actor =
-        audit_actor(certificates.leaf().map(std::convert::AsRef::as_ref))
-            .await;
-    let result = read_field_inner(
-        &state,
-        certificates.leaf().map(std::convert::AsRef::as_ref),
-        &item_id,
-        &field_token,
-    )
-    .await;
+    let cert_der = certificates.leaf().map(std::convert::AsRef::as_ref);
+    let actor = audit_actor(&state, cert_der).await;
+    let consumer = extract_consumer(&headers);
+    let (result, mut meta) =
+        read_field_inner(&state, cert_der, &item_id, &field_token).await;
+    meta.item_id = Some(item_id);
+    meta.field = Some(field_token);
+    meta.client = consumer;
     let outcome = api_audit_outcome(&result);
-    record_api_event(actor, "api.field_read", Some(&item_id), outcome).await;
+    record_api_event(actor, "api.field_read", meta, outcome).await;
     api_response(result)
 }
 
@@ -457,25 +519,74 @@ async fn read_status(
     State(state): State<ApiState>,
     Extension(certificates): Extension<PeerCertificates>,
 ) -> Response {
-    let actor =
-        audit_actor(certificates.leaf().map(std::convert::AsRef::as_ref))
-            .await;
-    let result = read_status_inner(
-        &state,
-        certificates.leaf().map(std::convert::AsRef::as_ref),
+    let cert_der = certificates.leaf().map(std::convert::AsRef::as_ref);
+    let actor = audit_actor(&state, cert_der).await;
+    let result = read_status_inner(&state, cert_der).await;
+    let outcome = api_audit_outcome(&result);
+    record_api_event(
+        actor,
+        "api.status_read",
+        ApiAuditMeta::default(),
+        outcome,
     )
     .await;
-    let outcome = api_audit_outcome(&result);
-    record_api_event(actor, "api.status_read", None, outcome).await;
     api_response(result)
 }
 
-async fn audit_actor(certificate_der: Option<&[u8]>) -> String {
+async fn unlock_account(
+    State(state): State<ApiState>,
+    Extension(certificates): Extension<PeerCertificates>,
+    headers: axum::http::HeaderMap,
+    Json(mut request): Json<UnlockRequest>,
+) -> Response {
+    let cert_der = certificates.leaf().map(std::convert::AsRef::as_ref);
+    let actor = audit_actor(&state, cert_der).await;
+    let consumer = extract_consumer(&headers);
+    let password = std::mem::take(&mut request.password);
+    let (result, account) = unlock_account_inner(
+        &state,
+        cert_der,
+        request.account.as_deref(),
+        password,
+    )
+    .await;
+    let outcome = api_audit_outcome(&result);
+    record_api_event(
+        actor,
+        "api.unlock",
+        ApiAuditMeta {
+            account,
+            client: consumer,
+            ..ApiAuditMeta::default()
+        },
+        outcome,
+    )
+    .await;
+    api_response(result)
+}
+
+async fn audit_actor(
+    state: &ApiState,
+    certificate_der: Option<&[u8]>,
+) -> String {
     let Some(certificate_der) = certificate_der else {
         return "unauthenticated".to_owned();
     };
     let fingerprint =
         rbw::remote_api::certificate_fingerprint(certificate_der);
+    if let Ok((_, store)) = (state.policy)().await {
+        if let Some(client) = store
+            .clients
+            .values()
+            .find(|client| client.fingerprint == fingerprint)
+        {
+            return if client.name.trim().is_empty() {
+                client.id.clone()
+            } else {
+                client.name.clone()
+            };
+        }
+    }
     let fallback = fingerprint.clone();
     tokio::task::spawn_blocking(move || {
         rbw::remote_api::load_policy_store()
@@ -485,7 +596,13 @@ async fn audit_actor(certificate_der: Option<&[u8]>) -> String {
                     .clients
                     .values()
                     .find(|client| client.fingerprint == fingerprint)
-                    .map(|client| client.id.clone())
+                    .map(|client| {
+                        if client.name.trim().is_empty() {
+                            client.id.clone()
+                        } else {
+                            client.name.clone()
+                        }
+                    })
             })
             .unwrap_or(fallback)
     })
@@ -499,6 +616,7 @@ fn api_audit_outcome<T>(result: &Result<T, ApiError>) -> &'static str {
             ErrorCode::InvalidRequest => "failure.invalid_request",
             ErrorCode::Unauthorized => "failure.unauthorized",
             ErrorCode::Forbidden => "failure.forbidden",
+            ErrorCode::InvalidPassword => "failure.invalid_password",
             ErrorCode::NotFound => "failure.not_found",
             ErrorCode::VaultLocked => "failure.vault_locked",
             ErrorCode::ReauthenticationRequired => {
@@ -513,7 +631,7 @@ fn api_audit_outcome<T>(result: &Result<T, ApiError>) -> &'static str {
 async fn record_api_event(
     actor: String,
     operation: &'static str,
-    item_id: Option<&str>,
+    meta: ApiAuditMeta,
     outcome: &'static str,
 ) {
     let Ok(config) = rbw::config::Config::load_async().await else {
@@ -521,11 +639,22 @@ async fn record_api_event(
         return;
     };
     let config = config.audit;
-    let event = match item_id {
-        Some(item_id) => rbw::audit::Event::new(actor, operation, outcome)
-            .with_item_id(item_id),
-        None => rbw::audit::Event::new(actor, operation, outcome),
-    };
+    let mut event = rbw::audit::Event::new(actor, operation, outcome);
+    if let Some(item_id) = meta.item_id.as_deref() {
+        event = event.with_item_id(item_id);
+    }
+    if let Some(item_name) = meta.item_name.as_deref() {
+        event = event.with_item_name(item_name);
+    }
+    if let Some(account) = meta.account.as_deref() {
+        event = event.with_account(account);
+    }
+    if let Some(field) = meta.field.as_deref() {
+        event = event.with_field(field);
+    }
+    if let Some(client) = meta.client.as_deref() {
+        event = event.with_client(client);
+    }
     rbw::audit::record_async_best_effort(config, event).await;
 }
 
@@ -561,13 +690,20 @@ async fn read_status_inner(
     let accounts =
         authorized_status_accounts(enabled, &store, certificate_der)?;
     let mut statuses = Vec::with_capacity(accounts.len());
-    for account in accounts {
-        statuses.push((state.status_reader)(account).await?);
+    for account in &accounts {
+        statuses.push((state.status_reader)(account.clone()).await?);
     }
+    let client_names = store
+        .clients
+        .values()
+        .map(|client| (client.id.clone(), client.name.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let events = (state.events_reader)(accounts, client_names).await;
     Ok(StatusResponse {
         api_version: 1,
         agent_version: env!("CARGO_PKG_VERSION").to_owned(),
         accounts: statuses,
+        events,
     })
 }
 
@@ -576,22 +712,38 @@ async fn read_field_inner(
     certificate_der: Option<&[u8]>,
     item_id: &str,
     field_token: &str,
-) -> Result<FieldReadResponse, ApiError> {
+) -> (Result<FieldReadResponse, ApiError>, ApiAuditMeta) {
     use rbw::remote_api::{FieldReadRequest, FieldRef};
 
-    let (enabled, store) = (state.policy)().await?;
-    let field = field_token
-        .parse::<FieldRef>()
-        .map_err(|_| ApiError::new(ErrorCode::InvalidRequest))?;
-    let account = authorized_account(
+    let mut meta = ApiAuditMeta::default();
+    let (enabled, store) = match (state.policy)().await {
+        Ok(value) => value,
+        Err(err) => return (Err(err), meta),
+    };
+    if let Some(cert) = certificate_der {
+        let fp = rbw::remote_api::certificate_fingerprint(cert);
+        meta.account = store
+            .clients
+            .values()
+            .find(|c| c.fingerprint == fp)
+            .and_then(|c| c.account.clone());
+    }
+    let Ok(field) = field_token.parse::<FieldRef>() else {
+        return (Err(ApiError::new(ErrorCode::InvalidRequest)), meta);
+    };
+    let account = match authorized_account(
         enabled,
         &store,
         certificate_der,
         item_id,
         &field,
-    )?;
+    ) {
+        Ok(account) => account,
+        Err(err) => return (Err(err), meta),
+    };
+    meta.account = Some(account.clone());
 
-    (state.reader)(
+    match (state.reader)(
         FieldReadRequest {
             item_id: item_id.to_owned(),
             field,
@@ -599,6 +751,78 @@ async fn read_field_inner(
         account,
     )
     .await
+    {
+        Ok((response, item_name)) => {
+            meta.item_name = item_name;
+            (Ok(response), meta)
+        }
+        Err(err) => (Err(err), meta),
+    }
+}
+
+async fn unlock_account_inner(
+    state: &ApiState,
+    certificate_der: Option<&[u8]>,
+    requested_account: Option<&str>,
+    mut password: String,
+) -> (Result<UnlockResponse, ApiError>, Option<String>) {
+    let (enabled, store) = match (state.policy)().await {
+        Ok(value) => value,
+        Err(err) => {
+            zeroize::Zeroize::zeroize(&mut password);
+            return (Err(err), None);
+        }
+    };
+    let account = match authorized_unlock_account(
+        enabled,
+        &store,
+        certificate_der,
+        requested_account,
+    ) {
+        Ok(account) => account,
+        Err(err) => {
+            zeroize::Zeroize::zeroize(&mut password);
+            return (Err(err), requested_account.map(str::to_owned));
+        }
+    };
+    let result = (state.unlocker)(account.clone(), password).await;
+    (result, Some(account))
+}
+
+fn authorized_unlock_account(
+    enabled: bool,
+    store: &rbw::remote_api::PolicyStore,
+    certificate_der: Option<&[u8]>,
+    requested_account: Option<&str>,
+) -> Result<String, ApiError> {
+    if !enabled {
+        return Err(ApiError::new(ErrorCode::Unauthorized));
+    }
+    let certificate_der = certificate_der
+        .ok_or_else(|| ApiError::new(ErrorCode::Unauthorized))?;
+    let fingerprint =
+        rbw::remote_api::certificate_fingerprint(certificate_der);
+    let client = store
+        .clients
+        .values()
+        .find(|client| client.fingerprint == fingerprint)
+        .ok_or_else(|| ApiError::new(ErrorCode::Unauthorized))?;
+    let target = requested_account
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .or_else(|| client.account.clone())
+        .unwrap_or_else(|| "default".to_owned());
+    let allowed_via_default =
+        client.account.as_deref() == Some(target.as_str());
+    let allowed_via_status = client.status
+        && rbw::remote_api::granted_status_accounts(client)
+            .iter()
+            .any(|account| account == &target);
+    if !allowed_via_default && !allowed_via_status {
+        return Err(ApiError::new(ErrorCode::Forbidden));
+    }
+    Ok(target)
 }
 
 fn authorized_account(
@@ -784,11 +1008,14 @@ mod tests {
                 let calls = calls.clone();
                 Box::pin(async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(FieldReadResponse {
-                        field: request.field,
-                        value: Some("synthetic-secret-value".to_owned()),
-                        sensitive: true,
-                    })
+                    Ok((
+                        FieldReadResponse {
+                            field: request.field,
+                            value: Some("synthetic-secret-value".to_owned()),
+                            sensitive: true,
+                        },
+                        Some("Synthetic Item".to_owned()),
+                    ))
                 })
             },
         );
@@ -820,11 +1047,35 @@ mod tests {
                     })
                 }
             });
+        let events_reader: Arc<
+            dyn Fn(
+                    Vec<String>,
+                    std::collections::BTreeMap<String, String>,
+                ) -> EventsFuture
+                + Send
+                + Sync,
+        > = Arc::new(|_, _| Box::pin(async { Vec::new() }));
+        let unlocker: Arc<
+            dyn Fn(String, String) -> UnlockFuture + Send + Sync,
+        > = Arc::new(|account, password| {
+            Box::pin(async move {
+                if password == "correct-password" {
+                    Ok(UnlockResponse {
+                        account,
+                        state: VaultLockState::Unlocked,
+                    })
+                } else {
+                    Err(ApiError::new(ErrorCode::InvalidPassword))
+                }
+            })
+        });
         (
             ApiState {
                 policy,
                 reader,
                 status_reader,
+                events_reader,
+                unlocker,
             },
             state_value,
             status_calls,
@@ -865,6 +1116,34 @@ mod tests {
                 .map(str::to_owned);
             let body = response.text()?;
             Ok((status, cache_control, body, retry_after))
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn https_post(
+        url: String,
+        ca_pem: String,
+        client_identity: Option<Vec<u8>>,
+        path: &'static str,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<(reqwest::StatusCode, String)> {
+        tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let ca = reqwest::Certificate::from_pem(ca_pem.as_bytes())?;
+            let mut builder =
+                reqwest::blocking::Client::builder().add_root_certificate(ca);
+            if let Some(identity) = client_identity {
+                builder =
+                    builder.identity(reqwest::Identity::from_pem(&identity)?);
+            }
+            let response = builder
+                .build()?
+                .post(format!("{url}{path}"))
+                .json(&payload)
+                .send()?;
+            let status = response.status();
+            let body = response.text()?;
+            Ok((status, body))
         })
         .await
         .unwrap()
@@ -946,6 +1225,45 @@ mod tests {
         assert_eq!(payload.accounts[0].state, VaultLockState::Locked);
         assert!(!response.2.contains("work"));
         assert!(!response.2.contains("client-1"));
+
+        // Unlocking a granted account succeeds with valid password and rejects
+        // an invalid password or an ungranted account.
+        let unlock_ok = https_post(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/unlock",
+            serde_json::json!({ "account": "personal", "password": "correct-password" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(unlock_ok.0, StatusCode::OK);
+        let unlocked: UnlockResponse =
+            serde_json::from_str(&unlock_ok.1).unwrap();
+        assert_eq!(unlocked.account, "personal");
+        assert_eq!(unlocked.state, VaultLockState::Unlocked);
+
+        let unlock_bad_pw = https_post(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/unlock",
+            serde_json::json!({ "account": "personal", "password": "wrong" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(unlock_bad_pw.0, StatusCode::UNPROCESSABLE_ENTITY);
+
+        let unlock_forbidden = https_post(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/unlock",
+            serde_json::json!({ "account": "ungranted", "password": "correct-password" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(unlock_forbidden.0, StatusCode::FORBIDDEN);
 
         // Multiple explicit grants return each account's state.
         policy

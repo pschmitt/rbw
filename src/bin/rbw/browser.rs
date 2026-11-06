@@ -447,6 +447,7 @@ fn record_browser_event(
                 .with_item_id(item_id)
         },
     );
+    let event = rbw::audit::apply_context(event);
     rbw::audit::record_best_effort(&config.audit, &event);
 }
 
@@ -470,6 +471,7 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
         let mut bytes = zeroize::Zeroizing::new(vec![0; length]);
         input.read_exact(&mut bytes)?;
         let client_name = authorize_or_report(arguments, &mut output)?;
+        rbw::audit::clear_context();
         let parsed = serde_json::from_slice::<Request>(&bytes);
         let response = if let Ok(request) = parsed {
             let id = request.id;
@@ -876,6 +878,13 @@ fn dispatch(
         }
     }
     actions::set_active_account(request.account)?;
+    if let Some(account) = actions::current_account().or_else(|| {
+        rbw::config::Config::load()
+            .ok()
+            .map(|c| c.primary_account_name())
+    }) {
+        rbw::audit::note_account(&account);
+    }
     match request.operation {
         Operation::Status => {
             let config = rbw::config::Config::load()?;
@@ -1312,10 +1321,14 @@ fn dispatch(
                     match_default,
                     manual,
                 } => {
+                    rbw::audit::note_origin(&url);
+                    rbw::audit::note_field("username,password");
                     let url = web_url(&url)?;
                     let default =
                         uri_match_default(match_default.as_deref())?;
                     let entry = entry(&db, &item)?;
+                    let name = decrypt(entry, &entry.name)?;
+                    rbw::audit::note_item(None, &entry.id, Some(&name));
                     let rbw::db::EntryData::Login {
                         username,
                         password,
@@ -1330,7 +1343,7 @@ fn dispatch(
                     ensure!(manual || matched, "site mismatch");
                     let custom = entry.fields.iter().map(|f| Ok(json!({"name": f.name.as_deref().map(|v| decrypt(entry, v)).transpose()?, "value": f.value.as_deref().map(|v| decrypt(entry, v)).transpose()?, "type": match f.ty { Some(rbw::api::FieldType::Hidden) => "hidden", Some(rbw::api::FieldType::Boolean) => "boolean", Some(rbw::api::FieldType::Linked) => "linked", _ => "text" }}))).collect::<anyhow::Result<Vec<_>>>()?;
                     Ok(
-                        json!({"name": decrypt(entry, &entry.name)?, "custom": custom, "username": username.as_deref().map(|s| decrypt(entry, s)).transpose()?,
+                        json!({"name": name, "custom": custom, "username": username.as_deref().map(|s| decrypt(entry, s)).transpose()?,
                         "password": password.as_deref().map(|s| decrypt(entry, s)).transpose()?,
                         // Only whether there is one: the extension asks the
                         // native host to copy the current code (`copy`).
@@ -1338,7 +1351,10 @@ fn dispatch(
                     )
                 }
                 Operation::Totp { item } => {
+                    rbw::audit::note_field("totp");
                     let entry = entry(&db, &item)?;
+                    let name = decrypt(entry, &entry.name).ok();
+                    rbw::audit::note_item(None, &entry.id, name.as_deref());
                     let rbw::db::EntryData::Login {
                         totp: Some(secret), ..
                     } = &entry.data
@@ -1353,7 +1369,10 @@ fn dispatch(
                     )
                 }
                 Operation::Copy { item, field } => {
+                    rbw::audit::note_field(&field);
                     let entry = entry(&db, &item)?;
+                    let name = decrypt(entry, &entry.name).ok();
+                    rbw::audit::note_item(None, &entry.id, name.as_deref());
                     let value = if field == "notes" {
                         decrypt(
                             entry,

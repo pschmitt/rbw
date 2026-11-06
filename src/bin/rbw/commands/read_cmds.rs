@@ -512,6 +512,17 @@ pub fn get(
     }
 
     deny_secret_get(&decrypted, field.as_deref(), list_fields, output)?;
+    if list_fields {
+        rbw::audit::note_field("fields");
+    } else if output_is_structured(output) {
+        rbw::audit::note_field("raw");
+    } else if output == OutputMode::Name {
+        rbw::audit::note_field("name");
+    } else if let Some(field) = &field {
+        rbw::audit::note_field(field);
+    } else if let Some((_, src)) = decrypted.default_secret() {
+        rbw::audit::note_field(&src.label());
+    }
     let decrypted = if redact_enabled() {
         decrypted.redacted()
     } else {

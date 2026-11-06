@@ -36,8 +36,10 @@ def load_coordinator(issue_calls: list[tuple[object, ...]]) -> types.ModuleType:
     package.__path__ = [str(ROOT)]
     const = types.ModuleType("rbw_coordinator_test.const")
     for name, value in {
+        "DEFAULT_ACCOUNT": "default",
         "DOMAIN": "rbw",
         "ISSUE_CLIENT_CERT": "client_certificate",
+        "ISSUE_DEFAULT_ACCOUNT_LOCKED": "default_account_locked",
         "ISSUE_STATUS_PERMISSION": "status_permission_required",
         "ISSUE_STATUS_UNAVAILABLE": "status_unavailable",
     }.items():
@@ -198,6 +200,46 @@ class RbwStatusCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.account_locked("personal"))
         self.assertEqual(result.status.agent_version, "2.40.0")
         self.assertTrue(all(call[0] == "delete" for call in issue_calls))
+
+    async def test_default_account_locked_creates_and_clears_fixable_repair_issue(self) -> None:
+        issue_calls: list[tuple[object, ...]] = []
+        module = load_coordinator(issue_calls)
+        client = FakeClient(
+            api.RbwApiStatus(
+                1,
+                "2.40.0",
+                (
+                    api.RbwAccountStatus("default", "locked"),
+                    api.RbwAccountStatus("ai", "locked"),
+                ),
+            )
+        )
+        coordinator = module.RbwStatusCoordinator(
+            SimpleNamespace(),
+            SimpleNamespace(entry_id="entry"),
+            client,
+        )
+
+        await coordinator._async_update_data()
+
+        created = [call for call in issue_calls if call[0] == "create"]
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0][3], "default_account_locked_entry")
+        self.assertTrue(created[0][4]["is_fixable"])
+        self.assertEqual(
+            created[0][4]["data"],
+            {"entry_id": "entry", "account": "default"},
+        )
+
+        issue_calls.clear()
+        client.result = api.RbwApiStatus(
+            1, "2.40.0", (api.RbwAccountStatus("default", "unlocked"),)
+        )
+        await coordinator._async_update_data()
+        self.assertIn(
+            ("delete", SimpleNamespace(), "rbw", "default_account_locked_entry", {}),
+            issue_calls,
+        )
 
 
 if __name__ == "__main__":
