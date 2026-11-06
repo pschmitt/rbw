@@ -160,25 +160,60 @@ class RbwAuditEventEntity(CoordinatorEntity[RbwStatusCoordinator], EventEntity):
 
 def classify_audit_event(event: RbwAuditEvent) -> tuple[str, dict[str, Any]]:
     """Map one sanitized audit log record to an EventEntity type and attributes."""
-    if event.outcome != "allowed" or event.operation in ("denied", "reprompt_denied"):
+    if event.outcome not in ("allowed", "success") or event.operation in (
+        "denied",
+        "reprompt_denied",
+    ):
         event_type = EVENT_ACCESS_DENIED
     elif event.operation in ("code", "browser.totp"):
         event_type = EVENT_TOTP_READ
-    elif event.operation in ("get", "api.field_read", "browser.credential"):
-        event_type = EVENT_TOTP_READ if event.field == "totp" else EVENT_CREDENTIAL_READ
-    elif event.operation in ("passkey assert", "passkey inject", "browser.passkey_get"):
+    elif event.operation in (
+        "get",
+        "show",
+        "raw",
+        "inject",
+        "run",
+        "api.field_read",
+        "browser.credential",
+    ):
+        event_type = (
+            EVENT_TOTP_READ
+            if event.field in ("totp", "totp_code")
+            else EVENT_CREDENTIAL_READ
+        )
+    elif event.operation in (
+        "passkey",
+        "passkey assert",
+        "passkey inject",
+        "browser.passkey_get",
+    ):
         event_type = EVENT_PASSKEY_USED
     elif event.operation == "browser.passkey_create":
         event_type = EVENT_PASSKEY_CREATED
-    elif event.operation in ("secret_to_file", "browser.copy"):
+    elif event.operation in ("secret_to_file", "copy", "browser.copy"):
         event_type = EVENT_SECRET_COPIED
     elif event.operation == "ssh_agent.sign":
         event_type = EVENT_SSH_SIGNED
-    elif event.operation == "attachment_download":
+    elif event.operation in (
+        "attachment_download",
+        "attachment download",
+        "attachment get",
+        "browser.attachment_download",
+    ):
         event_type = EVENT_ATTACHMENT_READ
-    elif event.operation in ("unlock", "api.unlock"):
+    elif event.operation in ("unlock", "login", "api.unlock", "browser.unlock"):
         event_type = EVENT_VAULT_UNLOCKED
-    elif event.operation in ("lock", "agent.lock"):
+    elif event.operation in (
+        "lock",
+        "purge",
+        "agent.lock",
+        "browser.lock",
+        "socket.lock",
+        "agent.timeout_lock",
+        "agent.server_logout",
+        "agent.key_rotation_lock",
+        "agent.stop",
+    ):
         event_type = EVENT_VAULT_LOCKED
     else:
         event_type = EVENT_CREDENTIAL_READ

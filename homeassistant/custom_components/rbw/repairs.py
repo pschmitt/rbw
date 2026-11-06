@@ -41,7 +41,7 @@ class RbwRepairFlow(RepairsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Offer a request retry, default vault unlock, or certificate reconfiguration."""
         if self.issue_id.startswith(f"{ISSUE_DEFAULT_ACCOUNT_LOCKED}_"):
-            return await self.async_step_unlock(user_input)
+            return await self.async_step_unlock()
         if self.issue_id.startswith(f"{ISSUE_CLIENT_CERT}_"):
             return self.async_show_menu(step_id="init", menu_options=["reconfigure"])
         if self.issue_id.startswith(f"{ISSUE_REAUTHENTICATION_REQUIRED}_"):

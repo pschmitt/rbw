@@ -255,8 +255,9 @@ class RepairRetryTests(unittest.IsolatedAsyncioTestCase):
         flow.data = {"entry_id": "entry", "account": "default"}
         flow.hass = hass
 
-        form = await flow.async_step_init()
+        form = await flow.async_step_init({"handler": "rbw", "issue_id": flow.issue_id})
         self.assertEqual(form["step_id"], "unlock")
+        self.assertEqual(form["errors"], {})
 
         result = await flow.async_step_unlock({"password": master_pw})
         self.assertEqual(result, {"type": "create_entry", "title": "", "data": {}})
