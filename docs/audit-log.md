@@ -68,6 +68,7 @@ while an account is locked (`last_lock` in `rbw status --json`).
 The `agent.stop` reasons are fixed labels:
 
 - `stop_agent`: `rbw stop-agent` or `rbw agent stop`.
+- `restart`: `rbw agent restart`.
 - `outdated`: a newer client (`rbw`, `rbw-browser`) replaced an older agent.
 - `unresponsive`: a client could not get the agent's version and replaced it.
 - `config_change`: the configuration or the primary account changed.

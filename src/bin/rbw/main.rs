@@ -2532,6 +2532,21 @@ enum AgentCmd {
         )]
         kill: bool,
     },
+    #[command(
+        about = "Restart the background agent, which locks every account",
+        long_about = "Stop the background agent, which locks every account, \
+            and start a new one. With --unlock, unlock right away, like \
+            `rbw agent stop; rbw unlock`."
+    )]
+    Restart {
+        #[arg(
+            long,
+            help = "Forcefully kill the agent if it is unresponsive"
+        )]
+        kill: bool,
+        #[arg(long, help = "Unlock the vault again after the restart")]
+        unlock: bool,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -2651,6 +2666,7 @@ impl AgentCmd {
     fn subcommand_name(&self) -> &'static str {
         match self {
             Self::Stop { .. } => "stop",
+            Self::Restart { .. } => "restart",
         }
     }
 }
@@ -4482,6 +4498,9 @@ fn main() {
                     commands::stop_agent()
                 }
             }
+            AgentCmd::Restart { kill, unlock } => {
+                commands::agent_restart(kill, unlock)
+            }
         },
         Opt::Api { api } => match api {
             ApiCmd::Enable { listen, hostname } => {
@@ -6026,6 +6045,27 @@ mod test {
             panic!("expected rbw stop-agent --kill");
         };
         assert!(kill);
+    }
+
+    #[test]
+    fn test_agent_restart_options() {
+        for (arguments, want_kill, want_unlock) in [
+            (&["rbw", "agent", "restart"][..], false, false),
+            (&["rbw", "agent", "restart", "--unlock"][..], false, true),
+            (
+                &["rbw", "agent", "restart", "--kill", "--unlock"][..],
+                true,
+                true,
+            ),
+        ] {
+            let Opt::Agent {
+                agent: AgentCmd::Restart { kill, unlock },
+            } = parse(arguments).command
+            else {
+                panic!("expected rbw agent restart");
+            };
+            assert_eq!((kill, unlock), (want_kill, want_unlock));
+        }
     }
 
     #[test]

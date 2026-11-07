@@ -119,6 +119,7 @@ fn quit_reason(reason: Option<&str>) -> &'static str {
     match reason {
         None => "unspecified",
         Some("stop_agent") => "stop_agent",
+        Some("restart") => "restart",
         Some("outdated") => "outdated",
         Some("unresponsive") => "unresponsive",
         Some("config_change") => "config_change",
@@ -784,6 +785,7 @@ mod audit_tests {
     fn quit_reasons_are_fixed_labels() {
         assert_eq!(super::quit_reason(None), "unspecified");
         assert_eq!(super::quit_reason(Some("outdated")), "outdated");
+        assert_eq!(super::quit_reason(Some("restart")), "restart");
         assert_eq!(super::quit_reason(Some("stop_agent")), "stop_agent");
         assert_eq!(
             super::quit_reason(Some("anything else, verbatim")),

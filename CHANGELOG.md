@@ -10,6 +10,8 @@
 * `GET /v1/items` lists the items a client has grants for, with names and granted
   fields, and never a value or the rest of the vault. The Home Assistant integration
   shows names from it and offers `async_list_items` to other integrations.
+* `rbw agent restart` starts a new agent, which locks every account. With `--unlock`
+  it unlocks right away, like `rbw agent stop; rbw unlock`.
 
 ### Changed
 

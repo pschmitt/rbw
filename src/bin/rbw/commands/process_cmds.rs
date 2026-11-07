@@ -63,6 +63,22 @@ pub fn restart_agent() -> anyhow::Result<()> {
     check_agent_version()
 }
 
+// Stops the agent, which locks every account, and starts a new one. The
+// configuration is checked first, so a broken one leaves the agent running.
+pub fn agent_restart(kill: bool, then_unlock: bool) -> anyhow::Result<()> {
+    check_config()?;
+    if kill {
+        kill_agent()?;
+    } else {
+        stop_agent_for("restart")?;
+    }
+    if then_unlock {
+        unlock(None, None)
+    } else {
+        ensure_agent()
+    }
+}
+
 pub fn kill_agent() -> anyhow::Result<()> {
     crate::actions::kill()?;
 

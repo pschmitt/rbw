@@ -12,7 +12,9 @@ necessary, so running `rbw login` when you are already logged in will do
 nothing, and similarly for `rbw unlock`. If necessary, you can explicitly log
 out by running `rbw purge`, and you can explicitly lock the database by running
 `rbw lock` or `rbw agent stop` (`rbw stop-agent` remains as a compatibility
-alias). If the agent is unresponsive, use `rbw agent stop --kill`.
+alias). If the agent is unresponsive, use `rbw agent stop --kill`. To start a new
+agent, use `rbw agent restart`. This locks every account too, and
+`rbw agent restart --unlock` unlocks right away.
 
 `rbw status` shows the rbw version, whether the agent is running, and one
 line per configured account: lock state, email, item count and last sync
