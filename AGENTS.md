@@ -104,7 +104,8 @@ version, because AMO signs each version only once.
 This repo is consumed by `nixos-config` (flake input `rbw`, following
 `main`). After a release's workflow has finished (the pin commit has landed on
 `main`): bump the lock (`nix flake lock --update-input rbw` in
-`nixos-config.git`), then deploy to the hosts that run rbw (`just deploy <host>`; the
+`nixos-config.git`; run it locally, there is no need for an `rworker`, since
+a lock update puts no real load on the machine), then deploy to the hosts that run rbw (`just deploy <host>`; the
 `brkn-infra` skill lists them and their roles). `rbw`/`rbw-agent` on
 a deployed host's `$PATH` resolve to the last-deployed Nix store path, not a local
 `target/debug`; the deploy's `home-manager-pschmitt.service` restart picks
