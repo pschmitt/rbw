@@ -11,7 +11,7 @@ import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote, urlsplit
 
 import aiohttp
@@ -241,6 +241,50 @@ class RbwApiClient:
             raise RbwApiError(
                 "connection_error", "Could not connect to the rbw API", retryable=True
             ) from None
+
+    async def async_list_items(self, *, consumer: str | None = None) -> list[dict[str, Any]]:
+        """Return the items this client has grants for, without any field values."""
+        if self._ssl_context is None:
+            raise RbwApiError(
+                "client_certificate",
+                "The mTLS client certificate configuration needs attention",
+                retryable=False,
+                authentication_error=True,
+            )
+        await self._async_wait_for_retry_after()
+        kwargs: dict[str, object] = {"ssl": self._ssl_context}
+        if consumer:
+            kwargs["headers"] = {"X-Rbw-Consumer": consumer}
+        invalid = RbwApiError(
+            "invalid_response", "The rbw API returned an invalid response", retryable=True
+        )
+        try:
+            async with asyncio.timeout(5):
+                async with self._session.get(f"{self._base_url}/v1/items", **kwargs) as response:
+                    if response.status >= 400:
+                        raise RbwApiError(
+                            f"http_{response.status}",
+                            "The rbw API request failed",
+                            retryable=response.status in (423, 503),
+                            authentication_error=response.status == 401,
+                            http_status=response.status,
+                        )
+                    try:
+                        payload = await response.json(content_type="application/json")
+                    except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                        raise invalid from None
+        except (TimeoutError, aiohttp.ClientError):
+            raise RbwApiError("unavailable", "The rbw API is unavailable", retryable=True) from None
+        items = payload.get("items") if isinstance(payload, dict) else None
+        if not isinstance(items, list) or not all(
+            isinstance(item, dict)
+            and isinstance(item.get("id"), str)
+            and isinstance(item.get("name"), str | None)
+            and isinstance(item.get("fields"), list)
+            for item in items
+        ):
+            raise invalid
+        return [{"id": i["id"], "name": i["name"], "fields": i["fields"]} for i in items]
 
     async def async_get_status(self) -> RbwApiStatus:
         """Return safe API and vault status for a client with status permission."""

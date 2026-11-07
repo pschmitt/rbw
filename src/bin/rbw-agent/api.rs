@@ -114,6 +114,10 @@ type ReaderFuture =
 type StatusFuture = BoxFuture<'static, Result<AccountStatus, ApiError>>;
 type EventsFuture = BoxFuture<'static, Vec<rbw::audit::Event>>;
 type UnlockFuture = BoxFuture<'static, Result<UnlockResponse, ApiError>>;
+type NamesFuture = BoxFuture<
+    'static,
+    Result<std::collections::BTreeMap<String, String>, ApiError>,
+>;
 
 #[derive(Clone)]
 struct ApiState {
@@ -135,6 +139,9 @@ struct ApiState {
     >,
     unlocker:
         std::sync::Arc<dyn Fn(String, String) -> UnlockFuture + Send + Sync>,
+    names_reader: std::sync::Arc<
+        dyn Fn(Vec<String>, String) -> NamesFuture + Send + Sync,
+    >,
 }
 
 impl ApiState {
@@ -152,6 +159,22 @@ impl ApiState {
                     Ok((config.api.enabled, store))
                 })
             });
+        let names_agent = agent.clone();
+        let names_reader: std::sync::Arc<
+            dyn Fn(Vec<String>, String) -> NamesFuture + Send + Sync,
+        > = std::sync::Arc::new(move |item_ids, account: String| {
+            let agent = names_agent.clone();
+            Box::pin(async move {
+                let environment = rbw::protocol::Environment::default();
+                crate::actions::read_remote_item_names(
+                    agent,
+                    item_ids,
+                    &account,
+                    &environment,
+                )
+                .await
+            })
+        });
         let reader_agent = agent.clone();
         let reader: std::sync::Arc<
             dyn Fn(rbw::remote_api::FieldReadRequest, String) -> ReaderFuture
@@ -229,6 +252,7 @@ impl ApiState {
             status_reader,
             events_reader,
             unlocker,
+            names_reader,
         }
     }
 }
@@ -472,6 +496,7 @@ fn tls_config_at(
 fn router(state: ApiState) -> Router {
     Router::new()
         .route("/v1/items/{item_id}/fields/{*field}", get(read_field))
+        .route("/v1/items", get(list_items))
         .route("/v1/status", get(read_status))
         .route("/v1/unlock", axum::routing::post(unlock_account))
         .with_state(state)
@@ -512,6 +537,23 @@ async fn read_field(
     meta.client = consumer;
     let outcome = api_audit_outcome(&result);
     record_api_event(actor, "api.field_read", meta, outcome).await;
+    api_response(result)
+}
+
+async fn list_items(
+    State(state): State<ApiState>,
+    Extension(certificates): Extension<PeerCertificates>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let cert_der = certificates.leaf().map(std::convert::AsRef::as_ref);
+    let actor = audit_actor(&state, cert_der).await;
+    let result = list_items_inner(&state, cert_der).await;
+    let meta = ApiAuditMeta {
+        client: extract_consumer(&headers),
+        ..ApiAuditMeta::default()
+    };
+    let outcome = api_audit_outcome(&result);
+    record_api_event(actor, "api.items_listed", meta, outcome).await;
     api_response(result)
 }
 
@@ -680,6 +722,50 @@ fn api_response<T: serde::Serialize>(
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+/// Only the items this client has field grants for: never the rest of the vault.
+async fn list_items_inner(
+    state: &ApiState,
+    certificate_der: Option<&[u8]>,
+) -> Result<rbw::remote_api::ItemListResponse, ApiError> {
+    let (enabled, store) = (state.policy)().await?;
+    if !enabled {
+        return Err(ApiError::new(ErrorCode::Unauthorized));
+    }
+    let certificate_der = certificate_der
+        .ok_or_else(|| ApiError::new(ErrorCode::Unauthorized))?;
+    let fingerprint =
+        rbw::remote_api::certificate_fingerprint(certificate_der);
+    let client = store
+        .clients
+        .values()
+        .find(|client| client.fingerprint == fingerprint)
+        .ok_or_else(|| ApiError::new(ErrorCode::Unauthorized))?;
+    let mut names = match (&client.account, client.items.is_empty()) {
+        (Some(account), false) => {
+            (state.names_reader)(
+                client.items.keys().cloned().collect(),
+                account.clone(),
+            )
+            .await?
+        }
+        _ => std::collections::BTreeMap::new(),
+    };
+    Ok(rbw::remote_api::ItemListResponse {
+        items: client
+            .items
+            .iter()
+            .map(|(id, fields)| rbw::remote_api::ItemSummary {
+                id: id.clone(),
+                name: names.remove(id),
+                fields: fields
+                    .iter()
+                    .map(rbw::remote_api::FieldRef::path_token)
+                    .collect(),
+            })
+            .collect(),
+    })
 }
 
 async fn read_status_inner(
@@ -1076,6 +1162,14 @@ mod tests {
                 status_reader,
                 events_reader,
                 unlocker,
+                names_reader: Arc::new(|item_ids: Vec<String>, _account| {
+                    Box::pin(async move {
+                        Ok(item_ids
+                            .into_iter()
+                            .map(|id| (id, "Synthetic Item".to_owned()))
+                            .collect())
+                    })
+                }),
             },
             state_value,
             status_calls,
@@ -1194,6 +1288,34 @@ mod tests {
         let payload: FieldReadResponse =
             serde_json::from_str(&response.2).unwrap();
         assert_eq!(payload.value.as_deref(), Some("synthetic-secret-value"));
+
+        // The listing names only granted items and holds no field values.
+        let reads_before = calls.load(std::sync::atomic::Ordering::SeqCst);
+        let response = https_request(
+            url.clone(),
+            fixture.ca_pem.clone(),
+            Some(fixture.client_identity.clone()),
+            "/v1/items",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1.as_deref(), Some("no-store"));
+        assert!(!response.2.contains("synthetic-secret-value"));
+        let listing: rbw::remote_api::ItemListResponse =
+            serde_json::from_str(&response.2).unwrap();
+        assert_eq!(
+            listing.items,
+            [rbw::remote_api::ItemSummary {
+                id: "item-1".to_owned(),
+                name: Some("Synthetic Item".to_owned()),
+                fields: vec!["password".to_owned()],
+            }]
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            reads_before
+        );
 
         // Status permission is distinct from item fields and reveals only
         // account names explicitly granted to this client.

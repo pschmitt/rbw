@@ -209,6 +209,41 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.requests, [])
 
 
+class ListItemsTests(unittest.IsolatedAsyncioTestCase):
+    def hass(self, integration, options, items):
+        session = FakeSession(FakeResponse(200, {"items": items}))
+        client = api.RbwApiClient(session, "https://vault.example", ssl.create_default_context())
+        runtime = integration.RbwRuntimeData(client, SimpleNamespace(), None)
+        entry = SimpleNamespace(entry_id="entry", options=options)
+        return SimpleNamespace(
+            data={"rbw": {"entry": runtime}},
+            config_entries=SimpleNamespace(async_get_entry=lambda entry_id: entry),
+        ), session
+
+    async def test_a_caller_sees_only_what_it_may_read(self) -> None:
+        integration = load_integration()
+        allowed = {"id": "a", "name": "Mine", "fields": ["password"]}
+        hass, session = self.hass(
+            integration,
+            {"access": {"hrworks": ["a"], "msteams": ["b"]}},
+            [allowed, {"id": "b", "name": "Theirs", "fields": ["password"]}],
+        )
+        with patch.object(
+            integration, "_detect_caller_consumer", return_value="custom_components.hrworks"
+        ):
+            self.assertEqual(await integration.async_list_items(hass, "entry"), [allowed])
+        self.assertEqual(
+            session.requests[0][1]["headers"]["X-Rbw-Consumer"], "custom_components.hrworks"
+        )
+
+    async def test_an_unidentified_caller_gets_nothing_and_asks_nothing(self) -> None:
+        integration = load_integration()
+        hass, session = self.hass(integration, {"access": {"hrworks": ["a"]}}, [])
+        with patch.object(integration, "_detect_caller_consumer", return_value=None):
+            self.assertEqual(await integration.async_list_items(hass, "entry"), [])
+        self.assertEqual(session.requests, [])
+
+
 class AccessHelperTests(unittest.TestCase):
     def test_configured_items_come_from_entries_using_this_client(self) -> None:
         access = load_integration().configured_items

@@ -116,6 +116,14 @@ configured account is enumerated. A client with no remaining status grants
 receives HTTP 403.
 
 ```text
+GET /v1/items
+```
+
+Lists the items this client has field grants for, and nothing else of the vault:
+`items`, each with `id`, `name` and the granted `fields` as tokens. No field value is
+read. `name` is `null` while the vault is locked or if the item is gone.
+
+```text
 GET /v1/items/{item-id}/fields/{field-token}
 ```
 

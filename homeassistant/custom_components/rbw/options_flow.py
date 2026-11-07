@@ -15,6 +15,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .access import configured_items, request_issue_id, with_items
+from .api import RbwApiError
 from .const import CONF_ACCESS, DOMAIN
 
 CONF_INTEGRATION = "integration"
@@ -29,6 +30,15 @@ class RbwOptionsFlow(OptionsFlow):
 
     def _access(self) -> dict[str, list[str]]:
         return self.config_entry.options.get(CONF_ACCESS, {})
+
+    async def _granted_items(self) -> dict[str, str]:
+        """Item IDs and readable labels of what the rbw API grants this client."""
+        runtime = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+        try:
+            items = await runtime.client.async_list_items()
+        except (AttributeError, RbwApiError):
+            return {}  # IDs can still be entered: the form keeps working.
+        return {item["id"]: item["name"] or item["id"] for item in items}
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         if user_input is not None:
@@ -71,8 +81,9 @@ class RbwOptionsFlow(OptionsFlow):
         configured = configured_items(
             self.hass.config_entries.async_entries(), self.config_entry.entry_id
         )
-        known = {item for items in self._access().values() for item in items}
-        known.update(item for items in configured.values() for item in items)
+        known = {item: item for items in self._access().values() for item in items}
+        known.update({item: item for items in configured.values() for item in items})
+        known.update(await self._granted_items())
         current = self._access().get(self._domain, [])
         return self.async_show_form(
             step_id="items",
@@ -80,7 +91,10 @@ class RbwOptionsFlow(OptionsFlow):
                 {
                     vol.Optional(CONF_ITEMS, default=current): SelectSelector(
                         SelectSelectorConfig(
-                            options=sorted(known),
+                            options=[
+                                {"value": item, "label": label}
+                                for item, label in sorted(known.items(), key=lambda i: i[1].lower())
+                            ],
                             multiple=True,
                             custom_value=True,
                             mode=SelectSelectorMode.DROPDOWN,

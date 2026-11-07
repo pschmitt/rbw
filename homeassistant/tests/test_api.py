@@ -406,3 +406,30 @@ class RbwApiClientTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ListItemsTests(unittest.IsolatedAsyncioTestCase):
+    def client(self, *responses: FakeResponse) -> api.RbwApiClient:
+        return api.RbwApiClient(
+            FakeSession(*responses), "https://vault.example", ssl.create_default_context()
+        )
+
+    async def test_lists_names_and_fields(self) -> None:
+        items = [{"id": "a", "name": "Item", "fields": ["password"]}]
+        client = self.client(FakeResponse(200, {"items": items}))
+        self.assertEqual(await client.async_list_items(), items)
+
+    async def test_a_locked_vault_leaves_the_name_out(self) -> None:
+        items = [{"id": "a", "name": None, "fields": []}]
+        client = self.client(FakeResponse(200, {"items": items}))
+        self.assertEqual(await client.async_list_items(), items)
+
+    async def test_invalid_answers_and_denials_raise(self) -> None:
+        for response, code in (
+            (FakeResponse(200, {"items": [{"id": 1}]}), "invalid_response"),
+            (FakeResponse(200, []), "invalid_response"),
+            (FakeResponse(403, {"code": "forbidden"}), "http_403"),
+        ):
+            with self.assertRaises(api.RbwApiError) as err:
+                await self.client(response).async_list_items()
+            self.assertEqual(err.exception.code, code)

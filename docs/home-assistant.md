@@ -93,6 +93,10 @@ from custom_components.rbw import async_get_field
 result = await async_get_field(hass, entry_id, item_id, field_id)
 ```
 
+To offer vault items in a form, `await async_list_items(hass, entry_id)` returns what
+the calling integration may read: `id`, `name` (`None` while the vault is locked) and
+the granted `fields`, never a value. It is empty until access is allowed.
+
 `entry_id` is the rbw config-entry ID. `field_id` uses the API token syntax,
 such as `password`, `totp`, `uri/0`, `custom/Recovery code`, or
 `identity/first_name`. Path separators are encoded by the client. The result
@@ -123,13 +127,15 @@ grants remain the security boundary.
 - **When an integration asks:** a denied read raises an error and creates a repair
   naming the integration and item. Allow it there, then let the integration retry.
 - **In the options:** open the rbw integration's options, pick an integration, and
-  edit its items. Removing them all revokes its access.
+  choose its items, listed by name from what the rbw API grants this client (the API
+  never lists the rest of the vault). Removing them all revokes its access.
 - **Upgrading:** items that integrations were already set up to read
   (`rbw_entry_id` with `rbw_item_id` in their entries) are allowed once, so they keep
   working. Anything else needs allowing.
 
 The check identifies the caller from the call stack; the `consumer` argument cannot
-override it.
+override it, and a caller that cannot be identified is denied. Per-integration client
+certificates would not add to this: every key would sit in the same process.
 
 ## Status device, audit event, and unlock repair
 

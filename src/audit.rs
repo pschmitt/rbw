@@ -489,6 +489,7 @@ fn last_lock_in(directory: &std::path::Path) -> Option<LastLock> {
 
 const NOTABLE_OPERATIONS: &[&str] = &[
     "api.field_read",
+    "api.items_listed",
     "api.unlock",
     "api.authorization",
     "get",

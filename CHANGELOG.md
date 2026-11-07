@@ -7,6 +7,9 @@
 * Home Assistant integration: deny by default which integrations may read which
   vault items. Choose in the integration's options, or allow a denied request from
   its repair. Items that integrations are already set up to read stay allowed.
+* `GET /v1/items` lists the items a client has grants for, with names and granted
+  fields, and never a value or the rest of the vault. The Home Assistant integration
+  shows names from it and offers `async_list_items` to other integrations.
 
 ## [2.44.0] - 2026-11-07
 

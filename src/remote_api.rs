@@ -154,6 +154,28 @@ pub struct FieldReadResponse {
     pub sensitive: bool,
 }
 
+/// One item a client has field grants for. Never contains a field value.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ItemSummary {
+    pub id: String,
+    /// The item's name; absent while the vault is locked or if it is gone.
+    pub name: Option<String>,
+    /// The granted fields, as path tokens.
+    pub fields: Vec<String>,
+}
+
+/// The items a client has field grants for, and only those.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ItemListResponse {
+    pub items: Vec<ItemSummary>,
+}
+
 /// Request body for unlocking an explicitly authorized vault account.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

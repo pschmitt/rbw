@@ -7,6 +7,7 @@ import inspect
 import logging
 import ssl
 from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -42,7 +43,7 @@ PLATFORMS = (
     getattr(Platform, "EVENT", "event"),
     Platform.SENSOR,
 )
-__all__ = ["async_get_field"]
+__all__ = ["async_get_field", "async_list_items"]
 
 
 @dataclass(slots=True)
@@ -185,6 +186,28 @@ async def async_get_field(
     )
     ir.async_delete_issue(hass, DOMAIN, _issue_id(entry_id, ISSUE_CLIENT_CERT))
     return result
+
+
+async def async_list_items(hass: HomeAssistant, entry_id: str) -> list[dict[str, Any]]:
+    """The vault items the calling integration may read, for its forms: never field values.
+
+    Each has ``id``, ``name`` (``None`` while the vault is locked) and the granted
+    ``fields``. It is empty for an integration without access, which then uses
+    ``async_get_field`` with an item ID to ask for it through a repair.
+    """
+    client = _get_client(hass, entry_id)
+    if client is None:
+        raise HomeAssistantError("The selected rbw config entry is not loaded")
+    entry = hass.config_entries.async_get_entry(entry_id)
+    consumer = _detect_caller_consumer()
+    domain = consumer_domain(consumer)
+    if entry is None or not domain:
+        return []
+    try:
+        items = await client.async_list_items(consumer=consumer)
+    except RbwApiError as err:
+        raise HomeAssistantError(f"rbw request failed ({err.code})") from None
+    return [item for item in items if is_allowed(entry.options, domain, item["id"])]
 
 
 def _check_access(hass: HomeAssistant, entry_id: str, consumer: str | None, item_id: str) -> None:

@@ -1835,6 +1835,58 @@ pub async fn unlock_remote_account(
 /// Read one pre-authorized item field for the remote API. This intentionally
 /// performs the item lookup and decryption inside the agent; callers never
 /// provide cipherstrings or encryption keys.
+/// The names of these items, without reading any of their fields. An item whose
+/// name is unavailable, because the vault is locked or the item is gone, is left
+/// out.
+pub async fn read_remote_item_names(
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    item_ids: Vec<String>,
+    account_name: &str,
+    environment: &rbw::protocol::Environment,
+) -> Result<
+    std::collections::BTreeMap<String, String>,
+    rbw::remote_api::ApiError,
+> {
+    use rbw::remote_api::{ApiError, ErrorCode};
+
+    let account = resolve_account(Some(account_name))
+        .await
+        .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
+    let db = load_db(&account)
+        .await
+        .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
+    let mut names = std::collections::BTreeMap::new();
+    for item_id in item_ids {
+        let Some(entry) = db
+            .entries
+            .iter()
+            .find(|entry| entry.id == item_id && !entry.deleted)
+        else {
+            continue;
+        };
+        if state
+            .lock()
+            .await
+            .key(&account.name, entry.org_id.as_deref())
+            .is_none()
+        {
+            continue;
+        }
+        if let Ok(Some(name)) = decrypt_remote_value(
+            state.clone(),
+            environment,
+            Some(entry.name.as_str()),
+            entry,
+            &account,
+        )
+        .await
+        {
+            names.insert(item_id, name);
+        }
+    }
+    Ok(names)
+}
+
 pub async fn read_remote_field(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     request: rbw::remote_api::FieldReadRequest,

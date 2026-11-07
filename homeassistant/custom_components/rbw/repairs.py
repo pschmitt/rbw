@@ -61,7 +61,7 @@ class RbwRepairFlow(RepairsFlow):
                 data_schema=vol.Schema({}),
                 description_placeholders={
                     "integration": str(request.get("domain")),
-                    "item": str(request.get("item_id")),
+                    "item": await self._item_label(request),
                 },
             )
         entry = self.hass.config_entries.async_get_entry(str(request.get("entry_id")))
@@ -71,6 +71,17 @@ class RbwRepairFlow(RepairsFlow):
             entry, options=with_item(entry.options, request["domain"], request["item_id"])
         )
         return self.async_create_entry(title="", data={})
+
+    async def _item_label(self, request: dict[str, Any]) -> str:
+        """The item's name when the rbw API grants it to this client, else its ID."""
+        item_id = str(request.get("item_id"))
+        runtime = self.hass.data.get(DOMAIN, {}).get(request.get("entry_id"))
+        try:
+            items = await runtime.client.async_list_items()
+        except (AttributeError, RbwApiError):
+            return item_id
+        name = next((i["name"] for i in items if i["id"] == item_id), None)
+        return f"{name} ({item_id})" if name else item_id
 
     async def async_step_unlock(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Prompt for the master password to unlock the default account."""
