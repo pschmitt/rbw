@@ -12,24 +12,26 @@ pub fn set_account(account: Option<String>) {
     *ACCOUNT.write().unwrap() = account;
 }
 
-#[allow(clippy::option_option)]
 thread_local! {
     // Set only on a background worker thread (see `bind_thread_account`):
     // that thread then targets its own account without touching the process
     // wide `ACCOUNT`, which the UI thread keeps re-pointing.
-    static THREAD_ACCOUNT: std::cell::RefCell<Option<Option<String>>> =
+    static THREAD_BOUND: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+    static THREAD_ACCOUNT: std::cell::RefCell<Option<String>> =
         const { std::cell::RefCell::new(None) };
 }
 
 // Make the calling thread (and only it) use `account` from now on, and make
 // its later `set_active_account` calls thread-local too.
 pub fn bind_thread_account(account: Option<String>) {
-    THREAD_ACCOUNT.with(|t| *t.borrow_mut() = Some(account));
+    THREAD_BOUND.with(|b| b.set(true));
+    THREAD_ACCOUNT.with(|t| *t.borrow_mut() = account);
 }
 
 pub fn current_account() -> Option<String> {
-    if let Some(account) = THREAD_ACCOUNT.with(|t| t.borrow().clone()) {
-        return account;
+    if THREAD_BOUND.with(std::cell::Cell::get) {
+        return THREAD_ACCOUNT.with(|t| t.borrow().clone());
     }
     ACCOUNT.read().unwrap().clone()
 }
@@ -38,7 +40,7 @@ pub fn current_account() -> Option<String> {
 // `account` (by name), or the primary account when `None`. Used by the
 // multi-account TUI to route each operation to the account that owns the entry.
 pub fn set_active_account(account: Option<String>) -> anyhow::Result<()> {
-    if THREAD_ACCOUNT.with(|t| t.borrow().is_some()) {
+    if THREAD_BOUND.with(std::cell::Cell::get) {
         bind_thread_account(account);
         return Ok(());
     }
