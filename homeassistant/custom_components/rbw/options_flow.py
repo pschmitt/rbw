@@ -13,23 +13,36 @@ from homeassistant.helpers.selector import (
     SelectSelectorConfig,
     SelectSelectorMode,
 )
+from homeassistant.loader import async_get_integrations
 
 from .access import configured_items, request_issue_id, with_items
 from .api import RbwApiError
 from .const import CONF_ACCESS, DOMAIN
 
-CONF_INTEGRATION = "integration"
-CONF_ITEMS = "items"
+CONF_ADD_INTEGRATION = "add_integration"
 
 
 class RbwOptionsFlow(OptionsFlow):
-    """Pick an integration, then the items it may read. No items means no access."""
+    """One form: a row of allowed items per integration. An empty row means no access."""
 
     def __init__(self) -> None:
-        self._domain = ""
+        self._rows: dict[str, list[str]] | None = None
 
     def _access(self) -> dict[str, list[str]]:
         return self.config_entry.options.get(CONF_ACCESS, {})
+
+    async def _names(self, domains: set[str]) -> dict[str, str]:
+        """Integration names, which also label the rows: the names are not translatable keys."""
+        found = await async_get_integrations(self.hass, domains)
+        names = {
+            domain: integration.name if not isinstance(integration, Exception) else domain
+            for domain, integration in found.items()
+        }
+        # Two integrations could share a name, and a row needs a unique label.
+        return {
+            domain: name if list(names.values()).count(name) == 1 else f"{name} ({domain})"
+            for domain, name in names.items()
+        }
 
     async def _granted_items(self) -> dict[str, str]:
         """Item IDs and readable labels of what the rbw API grants this client."""
@@ -41,66 +54,63 @@ class RbwOptionsFlow(OptionsFlow):
         return {item["id"]: item["name"] or item["id"] for item in items}
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        configured = configured_items(
+            self.hass.config_entries.async_entries(), self.config_entry.entry_id
+        )
+        if self._rows is None:
+            self._rows = {domain: [] for domain in configured} | {
+                domain: list(items) for domain, items in self._access().items()
+            }
+        installed = {entry.domain for entry in self.hass.config_entries.async_entries()} - {DOMAIN}
+        names = await self._names({*installed, *self._rows})
         if user_input is not None:
-            self._domain = user_input[CONF_INTEGRATION]
-            return await self.async_step_items()
-        entries = self.hass.config_entries.async_entries()
-        titles: dict[str, str] = {}
-        for entry in entries:
-            if entry.domain != DOMAIN:
-                titles.setdefault(entry.domain, entry.title)
-        options = [
-            {"value": domain, "label": f"{titles.get(domain, domain)} ({domain})"}
-            for domain in sorted({*titles, *self._access()})
+            self._rows = {domain: user_input.get(names[domain], []) for domain in self._rows}
+            if added := user_input.get(CONF_ADD_INTEGRATION):
+                self._rows.setdefault(added, [])
+            else:
+                return self._save()
+
+        known = {item: item for items in self._rows.values() for item in items}
+        known.update(await self._granted_items())
+        item_options = [
+            {"value": item, "label": label}
+            for item, label in sorted(known.items(), key=lambda pair: pair[1].lower())
         ]
-        allowed = ", ".join(f"{domain}: {len(items)}" for domain, items in self._access().items())
+        rows = {
+            vol.Optional(names[domain], description={"suggested_value": items}): SelectSelector(
+                SelectSelectorConfig(
+                    options=item_options,
+                    multiple=True,
+                    custom_value=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            )
+            for domain, items in sorted(self._rows.items(), key=lambda row: names[row[0]].lower())
+        }
+        addable = [
+            {"value": domain, "label": names[domain]}
+            for domain in sorted(installed - set(self._rows), key=lambda d: names[d].lower())
+        ]
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_INTEGRATION): SelectSelector(
-                        SelectSelectorConfig(options=options, mode=SelectSelectorMode.DROPDOWN)
-                    )
+                    **rows,
+                    vol.Optional(CONF_ADD_INTEGRATION): SelectSelector(
+                        SelectSelectorConfig(options=addable, mode=SelectSelectorMode.DROPDOWN)
+                    ),
                 }
             ),
-            description_placeholders={"allowed": allowed or "-"},
         )
 
-    async def async_step_items(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        if user_input is not None:
-            items = user_input.get(CONF_ITEMS, [])
+    def _save(self) -> FlowResult:
+        options = dict(self.config_entry.options)
+        for domain, items in (self._rows or {}).items():
             for item in items:
                 ir.async_delete_issue(
                     self.hass,
                     DOMAIN,
-                    request_issue_id(self.config_entry.entry_id, self._domain, item),
+                    request_issue_id(self.config_entry.entry_id, domain, item),
                 )
-            return self.async_create_entry(
-                title="", data=with_items(self.config_entry.options, self._domain, items)
-            )
-        configured = configured_items(
-            self.hass.config_entries.async_entries(), self.config_entry.entry_id
-        )
-        known = {item: item for items in self._access().values() for item in items}
-        known.update({item: item for items in configured.values() for item in items})
-        known.update(await self._granted_items())
-        current = self._access().get(self._domain, [])
-        return self.async_show_form(
-            step_id="items",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(CONF_ITEMS, default=current): SelectSelector(
-                        SelectSelectorConfig(
-                            options=[
-                                {"value": item, "label": label}
-                                for item, label in sorted(known.items(), key=lambda i: i[1].lower())
-                            ],
-                            multiple=True,
-                            custom_value=True,
-                            mode=SelectSelectorMode.DROPDOWN,
-                        )
-                    )
-                }
-            ),
-            description_placeholders={"integration": self._domain},
-        )
+            options = with_items(options, domain, items)
+        return self.async_create_entry(title="", data=options)

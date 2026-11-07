@@ -191,16 +191,12 @@
     "step": {
       "init": {
         "title": "Integration access",
-        "description": "Integrations can only read the vault items you allow here; everything else is denied. Allowed now: {allowed}.",
+        "description": "Integrations can only read the vault items you allow here; everything else is denied. Empty a row to revoke that integration's access.",
         "data": {
-          "integration": "Integration"
-        }
-      },
-      "items": {
-        "title": "Items for {integration}",
-        "description": "Vault item IDs that {integration} may read. Remove them all to revoke its access.",
-        "data": {
-          "items": "Vault item IDs"
+          "add_integration": "Add an integration"
+        },
+        "data_description": {
+          "add_integration": "Submit to add its row. The form stays open, and nothing is saved until you submit without choosing one."
         }
       }
     }
