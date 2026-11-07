@@ -11,10 +11,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import issue_registry as ir
 
+from .access import with_item
 from .api import RbwApiError
 from .const import (
     DEFAULT_ACCOUNT,
     DOMAIN,
+    ISSUE_ACCESS_REQUEST,
     ISSUE_API_UNAVAILABLE,
     ISSUE_CLIENT_CERT,
     ISSUE_DEFAULT_ACCOUNT_LOCKED,
@@ -40,6 +42,8 @@ class RbwRepairFlow(RepairsFlow):
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Offer a request retry, default vault unlock, or certificate reconfiguration."""
+        if self.issue_id.startswith(f"{ISSUE_ACCESS_REQUEST}_"):
+            return await self.async_step_allow()
         if self.issue_id.startswith(f"{ISSUE_DEFAULT_ACCOUNT_LOCKED}_"):
             return await self.async_step_unlock()
         if self.issue_id.startswith(f"{ISSUE_CLIENT_CERT}_"):
@@ -47,6 +51,26 @@ class RbwRepairFlow(RepairsFlow):
         if self.issue_id.startswith(f"{ISSUE_REAUTHENTICATION_REQUIRED}_"):
             return self.async_show_menu(step_id="init", menu_options=["manual_action"])
         return self.async_show_menu(step_id="init", menu_options=["retry", "reconfigure"])
+
+    async def async_step_allow(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Allow the integration that asked to read this item."""
+        request = self.data or {}
+        if user_input is None:
+            return self.async_show_form(
+                step_id="allow",
+                data_schema=vol.Schema({}),
+                description_placeholders={
+                    "integration": str(request.get("domain")),
+                    "item": str(request.get("item_id")),
+                },
+            )
+        entry = self.hass.config_entries.async_get_entry(str(request.get("entry_id")))
+        if entry is None:
+            return self.async_abort(reason="entry_missing")
+        self.hass.config_entries.async_update_entry(
+            entry, options=with_item(entry.options, request["domain"], request["item_id"])
+        )
+        return self.async_create_entry(title="", data={})
 
     async def async_step_unlock(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Prompt for the master password to unlock the default account."""

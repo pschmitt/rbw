@@ -45,8 +45,17 @@
       "description": "A requested field could not be fetched. Retry the same request after the API or vault is available.",
       "fix_flow": {
         "step": {
-          "init": {"title": "Retry rbw request", "menu_options": {"retry": "Retry request", "reconfigure": "Update connection"}},
-          "retry": {"title": "Retry rbw request", "description": "The requested value is discarded after checking that the request now succeeds."}
+          "init": {
+            "title": "Retry rbw request",
+            "menu_options": {
+              "retry": "Retry request",
+              "reconfigure": "Update connection"
+            }
+          },
+          "retry": {
+            "title": "Retry rbw request",
+            "description": "The requested value is discarded after checking that the request now succeeds."
+          }
         },
         "error": {
           "still_unavailable": "The API or vault is still unavailable. Try again later.",
@@ -65,7 +74,12 @@
       "description": "Home Assistant could not authenticate with the rbw API. Update the client certificate or CA file paths.",
       "fix_flow": {
         "step": {
-          "init": {"title": "Update rbw connection", "menu_options": {"reconfigure": "Update connection"}}
+          "init": {
+            "title": "Update rbw connection",
+            "menu_options": {
+              "reconfigure": "Update connection"
+            }
+          }
         },
         "abort": {
           "entry_not_found": "The rbw config entry no longer exists.",
@@ -125,12 +139,31 @@
           "unlock_not_permitted": "This rbw API client does not have permission for the default account."
         }
       }
+    },
+    "access_request": {
+      "title": "{integration} asks to read an rbw item",
+      "description": "The {integration} integration tried to read vault item {item} and was denied. Integrations can only read what you allow. Open this to allow it, or ignore it to keep denying it. Change this later in the rbw integration's options.",
+      "fix_flow": {
+        "step": {
+          "allow": {
+            "title": "Allow {integration}?",
+            "description": "Allow the {integration} integration to read vault item {item}? The rbw API's own field grants still apply."
+          }
+        },
+        "abort": {
+          "entry_missing": "The rbw integration entry no longer exists."
+        }
+      }
     }
   },
   "entity": {
     "binary_sensor": {
-      "api_connected": {"name": "API connected"},
-      "vault_locked": {"name": "Vault locked ({account})"}
+      "api_connected": {
+        "name": "API connected"
+      },
+      "vault_locked": {
+        "name": "Vault locked ({account})"
+      }
     },
     "event": {
       "audit": {
@@ -150,6 +183,24 @@
               "access_denied": "Access denied"
             }
           }
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Integration access",
+        "description": "Integrations can only read the vault items you allow here; everything else is denied. Allowed now: {allowed}.",
+        "data": {
+          "integration": "Integration"
+        }
+      },
+      "items": {
+        "title": "Items for {integration}",
+        "description": "Vault item IDs that {integration} may read. Remove them all to revoke its access.",
+        "data": {
+          "items": "Vault item IDs"
         }
       }
     }

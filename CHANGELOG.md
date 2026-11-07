@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+* Home Assistant integration: deny by default which integrations may read which
+  vault items. Choose in the integration's options, or allow a denied request from
+  its repair. Items that integrations are already set up to read stay allowed.
+
 ## [2.44.0] - 2026-11-07
 
 ### Added

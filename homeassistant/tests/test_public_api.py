@@ -33,6 +33,8 @@ def load_integration() -> types.ModuleType:
         "CONF_CLIENT_CERT": "client_cert",
         "CONF_CLIENT_KEY": "client_key",
         "DOMAIN": "rbw",
+        "CONF_ACCESS": "access",
+        "ISSUE_ACCESS_REQUEST": "access_request",
         "ISSUE_API_UNAVAILABLE": "api_unavailable",
         "ISSUE_CLIENT_CERT": "client_certificate",
         "ISSUE_REAUTHENTICATION_REQUIRED": "reauthentication_required",
@@ -52,7 +54,7 @@ def load_integration() -> types.ModuleType:
 
     exceptions.HomeAssistantError = HomeAssistantError
     issue_registry = types.ModuleType("homeassistant.helpers.issue_registry")
-    issue_registry.IssueSeverity = SimpleNamespace(ERROR="error")
+    issue_registry.IssueSeverity = SimpleNamespace(ERROR="error", WARNING="warning")
     issue_registry.async_delete_issue = lambda *args: None
     issue_registry.async_create_issue = lambda *args, **kwargs: None
     aiohttp_client = types.ModuleType("homeassistant.helpers.aiohttp_client")
@@ -143,3 +145,87 @@ class PublicApiSecurityTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AccessTests(unittest.IsolatedAsyncioTestCase):
+    def hass(self, integration, options):
+        session = FakeSession(
+            FakeResponse(200, {"field": "password", "value": "v", "sensitive": True})
+        )
+        client = api.RbwApiClient(session, "https://vault.example", ssl.create_default_context())
+        runtime = integration.RbwRuntimeData(client, SimpleNamespace(), None)
+        entry = SimpleNamespace(entry_id="entry", options=options)
+        hass = SimpleNamespace(
+            data={"rbw": {"entry": runtime}},
+            config_entries=SimpleNamespace(async_get_entry=lambda entry_id: entry),
+        )
+        return hass, session
+
+    async def test_an_allowed_integration_reads_only_its_items(self) -> None:
+        integration = load_integration()
+        hass, session = self.hass(integration, {"access": {"hrworks": ["item-id"]}})
+        result = await integration.async_get_field(
+            hass, "entry", "item-id", "password", consumer="custom_components.hrworks"
+        )
+        self.assertEqual(result["value"], "v")
+        for item, consumer in (
+            ("other-item", "custom_components.hrworks"),
+            ("item-id", "custom_components.msteams"),
+            ("item-id", None),
+        ):
+            with self.assertRaises(integration.HomeAssistantError):
+                await integration.async_get_field(
+                    hass, "entry", item, "password", consumer=consumer
+                )
+        self.assertEqual(len(session.requests), 1)
+
+    async def test_nothing_is_allowed_by_default_and_a_denial_asks_once(self) -> None:
+        integration = load_integration()
+        hass, session = self.hass(integration, {})
+        with patch.object(integration.ir, "async_create_issue") as issue:
+            with self.assertRaises(integration.HomeAssistantError):
+                await integration.async_get_field(
+                    hass, "entry", "item-id", "password", consumer="custom_components.hrworks"
+                )
+        self.assertEqual(session.requests, [])
+        self.assertEqual(issue.call_args.kwargs["translation_key"], "access_request")
+        self.assertEqual(
+            issue.call_args.kwargs["data"],
+            {"entry_id": "entry", "domain": "hrworks", "item_id": "item-id"},
+        )
+        # No field name or value in the request's details.
+        self.assertNotIn("field_id", issue.call_args.kwargs["data"])
+
+    async def test_a_detected_caller_outranks_the_name_it_claims(self) -> None:
+        integration = load_integration()
+        hass, session = self.hass(integration, {"access": {"hrworks": ["item-id"]}})
+        with patch.object(
+            integration, "_detect_caller_consumer", return_value="custom_components.msteams"
+        ):
+            with self.assertRaises(integration.HomeAssistantError):
+                await integration.async_get_field(
+                    hass, "entry", "item-id", "password", consumer="custom_components.hrworks"
+                )
+        self.assertEqual(session.requests, [])
+
+
+class AccessHelperTests(unittest.TestCase):
+    def test_configured_items_come_from_entries_using_this_client(self) -> None:
+        access = load_integration().configured_items
+        entry = lambda domain, data, options=None: SimpleNamespace(  # noqa: E731
+            domain=domain, data=data, options=options or {}
+        )
+        entries = [
+            entry("hrworks", {"rbw_entry_id": "e", "rbw_item_id": "a"}),
+            entry("msteams", {"rbw_entry_id": "old"}, {"rbw_entry_id": "e", "rbw_item_id": "b"}),
+            entry("other", {"rbw_entry_id": "different", "rbw_item_id": "c"}),
+            entry("empty", {"rbw_entry_id": "e", "rbw_item_id": ""}),
+            entry("rbw", {"rbw_entry_id": "e", "rbw_item_id": "d"}),
+        ]
+        self.assertEqual(access(entries, "e"), {"hrworks": ["a"], "msteams": ["b"]})
+
+    def test_no_items_removes_the_integration(self) -> None:
+        with_items = load_integration().with_items
+        options = with_items({"other": 1}, "hrworks", ["b", " a ", "b", ""])
+        self.assertEqual(options, {"other": 1, "access": {"hrworks": ["a", "b"]}})
+        self.assertEqual(with_items(options, "hrworks", []), {"other": 1, "access": {}})

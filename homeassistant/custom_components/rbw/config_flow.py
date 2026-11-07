@@ -50,6 +50,14 @@ class RbwConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Set up an mTLS connection to rbw."""
 
     VERSION = 1
+    MINOR_VERSION = 2
+
+    @staticmethod
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry):
+        """Choose which integrations may read which items."""
+        from .options_flow import RbwOptionsFlow
+
+        return RbwOptionsFlow()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Collect the API endpoint and paths to provisioned PEM files."""

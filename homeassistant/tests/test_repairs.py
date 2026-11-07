@@ -20,7 +20,12 @@ API_SPEC.loader.exec_module(api)
 
 class FakeRepairsFlow:
     def async_show_form(
-        self, *, step_id: str, data_schema: object, errors: dict[str, str] | None = None
+        self,
+        *,
+        step_id: str,
+        data_schema: object,
+        errors: dict[str, str] | None = None,
+        description_placeholders: object = None,
     ):
         return {"type": "form", "step_id": step_id, "errors": errors or {}}
 
@@ -69,6 +74,8 @@ def load_repair_module(issue_calls: list[tuple[object, ...]]) -> types.ModuleTyp
     const = types.ModuleType("rbw_repair_test.const")
     const.DEFAULT_ACCOUNT = "default"
     const.DOMAIN = "rbw"
+    const.CONF_ACCESS = "access"
+    const.ISSUE_ACCESS_REQUEST = "access_request"
     const.ISSUE_API_UNAVAILABLE = "api_unavailable"
     const.ISSUE_CLIENT_CERT = "client_certificate"
     const.ISSUE_DEFAULT_ACCOUNT_LOCKED = "default_account_locked"
@@ -146,6 +153,31 @@ class RepairRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             flow_manager.context,
             {"source": "reconfigure", "entry_id": "entry"},
+        )
+
+    async def test_allowing_a_request_adds_only_that_integration_and_item(self) -> None:
+        repairs = load_repair_module([])
+        entry = SimpleNamespace(options={"access": {"msteams": ["other"]}})
+        updates: list[dict[str, object]] = []
+        hass = SimpleNamespace(
+            data={},
+            config_entries=SimpleNamespace(
+                async_get_entry=lambda entry_id: entry if entry_id == "entry" else None,
+                async_update_entry=lambda _entry, *, options: updates.append(options),
+            ),
+        )
+        flow = repairs.RbwRepairFlow()
+        flow.hass = hass
+        flow.issue_id = "access_request_entry_abc"
+        flow.data = {"entry_id": "entry", "domain": "hrworks", "item_id": "item-id"}
+
+        await flow.async_step_init()
+        self.assertEqual(updates, [])
+
+        await flow.async_step_allow({})
+        self.assertEqual(
+            updates,
+            [{"access": {"msteams": ["other"], "hrworks": ["item-id"]}}],
         )
 
     async def test_retry_success_discards_secret_and_clears_issue(self) -> None:

@@ -15,6 +15,13 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .access import (
+    configured_items,
+    consumer_domain,
+    is_allowed,
+    request_issue_id,
+    with_items,
+)
 from .api import RbwApiClient, RbwApiError
 from .const import (
     CONF_BASE_URL,
@@ -22,6 +29,7 @@ from .const import (
     CONF_CLIENT_CERT,
     CONF_CLIENT_KEY,
     DOMAIN,
+    ISSUE_ACCESS_REQUEST,
     ISSUE_API_UNAVAILABLE,
     ISSUE_CLIENT_CERT,
     ISSUE_REAUTHENTICATION_REQUIRED,
@@ -44,6 +52,20 @@ class RbwRuntimeData:
     client: RbwApiClient
     coordinator: RbwStatusCoordinator
     configuration_url: str | None
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Access became deny by default: keep what integrations were explicitly set up to read."""
+    if entry.version > 1:
+        return False
+    if entry.minor_version < 2:
+        options = dict(entry.options)
+        for domain, items in configured_items(
+            hass.config_entries.async_entries(), entry.entry_id
+        ).items():
+            options = with_items(options, domain, items)
+        hass.config_entries.async_update_entry(entry, options=options, minor_version=2)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -106,7 +128,9 @@ async def async_get_field(
     if client is None:
         raise HomeAssistantError("The selected rbw config entry is not loaded")
 
-    resolved_consumer = consumer if consumer is not None else _detect_caller_consumer()
+    detected_consumer = _detect_caller_consumer()
+    _check_access(hass, entry_id, detected_consumer or consumer, item_id)
+    resolved_consumer = consumer if consumer is not None else detected_consumer
     try:
         try:
             result = await client.async_get_field(
@@ -161,6 +185,30 @@ async def async_get_field(
     )
     ir.async_delete_issue(hass, DOMAIN, _issue_id(entry_id, ISSUE_CLIENT_CERT))
     return result
+
+
+def _check_access(hass: HomeAssistant, entry_id: str, consumer: str | None, item_id: str) -> None:
+    """Deny by default, and ask once: a repair lets the user allow this integration and item."""
+    if not isinstance(hass.data.get(DOMAIN, {}).get(entry_id), RbwRuntimeData):
+        return
+    entry = hass.config_entries.async_get_entry(entry_id)
+    domain = consumer_domain(consumer)
+    if entry is not None and is_allowed(entry.options, domain, item_id):
+        return
+    _LOGGER.warning("rbw denied access for integration %s; see Repairs to allow it", domain)
+    if domain:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            request_issue_id(entry_id, domain, item_id),
+            is_fixable=True,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_ACCESS_REQUEST,
+            translation_placeholders={"integration": domain, "item": item_id},
+            data={"entry_id": entry_id, "domain": domain, "item_id": item_id},
+        )
+    raise HomeAssistantError(f"rbw access not allowed for integration {domain}")
 
 
 def _detect_caller_consumer() -> str | None:

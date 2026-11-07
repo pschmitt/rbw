@@ -112,6 +112,25 @@ master-password reprompt, the repair explains that Home Assistant cannot
 provide the prompt and keeps the issue open until that setting is removed or
 the item is read through local interactive rbw.
 
+## Choose which integrations may read what
+
+Deny by default: an integration can read a vault item only when you allow it. All
+integrations share one mTLS client, so the rbw API's field grants cannot tell them
+apart; this adds that per-integration check, on top of those grants. Integrations
+run in one process, so it stops mistakes and overreach, not hostile code: the
+grants remain the security boundary.
+
+- **When an integration asks:** a denied read raises an error and creates a repair
+  naming the integration and item. Allow it there, then let the integration retry.
+- **In the options:** open the rbw integration's options, pick an integration, and
+  edit its items. Removing them all revokes its access.
+- **Upgrading:** items that integrations were already set up to read
+  (`rbw_entry_id` with `rbw_item_id` in their entries) are allowed once, so they keep
+  working. Anything else needs allowing.
+
+The check identifies the caller from the call stack; the `consumer` argument cannot
+override it.
+
 ## Status device, audit event, and unlock repair
 
 The integration also creates one diagnostic **rbw Policy API** device. It polls
