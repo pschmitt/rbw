@@ -11,6 +11,11 @@
   fields, and never a value or the rest of the vault. The Home Assistant integration
   shows names from it and offers `async_list_items` to other integrations.
 
+### Changed
+
+* Update axum-server to 0.9. Its built-in TLS information replaces our own code for
+  reading a client's certificate.
+
 ## [2.44.0] - 2026-11-07
 
 ### Added

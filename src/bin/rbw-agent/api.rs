@@ -6,99 +6,9 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use axum_server::tls::TlsInfo;
 use futures::future::BoxFuture;
-use rustls::pki_types::CertificateDer;
-use std::{future::Future, io, pin::Pin};
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_rustls::server::TlsStream;
-
-#[derive(Clone, Debug, Default)]
-struct PeerCertificates(Vec<CertificateDer<'static>>);
-
-impl PeerCertificates {
-    fn leaf(&self) -> Option<&CertificateDer<'static>> {
-        self.0.first()
-    }
-}
-
-#[derive(Clone, Debug)]
-struct PeerCertAcceptor<A = axum_server::accept::DefaultAcceptor> {
-    inner: axum_server::tls_rustls::RustlsAcceptor<A>,
-}
-
-impl PeerCertAcceptor {
-    fn new(inner: axum_server::tls_rustls::RustlsAcceptor) -> Self {
-        Self { inner }
-    }
-}
-
-impl<I, S, A> axum_server::accept::Accept<I, S> for PeerCertAcceptor<A>
-where
-    A: axum_server::accept::Accept<I, S> + Clone + Send + 'static,
-    A::Stream: AsyncRead + AsyncWrite + Unpin + Send,
-    A::Service: Send,
-    A::Future: Send,
-    I: Send + 'static,
-    S: Send + 'static,
-{
-    type Stream = TlsStream<A::Stream>;
-    type Service = PeerCertService<A::Service>;
-    type Future = Pin<
-        Box<
-            dyn Future<Output = io::Result<(Self::Stream, Self::Service)>>
-                + Send,
-        >,
-    >;
-
-    fn accept(&self, stream: I, service: S) -> Self::Future {
-        let inner = self.inner.clone();
-        Box::pin(async move {
-            let (tls_stream, service) = inner.accept(stream, service).await?;
-            let (_, connection) = tls_stream.get_ref();
-            let certs = connection
-                .peer_certificates()
-                .unwrap_or_default()
-                .iter()
-                .map(|cert| cert.clone().into_owned())
-                .collect();
-            Ok((
-                tls_stream,
-                PeerCertService {
-                    inner: service,
-                    certs: PeerCertificates(certs),
-                },
-            ))
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
-struct PeerCertService<S> {
-    inner: S,
-    certs: PeerCertificates,
-}
-
-impl<S, B> tower_service::Service<axum::http::Request<B>>
-    for PeerCertService<S>
-where
-    S: tower_service::Service<axum::http::Request<B>>,
-{
-    type Response = S::Response;
-    type Error = S::Error;
-    type Future = S::Future;
-
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx)
-    }
-
-    fn call(&mut self, mut request: axum::http::Request<B>) -> Self::Future {
-        request.extensions_mut().insert(self.certs.clone());
-        self.inner.call(request)
-    }
-}
+use std::sync::Arc;
 
 use rbw::remote_api::{
     AccountStatus, ApiError, ErrorCode, FieldReadResponse, StatusResponse,
@@ -439,9 +349,7 @@ async fn prepare(
     let tls =
         rbw::remote_api::with_tls_material(&config.hostname, tls_config_at)?;
     let router = router(ApiState::production(agent));
-    let acceptor = PeerCertAcceptor::new(
-        axum_server::tls_rustls::RustlsAcceptor::new(tls),
-    );
+    let acceptor = axum_server::tls_rustls::RustlsAcceptor::new(tls);
 
     let listener = tokio::net::TcpListener::bind(listen)
         .await
@@ -523,11 +431,11 @@ fn extract_consumer(headers: &axum::http::HeaderMap) -> Option<String> {
 
 async fn read_field(
     State(state): State<ApiState>,
-    Extension(certificates): Extension<PeerCertificates>,
+    Extension(tls): Extension<Arc<TlsInfo>>,
     headers: axum::http::HeaderMap,
     Path((item_id, field_token)): Path<(String, String)>,
 ) -> Response {
-    let cert_der = certificates.leaf().map(std::convert::AsRef::as_ref);
+    let cert_der = tls.peer_certificates.first().map(Vec::as_slice);
     let actor = audit_actor(&state, cert_der).await;
     let consumer = extract_consumer(&headers);
     let (result, mut meta) =
@@ -542,10 +450,10 @@ async fn read_field(
 
 async fn list_items(
     State(state): State<ApiState>,
-    Extension(certificates): Extension<PeerCertificates>,
+    Extension(tls): Extension<Arc<TlsInfo>>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let cert_der = certificates.leaf().map(std::convert::AsRef::as_ref);
+    let cert_der = tls.peer_certificates.first().map(Vec::as_slice);
     let actor = audit_actor(&state, cert_der).await;
     let result = list_items_inner(&state, cert_der).await;
     let meta = ApiAuditMeta {
@@ -559,9 +467,9 @@ async fn list_items(
 
 async fn read_status(
     State(state): State<ApiState>,
-    Extension(certificates): Extension<PeerCertificates>,
+    Extension(tls): Extension<Arc<TlsInfo>>,
 ) -> Response {
-    let cert_der = certificates.leaf().map(std::convert::AsRef::as_ref);
+    let cert_der = tls.peer_certificates.first().map(Vec::as_slice);
     let actor = audit_actor(&state, cert_der).await;
     let result = read_status_inner(&state, cert_der).await;
     let outcome = api_audit_outcome(&result);
@@ -577,11 +485,11 @@ async fn read_status(
 
 async fn unlock_account(
     State(state): State<ApiState>,
-    Extension(certificates): Extension<PeerCertificates>,
+    Extension(tls): Extension<Arc<TlsInfo>>,
     headers: axum::http::HeaderMap,
     Json(mut request): Json<UnlockRequest>,
 ) -> Response {
-    let cert_der = certificates.leaf().map(std::convert::AsRef::as_ref);
+    let cert_der = tls.peer_certificates.first().map(Vec::as_slice);
     let actor = audit_actor(&state, cert_der).await;
     let consumer = extract_consumer(&headers);
     let password = std::mem::take(&mut request.password);
@@ -1256,9 +1164,7 @@ mod tests {
             tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let listener = listener.into_std().unwrap();
-        let acceptor = PeerCertAcceptor::new(
-            axum_server::tls_rustls::RustlsAcceptor::new(tls),
-        );
+        let acceptor = axum_server::tls_rustls::RustlsAcceptor::new(tls);
         let server =
             axum_server::from_tcp(listener).unwrap().acceptor(acceptor);
         let server_task = tokio::spawn(async move {
