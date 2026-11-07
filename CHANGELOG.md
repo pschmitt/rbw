@@ -15,8 +15,16 @@
 * `rbw agent restart` starts a new agent, which locks every account. With `--unlock`
   it unlocks right away, like `rbw agent stop; rbw unlock`.
 
+### Fixed
+
+* TUI: typing no longer crawls. Every keystroke decrypted the collection names of
+  every entry through the agent, even for plain searches; this now only happens for
+  `org:` and `collection:` queries, and the result is cached.
+
 ### Changed
 
+* The TUI loads only the target account on startup. Other accounts load in the
+  background and appear in the list as they arrive.
 * Update axum-server to 0.9. Its built-in TLS information replaces our own code for
   reading a client's certificate.
 
