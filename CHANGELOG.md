@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.44.1] - 2026-11-07
+
 ### Added
 
 * Home Assistant integration: deny by default which integrations may read which
