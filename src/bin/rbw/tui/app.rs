@@ -393,6 +393,8 @@ pub struct App {
     // still-encrypted name visibly flash before the real one landed.
     // Invalidated everywhere `detail_cache` is.
     scope_cache: HashMap<(usize, String), commands::TuiEntryScope>,
+    // Accounts still being loaded by the startup worker thread.
+    background: Option<std::sync::mpsc::Receiver<commands::TuiBackground>>,
     pub filter: Input,
     // Indices into the flattened view, filtered by the search term and sorted
     // by (folder, name, user).
@@ -603,6 +605,7 @@ impl App {
             slot: Vec::new(),
             detail_cache: HashMap::new(),
             scope_cache: HashMap::new(),
+            background: None,
             filter: initial_term.map_or_else(Input::default, Input::new),
             filtered: Vec::new(),
             selected: 0,
@@ -677,9 +680,19 @@ impl App {
 
     fn recompute_filter(&mut self) {
         let term = self.filter.value().to_string();
+        // Computing an entry's scope decrypts its collection names through
+        // the agent, so only do it (once per entry, then cached) when the
+        // query actually has an org:/collection: token. Doing it for every
+        // entry on every keystroke made typing crawl.
+        let needs_scope =
+            !term.is_empty() && commands::query_needs_scope(&term);
         let mut filtered = Vec::new();
         for i in 0..self.search.len() {
-            let scope = self.scope_for_index(i);
+            let scope = if needs_scope {
+                self.cached_scope_for_index(i)
+            } else {
+                None
+            };
             let c = &self.search[i];
             if (term.is_empty()
                 || c.search_match_with_scope(
@@ -728,6 +741,24 @@ impl App {
         let o = *self.owner.get(i)?;
         let s = *self.slot.get(i)?;
         self.vaults.get(o)?.db.entries.get(s).cloned()
+    }
+
+    fn cached_scope_for_index(
+        &mut self,
+        i: usize,
+    ) -> Option<commands::TuiEntryScope> {
+        let key = (*self.owner.get(i)?, self.search[i].id.clone());
+        if let Some(scope) = self.scope_cache.get(&key) {
+            return Some(scope.clone());
+        }
+        if let Err(e) = crate::actions::set_active_account(Some(
+            self.vaults[key.0].name.clone(),
+        )) {
+            log::warn!("{e:#}");
+        }
+        let scope = self.scope_for_index(i)?;
+        self.scope_cache.insert(key, scope.clone());
+        Some(scope)
     }
 
     fn scope_for_index(&self, i: usize) -> Option<commands::TuiEntryScope> {
@@ -1717,6 +1748,90 @@ impl App {
             self.mode = Mode::Normal;
         }
         Ok(())
+    }
+
+    pub fn attach_background(
+        &mut self,
+        rx: std::sync::mpsc::Receiver<commands::TuiBackground>,
+    ) {
+        self.background = Some(rx);
+        self.set_status(Level::Info, "loading other accounts...");
+    }
+
+    pub fn loading_in_background(&self) -> bool {
+        self.background.is_some()
+    }
+
+    // Drain whatever the startup worker has produced so far and fold it in.
+    // Returns true if anything changed (the caller redraws on the next tick
+    // anyway; this only tells it to poll faster while loading).
+    pub fn poll_background(&mut self) -> bool {
+        use commands::TuiBackground as Bg;
+        let mut changed = false;
+        loop {
+            let msg = match self
+                .background
+                .as_ref()
+                .map(std::sync::mpsc::Receiver::try_recv)
+            {
+                Some(Ok(msg)) => msg,
+                Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => {
+                    break;
+                }
+                Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                    Bg::Done
+                }
+            };
+            changed = true;
+            match msg {
+                Bg::Loading(name) => {
+                    self.set_status(
+                        Level::Info,
+                        format!("loading {name}..."),
+                    );
+                }
+                Bg::Locked(name) => {
+                    if !self.locked.contains(&name)
+                        && !self.vaults.iter().any(|v| v.name == name)
+                    {
+                        self.locked.push(name);
+                    }
+                    self.refresh_accounts_view();
+                }
+                Bg::Loaded(vault) => {
+                    let keep = self.current_key();
+                    self.locked.retain(|n| *n != vault.account);
+                    if let Some(slot) = self
+                        .vaults
+                        .iter_mut()
+                        .find(|v| v.name == vault.account)
+                    {
+                        slot.db = vault.db;
+                        slot.search = vault.search;
+                    } else {
+                        self.vaults.push(AccountVault {
+                            name: vault.account,
+                            db: vault.db,
+                            search: vault.search,
+                            decrypted: None,
+                            attachment_data: None,
+                            file_save: None,
+                        });
+                    }
+                    self.rebuild_flat();
+                    self.recompute_filter();
+                    self.restore_selection(keep);
+                    self.ensure_detail();
+                    self.refresh_accounts_view();
+                }
+                Bg::Done => {
+                    self.background = None;
+                    self.set_status(Level::Success, "all accounts loaded");
+                    break;
+                }
+            }
+        }
+        changed
     }
 
     pub fn sync_account(&mut self, name: &str) -> anyhow::Result<()> {

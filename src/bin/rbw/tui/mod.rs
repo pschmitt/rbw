@@ -71,11 +71,17 @@ pub fn run(
     crate::commands::tui_unlock_target()?;
     let mut terminal = ratatui::init();
     enable_mouse();
-    draw_loading(&mut terminal, "loading vaults...")?;
-    let open = crate::commands::tui_open_with_progress(all, true, |msg| {
-        let _ = draw_loading(&mut terminal, msg);
-    })?;
+    draw_loading(&mut terminal, "loading vault...")?;
+    // Only the target account blocks startup; the others load on a worker
+    // thread and show up as they arrive.
+    let open = crate::commands::tui_open_target()?;
+    let multi = open.multi;
     let mut app = App::new(open, initial_term, screen_lock_timeout);
+    if multi {
+        app.attach_background(crate::commands::tui_spawn_background_load(
+            all,
+        ));
+    }
     let res = run_loop(&mut terminal, &mut app);
     disable_mouse();
     ratatui::restore();
@@ -123,6 +129,7 @@ fn run_loop(
     loop {
         // Piggyback agent-lock detection on this same ~2Hz tick (throttled
         // internally to every few seconds) rather than adding a second timer.
+        app.poll_background();
         app.poll_agent_lock();
         if app.screen_lock_due() {
             if let Err(e) = app.lock_screen() {
@@ -131,7 +138,12 @@ fn run_loop(
         }
         terminal.draw(|f| ui::render(f, app))?;
 
-        if !event::poll(TICK)? {
+        let wait = if app.loading_in_background() {
+            Duration::from_millis(100)
+        } else {
+            TICK
+        };
+        if !event::poll(wait)? {
             continue;
         }
 

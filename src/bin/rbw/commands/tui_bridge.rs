@@ -545,36 +545,67 @@ pub(super) fn list_target_accounts(
 // RBW_ACCOUNT, else primary) up front — pinentry runs here, on the real
 // terminal, before the UI takes over the screen; the target is always
 // loaded regardless of `exclude_from`, since it was asked for explicitly.
-// Every other configured account not excluded from `Tui` is then unlocked
+// Every other configured account not excluded from `Tui` is then loaded in
+// the background (`tui_spawn_background_load`), unlocked
 // per `should_unlock_for_merge` (so `unlock: always` accounts always come
 // up, `--all` additionally brings in the `on-demand` ones, and `never`
 // accounts are only loaded if already unlocked); the rest are reported as
 // locked for lazy unlock from the accounts panel. An account excluded from
 // `Tui` is skipped entirely -- it won't appear locked in the accounts panel
 // either, unless it's the target.
-pub fn tui_open_with_progress<F>(
-    all: bool,
-    target_unlocked: bool,
-    mut progress: F,
-) -> anyhow::Result<TuiOpen>
-where
-    F: FnMut(&str),
-{
+pub fn tui_open_target() -> anyhow::Result<TuiOpen> {
     let config = rbw::config::Config::load()?;
     let accounts = config.accounts();
     let target = crate::actions::current_account()
         .unwrap_or_else(|| config.primary_account_name());
+    crate::actions::set_active_account(Some(target.clone()))?;
+    let (db, search) = tui_reload()?;
+    Ok(TuiOpen {
+        multi: accounts.len() > 1,
+        vaults: vec![TuiVault {
+            account: target,
+            db,
+            search,
+        }],
+        locked: Vec::new(),
+    })
+}
 
-    if !target_unlocked {
-        crate::actions::set_active_account(Some(target.clone()))?;
-        unlock(None, None)?;
-    }
+// What the background loader reports for the accounts other than the target.
+pub enum TuiBackground {
+    Loading(String),
+    Loaded(TuiVault),
+    Locked(String),
+    Done,
+}
 
-    let mut vaults = Vec::new();
-    let mut locked = Vec::new();
-    for account in &accounts {
-        if account.name != target
-            && account.excluded_from(rbw::config::ExcludeContext::Tui)
+// Load every other account (unlocking per its policy) on a worker thread so
+// the TUI is usable right away; results arrive on the returned channel. The
+// worker targets its accounts through a thread-local override, so it never
+// fights the UI thread over the process-wide active account.
+pub fn tui_spawn_background_load(
+    all: bool,
+) -> std::sync::mpsc::Receiver<TuiBackground> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let target = crate::actions::current_account();
+    std::thread::spawn(move || {
+        crate::actions::bind_thread_account(target.clone());
+        let _ = tui_load_others(all, target, &tx);
+        let _ = tx.send(TuiBackground::Done);
+    });
+    rx
+}
+
+fn tui_load_others(
+    all: bool,
+    target: Option<String>,
+    tx: &std::sync::mpsc::Sender<TuiBackground>,
+) -> anyhow::Result<()> {
+    let config = rbw::config::Config::load()?;
+    let target = target.unwrap_or_else(|| config.primary_account_name());
+    for account in &config.accounts() {
+        if account.name == target
+            || account.excluded_from(rbw::config::ExcludeContext::Tui)
         {
             continue;
         }
@@ -582,40 +613,38 @@ where
         let should_unlock =
             should_unlock_for_merge(account.unlock.policy, all);
         if should_unlock && !active_account_unlocked() {
-            let msg = format!("unlocking '{}'...", account.name);
-            progress(&msg);
+            let _ = tx.send(TuiBackground::Loading(account.name.clone()));
             if let Err(e) = unlock(None, None) {
-                if account.name == target {
-                    return Err(e);
-                }
                 log::warn!(
                     "failed to auto-unlock account '{}': {e:#}; \
                      leaving it locked",
                     account.name
                 );
-                locked.push(account.name.clone());
+                let _ = tx.send(TuiBackground::Locked(account.name.clone()));
                 continue;
             }
         }
         if active_account_unlocked() {
-            let msg = format!("syncing '{}'...", account.name);
-            progress(&msg);
-            let (db, search) = tui_reload()?;
-            vaults.push(TuiVault {
-                account: account.name.clone(),
-                db,
-                search,
-            });
+            let _ = tx.send(TuiBackground::Loading(account.name.clone()));
+            match tui_reload() {
+                Ok((db, search)) => {
+                    let _ = tx.send(TuiBackground::Loaded(TuiVault {
+                        account: account.name.clone(),
+                        db,
+                        search,
+                    }));
+                }
+                Err(e) => {
+                    log::warn!("failed to load '{}': {e:#}", account.name);
+                    let _ =
+                        tx.send(TuiBackground::Locked(account.name.clone()));
+                }
+            }
         } else {
-            locked.push(account.name.clone());
+            let _ = tx.send(TuiBackground::Locked(account.name.clone()));
         }
     }
-
-    Ok(TuiOpen {
-        multi: accounts.len() > 1,
-        vaults,
-        locked,
-    })
+    Ok(())
 }
 
 pub fn tui_unlock_target() -> anyhow::Result<()> {

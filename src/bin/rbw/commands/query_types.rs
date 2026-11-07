@@ -414,6 +414,17 @@ pub fn browser_search_match(
     cipher.search_match_with_scope(query, None, false, None)
 }
 
+// True if `input` has an organization/collection token, i.e. matching it
+// needs the entry's scope (which costs agent round-trips to compute).
+pub fn query_needs_scope(input: &str) -> bool {
+    parse_query(input).iter().any(|token| {
+        matches!(
+            token,
+            QueryToken::Organization(_) | QueryToken::Collection(_)
+        )
+    })
+}
+
 pub(super) fn parse_query(input: &str) -> Vec<QueryToken> {
     input.split_whitespace().map(QueryToken::parse).collect()
 }
