@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.44.4] - 2026-11-09
+
 ### Added
 
 * `rbw status` warns, in yellow, when the agent is a different version than rbw,
