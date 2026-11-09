@@ -716,6 +716,15 @@ pub(super) fn decrypted_cipher_to_search(
 pub(super) fn prefetch_cipher_decrypts<'a>(
     entries: impl IntoIterator<Item = &'a rbw::db::Entry>,
 ) -> crate::actions::DecryptCacheGuard {
+    prefetch_vault_decrypts(&[], entries)
+}
+
+// `prefetch_cipher_decrypts`, plus the names of `collections`, which
+// `tui_entry_scope` otherwise decrypts once per entry that is in one.
+pub(super) fn prefetch_vault_decrypts<'a>(
+    collections: &[rbw::db::Collection],
+    entries: impl IntoIterator<Item = &'a rbw::db::Entry>,
+) -> crate::actions::DecryptCacheGuard {
     fn collect(value: &serde_json::Value, out: &mut Vec<String>) {
         match value {
             serde_json::Value::String(s) => {
@@ -738,6 +747,9 @@ pub(super) fn prefetch_cipher_decrypts<'a>(
     }
 
     let mut requests = BatchRequests::new();
+    for collection in collections {
+        requests.push(&collection.name, None, Some(&collection.org_id));
+    }
     // Requests made with the user's own key (no entry key, no org).
     let mut seen = std::collections::HashSet::new();
     for entry in entries {

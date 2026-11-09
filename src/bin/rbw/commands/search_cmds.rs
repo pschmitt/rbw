@@ -301,7 +301,7 @@ pub fn search(
             else {
                 continue;
             };
-            let mut account_entries: Vec<DecryptedCipher> = db
+            let scoped: Vec<&rbw::db::Entry> = db
                 .entries
                 .iter()
                 .filter(|entry| {
@@ -311,6 +311,13 @@ pub fn search(
                         org_id.as_deref(),
                     )
                 })
+                .collect();
+            let _prefetched = prefetch_vault_decrypts(
+                &db.collections,
+                scoped.iter().copied(),
+            );
+            let mut account_entries: Vec<DecryptedCipher> = scoped
+                .into_iter()
                 .filter_map(|entry| match decrypt_search_cipher(entry) {
                     Ok(searchable) => {
                         let scope = tui_entry_scope(&db, entry);
@@ -376,7 +383,9 @@ pub fn search(
 
         // As in `list`, decrypt every entry's searchable fields in a single
         // batch request rather than one socket round-trip per field per
-        // entry.
+        // entry. `tui_entry_scope` decrypts collection names, so fetch those
+        // in one batch up front too.
+        let _prefetched = prefetch_vault_decrypts(&db.collections, []);
         let mut requests = BatchRequests::new();
         let plans: Vec<(TuiEntryScope, SearchCipherPlan)> = db
             .entries

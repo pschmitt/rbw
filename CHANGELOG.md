@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* `rbw search` decrypted the collection names of every entry in a collection one
+  agent request at a time, and `rbw search --json` every field of every entry; both
+  now decrypt in batches (8 s and 109 s down to under a second on a large vault).
+
 ## [2.44.2] - 2026-11-09
 
 ### Fixed
