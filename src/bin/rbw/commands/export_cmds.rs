@@ -225,6 +225,7 @@ pub(super) fn build_exported_vault_matching(
     let pb = item_progress_bar(
         u64::try_from(entries_snapshot.len()).unwrap_or(u64::MAX),
     );
+    let _prefetched = prefetch_cipher_decrypts(&entries_snapshot);
     for entry in &entries_snapshot {
         let decrypted = decrypt_cipher(entry)?;
         pb.set_message(fit_to_width(&decrypted.name, PROGRESS_MSG_WIDTH));

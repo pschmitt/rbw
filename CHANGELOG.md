@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* `rbw list --json`/`--yaml`, `rbw export` and `rbw audit` no longer stall every other
+  rbw command for minutes. They decrypted each field of each entry in its own agent
+  request, each written and synced to the audit log under its lock; they now decrypt
+  in batches (a large vault: from 96 s to about 1 s).
+* The audit log removes expired files once a day instead of listing its directory on
+  every event.
+
 ## [2.44.1] - 2026-11-07
 
 ### Added

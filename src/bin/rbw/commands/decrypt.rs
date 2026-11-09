@@ -706,6 +706,74 @@ pub(super) fn decrypted_cipher_to_search(
     }
 }
 
+// Prefetch, in a few `decrypt_batch` calls, every cipherstring that
+// `decrypt_cipher` will ask the agent for on `entries` (all in the current
+// account), so decrypting many entries in full doesn't cost one agent request
+// per field. Walks each entry's serialized form rather than listing fields by
+// hand, so a field added to `decrypt_cipher` later is still covered; a guess
+// that doesn't match (a value that isn't decrypted with the entry's key) is
+// just a cache miss, decrypted on demand as before.
+pub(super) fn prefetch_cipher_decrypts<'a>(
+    entries: impl IntoIterator<Item = &'a rbw::db::Entry>,
+) -> crate::actions::DecryptCacheGuard {
+    fn collect(value: &serde_json::Value, out: &mut Vec<String>) {
+        match value {
+            serde_json::Value::String(s) => {
+                if rbw::cipherstring::CipherString::new(s).is_ok() {
+                    out.push(s.clone());
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    collect(value, out);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for value in map.values() {
+                    collect(value, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut requests = BatchRequests::new();
+    // Requests made with the user's own key (no entry key, no org).
+    let mut seen = std::collections::HashSet::new();
+    for entry in entries {
+        // Folder names are decrypted with the user's own key.
+        if let Some(folder) = &entry.folder {
+            if seen.insert(folder.clone()) {
+                requests.push(folder, None, None);
+            }
+        }
+        let Ok(serde_json::Value::Object(map)) = serde_json::to_value(entry)
+        else {
+            continue;
+        };
+        let mut cipherstrings = Vec::new();
+        for (name, value) in &map {
+            // `key` is the entry key itself, `folder` is handled above.
+            if name != "key" && name != "folder" {
+                collect(value, &mut cipherstrings);
+            }
+        }
+        for cipherstring in cipherstrings {
+            // An entry key or org changes the plaintext, so dedup per entry.
+            if entry.key.is_some() || entry.org_id.is_some() {
+                requests.push(
+                    &cipherstring,
+                    entry.key.as_deref(),
+                    entry.org_id.as_deref(),
+                );
+            } else if seen.insert(cipherstring.clone()) {
+                requests.push(&cipherstring, None, None);
+            }
+        }
+    }
+    crate::actions::prefetch_decrypts(&requests.into_vec())
+}
+
 pub fn decrypt_cipher(
     entry: &rbw::db::Entry,
 ) -> anyhow::Result<DecryptedCipher> {

@@ -88,13 +88,17 @@ pub fn audit(
 
     unlock(None, None)?;
     let db = load_db()?;
-    let logins: Vec<Login> = db
+    let candidates: Vec<&rbw::db::Entry> = db
         .entries
         .iter()
         .filter(|entry| !entry.deleted && !entry.archived)
         .filter(|entry| {
             matches!(entry.data, rbw::db::EntryData::Login { .. })
         })
+        .collect();
+    let _prefetched = prefetch_cipher_decrypts(candidates.iter().copied());
+    let logins: Vec<Login> = candidates
+        .into_iter()
         .filter_map(|entry| match decrypt_cipher(entry) {
             Ok(cipher) => Some(cipher),
             Err(e) => {

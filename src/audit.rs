@@ -280,6 +280,10 @@ pub fn append(config: &AuditConfig, event: &Event) -> anyhow::Result<()> {
     append_at(&crate::dirs::audit_dir(), today, config, event)
 }
 
+// The directory and day `append_at` last pruned expired files for.
+static LAST_PRUNED: std::sync::Mutex<Option<(std::path::PathBuf, u32)>> =
+    std::sync::Mutex::new(None);
+
 fn append_at(
     directory: &std::path::Path,
     today: u32,
@@ -301,7 +305,24 @@ fn append_at(
     )?;
     lock.lock_exclusive().context("failed to lock audit log")?;
 
-    let prune_result = prune_expired(directory, today, config.retention_days);
+    // Expired files only change when the day does, so list the directory
+    // once per day (and directory) rather than on every event.
+    let mut last_pruned = LAST_PRUNED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let prune_result = if last_pruned
+        .as_ref()
+        .is_some_and(|(dir, day)| *day == today && dir == directory)
+    {
+        Ok(())
+    } else {
+        let result = prune_expired(directory, today, config.retention_days);
+        if result.is_ok() {
+            *last_pruned = Some((directory.to_path_buf(), today));
+        }
+        result
+    };
+    drop(last_pruned);
 
     let path = directory.join(format!("audit-{today}.jsonl"));
     let mut file = open_private(&path, true, true)

@@ -244,6 +244,93 @@ pub fn kill() -> anyhow::Result<()> {
     Ok(())
 }
 
+// Plaintexts fetched ahead of time by `prefetch_decrypts`, keyed by account,
+// cipherstring, entry key and org id. `decrypt` answers from here first, so a
+// command that decrypts every field of many entries one by one (e.g. `list
+// --json`) costs a few `decrypt_batch` round trips instead of one agent
+// request (and one audit event) per field.
+type DecryptCacheKey =
+    (Option<String>, String, Option<String>, Option<String>);
+
+thread_local! {
+    static DECRYPT_CACHE: std::cell::RefCell<
+        std::collections::HashMap<DecryptCacheKey, String>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+// Cipherstrings per `decrypt_batch` request in `prefetch_decrypts`.
+const PREFETCH_CHUNK: usize = 500;
+
+/// Empties the prefetched plaintexts when dropped.
+#[must_use = "the prefetched plaintexts are dropped with the guard"]
+pub struct DecryptCacheGuard(());
+
+impl Drop for DecryptCacheGuard {
+    fn drop(&mut self) {
+        DECRYPT_CACHE.with(|cache| cache.borrow_mut().clear());
+    }
+}
+
+/// Decrypt `requests` with a few `decrypt_batch` calls for the current
+/// account and keep what succeeded for later `decrypt` calls on this thread,
+/// until the returned guard drops. Best effort: anything not prefetched
+/// (a failed batch, a request that failed) is decrypted on demand as before.
+pub fn prefetch_decrypts(
+    requests: &[rbw::protocol::DecryptRequest],
+) -> DecryptCacheGuard {
+    let guard = DecryptCacheGuard(());
+    let account = current_account();
+    for chunk in requests.chunks(PREFETCH_CHUNK) {
+        let results = match decrypt_batch(chunk.to_vec()) {
+            Ok(results) => results,
+            Err(e) => {
+                log::debug!("prefetching decryptions failed: {e:#}");
+                break;
+            }
+        };
+        DECRYPT_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            for (request, result) in chunk.iter().zip(results) {
+                if let rbw::protocol::DecryptResult::Success { plaintext } =
+                    result
+                {
+                    cache.insert(
+                        (
+                            account.clone(),
+                            request.cipherstring.clone(),
+                            request.entry_key.clone(),
+                            request.org_id.clone(),
+                        ),
+                        plaintext,
+                    );
+                }
+            }
+        });
+    }
+    guard
+}
+
+fn cached_decrypt(
+    cipherstring: &str,
+    entry_key: Option<&str>,
+    org_id: Option<&str>,
+) -> Option<String> {
+    DECRYPT_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        if cache.is_empty() {
+            return None;
+        }
+        cache
+            .get(&(
+                current_account(),
+                cipherstring.to_string(),
+                entry_key.map(str::to_string),
+                org_id.map(str::to_string),
+            ))
+            .cloned()
+    })
+}
+
 pub fn decrypt(
     cipherstring: &str,
     entry_key: Option<&str>,
@@ -260,6 +347,13 @@ pub fn decrypt_with_attachment_key(
     org_id: Option<&str>,
     attachment_key: Option<&str>,
 ) -> anyhow::Result<String> {
+    if attachment_key.is_none() {
+        if let Some(plaintext) =
+            cached_decrypt(cipherstring, entry_key, org_id)
+        {
+            return Ok(plaintext);
+        }
+    }
     let mut sock = connect()?;
     sock.send(&rbw::protocol::Request::with_account(
         get_environment(),

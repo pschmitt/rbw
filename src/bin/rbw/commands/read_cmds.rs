@@ -149,7 +149,7 @@ pub fn list(
             else {
                 continue;
             };
-            let mut account_entries: Vec<DecryptedCipher> = db
+            let scoped: Vec<&rbw::db::Entry> = db
                 .entries
                 .iter()
                 .filter(|entry| {
@@ -160,6 +160,11 @@ pub fn list(
                     )
                 })
                 .filter(|entry| modified_before(entry))
+                .collect();
+            let _prefetched =
+                prefetch_cipher_decrypts(scoped.iter().copied());
+            let mut account_entries: Vec<DecryptedCipher> = scoped
+                .into_iter()
                 // One corrupt entry must not fail listing the rest of the
                 // vault -- skip it and warn instead.
                 .filter_map(|entry| match decrypt_cipher(entry) {
