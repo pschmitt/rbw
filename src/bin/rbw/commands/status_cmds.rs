@@ -135,6 +135,19 @@ fn stale_agent_hint(version: u32) -> &'static str {
     }
 }
 
+// What to do about an agent that serves this rbw but is another version
+// (usually one that outlived an upgrade, still running the old code).
+fn other_agent_hint(version: u32) -> String {
+    if version > rbw::protocol::VERSION {
+        format!("not {}; this rbw is older", env!("CARGO_PKG_VERSION"))
+    } else {
+        format!(
+            "not {}; restart it to update: `rbw agent restart`",
+            env!("CARGO_PKG_VERSION")
+        )
+    }
+}
+
 // Why the vault was last locked, from the audit log: "the agent stopped:
 // `rbw stop-agent` (2h 5m ago)".
 fn lock_summary(lock: &rbw::audit::LastLock) -> String {
@@ -150,12 +163,13 @@ fn print_short(
     accounts: &[AccountStatus],
     pid: Option<u32>,
     stale_agent: Option<u32>,
+    other_agent: Option<u32>,
     last_lock: Option<&rbw::audit::LastLock>,
     c: bool,
 ) {
-    let agent = match (pid, stale_agent) {
-        (None, _) => style::danger("agent not running", c),
-        (Some(_), Some(version)) => style::danger(
+    let agent = match (pid, stale_agent, other_agent) {
+        (None, _, _) => style::danger("agent not running", c),
+        (Some(_), Some(version), _) => style::danger(
             &format!(
                 "agent {} ({})",
                 rbw::protocol::version_string(version),
@@ -163,7 +177,15 @@ fn print_short(
             ),
             c,
         ),
-        (Some(pid), None) => format!(
+        (Some(pid), None, Some(version)) => style::warning(
+            &format!(
+                "agent {} running (pid {pid}; {})",
+                rbw::protocol::version_string(version),
+                other_agent_hint(version)
+            ),
+            c,
+        ),
+        (Some(pid), None, None) => format!(
             "{} {}",
             style::success("agent running", c),
             style::dim(&format!("(pid {pid})"), c)
@@ -247,6 +269,11 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
     let agent_version = pid.and_then(|_| crate::actions::version().ok());
     let stale_agent =
         agent_version.filter(|v| !rbw::protocol::compatible(*v));
+    // Compatible, but not this version: it works, yet runs other code than
+    // the rbw that was just installed (fixes included), so say so in yellow.
+    let other_agent = agent_version.filter(|v| {
+        rbw::protocol::compatible(*v) && *v != rbw::protocol::VERSION
+    });
     let mut accounts = config
         .accounts()
         .iter()
@@ -296,6 +323,8 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
                 "pid": pid,
                 "version": agent_version.map(rbw::protocol::version_string),
                 "version_mismatch": stale_agent.is_some(),
+                "version_differs": agent_version
+                    .is_some_and(|v| v != rbw::protocol::VERSION),
                 "socket": rbw::dirs::socket_file(),
                 "lock_timeout": config.agent.lock_timeout,
                 "sync_interval": config.agent.sync_interval,
@@ -316,7 +345,14 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
 
     let c = stdout_supports_color();
     if !full {
-        print_short(&accounts, pid, stale_agent, last_lock.as_ref(), c);
+        print_short(
+            &accounts,
+            pid,
+            stale_agent,
+            other_agent,
+            last_lock.as_ref(),
+            c,
+        );
         return Ok(());
     }
     // Labels are padded before they are painted so the escape codes don't
@@ -373,6 +409,19 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
                     ),
                     c
                 )
+            ),
+        );
+    } else if let Some(version) = other_agent {
+        row(
+            "",
+            "agent version:",
+            style::warning(
+                &format!(
+                    "{} ({})",
+                    rbw::protocol::version_string(version),
+                    other_agent_hint(version)
+                ),
+                c,
             ),
         );
     }

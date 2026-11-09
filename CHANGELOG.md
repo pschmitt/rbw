@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+* `rbw status` warns, in yellow, when the agent is a different version than rbw,
+  even one that still works with it (usually an agent that outlived an upgrade
+  and still runs the old code), and says how to restart it. `--json` reports
+  it as `agent.version_differs`.
+
+### Fixed
+
+* The browser extension's password audit and `rbw passkey` (finding a passkey,
+  `counter --all`) decrypted every field of the entries they look at in its own
+  agent request; they now decrypt in batches (`counter --all`: 579 requests down
+  to 3).
+
 ## [2.44.3] - 2026-11-09
 
 ### Fixed
