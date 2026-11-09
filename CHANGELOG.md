@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.44.2] - 2026-11-09
+
 ### Fixed
 
 * `rbw list --json`/`--yaml`, `rbw export` and `rbw audit` no longer stall every other
