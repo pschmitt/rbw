@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.44.3] - 2026-11-09
+
 ### Fixed
 
 * `rbw search` decrypted the collection names of every entry in a collection one
