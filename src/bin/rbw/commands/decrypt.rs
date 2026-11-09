@@ -713,7 +713,7 @@ pub(super) fn decrypted_cipher_to_search(
 // hand, so a field added to `decrypt_cipher` later is still covered; a guess
 // that doesn't match (a value that isn't decrypted with the entry's key) is
 // just a cache miss, decrypted on demand as before.
-pub(super) fn prefetch_cipher_decrypts<'a>(
+pub fn prefetch_cipher_decrypts<'a>(
     entries: impl IntoIterator<Item = &'a rbw::db::Entry>,
 ) -> crate::actions::DecryptCacheGuard {
     prefetch_vault_decrypts(&[], entries)

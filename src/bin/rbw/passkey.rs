@@ -83,6 +83,17 @@ fn select_cached(
     })
 }
 
+/// A live (not trashed or archived) login that carries passkeys.
+fn holds_passkeys(entry: &rbw::db::Entry) -> bool {
+    !entry.deleted
+        && !entry.archived
+        && matches!(
+            &entry.data,
+            rbw::db::EntryData::Login { fido2_credentials, .. }
+                if !fido2_credentials.is_empty()
+        )
+}
+
 /// Live logins holding a passkey for `rp_id`. Only entries that carry passkeys
 /// at all are decrypted.
 fn candidates(
@@ -90,13 +101,12 @@ fn candidates(
     rp_id: &str,
 ) -> anyhow::Result<Vec<(rbw::db::Entry, commands::DecryptedCipher)>> {
     let mut found = Vec::new();
+    // Decrypting an entry in full asks the agent once per field otherwise.
+    let _prefetched = commands::prefetch_cipher_decrypts(
+        db.entries.iter().filter(|entry| holds_passkeys(entry)),
+    );
     for entry in &db.entries {
-        let has_passkeys = matches!(
-            &entry.data,
-            rbw::db::EntryData::Login { fido2_credentials, .. }
-                if !fido2_credentials.is_empty()
-        );
-        if entry.deleted || entry.archived || !has_passkeys {
+        if !holds_passkeys(entry) {
             continue;
         }
         let decrypted = commands::decrypt_cipher(entry)?;
@@ -398,13 +408,12 @@ fn list_all() -> anyhow::Result<()> {
     actions::sync()?;
     let db = commands::load_db()?;
     let mut list = Vec::new();
+    // Decrypting an entry in full asks the agent once per field otherwise.
+    let _prefetched = commands::prefetch_cipher_decrypts(
+        db.entries.iter().filter(|entry| holds_passkeys(entry)),
+    );
     for entry in &db.entries {
-        let has_passkeys = matches!(
-            &entry.data,
-            rbw::db::EntryData::Login { fido2_credentials, .. }
-                if !fido2_credentials.is_empty()
-        );
-        if entry.deleted || entry.archived || !has_passkeys {
+        if !holds_passkeys(entry) {
             continue;
         }
         let decrypted = commands::decrypt_cipher(entry)?;

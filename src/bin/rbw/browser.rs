@@ -1778,11 +1778,20 @@ fn dispatch(
                     >::new();
                     let mut without_totp = Vec::new();
                     let mut logins = 0;
-                    for entry in db.entries.iter().filter(|e| {
-                        !e.deleted
-                            && !e.archived
-                            && !e.master_password_reprompt()
-                    }) {
+                    let audited: Vec<&rbw::db::Entry> = db
+                        .entries
+                        .iter()
+                        .filter(|e| {
+                            !e.deleted
+                                && !e.archived
+                                && !e.master_password_reprompt()
+                        })
+                        .collect();
+                    // One agent request per name, URI and password otherwise.
+                    let _prefetched = commands::prefetch_cipher_decrypts(
+                        audited.iter().copied(),
+                    );
+                    for entry in audited {
                         if let rbw::db::EntryData::Login {
                             username,
                             password: Some(pw),
