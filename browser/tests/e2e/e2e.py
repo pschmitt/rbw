@@ -113,6 +113,15 @@ def main():
             click_in("login"); v = values()
             check("login fill via frame", v["pass"] == "pw-from-rbw" and v["user"] == "alice", str(v))
 
+        for field, offset in [("username", -80), ("password", -48), ("totp", -16)]:
+            fresh(); page.click("#pass"); opened = host()
+            if opened:
+                time.sleep(0.8)
+                page.click_point(opened["x"] + opened["w"] + offset, opened["y"] + 102); time.sleep(1)
+                with open(os.environ["RBW_E2E_LOG"]) as log:
+                    check(f"copy {field} reaches native host", f"copy-field:{field}" in log.read().split())
+            else: check(f"copy {field} chooser opens", False)
+
         fresh(); page.click("#pass"); opened = host()
         if opened:
             click_in("search"); page.type_text("Test Login"); time.sleep(1.2)

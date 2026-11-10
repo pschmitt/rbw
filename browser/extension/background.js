@@ -591,6 +591,30 @@ async function inlineMessage(port, message, state) {
         : { id: item.id, name: item.name, username: item.username, favicon: prefs.favicons ? faviconCache.get(item.iconOrigin)?.value || null : null });
       for (const item of items) { session.allowed.add(item.id); session.items.set(item.id, item); }
       port.postMessage({ type: "results", sequence: message.sequence, items, total: Math.max(eligible.length, (result.total ?? result.items.length) - (result.items.length - eligible.length)) });
+    } else if (message.type === "availability" && session.kind === "login" && Array.isArray(message.items)) {
+      const ids = [...new Set(message.items)].filter(id => session.allowed.has(id)).slice(0, 50);
+      const items = await Promise.all(ids.map(async id => {
+        try {
+          const credential = await native({ action: "credential", account, item: id, url: session.url });
+          let totp = false;
+          if (credential.hasTotp === true) {
+            try { totp = !!(await native({ action: "totp", account, item: id })).code; } catch (_) { /* Empty or invalid authenticator key. */ }
+          }
+          return { id, username: !!credential.username, password: !!credential.password, totp };
+        } catch (_) { return { id, username: false, password: false, totp: false }; }
+      }));
+      port.postMessage({ type: "availability", items });
+    } else if (message.type === "copy" && session.kind === "login" && session.allowed.has(message.item) && ["username", "password", "totp"].includes(message.field)) {
+      if (!await verifyInlineClick(session, message.x, message.y)) { port.postMessage({ type: "rejected", error: "rbw could not confirm that its window is fully visible. Click again." }); return; }
+      try {
+        const tab = await activeTab();
+        if (tab.id !== session.tabId || new URL(tab.url).origin !== new URL(session.url).origin) throw new Error("Page changed.");
+        const credential = await native({ action: "credential", account, item: message.item, url: tab.url });
+        const available = message.field === "totp" ? credential.hasTotp : credential[message.field];
+        if (!available) throw new Error(`This login has no ${message.field === "totp" ? "authenticator code" : message.field}.`);
+        await native({ action: "copy", account, item: message.item, field: message.field });
+        port.postMessage({ type: "copied", item: message.item, field: message.field });
+      } catch (error) { port.postMessage({ type: "rejected", error: error.message || "Could not copy." }); }
     } else if (["fill", "generate_fill"].includes(message.type) && session.allowed.has(message.item)) {
       const item = session.items.get(message.item) || {};
       const generate = message.type === "generate_fill";
@@ -816,7 +840,7 @@ async function pageMessage(message, sender, respond) {
         favicon: kind === "login" && prefs.favicons ? faviconCache.get(v.iconOrigin)?.value || null : null }));
       const total = Math.max(eligible.length, (result.total ?? result.items.length) - (result.items.length - eligible.length));
       const setPassword = kind === "login" && message.setPassword === true;
-      const token = openInlineSession({ mode: "choices", kind, setPassword, tabId: sender.tab.id, frameId: sender.frameId, url: sender.url, allowed: new Set(items.map(v => v.id)), items: new Map(items.map(v => [v.id, v])), payload: { mode: "choices", kind, items, total, setPassword } });
+      const token = openInlineSession({ mode: "choices", kind, setPassword, tabId: sender.tab.id, frameId: sender.frameId, url: sender.url, allowed: new Set(items.map(v => v.id)), items: new Map(items.map(v => [v.id, v])), payload: { mode: "choices", kind, items, total, setPassword, animations: prefs.animations, animationSpeed: prefs.animationSpeed } });
       return respond({ result: token, appIcon: await bundledIcon("icons/toolbar-48.png") });
     } catch (_) { return respond({ result: null }); }
   }

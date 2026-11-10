@@ -32,7 +32,7 @@
     const recognizable = el => el.autocomplete?.split(/\s+/).includes("username") || el.type === "email" || /(^|[\s_-])(user(name)?|email|login|identifier|account)([\s_-]|$)/i.test([el.id, el.name, el.getAttribute("aria-label")].filter(Boolean).join(" "));
     // Generic text fields are only eligible inside the same real login form.
     // Username-only flows require explicit login semantics; never guess a search box.
-    const usernameOnly = el => el.autocomplete?.split(/\s+/).includes("username") || /username|identifier|login/i.test([el.id, el.name].join(" ")) || (recognizable(el) && /login|sign.?in|auth/i.test([el.form?.id, el.form?.name, el.form?.getAttribute("action"), el.form?.getAttribute("aria-label")].filter(Boolean).join(" ")));
+    const usernameOnly = el => el.autocomplete?.split(/\s+/).includes("username") || /username|identifier|login|e-?mail/i.test([el.id, el.name, el.placeholder, el.getAttribute("aria-label")].filter(Boolean).join(" ")) || (recognizable(el) && /login|sign.?in|auth/i.test([el.form?.id, el.form?.name, el.form?.getAttribute("action"), el.form?.getAttribute("aria-label")].filter(Boolean).join(" ")));
     const user = password ? users.find(recognizable) || (password.form ? users.filter(el => el.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING).at(-1) : null) : users.find(usernameOnly);
     const scopeForm = password ? password.form : newPasswordForm;
     const scoped = scopeForm ? fields.filter(el => el.form === scopeForm) : fields;

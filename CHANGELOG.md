@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+* The inline autofill chooser offers copy buttons for available usernames,
+  passwords and authenticator codes, with the same feedback as the vault.
+
+### Fixed
+
+* Recognize email placeholders on username-only sign-in pages, so a matching
+  login can fill the first step of a sign-in.
+
 ## [2.45.2] - 2026-11-10
 
 ### Added

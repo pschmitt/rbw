@@ -1,4 +1,4 @@
-html,body{margin:0;padding:0;background:transparent;color-scheme:dark;overflow:hidden}
+html,body{--ok:#4cc38a;--danger:#ff6b7a;margin:0;padding:0;background:transparent;color-scheme:dark;overflow:hidden}
 body{font:13px/1.4 system-ui,sans-serif;color:#efefef}
 main{background:#282828}
 strong,small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -63,10 +63,18 @@ main.save{box-sizing:border-box;border:1px solid #555;border-radius:10px;overflo
 .save .status:empty{display:none}
 .notice{padding:6px 12px;color:#f0c674;font-size:11px}
 .notice:empty{display:none}
-.item-row{display:flex;border-top:1px solid #383838}
+.item-row{display:flex;background:#282828}
+.item-row:has(.item-btn.is-filling){background:#383838}
+.item-row:has(.item-btn.is-filled){background:#303a32}
 .item-row:first-of-type{border-top:0}
 .item-row .item-btn{flex:1;min-width:0;border-top:0}
-.row-action{display:flex;align-items:center;gap:5px;flex-shrink:0;border:0;border-left:1px solid #383838;padding:0 12px;background:#282828;color:#d0d0d0;font:12px system-ui,sans-serif;cursor:pointer}
+.row-action{display:flex;align-items:center;gap:5px;flex-shrink:0;border:0;padding:0 12px;background:transparent;color:#d0d0d0;font:12px system-ui,sans-serif;cursor:pointer}
 .row-action:hover,.row-action:focus-visible{background:#383838;color:#efefef;outline:none}
 .row-action svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .set-password-hint{margin:0;padding:0 12px 8px;color:#adadad;font-size:11px}
+
+.copy-action{align-self:center;justify-content:center;box-sizing:border-box;width:30px;height:30px;margin-right:6px;padding:0;border:1px solid #555;border-radius:6px;background:#303030}
+.copy-action:hover{background:#454545;border-color:#888}
+.copy-action:focus-visible{background:#454545;border-color:#a8c7fa;outline:2px solid #a8c7fa;outline-offset:1px}
+
+.copy-action[hidden]{display:none}

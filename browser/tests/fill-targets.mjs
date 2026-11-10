@@ -29,6 +29,11 @@ test("the username before the password in the same form is the user", () => {
   assert.equal(found.password, password);
 });
 
+test("an email placeholder identifies a username-only step", () => {
+  const email = input({placeholder: "Enter your email"});
+  assert.equal(loginTargets([email]).user, email);
+});
+
 test("search boxes are never the username", () => {
   const search = input({type: "search"}, form), user = input({autocomplete: "username"}, form);
   assert.equal(loginTargets([search, user, input({type: "password"}, form)]).user, user);

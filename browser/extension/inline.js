@@ -49,15 +49,24 @@ function itemButton(item, kind) {
   if (subtitle) textCol.append(element("small", subtitle));
   button.append(iconCol, textCol);
   button.addEventListener("click", event => act(event, { type: "fill", item: item.id }));
-  if (!session?.setPassword || kind === "card") return button;
+  if (kind === "card") return button;
   // A set-password page: fill the stored password, or generate a new one,
   // save it to this login and fill that.
   const row = element("div", null, "item-row");
+  for (const field of ["username", "password", "totp"]) {
+    const copy = element("button", null, "row-action copy-action"); copy.type = "button";
+    copy.append(icon({ username: "identity", password: "key", totp: "generator" }[field]));
+    copy.dataset.field = field; copy.hidden = field !== "username" || !item.username;
+    copy.title = `Copy ${field} for ${item.name}`; copy.setAttribute("aria-label", copy.title);
+    copy.addEventListener("click", event => act(event, { type: "copy", item: item.id, field }));
+    row.append(copy);
+  }
+  if (!session?.setPassword) { row.prepend(button); return row; }
   const generate = element("button", null, "row-action"); generate.type = "button";
   generate.title = `Generate a new password, save it to ${item.name} and fill it`; generate.setAttribute("aria-label", generate.title);
   generate.append(icon("generator"), element("span", "New"));
   generate.addEventListener("click", event => act(event, { type: "generate_fill", item: item.id }));
-  row.append(button, generate);
+  row.prepend(button); row.append(generate);
   return row;
 }
 function updateState(state) {
@@ -79,6 +88,7 @@ function updateState(state) {
 // login); cards are not tied to a site, so their search covers all cards.
 function renderChoices(data) {
   root.className = "choices"; rows.clear(); session.setPassword = data.setPassword === true;
+  session.animations = data.animations; session.animationSpeed = data.animationSpeed;
   const card = data.kind === "card";
   const noun = (count = 2) => card ? (count === 1 ? "card" : "cards") : (count === 1 ? "login" : "logins");
   banner = element("div", null, "fill-banner"); banner.hidden = true;
@@ -121,9 +131,9 @@ function renderChoices(data) {
     count.textContent = results.total > results.items.length ? `Showing ${results.items.length} of ${results.total} ${noun()}` : `${results.items.length} ${noun(results.items.length)}`;
     list.replaceChildren(...(results.items.length ? results.items.map(item => itemButton(item, data.kind)) : [element("p", `No matching ${noun()}.`, "inline-empty")]));
     settle();
-    if (!card && results.items.length) send({ type: "icons" });
+    if (!card && results.items.length) { send({ type: "icons" }); send({ type: "availability", items: results.items.map(item => item.id) }); }
   };
-  if (!card) send({ type: "icons" });
+  if (!card) { send({ type: "icons" }); send({ type: "availability", items: data.items.map(item => item.id) }); }
 }
 const SAVE_TIMEOUT = 20000;
 // Header shared in look with the inline chooser: title, Keep open, close and
@@ -212,6 +222,18 @@ function connect(value) {
         if (!target || !item.favicon) continue;
         const image = element("img"); image.alt = ""; image.src = item.favicon; image.onload = () => target.replaceChildren(image);
       }
+    } else if (message.type === "availability") {
+      for (const item of message.items) {
+        const row = rows.get(item.id)?.closest(".item-row");
+        for (const field of ["username", "password", "totp"]) {
+          const button = row?.querySelector(`[data-field="${field}"]`);
+          if (button) button.hidden = !item[field];
+        }
+      }
+    } else if (message.type === "copied") {
+      const button = rows.get(message.item)?.closest(".item-row")?.querySelector(`[data-field="${message.field}"]`);
+      const motion = session.animations !== "off" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+      stampResult(button, { motion, speed: { slow: 1.6, fast: 0.65 }[session.animationSpeed] || 1 });
     } else if (message.type === "save_choices") session?.saveChoices?.(message.items || []);
     else if (message.type === "save_result") session?.saveResult?.(message.error);
     else if (message.type === "rejected" && notice) notice.textContent = message.error;

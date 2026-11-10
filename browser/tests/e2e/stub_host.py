@@ -23,6 +23,7 @@ while True:
     if len(header) < 4: break
     request = json.loads(sys.stdin.buffer.read(struct.unpack("@I", header)[0]))
     action = request.get("action"); log.write(f"{action}:{request.get('item') or ''}\n"); log.flush()
+    if action == "copy": log.write(f"copy-field:{request.get('field')}\n"); log.flush()
     if action == "status": result = {"unlocked": True, "accounts": ["test"], "primary": "test", "hostVersion": host_version, "staleAgent": None}
     elif action == "search":
         logins = [LOGIN] + [{**LOGIN, "id": f"login-{n}", "name": f"Other Login {n}", "username": f"user{n}"} for n in range(2, 8)]
@@ -30,9 +31,10 @@ while True:
         query = (request.get("query") or "").lower()
         items = [item for item in items if query in f"{item['name']} {item['username']}".lower()]
         result = {"items": items, "limit": 200, "total": len(items), "folders": [], "collections": []}
-    elif action == "credential": result = {"name": "Test Login", "custom": [], "username": "alice", "password": "generated-pw" if request.get("item") in generated else "pw-from-rbw"}
+    elif action == "credential": result = {"name": "Test Login", "custom": [], "username": "alice", "hasTotp": True, "password": "generated-pw" if request.get("item") in generated else "pw-from-rbw"}
     elif action == "detail" and str(request.get("item")).startswith("login-"): result = {"cipher": {"name": "Test Login", "data": {"type": "login", "username": "alice", "password": "pw-from-rbw", "uris": []}, "fields": []}, "revision": "r1"}
     elif action == "detail": result = {"cipher": {"name": "Test Visa", "data": {"type": "card", "cardholder_name": "Alice Test", "number": "4111111111111111", "brand": "Visa", "exp_month": "12", "exp_year": "2030", "code": "123"}, "fields": []}, "revision": "r1"}
+    elif action == "totp": result = {"code": "123456"}
     elif action == "generate": result = "generated-pw"
     elif action == "save":
         if ((request.get("cipher") or {}).get("data") or {}).get("password") == "generated-pw": generated.add(request.get("item"))
