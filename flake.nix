@@ -331,6 +331,7 @@
                 enabled = true;
                 retentionDays = 15;
               };
+              upgrade.autoRestart = false;
               pinentry = {
                 command = "pinentry-gtk2";
                 timeout = 300;

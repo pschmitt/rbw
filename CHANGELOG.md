@@ -17,6 +17,11 @@
   upgrade replaces the older agent that way by itself, and Home Manager
   activation does it right away (`rbw agent restart --if-outdated`).
 
+### Changed
+
+* `rbw status` shows account emails in cyan instead of green, so they no
+  longer blend into the green "unlocked" before them.
+
 ## [2.44.4] - 2026-11-09
 
 ### Added

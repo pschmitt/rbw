@@ -225,7 +225,9 @@ fn print_short(
         let email = a.email.as_deref().unwrap_or("N/A");
         let email_pad = " ".repeat(email_width - width(email));
         let email = if a.email.is_some() {
-            style::user(email, c)
+            // Cyan, not the usual green for accounts: "unlocked" right
+            // before it is green already.
+            style::paint_raw(email, "36", c)
         } else {
             style::empty(email, c)
         };
