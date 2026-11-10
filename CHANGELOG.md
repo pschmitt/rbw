@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.45.2] - 2026-11-10
+
 ### Added
 
 * `rbw status` warns about other `rbw-agent` processes of the same user (another
