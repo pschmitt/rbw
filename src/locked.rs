@@ -206,6 +206,11 @@ impl Keys {
     pub fn mac_key(&self) -> &[u8] {
         &self.keys.data()[32..64]
     }
+
+    // The whole key material, for handing it to a re-executed agent.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.keys.data()
+    }
 }
 
 #[derive(Clone)]

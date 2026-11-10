@@ -62,7 +62,8 @@ while an account is locked (`last_lock` in `rbw status --json`).
 | `agent.server_logout` | `agent` | The server sent a logout notification. |
 | `agent.key_rotation_lock` | `agent` | A key rotation (`rbw security rotate-key`, `change-password --rotate-key`) dropped the old key. |
 | `socket.lock` | `local-agent-socket` | `rbw lock`; `reason` is `one_account` or `all_accounts`, `client` the program that asked. |
-| `agent.start` | `agent` | The agent started, with no keys; `version` is its rbw version. |
+| `agent.start` | `agent` | The agent started, with no keys; `version` is its rbw version. After a re-exec, `reason` is `reexec` (it took over the old agent's keys) or `reexec_locked` (it couldn't read them and started locked). |
+| `agent.reexec` | `agent` | `rbw agent restart` (or `upgrade.autoRestart`) replaced the agent in place, keeping its keys; `version` is the old agent's, `client` the program that asked; `failure` when the exec failed and the old agent kept running. |
 | `agent.stop` | `agent` or `local-agent-socket` | The agent stopped; `reason` says why, `version` is its rbw version, `client` the program that asked. |
 
 The `agent.stop` reasons are fixed labels:

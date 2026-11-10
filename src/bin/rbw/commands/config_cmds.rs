@@ -42,6 +42,9 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
             Some(config.unlock_hide_fingerprint_notice.to_string())
         }
         "passkeyCounter" => Some(config.passkey_counter.to_string()),
+        "upgrade.autoRestart" => {
+            Some(config.upgrade.auto_restart.to_string())
+        }
         "unlockUi" => Some(config.unlock_ui.as_str().to_string()),
         "pinentry.command" => Some(config.pinentry.command),
         "pinentry.timeout" => Some(config.pinentry.timeout.to_string()),
@@ -199,6 +202,11 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
                 .parse()
                 .context("passkeyCounter must be true or false")?;
         }
+        "upgrade.autoRestart" => {
+            config.upgrade.auto_restart = value
+                .parse()
+                .context("upgrade.autoRestart must be true or false")?;
+        }
         "unlockUi" => {
             config.unlock_ui = match value {
                 "auto" => rbw::config::UnlockUi::Auto,
@@ -321,6 +329,7 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
             config.unlock_hide_fingerprint_notice = false;
         }
         "passkeyCounter" => config.passkey_counter = false,
+        "upgrade.autoRestart" => config.upgrade.auto_restart = false,
         "unlockUi" => config.unlock_ui = rbw::config::UnlockUi::Auto,
         "pinentry.command" => {
             config.pinentry.command = rbw::config::default_pinentry();

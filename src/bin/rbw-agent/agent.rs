@@ -206,29 +206,10 @@ impl Agent {
                             continue;
                         }
                     };
-                    let mut sock = crate::sock::Sock::new(stream);
-                    let state = self.state.clone();
-                    tokio::spawn(async move {
-                        let res =
-                            handle_request(&mut sock, state.clone()).await;
-                        if let Err(e) = res {
-                            // The client may already be gone (e.g. it was
-                            // interrupted with Ctrl+C while we were prompting
-                            // for a pin), in which case sending the error will
-                            // itself fail; there's nothing useful to do but
-                            // log it.
-                            if let Err(send_err) = sock
-                                .send(&rbw::protocol::Response::Error {
-                                    error: format!("{e:#}"),
-                                })
-                                .await
-                            {
-                                log::warn!(
-                                    "failed to send error to client: {send_err:#}"
-                                );
-                            }
-                        }
-                    });
+                    // Held for the next agent while a re-exec drains.
+                    if let Some(stream) = crate::reexec::admit(stream) {
+                        serve(stream, self.state.clone());
+                    }
                 }
                 Event::Timeout(()) => {
                     self.state.lock().await.clear();
@@ -246,7 +227,10 @@ impl Agent {
                 }
                 Event::Sync(()) => {
                     let state = self.state.clone();
+                    // A re-exec waits for the sync to finish.
+                    let busy = crate::reexec::busy();
                     tokio::spawn(async move {
+                        let _busy = busy;
                         // Syncs every configured account; failures (e.g.
                         // accounts we aren't logged in to) are logged and
                         // skipped inside sync_all.
@@ -261,6 +245,34 @@ impl Agent {
     }
 }
 
+// Serve one connection in its own task.
+pub fn serve(
+    stream: tokio::net::UnixStream,
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+) {
+    // Counted before the task starts, so a re-exec never misses it.
+    let busy = crate::reexec::busy();
+    tokio::spawn(async move {
+        let _busy = busy;
+        let mut sock = crate::sock::Sock::new(stream);
+        let res = handle_request(&mut sock, state).await;
+        if let Err(e) = res {
+            // The client may already be gone (e.g. it was interrupted with
+            // Ctrl+C while we were prompting for a pin), in which case
+            // sending the error will itself fail; there's nothing useful to
+            // do but log it.
+            if let Err(send_err) = sock
+                .send(&rbw::protocol::Response::Error {
+                    error: format!("{e:#}"),
+                })
+                .await
+            {
+                log::warn!("failed to send error to client: {send_err:#}");
+            }
+        }
+    });
+}
+
 fn socket_audit_operation(
     action: &rbw::protocol::Action,
 ) -> Option<&'static str> {
@@ -270,9 +282,11 @@ fn socket_audit_operation(
         Action::Register { .. } => "socket.register",
         Action::Login { .. } => "socket.login",
         Action::Unlock { .. } => "socket.unlock",
-        Action::CheckLock | Action::Version | Action::Quit { .. } => {
-            return None
-        }
+        // Recorded as agent.stop / agent.reexec instead.
+        Action::CheckLock
+        | Action::Version
+        | Action::Quit { .. }
+        | Action::Reexec { .. } => return None,
         Action::Lock => "socket.lock",
         Action::Sync => "socket.sync",
         Action::PurgeVault { .. } => "socket.purge_vault",
@@ -719,6 +733,11 @@ async fn dispatch(
         }
         rbw::protocol::Action::Version => {
             crate::actions::version(sock).await?;
+            false
+        }
+        rbw::protocol::Action::Reexec { exe } => {
+            let client = peer_program(sock);
+            crate::reexec::reexec(sock, state.clone(), &exe, client).await?;
             false
         }
     };

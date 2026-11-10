@@ -14,6 +14,9 @@ enum Action {
 
 pub struct Timeout {
     req_w: tokio::sync::mpsc::UnboundedSender<Action>,
+    // When the running timer fires, so a re-exec can hand the rest of it
+    // to the new agent (`remaining`).
+    deadline: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 impl Timeout {
@@ -53,14 +56,30 @@ impl Timeout {
                 }
             }
         });
-        (Self { req_w }, timer_r)
+        (
+            Self {
+                req_w,
+                deadline: std::sync::Mutex::new(None),
+            },
+            timer_r,
+        )
     }
 
     pub fn set(&self, dur: std::time::Duration) {
+        *self.deadline.lock().unwrap() =
+            std::time::Instant::now().checked_add(dur);
         self.req_w.send(Action::Set(dur)).unwrap();
     }
 
     pub fn clear(&self) {
+        *self.deadline.lock().unwrap() = None;
         self.req_w.send(Action::Clear).unwrap();
+    }
+
+    // The time left until the timer fires, or `None` when none is running.
+    pub fn remaining(&self) -> Option<std::time::Duration> {
+        self.deadline.lock().unwrap().map(|deadline| {
+            deadline.saturating_duration_since(std::time::Instant::now())
+        })
     }
 }

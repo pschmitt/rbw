@@ -12,6 +12,11 @@ The main sections are:
   account exclusions under `excludeFrom`, and the account's `color`.
 * `agent`: `syncInterval` controls background synchronization and
   `lockTimeout` controls how long unlocked keys remain in memory.
+* `upgrade`: `autoRestart` replaces a running agent older than `rbw` with the
+  new `rbw-agent`, keeping every account unlocked, on the first `rbw` command
+  after an upgrade (`rbw agent restart --if-outdated`; the Home Manager module
+  also runs that on activation). Off by default: an older agent keeps running
+  until `rbw agent restart`.
 * `audit`: local security event logging, enabled by default; `retentionDays`
   keeps 15 calendar days by default (valid range: 1–3650). See
   [Audit log](audit-log.md) for event coverage and privacy details.

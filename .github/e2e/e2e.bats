@@ -962,3 +962,28 @@ wait_for_unlocked() {
     [ "$status" -ne 0 ]
     "$RBW" account set follower --unlock on-demand
 }
+
+@test "agent restart keeps the vault unlocked; --lock locks it" {
+    agent_pid() {
+        "$RBW" status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["agent"]["pid"])'
+    }
+    echo "$PASSWORD" | "$RBW" unlock --stdin
+    "$RBW" generate e2e-reexec-entry e2e-user --length 20 >/dev/null
+    "$RBW" sync
+    BEFORE_PID="$(agent_pid)"
+    BEFORE="$("$RBW" get e2e-reexec-entry | sha256sum)"
+
+    # Replaced in place: same process, keys handed over, no unlock needed.
+    "$RBW" agent restart
+    [ "$(agent_pid)" = "$BEFORE_PID" ]
+    "$RBW" unlocked
+    [ "$("$RBW" get e2e-reexec-entry | sha256sum)" = "$BEFORE" ]
+    "$RBW" agent restart --if-outdated
+    "$RBW" unlocked
+
+    "$RBW" agent restart --lock
+    [ "$(agent_pid)" != "$BEFORE_PID" ]
+    run "$RBW" unlocked
+    [ "$status" -ne 0 ]
+    echo "$PASSWORD" | "$RBW" unlock --stdin
+}

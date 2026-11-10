@@ -508,6 +508,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "unlockFingerprint",
     "unlockHideFingerprintNotice",
     "passkeyCounter",
+    "upgrade.autoRestart",
     "pinentry.command",
     "pinentry.timeout",
     "termux.keyAlias",

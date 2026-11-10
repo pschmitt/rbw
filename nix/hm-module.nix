@@ -467,6 +467,24 @@ let
         default = { };
         description = "Local security audit log settings.";
       };
+      upgrade = mkOption {
+        type = types.submodule {
+          options = {
+            autoRestart = mkOption {
+              type = types.bool;
+              default = false;
+              description = ''
+                Replace a running rbw-agent that is older than rbw with the
+                new rbw-agent, in place and keeping every account unlocked:
+                on the next `rbw` command after an upgrade, and right away
+                when Home Manager activates a new rbw.
+              '';
+            };
+          };
+        };
+        default = { };
+        description = "What happens to a running agent when rbw is upgraded.";
+      };
       unlockNoEcho = mkOption {
         type = types.bool;
         default = false;
@@ -949,10 +967,23 @@ in
           # guard against (contrast the old `_secret`-marker approach this
           # replaced, which had to bake the *resolved* secret value into
           # config.yaml during activation itself).
-          home.activation.rbw-config = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-            $DRY_RUN_CMD mkdir -p "$(dirname '${configFile}')"
-            $DRY_RUN_CMD install -m 0600 '${renderedConfigFile}' '${configFile}'
-          '';
+          home.activation = {
+            rbw-config = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+              $DRY_RUN_CMD mkdir -p "$(dirname '${configFile}')"
+              $DRY_RUN_CMD install -m 0600 '${renderedConfigFile}' '${configFile}'
+            '';
+
+            # Hands a running older agent over to this rbw-agent, unlocked
+            # (never stops, locks or starts one). Best effort: activation
+            # carries on whatever happens.
+            rbw-agent-upgrade = mkIf cfg.settings.upgrade.autoRestart (
+              lib.hm.dag.entryAfter [ "rbw-config" "linkGeneration" ] ''
+                XDG_RUNTIME_DIR="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+                  $DRY_RUN_CMD ${pkgs.coreutils}/bin/timeout 30 \
+                  ${cfg.package}/bin/rbw agent restart --if-outdated || true
+              ''
+            );
+          };
         }
       )
     ]

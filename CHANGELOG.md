@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+* `rbw agent restart` keeps every account unlocked: the agent execs the new
+  `rbw-agent` in place (same pid, same socket) and hands it the unlocked keys
+  through memory (a memfd), never the filesystem. It first lets running
+  requests finish and holds new connections for the new agent, so clients
+  don't notice. Linux only; an agent older than 2.45 is stopped as before,
+  and `--lock` always stops it. New `Reexec` agent request.
+* `upgrade.autoRestart` (config, `rbw config set upgrade.autoRestart true`,
+  Home Manager `settings.upgrade.autoRestart`): the first `rbw` command after an
+  upgrade replaces the older agent that way by itself, and Home Manager
+  activation does it right away (`rbw agent restart --if-outdated`).
+
 ## [2.44.4] - 2026-11-09
 
 ### Added

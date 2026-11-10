@@ -224,6 +224,69 @@ pub fn quit(reason: &'static str) -> anyhow::Result<()> {
     }
 }
 
+// The `rbw-agent` to replace the running agent with: `$RBW_AGENT` when it
+// is a path, else the one installed next to this rbw, else the one on
+// `$PATH`.
+pub fn agent_exe() -> Option<std::path::PathBuf> {
+    let explicit =
+        std::env::var_os("RBW_AGENT").map(std::path::PathBuf::from);
+    if let Some(path) = &explicit {
+        if path.is_absolute() {
+            return Some(path.clone());
+        }
+    }
+    let name = explicit.unwrap_or_else(|| "rbw-agent".into());
+    if name.components().count() == 1 {
+        if let Some(sibling) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join(&name)))
+            .filter(|path| path.is_file())
+        {
+            return Some(sibling);
+        }
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(&name))
+        .find(|path| path.is_file())
+}
+
+/// How a request to replace the agent in place went.
+pub enum Reexec {
+    /// The agent now runs `exe`, still unlocked.
+    Done,
+    /// The agent can't do it (too old, not Linux, busy, untrusted binary)
+    /// and kept running unchanged; the reason is attached.
+    Refused(String),
+}
+
+// Ask the running agent to exec `exe` in place, keeping its keys.
+pub fn reexec(exe: &std::path::Path) -> anyhow::Result<Reexec> {
+    let mut sock = connect()?;
+    sock.send(&rbw::protocol::Request::with_account(
+        get_environment(),
+        current_account(),
+        rbw::protocol::Action::Reexec {
+            exe: exe.to_string_lossy().into_owned(),
+        },
+    ))?;
+    match sock.recv()? {
+        rbw::protocol::Response::Ack => {}
+        rbw::protocol::Response::Error { error } => {
+            return Ok(Reexec::Refused(error))
+        }
+        res => anyhow::bail!("unexpected message: {res:?}"),
+    }
+    // The exec closes this connection; an `Error` instead means the exec
+    // failed and the old agent is still serving.
+    match sock.recv_or_eof() {
+        Ok(None) | Err(_) => Ok(Reexec::Done),
+        Ok(Some(rbw::protocol::Response::Error { error })) => {
+            Err(anyhow::anyhow!("{error}"))
+        }
+        Ok(Some(res)) => anyhow::bail!("unexpected message: {res:?}"),
+    }
+}
+
 pub fn kill() -> anyhow::Result<()> {
     let pid = match agent_pid() {
         Ok(pid) => pid,

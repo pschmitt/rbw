@@ -29,6 +29,24 @@ impl Sock {
         Ok(())
     }
 
+    // The next response, or `None` once the agent closed the connection.
+    pub fn recv_or_eof(
+        &mut self,
+    ) -> anyhow::Result<Option<rbw::protocol::Response>> {
+        let Self(sock) = self;
+        let mut line = String::new();
+        std::io::BufReader::new(sock)
+            .read_line(&mut line)
+            .context("failed to read message from agent")?;
+        if line.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(
+            serde_json::from_str(&line)
+                .context("failed to parse message from agent")?,
+        ))
+    }
+
     pub fn recv(&mut self) -> anyhow::Result<rbw::protocol::Response> {
         let Self(sock) = self;
         let mut buf = std::io::BufReader::new(sock);

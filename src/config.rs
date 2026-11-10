@@ -235,6 +235,26 @@ pub struct ApiConfig {
     pub hostname: String,
 }
 
+/// What happens when rbw is upgraded while an agent is running.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct UpgradeConfig {
+    /// Replace an agent older than the `rbw` talking to it with that rbw's
+    /// own `rbw-agent`, keeping every account unlocked (`rbw agent restart`
+    /// without `--lock`). Off: an older agent keeps running until it is
+    /// restarted (or, from an older minor, until it is replaced locked).
+    #[serde(default)]
+    pub auto_restart: bool,
+}
+
+impl UpgradeConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 /// Controls the local security audit log. The log is enabled by default and
 /// retains 15 calendar days of secret-free operation metadata.
 #[derive(
@@ -932,6 +952,8 @@ pub struct Config {
     pub api: ApiConfig,
     #[serde(default, skip_serializing_if = "AuditConfig::is_default")]
     pub audit: AuditConfig,
+    #[serde(default, skip_serializing_if = "UpgradeConfig::is_default")]
+    pub upgrade: UpgradeConfig,
     #[serde(default)]
     pub pinentry: PinentryConfig,
     #[serde(default, skip_serializing_if = "UnlockUi::is_auto")]

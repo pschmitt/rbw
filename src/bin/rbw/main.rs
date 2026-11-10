@@ -2533,19 +2533,37 @@ enum AgentCmd {
         kill: bool,
     },
     #[command(
-        about = "Restart the background agent, which locks every account",
-        long_about = "Stop the background agent, which locks every account, \
-            and start a new one. With --unlock, unlock right away, like \
-            `rbw agent stop; rbw unlock`."
+        about = "Restart the background agent with this rbw's version",
+        long_about = "Replace the background agent with this rbw's \
+            rbw-agent. The agent hands its unlocked keys to the new one in \
+            memory, so every account stays unlocked (rbw-agent 2.45 and \
+            later, on Linux). An older agent is stopped instead, which locks \
+            every account, and a new one started. With --lock, always stop \
+            it, like `rbw agent stop`. With --unlock, unlock right away \
+            afterwards."
     )]
     Restart {
         #[arg(
             long,
-            help = "Forcefully kill the agent if it is unresponsive"
+            help = "Forcefully kill the agent if it is unresponsive (locks)"
         )]
         kill: bool,
         #[arg(long, help = "Unlock the vault again after the restart")]
         unlock: bool,
+        #[arg(
+            long,
+            conflicts_with = "if_outdated",
+            help = "Stop the agent, locking every account, instead of \
+                replacing it unlocked"
+        )]
+        lock: bool,
+        #[arg(
+            long,
+            conflicts_with_all = ["kill", "unlock"],
+            help = "Only replace an agent older than this rbw, only \
+                unlocked; never stop or start one (for upgrade hooks)"
+        )]
+        if_outdated: bool,
     },
 }
 
@@ -4498,9 +4516,12 @@ fn main() {
                     commands::stop_agent()
                 }
             }
-            AgentCmd::Restart { kill, unlock } => {
-                commands::agent_restart(kill, unlock)
-            }
+            AgentCmd::Restart {
+                kill,
+                unlock,
+                lock,
+                if_outdated,
+            } => commands::agent_restart(kill, unlock, lock, if_outdated),
         },
         Opt::Api { api } => match api {
             ApiCmd::Enable { listen, hostname } => {
@@ -6059,13 +6080,30 @@ mod test {
             ),
         ] {
             let Opt::Agent {
-                agent: AgentCmd::Restart { kill, unlock },
+                agent: AgentCmd::Restart { kill, unlock, .. },
             } = parse(arguments).command
             else {
                 panic!("expected rbw agent restart");
             };
             assert_eq!((kill, unlock), (want_kill, want_unlock));
         }
+        let Opt::Agent {
+            agent:
+                AgentCmd::Restart {
+                    lock, if_outdated, ..
+                },
+        } = parse(&["rbw", "agent", "restart", "--if-outdated"]).command
+        else {
+            panic!("expected rbw agent restart --if-outdated");
+        };
+        assert!(if_outdated && !lock);
+        let Opt::Agent {
+            agent: AgentCmd::Restart { lock, .. },
+        } = parse(&["rbw", "agent", "restart", "--lock"]).command
+        else {
+            panic!("expected rbw agent restart --lock");
+        };
+        assert!(lock);
     }
 
     #[test]

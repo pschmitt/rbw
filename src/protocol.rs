@@ -362,6 +362,14 @@ pub enum Action {
         reason: Option<String>,
     },
     Version,
+    // Replace the agent with the `rbw-agent` at `exe` (since 2.45) without
+    // locking: the agent waits for its other requests to finish, answers
+    // `Ack`, then execs `exe` in place (same pid, same socket) and hands it
+    // the unlocked keys in memory. An `Error` (also what an older agent
+    // answers) means the agent kept running unchanged.
+    Reexec {
+        exe: String,
+    },
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]

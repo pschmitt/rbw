@@ -55,18 +55,76 @@ pub fn stop_agent_for(reason: &'static str) -> anyhow::Result<()> {
     Ok(())
 }
 
-// Replaces the running agent (which locks every account) with this build's.
+// Replaces the running agent with this build's: in place and still unlocked
+// when the agent can (2.45 and later, on Linux), else by stopping it, which
+// locks every account.
 pub fn restart_agent() -> anyhow::Result<()> {
     check_config()?;
-    crate::actions::quit("outdated")?;
-    run_agent()?;
+    if !replace_agent_in_place() {
+        crate::actions::quit("outdated")?;
+        run_agent()?;
+    }
     check_agent_version()
 }
 
-// Stops the agent, which locks every account, and starts a new one. The
-// configuration is checked first, so a broken one leaves the agent running.
-pub fn agent_restart(kill: bool, then_unlock: bool) -> anyhow::Result<()> {
+// Asks the running agent to exec this build's rbw-agent in place, keeping
+// its unlocked keys. False (and the agent unchanged) when there is no agent
+// or it can't.
+pub(super) fn replace_agent_in_place() -> bool {
+    let Some(exe) = crate::actions::agent_exe() else {
+        log::warn!("can't find rbw-agent to replace the agent with");
+        return false;
+    };
+    match crate::actions::reexec(&exe) {
+        Ok(crate::actions::Reexec::Done) => true,
+        Ok(crate::actions::Reexec::Refused(reason)) => {
+            log::info!("can't replace the agent in place: {reason}");
+            false
+        }
+        Err(e) => {
+            log::debug!("can't replace the agent in place: {e:#}");
+            false
+        }
+    }
+}
+
+// Restarts the agent with this build's binary. Unless `lock` (or `kill`) is
+// given, the agent is replaced in place and stays unlocked; an agent that
+// can't do that (older than 2.45) is stopped, which locks every account, and
+// a new one started. `if_outdated` only replaces an agent older than this
+// rbw, only in place, and never starts or locks one (for upgrade hooks).
+// The configuration is checked first, so a broken one leaves the agent
+// running.
+pub fn agent_restart(
+    kill: bool,
+    then_unlock: bool,
+    lock: bool,
+    if_outdated: bool,
+) -> anyhow::Result<()> {
     check_config()?;
+    if if_outdated {
+        let Ok(version) = crate::actions::version() else {
+            return Ok(());
+        };
+        if version >= rbw::protocol::VERSION {
+            return Ok(());
+        }
+        if !replace_agent_in_place() {
+            log::warn!(
+                "rbw-agent {} keeps running; `rbw agent restart` replaces it",
+                rbw::protocol::version_string(version)
+            );
+        }
+        return Ok(());
+    }
+    if !kill && !lock && replace_agent_in_place() {
+        check_agent_version()?;
+        return if then_unlock {
+            unlock(None, None)
+        } else {
+            Ok(())
+        };
+    }
     if kill {
         kill_agent()?;
     } else {
@@ -168,6 +226,20 @@ pub(super) fn check_config() -> anyhow::Result<()> {
 
 pub(super) fn check_agent_version() -> anyhow::Result<()> {
     let agent_version = version_or_quit()?;
+    // `upgrade.autoRestart`: an agent older than this rbw (one that outlived
+    // an upgrade) is replaced in place, keeping every account unlocked.
+    if agent_version < rbw::protocol::VERSION
+        && rbw::config::Config::load()
+            .is_ok_and(|config| config.upgrade.auto_restart)
+        && replace_agent_in_place()
+    {
+        log::info!(
+            "replaced rbw-agent {} with {}",
+            rbw::protocol::version_string(agent_version),
+            env!("CARGO_PKG_VERSION")
+        );
+        return Ok(());
+    }
     // Any patch of this minor, or a newer minor of this major, serves this
     // client (see `protocol::compatible`); an older one is replaced. A newer
     // major is never stopped: then this rbw is the stale one (a program
