@@ -1,8 +1,8 @@
 {
   "chromiumId": "cnmnibgkcloflchecoolkkimmohfhckg",
   "chromiumKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAn7b6xSCFDHRPOLwuuEiV6j3Xf690if9kL8JQPs+1ssgdYhdYW7Z6v55u372MrMmTybbteaB9/5SC/Hin4z69KXJ9HkWV48E0AsIhG403HbIdF2Ks3E5J5COe4dglldLfkM8A3WeCEEKmWdSUC1gHN3wZG5Kj1MQixGIa88YCbcire/9v1NaAt0+scK+VOPWgY3JRGWXDO+f6Z2nkgARy13YH5Xjf2R9YMMQlJhjUfTR96jmjRlvxo5zQXgF0FmqYR9Y8U0+rqSMHuh3cgpZifuQakcGMkobz6X1Wg80OWwnexD9cQkHl7ek4uY5I8mOLXsV3MAwaghLJSM4Cl+UnHQIDAQAB",
-  "version": "2.45.1",
-  "tag": "v2.45.1",
-  "firefoxSha256": "1a9ee3d9f492faed78f5d5fe0b6c029a832b8b249aedfd390bd5aee23d8ad478",
-  "chromiumSha256": "25fa6a9322c683dfaf67c291a80bffd0738caa79fc2fb84ef34b15a313447e1f"
+  "version": "2.45.2",
+  "tag": "v2.45.2",
+  "firefoxSha256": "a94efb8f0101c9c6d5f37d31e3e9480e1222a38433db824a0c7340c6fbb74376",
+  "chromiumSha256": "7b96fc948634a2c769fb5b9f2790c887d87103d13433b748fb982ace4e8fea6d"
 }
