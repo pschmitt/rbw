@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.45.3] - 2026-11-10
+
 ### Added
 
 * The inline autofill chooser offers copy buttons for available usernames,
