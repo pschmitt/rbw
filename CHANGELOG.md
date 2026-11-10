@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.45.1] - 2026-11-10
+
 ### Changed
 
 * `rbw status` paints only the agent's state ("running", "not running"), not
