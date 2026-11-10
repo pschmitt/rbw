@@ -28,6 +28,10 @@ pub const VERSION: u32 = {
 /// browser hosts that are still running the previous release. An older
 /// minor may lack what this build sends, and another major is a different
 /// protocol: those are replaced (or reported).
+/// The first agent version that can replace itself in place
+/// (`Action::Reexec`); an older one answers it with a parse error.
+pub const REEXEC_SINCE: u32 = 2_045_000;
+
 pub const fn compatible(version: u32) -> bool {
     version / 1_000_000 == VERSION / 1_000_000
         && version / 1_000 >= VERSION / 1_000

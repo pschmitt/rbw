@@ -167,11 +167,12 @@ fn print_short(
     last_lock: Option<&rbw::audit::LastLock>,
     c: bool,
 ) {
+    // Only the state is painted, not the word "agent".
     let agent = match (pid, stale_agent, other_agent) {
-        (None, _, _) => style::danger("agent not running", c),
+        (None, _, _) => style::danger("not running", c),
         (Some(_), Some(version), _) => style::danger(
             &format!(
-                "agent {} ({})",
+                "{} ({})",
                 rbw::protocol::version_string(version),
                 stale_agent_hint(version)
             ),
@@ -179,7 +180,7 @@ fn print_short(
         ),
         (Some(pid), None, Some(version)) => style::warning(
             &format!(
-                "agent {} running (pid {pid}; {})",
+                "{} running (pid {pid}; {})",
                 rbw::protocol::version_string(version),
                 other_agent_hint(version)
             ),
@@ -187,16 +188,17 @@ fn print_short(
         ),
         (Some(pid), None, None) => format!(
             "{} {}",
-            style::success("agent running", c),
+            style::success("running", c),
             style::dim(&format!("(pid {pid})"), c)
         ),
     };
     println!(
-        "{} {} {} {agent}",
+        "{} {} {} agent {agent}",
         style::name("rbw", c),
         style::dim(env!("CARGO_PKG_VERSION"), c),
         style::dim("·", c)
     );
+    println!();
     if accounts.is_empty() {
         println!("{}", style::empty("no accounts configured", c));
         return;
@@ -212,6 +214,13 @@ fn print_short(
     let email_width = accounts
         .iter()
         .map(|a| a.email.as_deref().map_or(3, width))
+        .max()
+        .unwrap_or(0);
+    // Item counts are right-aligned, so "items" lines up.
+    let items_width = accounts
+        .iter()
+        .filter(|a| a.logged_in)
+        .map(|a| a.items.unwrap_or_default().to_string().len())
         .max()
         .unwrap_or(0);
     for a in accounts {
@@ -239,7 +248,7 @@ fn print_short(
             );
             format!(
                 "{} {} {synced}",
-                style::name(&items.to_string(), c),
+                style::name(&format!("{items:>items_width$}"), c),
                 style::dim(if items == 1 { "item ·" } else { "items ·" }, c)
             )
         } else {

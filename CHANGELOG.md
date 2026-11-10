@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+* `rbw status` paints only the agent's state ("running", "not running"), not
+  the word "agent", leaves a blank line before the accounts, and right-aligns
+  their item counts so the columns line up.
+* rbw no longer asks an agent older than 2.45 to restart in place (it can't),
+  and says so plainly instead of reporting "failed to parse agent request".
+
 ## [2.45.0] - 2026-11-10
 
 ### Added

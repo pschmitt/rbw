@@ -60,7 +60,7 @@ pub fn stop_agent_for(reason: &'static str) -> anyhow::Result<()> {
 // locks every account.
 pub fn restart_agent() -> anyhow::Result<()> {
     check_config()?;
-    if !replace_agent_in_place() {
+    if !replace_agent_in_place(crate::actions::version().ok()) {
         crate::actions::quit("outdated")?;
         run_agent()?;
     }
@@ -69,8 +69,19 @@ pub fn restart_agent() -> anyhow::Result<()> {
 
 // Asks the running agent to exec this build's rbw-agent in place, keeping
 // its unlocked keys. False (and the agent unchanged) when there is no agent
-// or it can't.
-pub(super) fn replace_agent_in_place() -> bool {
+// or it can't. `version` is the agent's, when known: one older than 2.45
+// can't, so it isn't asked.
+pub(super) fn replace_agent_in_place(version: Option<u32>) -> bool {
+    if let Some(version) =
+        version.filter(|v| *v < rbw::protocol::REEXEC_SINCE)
+    {
+        log::info!(
+            "rbw-agent {} predates in-place restarts (2.45); replacing it \
+             locks the vault",
+            rbw::protocol::version_string(version)
+        );
+        return false;
+    }
     let Some(exe) = crate::actions::agent_exe() else {
         log::warn!("can't find rbw-agent to replace the agent with");
         return false;
@@ -109,7 +120,7 @@ pub fn agent_restart(
         if version >= rbw::protocol::VERSION {
             return Ok(());
         }
-        if !replace_agent_in_place() {
+        if !replace_agent_in_place(Some(version)) {
             log::warn!(
                 "rbw-agent {} keeps running; `rbw agent restart` replaces it",
                 rbw::protocol::version_string(version)
@@ -117,7 +128,10 @@ pub fn agent_restart(
         }
         return Ok(());
     }
-    if !kill && !lock && replace_agent_in_place() {
+    if !kill
+        && !lock
+        && replace_agent_in_place(crate::actions::version().ok())
+    {
         check_agent_version()?;
         return if then_unlock {
             unlock(None, None)
@@ -231,7 +245,7 @@ pub(super) fn check_agent_version() -> anyhow::Result<()> {
     if agent_version < rbw::protocol::VERSION
         && rbw::config::Config::load()
             .is_ok_and(|config| config.upgrade.auto_restart)
-        && replace_agent_in_place()
+        && replace_agent_in_place(Some(agent_version))
     {
         log::info!(
             "replaced rbw-agent {} with {}",
