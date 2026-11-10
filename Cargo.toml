@@ -50,14 +50,7 @@ log = "0.4.29"
 open = "5.3.3"
 pbkdf2 = "0.13.0"
 percent-encoding = "2.3.2"
-# pkcs8 was a direct dependency only for `DecodePrivateKey`/`DecodePublicKey`
-# on `rsa` types; that only compiles against the pkcs8 version `rsa` itself
-# depends on (see `rsa::pkcs8` usage in cipherstring.rs), so bumping it here
-# independently of `rsa` breaks the build with no upside -- removed.
-# TODO: necessary because `rsa` (not in the lockstep bump group) still
-# depends on rand_core 0.6 via rand 0.8
 p256 = { version = "0.14", features = ["ecdsa", "pkcs8"] }
-rand_8 = { package = "rand", version = "0.8.5" }
 rand = "0.10.0"
 ratatui = "0.30.2"
 rcgen = { version = "0.14", features = ["x509-parser"] }
@@ -71,7 +64,7 @@ reqwest = { version = "0.12.28", default-features = false, features = [
     "rustls-tls-native-roots",
 ] }
 rmpv = "1.3.0"
-rsa = "0.9.9"
+rsa = { version = "0.10.0", features = ["pkcs1v15"] }
 rustix = { version = "1.1.3", features = [
     "termios",
     "process",
@@ -84,14 +77,11 @@ serde_json = "1.0.147"
 serde_path_to_error = "0.1.20"
 serde_repr = "0.1.20"
 serde = { version = "1.0.228", features = ["derive"] }
-# `rsa` (not in the lockstep bump group) still needs digest 0.10-era
-# `Sha1`/`Digest`/`DecodePrivateKey`/`DecodePublicKey` impls for its OAEP and
-# PKCS1v15 signing APIs; it re-exports a compatible `sha2` and `pkcs8` itself
-# (used as `rsa::sha2`/`rsa::pkcs8`) but not `sha1`, hence this alias.
-sha1_10 = { package = "sha1", version = "0.10.6" }
 sha1 = "0.11.0"
 sha2 = "0.11.0"
 signature = "3"
+# ssh-key 0.6 implements the signer trait from signature 2.
+signature_2 = { package = "signature", version = "2.2" }
 ssh-agent-lib = "0.6.0"
 tar = "0.4.46"
 tempfile = "3.24.0"

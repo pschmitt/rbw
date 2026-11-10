@@ -25,8 +25,10 @@ ignore = [
     # This advisory reports maintenance status, not a known vulnerability;
     # drop it once authenticator moves off serde_cbor.
     "RUSTSEC-2021-0127",
-    # this is a timing attack against using the rsa crate for encryption, but
-    # we only use rsa decryption here
+    # ssh-agent-lib enables ssh-key 0.6's RSA support, which still pulls in
+    # rsa 0.9 and is affected by Marvin. rbw decodes SSH keys with ssh-key
+    # but performs its RSA signing and vault decryption with rsa 0.10. Remove
+    # this exception when ssh-agent-lib updates its ssh-key dependency.
     "RUSTSEC-2023-0071",
     # (2026-07-03) quick-xml DoS via crafted untrusted XML (quadratic
     # duplicate-attribute check / unbounded namespace allocations), fixed
@@ -112,10 +114,15 @@ skip = [
     { name = "sec1", version = "0.8.1" },
     { name = "spki", version = "0.7.3" },
     { name = "spki", version = "0.8.1" },
+    # ssh-agent-lib -> ssh-key 0.6 still pulls rsa 0.9 and pkcs1 0.7;
+    # rbw's RSA operations use rsa 0.10 and pkcs1 0.8.
+    { name = "rsa", version = "0.9.10" },
+    { name = "rsa", version = "0.10.0" },
+    { name = "pkcs1", version = "0.7.5" },
+    { name = "pkcs1", version = "0.8.0" },
     # until the rand 0.8 -> 0.9 -> 0.10 transition finished making its way
-    # through the crate ecosystem (rand_8 is pinned to 0.8 for `rsa`; some
-    # transitive deps are still on 0.9 for other target platforms; rbw's own
-    # direct dependency is 0.10)
+    # through the crate ecosystem (some transitive deps still use older
+    # versions; rbw's own direct dependency is 0.10)
     { name = "rand", version = "0.8.6" },
     { name = "rand", version = "0.9.4" },
     { name = "rand", version = "0.10.2" },
@@ -143,11 +150,8 @@ skip = [
     # the tree has converged on yet
     { name = "syn", version = "2.0.119" },
     { name = "syn", version = "3.0.4" },
-    # `rsa` (and, transitively through it and `ssh-key`, several elliptic
-    # curve / ed25519 crates) is still on the digest-0.10-era stack; rbw's
-    # own direct dependency on each of these is the newer major. See the
-    # `sha1_10`/`rsa::sha2`/`rsa::signature`/`rsa::pkcs8` workarounds in
-    # cipherstring.rs and ssh_agent.rs.
+    # Transitive dependencies, including ssh-key and elliptic-curve crates,
+    # still use the digest 0.10 stack alongside rbw's 0.11 dependencies.
     { name = "block-buffer", version = "0.10.4" },
     { name = "block-buffer", version = "0.12.1" },
     { name = "cipher", version = "0.4.4" },

@@ -4,10 +4,6 @@ use aes::cipher::{
     BlockModeDecrypt as _, BlockModeEncrypt as _, KeyIvInit as _,
 };
 use hmac::{KeyInit as _, Mac as _};
-// `rsa`'s own re-exported `pkcs8` (0.10-line), not our top-level `pkcs8`
-// (0.11): `rsa::RsaPrivateKey`/`RsaPublicKey` only implement the
-// `DecodePrivateKey`/`DecodePublicKey` traits from the version rsa itself
-// depends on.
 use rand::Rng as _;
 use rsa::pkcs8::{DecodePrivateKey as _, DecodePublicKey as _};
 use zeroize::Zeroize as _;
@@ -207,10 +203,10 @@ impl CipherString {
             let privkey_data = private_key.private_key();
             let privkey_data =
                 pkcs7_unpad(privkey_data).ok_or(Error::Padding)?;
-            let pkey = rsa::RsaPrivateKey::from_pkcs8_der(privkey_data)
+            let pkey = rsa::PrivateKey::from_pkcs8_der(privkey_data)
                 .map_err(|source| Error::RsaPkcs8 { source })?;
             let mut bytes = pkey
-                .decrypt(rsa::Oaep::new::<sha1_10::Sha1>(), ciphertext)
+                .decrypt(rsa::Oaep::<sha1::Sha1>::new(), ciphertext)
                 .map_err(|source| Error::Rsa { source })?;
 
             // XXX it'd be great if the rsa crate would let us decrypt
@@ -236,15 +232,12 @@ impl CipherString {
     // asymmetric is server-generated and only ever decrypted (see
     // `decrypt_locked_asymmetric`).
     pub fn encrypt_asymmetric(
-        public_key: &rsa::RsaPublicKey,
+        public_key: &rsa::PublicKey,
         plaintext: &[u8],
     ) -> Result<Self> {
-        // The `rsa` crate's `encrypt` needs a `rand_core` 0.6-compatible
-        // rng, not the 0.9 one `rand::rng()` gives -- same reason
-        // `ssh_agent.rs` reaches for `rand_8` instead of `rand` here.
-        let mut rng = rand_8::rngs::OsRng;
+        let mut rng = rand::rng();
         let ciphertext = public_key
-            .encrypt(&mut rng, rsa::Oaep::new::<sha1_10::Sha1>(), plaintext)
+            .encrypt(&mut rng, rsa::Oaep::<sha1::Sha1>::new(), plaintext)
             .map_err(|source| Error::Rsa { source })?;
         Ok(Self::Asymmetric { ciphertext })
     }
@@ -256,10 +249,10 @@ impl CipherString {
 // (fetched from the server) when confirming them (`rbw org confirm`).
 pub fn rsa_public_key_from_private(
     private_key: &crate::locked::PrivateKey,
-) -> Result<rsa::RsaPublicKey> {
+) -> Result<rsa::PublicKey> {
     let privkey_data = private_key.private_key();
     let privkey_data = pkcs7_unpad(privkey_data).ok_or(Error::Padding)?;
-    let pkey = rsa::RsaPrivateKey::from_pkcs8_der(privkey_data)
+    let pkey = rsa::PrivateKey::from_pkcs8_der(privkey_data)
         .map_err(|source| Error::RsaPkcs8 { source })?;
     Ok(pkey.to_public_key())
 }
@@ -267,8 +260,8 @@ pub fn rsa_public_key_from_private(
 // Parses another org member's RSA public key (fetched from the server as
 // raw DER bytes, `GET /users/{id}/public-key`) so `rbw org confirm` can
 // encrypt the org key to them.
-pub fn rsa_public_key_from_der(der: &[u8]) -> Result<rsa::RsaPublicKey> {
-    rsa::RsaPublicKey::from_public_key_der(der)
+pub fn rsa_public_key_from_der(der: &[u8]) -> Result<rsa::PublicKey> {
+    rsa::PublicKey::from_public_key_der(der)
         .map_err(|source| Error::RsaSpki { source })
 }
 
@@ -472,4 +465,34 @@ fn test_parse_malformed_type() {
             Err(Error::UnimplementedCipherStringType { .. })
         ));
     }
+}
+
+#[test]
+fn rsa_oaep_sha1_round_trip_for_organization_keys() {
+    use rsa::pkcs8::EncodePrivateKey as _;
+
+    let private = rsa::PrivateKey::new(&mut rand::rng(), 2048).unwrap();
+    let public = private.to_public_key();
+    let der = private.to_pkcs8_der().unwrap();
+    let pad = 16 - der.as_bytes().len() % 16;
+    let mut locked = crate::locked::Vec::new();
+    locked.extend(der.as_bytes().iter().copied());
+    locked.extend(std::iter::repeat_n(u8::try_from(pad).unwrap(), pad));
+    let key = crate::locked::PrivateKey::new(locked);
+    let plaintext = b"organization key material";
+
+    let encrypted =
+        CipherString::encrypt_asymmetric(&public, plaintext).unwrap();
+    let CipherString::Asymmetric { ciphertext } = &encrypted else {
+        panic!("expected asymmetric cipherstring");
+    };
+    assert_eq!(
+        private.oaep_decrypt::<sha1::Sha1>(ciphertext).unwrap(),
+        plaintext
+    );
+    assert!(private.oaep_decrypt::<sha2::Sha256>(ciphertext).is_err());
+    assert_eq!(
+        encrypted.decrypt_locked_asymmetric(&key).unwrap().data(),
+        plaintext
+    );
 }

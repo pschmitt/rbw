@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Upgrade the RSA implementation used for organization keys and SSH signing
+  to 0.10, which includes the upstream Marvin timing-attack mitigations.
+
+
 ## [2.45.3] - 2026-11-10
 
 ### Added

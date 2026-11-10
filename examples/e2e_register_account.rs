@@ -84,15 +84,12 @@ fn main() {
     )
     .expect("failed to wrap generated vault key");
 
-    // RSA keypair used for org-invite encryption -- every account needs
-    // one, wrapped under the vault key (not the master key). `rsa` pulls
-    // in `rand_core` 0.6.x, which `rand` 0.9's `OsRng` doesn't implement
-    // -- `rand_8` (rand 0.8.5) is already a dependency for exactly this
-    // mismatch (see `cipherstring.rs`'s own RSA-adjacent code).
-    let mut rng = rand_8::rngs::OsRng;
-    let private_key = rsa::RsaPrivateKey::new(&mut rng, 2048)
+    // Every account needs an RSA keypair, wrapped under the vault key,
+    // for organization key sharing.
+    let mut rng = rand::rng();
+    let private_key = rsa::PrivateKey::new(&mut rng, 2048)
         .expect("failed to generate RSA keypair");
-    let public_key = rsa::RsaPublicKey::from(&private_key);
+    let public_key = rsa::PublicKey::from(&private_key);
     let private_key_der = private_key
         .to_pkcs8_der()
         .expect("failed to encode RSA private key");

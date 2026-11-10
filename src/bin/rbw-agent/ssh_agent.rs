@@ -1,9 +1,5 @@
-// `rsa`'s own re-exported `signature` (2.x line), not our top-level
-// `signature` (3.x): `rsa::pkcs1v15::SigningKey` only implements the
-// signer traits from the version rsa itself depends on.
-use rsa::signature::{
-    RandomizedSigner as _, SignatureEncoding as _, Signer as _,
-};
+use rsa::signature::{RandomizedSigner as _, SignatureEncoding as _};
+use signature_2::Signer as _;
 
 async fn record_ssh_agent_event(
     operation: &'static str,
@@ -32,8 +28,75 @@ async fn record_ssh_agent_event(
     rbw::audit::record_async_best_effort(config, event).await;
 }
 
+fn rsa_private_key(
+    p_bytes: &[u8],
+    q_bytes: &[u8],
+    e_bytes: &[u8],
+) -> Result<rsa::PrivateKey, ssh_agent_lib::error::AgentError> {
+    let bits = u32::try_from(
+        p_bytes
+            .len()
+            .max(q_bytes.len())
+            .max(e_bytes.len())
+            .saturating_mul(8),
+    )
+    .map_err(ssh_agent_lib::error::AgentError::other)?;
+    let parse = |bytes: &[u8]| {
+        rsa::BoxedUint::from_be_slice(bytes, bits)
+            .map_err(ssh_agent_lib::error::AgentError::other)
+    };
+    rsa::PrivateKey::from_p_q(
+        parse(p_bytes)?,
+        parse(q_bytes)?,
+        parse(e_bytes)?,
+    )
+    .map_err(ssh_agent_lib::error::AgentError::other)
+}
+
 const SSH_AGENT_RSA_SHA2_256: u32 = 2;
 const SSH_AGENT_RSA_SHA2_512: u32 = 4;
+
+fn rsa_signature(
+    rsa_key: rsa::PrivateKey,
+    data: &[u8],
+    flags: u32,
+) -> Result<ssh_agent_lib::ssh_key::Signature, ssh_agent_lib::error::AgentError>
+{
+    let mut rng = rand::rng();
+
+    let (algorithm, sig_bytes) = if flags & SSH_AGENT_RSA_SHA2_512 != 0 {
+        let signing_key =
+            rsa::pkcs1v15::SigningKey::<rsa::sha2::Sha512>::new(rsa_key);
+        let signature = signing_key
+            .try_sign_with_rng(&mut rng, data)
+            .map_err(ssh_agent_lib::error::AgentError::other)?;
+
+        ("rsa-sha2-512", signature.to_bytes())
+    } else if flags & SSH_AGENT_RSA_SHA2_256 != 0 {
+        let signing_key =
+            rsa::pkcs1v15::SigningKey::<rsa::sha2::Sha256>::new(rsa_key);
+        let signature = signing_key
+            .try_sign_with_rng(&mut rng, data)
+            .map_err(ssh_agent_lib::error::AgentError::other)?;
+
+        ("rsa-sha2-256", signature.to_bytes())
+    } else {
+        let signing_key =
+            rsa::pkcs1v15::SigningKey::<sha1::Sha1>::new_unprefixed(rsa_key);
+        let signature = signing_key
+            .try_sign_with_rng(&mut rng, data)
+            .map_err(ssh_agent_lib::error::AgentError::other)?;
+
+        ("ssh-rsa", signature.to_bytes())
+    };
+
+    ssh_agent_lib::ssh_key::Signature::new(
+        ssh_agent_lib::ssh_key::Algorithm::new(algorithm)
+            .map_err(ssh_agent_lib::error::AgentError::other)?,
+        sig_bytes,
+    )
+    .map_err(ssh_agent_lib::error::AgentError::other)
+}
 
 #[derive(Clone)]
 pub struct SshAgent {
@@ -117,68 +180,13 @@ impl ssh_agent_lib::agent::Session for SshAgent {
                     .map_err(ssh_agent_lib::error::AgentError::other),
 
                 ssh_agent_lib::ssh_key::private::KeypairData::Rsa(key) => {
-                    let p =
-                        rsa::BigUint::from_bytes_be(key.private.p.as_bytes());
-                    let q =
-                        rsa::BigUint::from_bytes_be(key.private.q.as_bytes());
-                    let e =
-                        rsa::BigUint::from_bytes_be(key.public.e.as_bytes());
-                    let rsa_key = rsa::RsaPrivateKey::from_p_q(p, q, e)
-                        .map_err(ssh_agent_lib::error::AgentError::other)?;
+                    let rsa_key = rsa_private_key(
+                        key.private.p.as_bytes(),
+                        key.private.q.as_bytes(),
+                        key.public.e.as_bytes(),
+                    )?;
 
-                    let mut rng = rand_8::rngs::OsRng;
-
-                    let (algorithm, sig_bytes) =
-                        if request.flags & SSH_AGENT_RSA_SHA2_512 != 0 {
-                            let signing_key = rsa::pkcs1v15::SigningKey::<
-                                rsa::sha2::Sha512,
-                            >::new(
-                                rsa_key
-                            );
-                            let signature = signing_key
-                                .try_sign_with_rng(&mut rng, &request.data)
-                                .map_err(
-                                    ssh_agent_lib::error::AgentError::other,
-                                )?;
-
-                            ("rsa-sha2-512", signature.to_bytes())
-                        } else if request.flags & SSH_AGENT_RSA_SHA2_256 != 0
-                        {
-                            let signing_key = rsa::pkcs1v15::SigningKey::<
-                                rsa::sha2::Sha256,
-                            >::new(
-                                rsa_key
-                            );
-                            let signature = signing_key
-                                .try_sign_with_rng(&mut rng, &request.data)
-                                .map_err(
-                                    ssh_agent_lib::error::AgentError::other,
-                                )?;
-
-                            ("rsa-sha2-256", signature.to_bytes())
-                        } else {
-                            let signing_key = rsa::pkcs1v15::SigningKey::<
-                                sha1_10::Sha1,
-                            >::new_unprefixed(
-                                rsa_key
-                            );
-                            let signature = signing_key
-                                .try_sign_with_rng(&mut rng, &request.data)
-                                .map_err(
-                                    ssh_agent_lib::error::AgentError::other,
-                                )?;
-
-                            ("ssh-rsa", signature.to_bytes())
-                        };
-
-                    Ok(ssh_agent_lib::ssh_key::Signature::new(
-                        ssh_agent_lib::ssh_key::Algorithm::new(algorithm)
-                            .map_err(
-                                ssh_agent_lib::error::AgentError::other,
-                            )?,
-                        sig_bytes,
-                    )
-                    .map_err(ssh_agent_lib::error::AgentError::other)?)
+                    rsa_signature(rsa_key, &request.data, request.flags)
                 }
 
                 // TODO: Check which other key types are supported by bitwarden
@@ -192,4 +200,43 @@ impl ssh_agent_lib::agent::Session for SshAgent {
             .await;
         result
     }
+}
+
+#[test]
+fn rsa_components_preserve_the_ssh_public_key() {
+    use rsa::traits::{PrivateKeyParts as _, PublicKeyParts as _};
+    use signature_2::Verifier as _;
+
+    let original = rsa::PrivateKey::new(&mut rand::rng(), 2048).unwrap();
+    let primes = original.primes();
+    let restored = rsa_private_key(
+        &primes[0].to_be_bytes(),
+        &primes[1].to_be_bytes(),
+        &original.e_bytes(),
+    )
+    .unwrap();
+    assert_eq!(original.n_bytes(), restored.n_bytes());
+    assert_eq!(original.e_bytes(), restored.e_bytes());
+
+    let public = ssh_agent_lib::ssh_key::public::RsaPublicKey {
+        e: ssh_agent_lib::ssh_key::Mpint::from_positive_bytes(
+            &original.e_bytes(),
+        )
+        .unwrap(),
+        n: ssh_agent_lib::ssh_key::Mpint::from_positive_bytes(
+            &original.n_bytes(),
+        )
+        .unwrap(),
+    };
+    let message = b"SSH signature compatibility";
+    for flags in [SSH_AGENT_RSA_SHA2_256, SSH_AGENT_RSA_SHA2_512] {
+        let signature =
+            rsa_signature(restored.clone(), message, flags).unwrap();
+        public.verify(message, &signature).unwrap();
+        assert!(public.verify(b"different message", &signature).is_err());
+    }
+
+    // ssh-key 0.6 does not accept legacy ssh-rsa signatures. Keep the
+    // existing failure explicit until the upstream type supports them.
+    assert!(rsa_signature(restored, message, 0).is_err());
 }
