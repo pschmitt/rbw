@@ -181,6 +181,10 @@ pub async fn supervise(
         tokio::time::interval(std::time::Duration::from_millis(500));
     let mut running: Option<RunningListener> = None;
     let mut last_status: Option<rbw::remote_api::ListenerStatus> = None;
+    // After a failed start (the port taken, say by a second agent), retry
+    // the same address less and less often and log the same error once,
+    // instead of twice every 500 ms; a config change retries at once.
+    let mut backoff = Backoff::default();
     loop {
         interval.tick().await;
         let config = match rbw::config::Config::load_async().await {
@@ -219,6 +223,9 @@ pub async fn supervise(
         if same_config {
             continue;
         }
+        if !backoff.ready(&desired_listen, &desired_hostname) {
+            continue;
+        }
         if let Some(listener) = running.take() {
             stop_listener(listener).await;
         }
@@ -228,6 +235,11 @@ pub async fn supervise(
         let listener_config = config.api.clone();
         let listener_cancel = cancel.clone();
         let listener_agent = agent.clone();
+        // A listener that never started is reported once below ("did not
+        // start"); only one that stops later logs here.
+        let started =
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let listener_started = started.clone();
         let task = tokio::spawn(async move {
             if let Err(error) = run(
                 listener_agent,
@@ -237,12 +249,19 @@ pub async fn supervise(
             )
             .await
             {
-                log::error!("remote API stopped: {error:#}");
+                if listener_started.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    log::error!("remote API stopped: {error:#}");
+                } else {
+                    log::debug!("remote API stopped: {error:#}");
+                }
             }
         });
 
         match ready_rx.await {
             Ok(Ok(())) => {
+                started.store(true, std::sync::atomic::Ordering::SeqCst);
+                backoff.succeeded();
                 save_status_if_changed(
                     &mut last_status,
                     rbw::remote_api::ListenerStatus {
@@ -262,7 +281,17 @@ pub async fn supervise(
                 });
             }
             Ok(Err(error)) => {
-                log::error!("remote API did not start: {error}");
+                if let Some(retry) =
+                    backoff.failed(&desired_listen, &desired_hostname, &error)
+                {
+                    log::error!(
+                        "remote API did not start: {error} (retrying with \
+                         backoff, now every {}s; repeats are not logged)",
+                        retry.as_secs()
+                    );
+                } else {
+                    log::debug!("remote API did not start: {error}");
+                }
                 save_status_if_changed(
                     &mut last_status,
                     rbw::remote_api::ListenerStatus {
@@ -281,6 +310,94 @@ pub async fn supervise(
                 let _ = task.await;
             }
         }
+    }
+}
+
+// Retry pacing for a remote API listener that failed to start.
+#[derive(Default)]
+struct Backoff {
+    // The address and hostname that failed, the error, the current delay
+    // and when the next attempt may run.
+    failed: Option<(String, String, String)>,
+    delay: std::time::Duration,
+    retry_at: Option<tokio::time::Instant>,
+}
+
+impl Backoff {
+    const FIRST: std::time::Duration = std::time::Duration::from_secs(1);
+    const MAX: std::time::Duration = std::time::Duration::from_secs(60);
+
+    // Whether to try starting `listen`/`hostname` now. Another address or
+    // hostname than the one that failed (a config change) starts over.
+    fn ready(&mut self, listen: &str, hostname: &str) -> bool {
+        let same = self
+            .failed
+            .as_ref()
+            .is_some_and(|(l, h, _)| l == listen && h == hostname);
+        if !same {
+            *self = Self::default();
+            return true;
+        }
+        self.retry_at
+            .is_none_or(|at| tokio::time::Instant::now() >= at)
+    }
+
+    // Record a failed start. Returns the new delay when the error is worth
+    // logging (the first one, or a different one), else `None`.
+    fn failed(
+        &mut self,
+        listen: &str,
+        hostname: &str,
+        error: &str,
+    ) -> Option<std::time::Duration> {
+        let repeat = self.failed.as_ref().is_some_and(|(l, h, e)| {
+            l == listen && h == hostname && e == error
+        });
+        self.delay = if self.delay.is_zero() {
+            Self::FIRST
+        } else {
+            (self.delay * 2).min(Self::MAX)
+        };
+        self.retry_at = Some(tokio::time::Instant::now() + self.delay);
+        self.failed =
+            Some((listen.to_owned(), hostname.to_owned(), error.to_owned()));
+        (!repeat).then_some(self.delay)
+    }
+
+    fn succeeded(&mut self) {
+        *self = Self::default();
+    }
+}
+
+#[cfg(test)]
+mod backoff_tests {
+    use super::Backoff;
+
+    #[tokio::test]
+    async fn repeated_failures_back_off_and_log_once() {
+        let mut b = Backoff::default();
+        assert!(b.ready("a:1", "h"));
+        assert_eq!(
+            b.failed("a:1", "h", "in use"),
+            Some(std::time::Duration::from_secs(1))
+        );
+        assert!(!b.ready("a:1", "h"));
+        // The delay has passed.
+        b.retry_at = Some(tokio::time::Instant::now());
+        assert!(b.ready("a:1", "h"));
+        assert_eq!(b.failed("a:1", "h", "in use"), None);
+        assert_eq!(b.delay, std::time::Duration::from_secs(2));
+        for _ in 0..10 {
+            b.failed("a:1", "h", "in use");
+        }
+        assert_eq!(b.delay, std::time::Duration::from_secs(60));
+        // Another error is logged again; another address starts over.
+        assert!(b.failed("a:1", "h", "denied").is_some());
+        assert!(b.ready("b:2", "h"));
+        assert!(b.failed.is_none());
+        b.failed("a:1", "h", "in use");
+        b.succeeded();
+        assert!(b.ready("a:1", "h"));
     }
 }
 

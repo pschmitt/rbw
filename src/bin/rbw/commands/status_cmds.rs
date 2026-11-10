@@ -20,6 +20,76 @@ struct AccountStatus {
     organizations: usize,
 }
 
+// Other rbw-agent processes of this user than `own`: another profile's, or
+// one started without `XDG_RUNTIME_DIR` (cron, ssh, a service) before rbw
+// found the session's runtime directory, with a separate socket and its own
+// unlock state. Linux only (`/proc`).
+fn other_agent_pids(own: Option<u32>) -> Vec<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        let uid = rustix::process::getuid().as_raw().to_string();
+        let mut pids = std::fs::read_dir("/proc")
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| {
+                entry.ok()?.file_name().to_str()?.parse().ok()
+            })
+            .filter(|pid: &u32| Some(*pid) != own)
+            .filter(|pid| {
+                std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                    .is_ok_and(|comm| {
+                        let comm = comm.trim_end();
+                        comm == "rbw-agent" || comm.starts_with(".rbw-agent")
+                    })
+            })
+            .filter(|pid| {
+                std::fs::read_to_string(format!("/proc/{pid}/status"))
+                    .is_ok_and(|status| {
+                        status.lines().any(|line| {
+                            line.strip_prefix("Uid:").is_some_and(|ids| {
+                                ids.split_whitespace().next() == Some(&uid)
+                            })
+                        })
+                    })
+            })
+            .collect::<Vec<_>>();
+        pids.sort_unstable();
+        pids
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = own;
+        Vec::new()
+    }
+}
+
+fn other_agents_text(pids: &[u32]) -> String {
+    let list = |sep: &str| {
+        pids.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(sep)
+    };
+    format!(
+        "{} other rbw-agent{} running (pid {}): another profile, or started \
+         without XDG_RUNTIME_DIR with its own unlock; `kill {}` stops {}",
+        pids.len(),
+        if pids.len() == 1 { "" } else { "s" },
+        list(", "),
+        list(" "),
+        if pids.len() == 1 { "it" } else { "them" },
+    )
+}
+
+#[test]
+fn other_agents_text_gives_a_runnable_kill_command() {
+    assert!(other_agents_text(&[7]).contains("(pid 7)"));
+    assert!(other_agents_text(&[7]).contains("`kill 7` stops it"));
+    let two = other_agents_text(&[7, 9]);
+    assert!(two.starts_with("2 other rbw-agents running (pid 7, 9)"));
+    assert!(two.contains("`kill 7 9` stops them"));
+}
+
 fn agent_pid_if_running() -> Option<u32> {
     let pid = std::fs::read_to_string(rbw::dirs::pid_file()).ok()?;
     let pid: i32 = pid.trim().parse().ok()?;
@@ -164,6 +234,7 @@ fn print_short(
     pid: Option<u32>,
     stale_agent: Option<u32>,
     other_agent: Option<u32>,
+    others: &[u32],
     last_lock: Option<&rbw::audit::LastLock>,
     c: bool,
 ) {
@@ -259,6 +330,9 @@ fn print_short(
             account_name(a, c)
         );
     }
+    if !others.is_empty() {
+        println!("{}", style::warning(&other_agents_text(others), c));
+    }
     if let Some(lock) = last_lock {
         println!(
             "{} {}",
@@ -273,6 +347,7 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
         .unwrap_or_else(|_| rbw::config::Config::new());
     let primary = config.primary_account_name();
     let pid = agent_pid_if_running();
+    let others = other_agent_pids(pid);
     // An agent from an older minor or another major (one that outlived an
     // upgrade) can't serve this rbw: shown in red so it's clear why commands
     // replace it, or why the browser extension says it's out of date. A
@@ -337,6 +412,7 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
                 "version_differs": agent_version
                     .is_some_and(|v| v != rbw::protocol::VERSION),
                 "socket": rbw::dirs::socket_file(),
+                "other_pids": others,
                 "lock_timeout": config.agent.lock_timeout,
                 "sync_interval": config.agent.sync_interval,
             },
@@ -361,6 +437,7 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
             pid,
             stale_agent,
             other_agent,
+            &others,
             last_lock.as_ref(),
             c,
         );
@@ -434,6 +511,13 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
                 ),
                 c,
             ),
+        );
+    }
+    if !others.is_empty() {
+        row(
+            "",
+            "other agents:",
+            style::warning(&other_agents_text(&others), c),
         );
     }
     row(

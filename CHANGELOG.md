@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+
+* `rbw status` warns about other `rbw-agent` processes of the same user (another
+  profile's, or a stray one started without `XDG_RUNTIME_DIR`) and how to stop
+  them; `--json` lists them as `agent.other_pids`.
+
+### Fixed
+
+* Without `XDG_RUNTIME_DIR` (cron jobs, `ssh host rbw ...`, system services),
+  rbw now uses the user's `/run/user/UID` when it exists, so it talks to the
+  agent the desktop session runs instead of starting a second agent, with its
+  own unlock, in the temp directory. A stray second agent also fought the
+  first for the remote API port.
+* When the remote API can't bind its address (another program holds the
+  port), the agent retries less and less often (up to once a minute) and logs
+  the error once, instead of twice every 500 ms (141 MB of log on one host).
+* On Termux without `TMPDIR` (Termux:Boot, the job scheduler), rbw put its
+  socket under `/data/local/tmp`, which apps can't write to; it now uses
+  `$PREFIX/tmp`, the same directory a Termux session uses.
+
 ## [2.45.1] - 2026-11-10
 
 ### Changed
