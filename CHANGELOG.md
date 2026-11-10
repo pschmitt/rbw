@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.45.0] - 2026-11-10
+
 ### Added
 
 * `rbw agent restart` keeps every account unlocked: the agent execs the new
