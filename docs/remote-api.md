@@ -87,6 +87,20 @@ needs current one-time codes. The API returns a current code, never the stored
 TOTP seed or its provisioning URI. Custom field names and identity field names
 are case-sensitive.
 
+A `uri/N` grant also permits reading `uri_match/N`, the saved Bitwarden match
+type as a JSON integer encoded in the field value, or `null` for the default.
+This lets a browser client enforce the entry's existing URI policy without
+granting access to other URIs or fields.
+
+An administrator can grant fields for every current and future item in the
+client's single scoped account with `--item-id @all`. The special fields
+`uri_all` and `custom_all` grant all saved URIs and named custom fields,
+respectively. These account-wide grants are broad and must be granted
+explicitly; ordinary per-item grants remain the default. Revoke them with
+`rbw api revoke CLIENT --item-id @all` or individual `--field` options.
+Older RBW agents cannot read a policy containing account-wide grants: revoke
+those grants before rolling back to an agent without this feature.
+
 Review client identities, status permission, and field grant counts with
 `rbw api client list`.
 Remove a field grant with `rbw api revoke '<client-id>' --item-id

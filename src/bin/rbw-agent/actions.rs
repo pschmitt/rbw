@@ -1856,14 +1856,12 @@ pub async fn read_remote_item_names(
         .await
         .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
     let mut names = std::collections::BTreeMap::new();
-    for item_id in item_ids {
-        let Some(entry) = db
-            .entries
-            .iter()
-            .find(|entry| entry.id == item_id && !entry.deleted)
-        else {
-            continue;
-        };
+    let all_items = item_ids.is_empty();
+    let ids: std::collections::HashSet<_> =
+        item_ids.iter().map(String::as_str).collect();
+    for entry in db.entries.iter().filter(|entry| {
+        !entry.deleted && (all_items || ids.contains(entry.id.as_str()))
+    }) {
         if state
             .lock()
             .await
@@ -1881,7 +1879,7 @@ pub async fn read_remote_item_names(
         )
         .await
         {
-            names.insert(item_id, name);
+            names.insert(entry.id.clone(), name);
         }
     }
     Ok(names)
@@ -1974,6 +1972,50 @@ pub async fn read_remote_field(
                 return Err(ApiError::new(ErrorCode::NotFound));
             };
             Some(uri.uri.as_str())
+        }
+        (
+            FieldRef::UriMatch(index),
+            rbw::db::EntryData::Login { uris, .. },
+        ) => {
+            let uri = uris
+                .get(*index)
+                .ok_or_else(|| ApiError::new(ErrorCode::NotFound))?;
+            let value = serde_json::to_string(&uri.match_type)
+                .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
+            return Ok((
+                FieldReadResponse {
+                    field,
+                    value: Some(value),
+                    sensitive: false,
+                },
+                item_name,
+            ));
+        }
+        (FieldRef::UriAll, rbw::db::EntryData::Login { uris, .. }) => {
+            let mut result = Vec::new();
+            for uri in uris {
+                let value = decrypt_remote_value(
+                    state.clone(),
+                    environment,
+                    Some(&uri.uri),
+                    entry,
+                    &account,
+                )
+                .await?;
+                if let Some(value) = value {
+                    result.push(serde_json::json!({"uri": value, "match_type": uri.match_type}));
+                }
+            }
+            let value = serde_json::to_string(&result)
+                .map_err(|_| ApiError::new(ErrorCode::Unavailable))?;
+            return Ok((
+                FieldReadResponse {
+                    field,
+                    value: Some(value),
+                    sensitive: false,
+                },
+                item_name,
+            ));
         }
         (FieldRef::Notes, _) => entry.notes.as_deref(),
         (FieldRef::Custom(expected), _) => {

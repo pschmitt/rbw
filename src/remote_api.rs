@@ -27,8 +27,14 @@ pub enum FieldRef {
     Password,
     Totp,
     Uri(usize),
+    /// Match policy for a granted URI; shares the URI's authorization.
+    UriMatch(usize),
+    /// All URIs and their match policies on an authorized item.
+    UriAll,
     Notes,
     Custom(String),
+    /// Permission to read named custom fields on an authorized item.
+    CustomAll,
     CardholderName,
     CardNumber,
     CardBrand,
@@ -78,8 +84,11 @@ impl FieldRef {
             Self::Password => "password".to_owned(),
             Self::Totp => "totp".to_owned(),
             Self::Uri(index) => format!("uri/{index}"),
+            Self::UriMatch(index) => format!("uri_match/{index}"),
+            Self::UriAll => "uri_all".to_owned(),
             Self::Notes => "notes".to_owned(),
             Self::Custom(name) => format!("custom/{name}"),
+            Self::CustomAll => "custom_all".to_owned(),
             Self::CardholderName => "cardholder_name".to_owned(),
             Self::CardNumber => "card_number".to_owned(),
             Self::CardBrand => "card_brand".to_owned(),
@@ -104,6 +113,8 @@ impl FromStr for FieldRef {
             "username" => Self::Username,
             "password" => Self::Password,
             "totp" => Self::Totp,
+            "uri_all" => Self::UriAll,
+            "custom_all" => Self::CustomAll,
             "notes" => Self::Notes,
             "cardholder_name" => Self::CardholderName,
             "card_number" => Self::CardNumber,
@@ -116,6 +127,9 @@ impl FromStr for FieldRef {
             "ssh_fingerprint" => Self::SshFingerprint,
             _ if token.starts_with("uri/") => {
                 Self::Uri(token[4..].parse().map_err(|_| invalid())?)
+            }
+            _ if token.starts_with("uri_match/") => {
+                Self::UriMatch(token[10..].parse().map_err(|_| invalid())?)
             }
             _ if token.starts_with("custom/") => {
                 let name = &token[7..];
@@ -256,6 +270,9 @@ pub struct ClientPolicy {
     pub status_accounts: Vec<String>,
     #[serde(default)]
     pub items: std::collections::BTreeMap<String, Vec<FieldRef>>,
+    /// Explicit field grants applying to all items in the scoped account.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub all_items: Vec<FieldRef>,
 }
 
 /// Account lock state visible to a status-authorized client.
@@ -783,6 +800,7 @@ pub fn create_client(name: &str) -> anyhow::Result<ClientPolicy> {
         status: false,
         status_accounts: Vec::new(),
         items: std::collections::BTreeMap::new(),
+        all_items: Vec::new(),
     };
     if let Err(error) = update_policy_store(|store| {
         store.clients.insert(id.clone(), policy.clone());
@@ -826,7 +844,11 @@ fn grant_fields_policy(
         );
     }
     client.account = Some(account.to_owned());
-    let allowed = client.items.entry(item_id.to_owned()).or_default();
+    let allowed = if item_id == "@all" {
+        &mut client.all_items
+    } else {
+        client.items.entry(item_id.to_owned()).or_default()
+    };
     for field in fields {
         if !allowed.contains(field) {
             allowed.push(field.clone());
@@ -878,7 +900,7 @@ pub fn granted_status_accounts(client: &ClientPolicy) -> Vec<String> {
 fn grant_status_policy(client: &mut ClientPolicy, account: &str) {
     let accounts = granted_status_accounts(client);
     client.status_accounts = accounts;
-    if client.items.is_empty() {
+    if client.items.is_empty() && client.all_items.is_empty() {
         // A pre-statusAccounts policy used `account` only as its status
         // scope. Once migrated, leave the item grant scope independent.
         client.account = None;
@@ -914,7 +936,10 @@ fn revoke_status_policy(client: &mut ClientPolicy, account: Option<&str>) {
         client.status_accounts.clear();
     }
     client.status = !client.status_accounts.is_empty();
-    if !client.status && client.items.is_empty() {
+    if !client.status
+        && client.items.is_empty()
+        && client.all_items.is_empty()
+    {
         client.account = None;
     }
 }
@@ -940,6 +965,24 @@ fn revoke_fields_policy(
     item_id: &str,
     fields: &[FieldRef],
 ) -> anyhow::Result<()> {
+    if item_id == "@all" {
+        anyhow::ensure!(
+            !client.all_items.is_empty(),
+            "all-item grant was not found"
+        );
+        if fields.is_empty() {
+            client.all_items.clear();
+        } else {
+            client.all_items.retain(|field| !fields.contains(field));
+        }
+        if client.items.is_empty()
+            && client.all_items.is_empty()
+            && !client.status
+        {
+            client.account = None;
+        }
+        return Ok(());
+    }
     if fields.is_empty() {
         anyhow::ensure!(
             client.items.remove(item_id).is_some(),
@@ -958,7 +1001,10 @@ fn revoke_fields_policy(
             client.items.remove(item_id);
         }
     }
-    if client.items.is_empty() && !client.status {
+    if client.items.is_empty()
+        && client.all_items.is_empty()
+        && !client.status
+    {
         client.account = None;
     }
     Ok(())
@@ -1259,6 +1305,9 @@ if errors:
             ("password", FieldRef::Password),
             ("totp", FieldRef::Totp),
             ("uri/2", FieldRef::Uri(2)),
+            ("uri_match/2", FieldRef::UriMatch(2)),
+            ("uri_all", FieldRef::UriAll),
+            ("custom_all", FieldRef::CustomAll),
             (
                 "custom/Recovery code",
                 FieldRef::Custom("Recovery code".into()),
@@ -1378,6 +1427,7 @@ if errors:
             status: false,
             status_accounts: Vec::new(),
             items: std::collections::BTreeMap::new(),
+            all_items: Vec::new(),
         };
 
         grant_status_policy(&mut client, "personal");
@@ -1409,6 +1459,46 @@ if errors:
     }
 
     #[test]
+    fn account_wide_grants_are_separate_from_legacy_items_and_revocable() {
+        let mut client = ClientPolicy {
+            id: "test".into(),
+            name: "test".into(),
+            fingerprint: "test".into(),
+            account: None,
+            status: false,
+            status_accounts: vec![],
+            items: std::collections::BTreeMap::new(),
+            all_items: vec![],
+        };
+        client.items.insert("@all".into(), vec![FieldRef::Password]);
+        assert_eq!(client.all_items, Vec::<FieldRef>::new());
+        grant_fields_policy(
+            &mut client,
+            "personal",
+            "@all",
+            &[FieldRef::Username, FieldRef::UriAll],
+        )
+        .unwrap();
+        assert_eq!(
+            client.all_items,
+            vec![FieldRef::Username, FieldRef::UriAll]
+        );
+        assert!(grant_fields_policy(
+            &mut client,
+            "work",
+            "@all",
+            &[FieldRef::Password]
+        )
+        .is_err());
+        revoke_fields_policy(&mut client, "@all", &[FieldRef::Username])
+            .unwrap();
+        assert_eq!(client.all_items, vec![FieldRef::UriAll]);
+        revoke_fields_policy(&mut client, "@all", &[]).unwrap();
+        assert_eq!(client.all_items, Vec::<FieldRef>::new());
+        assert_eq!(client.items["@all"], vec![FieldRef::Password]);
+    }
+
+    #[test]
     fn status_accounts_remain_independent_from_item_account_scope() {
         let mut client = ClientPolicy {
             id: "client-1".to_owned(),
@@ -1421,6 +1511,7 @@ if errors:
                 "item-1".to_owned(),
                 vec![FieldRef::Username],
             )]),
+            all_items: Vec::new(),
         };
 
         revoke_fields_policy(&mut client, "item-1", &[]).unwrap();

@@ -104,11 +104,12 @@ pub fn api_client_list() -> anyhow::Result<()> {
     for client in store.clients.values() {
         let fields: usize = client.items.values().map(Vec::len).sum();
         println!(
-            "{}\t{}\t{}\t{} item(s), {fields} field grant(s), status [{}]",
+            "{}\t{}\t{}\t{} item(s), {fields} field grant(s), account-wide fields [{}], status [{}]",
             client.id,
             client.name,
             client.account.as_deref().unwrap_or("unscoped"),
             client.items.len(),
+            client.all_items.iter().map(rbw::remote_api::FieldRef::path_token).collect::<Vec<_>>().join(", "),
             rbw::remote_api::granted_status_accounts(client).join(", "),
         );
     }

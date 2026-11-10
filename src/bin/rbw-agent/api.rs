@@ -650,27 +650,48 @@ async fn list_items_inner(
         .values()
         .find(|client| client.fingerprint == fingerprint)
         .ok_or_else(|| ApiError::new(ErrorCode::Unauthorized))?;
-    let mut names = match (&client.account, client.items.is_empty()) {
+    let mut names = match (
+        &client.account,
+        client.items.is_empty() && client.all_items.is_empty(),
+    ) {
         (Some(account), false) => {
             (state.names_reader)(
-                client.items.keys().cloned().collect(),
+                if client.all_items.is_empty() {
+                    client.items.keys().cloned().collect()
+                } else {
+                    Vec::new()
+                },
                 account.clone(),
             )
             .await?
         }
         _ => std::collections::BTreeMap::new(),
     };
+    let mut ids: std::collections::BTreeSet<String> =
+        client.items.keys().cloned().collect();
+    if !client.all_items.is_empty() {
+        ids.extend(names.keys().cloned());
+    }
     Ok(rbw::remote_api::ItemListResponse {
-        items: client
-            .items
-            .iter()
-            .map(|(id, fields)| rbw::remote_api::ItemSummary {
-                id: id.clone(),
-                name: names.remove(id),
-                fields: fields
-                    .iter()
-                    .map(rbw::remote_api::FieldRef::path_token)
-                    .collect(),
+        items: ids
+            .into_iter()
+            .map(|id| {
+                let mut fields = client.all_items.clone();
+                if let Some(specific) = client.items.get(&id) {
+                    for field in specific {
+                        if !fields.contains(field) {
+                            fields.push(field.clone());
+                        }
+                    }
+                }
+                rbw::remote_api::ItemSummary {
+                    name: names.remove(&id),
+                    id,
+                    fields: fields
+                        .iter()
+                        .map(rbw::remote_api::FieldRef::path_token)
+                        .collect(),
+                }
             })
             .collect(),
     })
@@ -842,11 +863,29 @@ fn authorized_account(
         .account
         .clone()
         .ok_or_else(|| ApiError::new(ErrorCode::Forbidden))?;
-    let allowed_fields = client
+    let authorized_field = match field {
+        rbw::remote_api::FieldRef::UriMatch(index) => {
+            rbw::remote_api::FieldRef::Uri(*index)
+        }
+        _ => field.clone(),
+    };
+    let allowed = client
         .items
         .get(item_id)
-        .ok_or_else(|| ApiError::new(ErrorCode::Forbidden))?;
-    if !allowed_fields.contains(field) {
+        .into_iter()
+        .chain(std::iter::once(&client.all_items))
+        .any(|fields| {
+            fields.contains(&authorized_field)
+                || matches!(
+                    authorized_field,
+                    rbw::remote_api::FieldRef::Uri(_)
+                ) && fields.contains(&rbw::remote_api::FieldRef::UriAll)
+                || matches!(
+                    authorized_field,
+                    rbw::remote_api::FieldRef::Custom(_)
+                ) && fields.contains(&rbw::remote_api::FieldRef::CustomAll)
+        });
+    if !allowed {
         return Err(ApiError::new(ErrorCode::Forbidden));
     }
     Ok(account)
@@ -889,6 +928,188 @@ mod tests {
         CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
     };
     use std::sync::Arc;
+
+    #[test]
+    fn uri_match_requires_same_uri_grant() {
+        let cert = b"synthetic-client";
+        let client = ClientPolicy {
+            id: "test".into(),
+            name: "test".into(),
+            fingerprint: rbw::remote_api::certificate_fingerprint(cert),
+            account: Some("personal".into()),
+            status: false,
+            status_accounts: vec![],
+            items: std::collections::BTreeMap::from([(
+                "item".into(),
+                vec![FieldRef::Uri(0)],
+            )]),
+            all_items: Vec::new(),
+        };
+        let store = PolicyStore {
+            clients: std::collections::BTreeMap::from([(
+                "test".into(),
+                client,
+            )]),
+        };
+        assert!(authorized_account(
+            true,
+            &store,
+            Some(cert),
+            "item",
+            &FieldRef::UriMatch(0)
+        )
+        .is_ok());
+        assert!(authorized_account(
+            true,
+            &store,
+            Some(cert),
+            "item",
+            &FieldRef::UriMatch(1)
+        )
+        .is_err());
+        assert!(authorized_account(
+            true,
+            &store,
+            Some(cert),
+            "other",
+            &FieldRef::UriMatch(0)
+        )
+        .is_err());
+        assert!(authorized_account(
+            true,
+            &store,
+            None,
+            "item",
+            &FieldRef::UriMatch(0)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn account_wide_grants_are_explicit_and_field_scoped() {
+        let cert = b"synthetic-client";
+        let mut client = ClientPolicy {
+            id: "test".into(),
+            name: "test".into(),
+            fingerprint: rbw::remote_api::certificate_fingerprint(cert),
+            account: Some("personal".into()),
+            status: false,
+            status_accounts: vec![],
+            items: std::collections::BTreeMap::new(),
+            all_items: vec![
+                FieldRef::Username,
+                FieldRef::UriAll,
+                FieldRef::CustomAll,
+            ],
+        };
+        let mut store = PolicyStore {
+            clients: std::collections::BTreeMap::new(),
+        };
+        store.clients.insert("test".into(), client.clone());
+        for field in [
+            FieldRef::Username,
+            FieldRef::UriAll,
+            FieldRef::Uri(3),
+            FieldRef::UriMatch(3),
+            FieldRef::Custom("token".into()),
+        ] {
+            assert!(authorized_account(
+                true,
+                &store,
+                Some(cert),
+                "any-item",
+                &field
+            )
+            .is_ok());
+        }
+        assert!(authorized_account(
+            true,
+            &store,
+            Some(cert),
+            "any-item",
+            &FieldRef::Password
+        )
+        .is_err());
+        client.all_items.clear();
+        store.clients.insert("test".into(), client);
+        assert!(authorized_account(
+            true,
+            &store,
+            Some(cert),
+            "any-item",
+            &FieldRef::Uri(3)
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn revoked_account_wide_uri_grant_stops_field_reads() {
+        let cert = b"synthetic-client";
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (state, policy, _) = test_state(cert, true, calls.clone());
+        policy
+            .write()
+            .await
+            .1
+            .clients
+            .get_mut("client-1")
+            .unwrap()
+            .all_items = vec![FieldRef::UriAll];
+        let (result, _) =
+            read_field_inner(&state, Some(cert), "new-item", "uri_all").await;
+        assert!(result.is_ok());
+        policy
+            .write()
+            .await
+            .1
+            .clients
+            .get_mut("client-1")
+            .unwrap()
+            .all_items
+            .clear();
+        let (result, _) =
+            read_field_inner(&state, Some(cert), "new-item", "uri_all").await;
+        assert!(result.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn listing_combines_account_wide_and_item_grants() {
+        let cert = b"synthetic-client";
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (mut state, policy, _) = test_state(cert, true, calls);
+        state.names_reader = Arc::new(|ids, _account| {
+            Box::pin(async move {
+                assert_eq!(ids, Vec::<String>::new());
+                Ok(std::collections::BTreeMap::from([
+                    ("item-1".into(), "first".into()),
+                    ("new-item".into(), "second".into()),
+                ]))
+            })
+        });
+        policy
+            .write()
+            .await
+            .1
+            .clients
+            .get_mut("client-1")
+            .unwrap()
+            .all_items = vec![FieldRef::Username, FieldRef::UriAll];
+        let listing = list_items_inner(&state, Some(cert)).await.unwrap();
+        assert_eq!(listing.items.len(), 2);
+        let first = listing
+            .items
+            .iter()
+            .find(|item| item.id == "item-1")
+            .unwrap();
+        assert!(first.fields.iter().any(|field| field == "password"));
+        let new = listing
+            .items
+            .iter()
+            .find(|item| item.id == "new-item")
+            .unwrap();
+        assert_eq!(new.fields, vec!["username", "uri_all"]);
+    }
 
     struct TlsFixture {
         pki_dir: tempfile::TempDir,
@@ -973,6 +1194,7 @@ mod tests {
                 "item-1".to_owned(),
                 vec![FieldRef::Password],
             )]),
+            all_items: Vec::new(),
         };
         let state_value = Arc::new(tokio::sync::RwLock::new((
             enabled,
