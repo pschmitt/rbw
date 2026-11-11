@@ -13,8 +13,8 @@ jobs:
   # ghcr.io/pschmitt/rbw, built natively per architecture (no QEMU) by the
   # shared workflow: `latest` and `sha-<commit>` on every run, the version
   # from Cargo.toml (without the `v` of the git tag) on version tags, plus
-  # build provenance; verify with
-  # `gh attestation verify oci://ghcr.io/pschmitt/rbw:latest -R pschmitt/rbw`.
+  # build provenance, signed by the shared workflow; verify with
+  # `gh attestation verify oci://ghcr.io/pschmitt/rbw:latest -R pschmitt/rbw --signer-repo pschmitt/ci-workflows`.
   # docker-auto.yaml builds rbw-auto on top once this workflow succeeds.
   docker:
     permissions:
