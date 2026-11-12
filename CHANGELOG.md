@@ -4,6 +4,10 @@
 
 ### Added
 
+* Browser extension: a failed request shows a specific message, with the
+  sanitized error chain behind a "Details" disclosure; the native host also
+  logs it, and with a `browser-debug` file next to the agent's pidfile writes
+  full chains to `browser-errors.log`.
 * `rbw backup DIR`: a rotated, optionally encrypted export for scheduled
   jobs, with a `bw-export-latest` link, a `LAST_BACKUP` timestamp and
   `--retention-days`.
@@ -17,61 +21,49 @@
   systemd units that call rbw directly with `LoadCredential`.
 
 * `rbw mirror --dest-collection` reconciles one way by source id: the
-  pairing of copies and source entries lives in a state item in the
-  destination account, so unchanged entries are skipped, same-name entries
-  no longer overwrite each other, and attachments follow their own entry.
-  `--prune` (config `prune`, rbw-auto `pruneDestination`/`BW_SYNC_PRUNE`)
-  moves copies whose source entry is gone to the trash.
-* Mirror state items live in a "rbw mirror state" collection of the
-  destination organization, not in the destination's personal vault.
-* `rbw mirror --personal-only` (config `fallbackToPersonalVault`, rbw-auto
-  `collections.fallback = "personal-vault"`) copies only the source's
-  personal vault, so organization entries are not mirrored twice.
-* `BW_BACKUP_RETENTION_DAYS` deletes backups older than a number of days.
+  pairing of copies and source entries lives in a state item in a "rbw
+  mirror state" collection of the destination organization, so unchanged
+  entries are skipped, same-name entries no longer overwrite each other,
+  and attachments follow their own entry. `--prune` (config `prune`,
+  `services.rbw.mirror.prune`) moves copies whose source entry is gone to
+  the trash.
+* `rbw mirror --personal-only` (config `fallbackToPersonalVault`,
+  `services.rbw.mirror.collections.fallback = "personal-vault"`) copies only
+  the source's personal vault, so organization entries are not mirrored
+  twice.
 
 ### Changed
 
+* Upgrade the RSA implementation used for organization keys and SSH signing
+  to 0.10, which includes the upstream Marvin timing-attack mitigations.
 * The `rbw-auto` container image runs rbw directly: `rbw` is the
   entrypoint, cron (with a mounted `/etc/cron.d/rbw`) runs schedules, and
   accounts unlock from mounted credential files. The `rbw-auto-backup` and
   `rbw-auto-sync` scripts, their Nix packages and the environment-variable
   interface are removed (breaking for container users).
 * rbw-auto's files are MIT-licensed like the rest of rbw.
-
 * `services.rbw-auto` is replaced by `services.rbw`; the old options fail
   evaluation with a pointer to the new ones. Environment files become one
-  file per credential. `rbw mirror` syncs both accounts before it starts.
-
-* Collection mirrors download source attachments only for entries they
-  create or rewrite; the change digest covers attachment ids instead of
-  their contents.
-* rbw-auto: `backupJobs.<name>.retention` (a number of backups) is replaced
-  by `retentionDays`.
-* Collection-mode whole-vault fallbacks preserve destination entries by
-  default. Purging the destination collection is now opt-in.
+  file per credential, backups are kept for `retentionDays`, and a mirror
+  fallback never purges its destination collection unless
+  `purgeDestination` is set.
+* `rbw mirror` syncs both accounts before it starts. Collection mirrors
+  download source attachments only for entries they create or rewrite; the
+  change digest covers attachment ids instead of their contents.
 
 ### Fixed
 
+* Browser extension: rbw's page overlays (inline chooser, save-login prompt,
+  fill notice) appear above a page's modal `<dialog>` and stay clickable.
+* When mirroring into a collection, don't overwrite an existing item whose
+  organization doesn't match the destination collection; create the correct
+  copy and leave the existing item untouched.
 * Import duplicate-key entries into organizations through the organization
   import endpoint, avoiding personal-cipher edits that Vaultwarden rejects.
 * Treat an empty login username as no username when matching imported
   entries. The server stores no empty usernames, so such an entry never
   matched its own copy: imports reported it as not created, and mirrors
   created a new copy on every run.
-
-## [2.45.4] - 2026-11-12
-
-### Fixed
-
-* When mirroring into a collection, don't overwrite an existing item whose
-  organization doesn't match the destination collection; create the correct
-  copy and leave the existing item untouched.
-
-### Changed
-
-* Upgrade the RSA implementation used for organization keys and SSH signing
-  to 0.10, which includes the upstream Marvin timing-attack mitigations.
-
 
 ## [2.45.3] - 2026-11-10
 
