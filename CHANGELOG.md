@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* When mirroring into a collection, don't overwrite an existing item whose
+  organization doesn't match the destination collection; create the correct
+  copy and leave the existing item untouched.
+
 ### Changed
 
 * Upgrade the RSA implementation used for organization keys and SSH signing

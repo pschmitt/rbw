@@ -212,6 +212,22 @@ fn test_imported_entry_key_distinguishes_by_username() {
     assert_ne!(imported_entry_key(&a), imported_entry_key(&b));
 }
 
+#[test]
+fn test_mirror_overwrite_requires_destination_organization_match() {
+    assert!(entry_organization_matches_destination(
+        Some("destination-org"),
+        "destination-org"
+    ));
+    assert!(!entry_organization_matches_destination(
+        Some("other-org"),
+        "destination-org"
+    ));
+    assert!(!entry_organization_matches_destination(
+        None,
+        "destination-org"
+    ));
+}
+
 // `item_progress_bar`'s `{msg}` field must stay a fixed display width,
 // otherwise the bar/counter after it visibly shifts left/right as
 // different items' names scroll through at different lengths.

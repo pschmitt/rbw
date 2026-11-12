@@ -1085,6 +1085,13 @@ pub fn import(
 // vault rather than parsing it from a file, but otherwise wants the exact
 // same create-or-skip-or-overwrite/collection-creation/attachment-upload
 // behavior and summary output.
+pub(super) fn entry_organization_matches_destination(
+    entry_org_id: Option<&str>,
+    destination_org_id: &str,
+) -> bool {
+    entry_org_id == Some(destination_org_id)
+}
+
 pub(super) fn import_vault(
     mut vault: ImportedVault,
     collection: Option<&str>,
@@ -1247,6 +1254,7 @@ pub(super) fn import_vault(
     // unrelated entry with the same name/username sitting in some other
     // collection (or the personal vault) would count as "already there"
     // and get skipped, leaving the target collection missing it entirely.
+    let mut mismatched_org_index = std::collections::HashSet::new();
     let existing_index = {
         let mut requests = BatchRequests::new();
         let plans: Vec<SearchCipherPlan> = db
@@ -1264,14 +1272,26 @@ pub(super) fn import_vault(
             rbw::db::Entry,
         > = std::collections::HashMap::new();
         for (entry, plan) in db.entries.iter().zip(plans) {
-            if let Some((dest_id, _)) = &dest_collection {
+            let Ok(decrypted) = plan.resolve(&results) else {
+                continue;
+            };
+            let key = (decrypted.name, decrypted.user);
+            if let Some((dest_id, dest_org_id)) = &dest_collection {
                 if !entry.collection_ids.contains(dest_id) {
                     continue;
                 }
+                // The collection's organization is part of the destination
+                // identity. Never update an item whose org metadata would
+                // make the server reject the write.
+                if !entry_organization_matches_destination(
+                    entry.org_id.as_deref(),
+                    dest_org_id,
+                ) {
+                    mismatched_org_index.insert(key);
+                    continue;
+                }
             }
-            if let Ok(decrypted) = plan.resolve(&results) {
-                index.insert((decrypted.name, decrypted.user), entry.clone());
-            }
+            index.insert(key, entry.clone());
         }
         index
     };
@@ -1315,6 +1335,16 @@ pub(super) fn import_vault(
                 skipped_names.push(imported.name.clone());
             }
             continue;
+        }
+
+        if mismatched_org_index.contains(&key) {
+            eprintln!(
+                "{} '{}' belongs to a different destination organization; \
+                 creating it in the target collection and leaving the \
+                 existing item untouched",
+                style::warning("Note:", c),
+                imported.name,
+            );
         }
 
         let target_org = imported
