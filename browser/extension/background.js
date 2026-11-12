@@ -525,6 +525,7 @@ async function notifyFill(tab, notice) {
   // Bundle the local brand image into the isolated notice; no public resources
   // or website requests are needed for notification branding.
   const prefs = await settings();
+  await api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, files: ["top-layer.js"] }).catch(() => {});
   return api.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: showFillNotice, args: [tab.url, { ...notice, animations: prefs.animations, animationSpeed: prefs.animationSpeed, icon: await getNotificationIcon() }] });
 }
 // Inline UI sessions: a content script opens one and hands its token only to

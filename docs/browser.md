@@ -92,6 +92,17 @@ disclosure. The host also writes both to its stderr (the browser's log, so
 `browser-debug` file exists next to the agent's pidfile, the full chains are
 also appended to `browser-errors.log` there.
 
+The overlays rbw injects into pages (inline chooser, save-login prompt, fill
+notice) are manual popovers, so they sit in the browser's top layer above a
+page's modal `<dialog>`, and while a modal dialog is open they are mounted inside
+the top-most one so they are not inert (`top-layer.js`, with node tests in
+`browser/tests/top-layer.mjs`). Manual check: on a page that opens a modal
+`<dialog>` with a password field (`showModal()`), focus the field. The chooser
+must appear below the field, above the dialog's backdrop and clickable, and a
+save-login toast shown while the dialog is open must be on top; Escape in the
+chooser must not close the dialog. Browsers without the Popover API keep the
+maximal `z-index`.
+
 Filling traverses open shadow roots and same-origin frames; closed shadow roots,
 cross-origin iframe filling and unusual nonstandard controls need further work.
 Linked custom fields are resolved for the supported item fields. Capture suggestions require a native HTML

@@ -3,6 +3,9 @@
 // it. Hosts pin their own styles; each action click is verified by
 // rbwVerifyFrame while the background makes every page element hit-testable.
 const rbwHardenCss = "display:block!important;opacity:1!important;filter:none!important;transform:none!important;translate:none!important;scale:none!important;rotate:none!important;clip-path:none!important;clip:auto!important;mask:none!important;mix-blend-mode:normal!important;overflow:visible!important;";
+// Overlay hosts go through top-layer.js (manifest order: before this file).
+const rbwMount = host => { if (globalThis.rbwTopLayer) globalThis.rbwTopLayer.mount(host); else document.documentElement.append(host); };
+const rbwTopReset = () => globalThis.rbwTopLayer?.RESET || "";
 const rbwExtensionOrigin = (globalThis.browser || chrome).runtime.getURL("").replace(/\/$/, "");
 function rbwVerifyFrame(state, x, y) {
   try {
@@ -40,7 +43,7 @@ function rbwAnimate(state, keyframes, options) {
 }
 function rbwReleaseFrame(state) {
   clearInterval(state.retry); clearTimeout(state.readyTimer);
-  const gone = () => state.host.remove();
+  const gone = () => { globalThis.rbwTopLayer?.release(state.host); state.host.remove(); };
   // Only what was visible animates out; it can't be clicked meanwhile.
   const out = state.shownAt != null && state.host.isConnected && rbwMotion()
     ? (state.host.style.setProperty("pointer-events", "none", "important"),
@@ -236,8 +239,8 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
     box.append(header, frame); shadow.append(style, box);
     for (const type of ["pointerenter", "pointerdown", "focusin", "keydown"]) box.addEventListener(type, event => { if (event.isTrusted) undim(); });
     const rect = input.getBoundingClientRect();
-    host.style.cssText = `position:fixed!important;z-index:2147483647!important;top:0!important;left:0!important;width:${Math.max(0, Math.min(380, Math.max(rect.width, 240), innerWidth - 16))}px!important;visibility:hidden!important;pointer-events:auto!important;${rbwHardenCss}`;
-    document.documentElement.append(host);
+    host.style.cssText = `${rbwTopReset()}position:fixed!important;z-index:2147483647!important;top:0!important;left:0!important;width:${Math.max(0, Math.min(380, Math.max(rect.width, 240), innerWidth - 16))}px!important;visibility:hidden!important;pointer-events:auto!important;${rbwHardenCss}`;
+    rbwMount(host);
     ui = { token, host, box, frame, input, kind, shownAt: null, progress, progressFill, keepOpen, closeTimer: null, closeStopped: false };
     const current = ui;
     rbwConnectFrame(ui, () => { if (ui === current) close(); });
@@ -286,7 +289,7 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
     const frame = document.createElement("iframe"); frame.title = "Save login in rbw"; frame.src = api.runtime.getURL("inline.html");
     shadow.append(style, frame);
     host.style.cssText = `all:initial!important;position:fixed!important;inset:16px 16px auto auto!important;z-index:2147483647!important;max-width:calc(100vw - 32px)!important;visibility:hidden!important;pointer-events:auto!important;${rbwHardenCss}`;
-    document.documentElement.append(host);
+    rbwMount(host);
     prompt = { token, host, frame, shownAt: null };
     const current = prompt;
     rbwConnectFrame(prompt, () => { if (prompt === current) close(); });

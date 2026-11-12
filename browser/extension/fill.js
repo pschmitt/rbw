@@ -497,7 +497,9 @@ function showFillNotice(expectedUrl, notice) {
   };
   box.addEventListener("mouseenter", () => { clearTimeout(timer); held = remaining(); barAnimation?.pause(); });
   box.addEventListener("mouseleave", () => { if (!closing) arm(2000, held); });
-  box.append(close, progress); shadow.append(box); document.documentElement.append(host);
+  box.append(close, progress); shadow.append(box);
+  // top-layer.js (injected before this) keeps the notice above modal dialogs.
+  if (globalThis.rbwTopLayer) globalThis.rbwTopLayer.mount(host); else document.documentElement.append(host);
   requestAnimationFrame(() => { if (host.isConnected) box.classList.add("entering"); });
   arm(undo ? 8000 : 4500);
 }
