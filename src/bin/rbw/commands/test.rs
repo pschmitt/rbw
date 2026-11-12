@@ -5049,3 +5049,68 @@ fn test_next_mirror_state_maps_results_and_only_unique_creations() {
             .collect();
     assert_eq!(copies, expected);
 }
+
+#[test]
+fn test_prune_backups_deletes_only_old_backups() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = std::time::SystemTime::now();
+    let old = now - std::time::Duration::from_hours(40 * 24);
+    let touch = |name: &str, modified: std::time::SystemTime| {
+        let path = dir.path().join(name);
+        std::fs::write(&path, b"x").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+    };
+    touch("bw-export-old.json", old);
+    touch("bw-export-recent.json", now);
+    touch("bw-export-current.json", old);
+    touch("unrelated.txt", old);
+    std::os::unix::fs::symlink(
+        "bw-export-recent.json",
+        dir.path().join("bw-export-latest"),
+    )
+    .unwrap();
+
+    let removed =
+        prune_backups(dir.path(), 30, "bw-export-current.json", now).unwrap();
+    assert_eq!(removed, 1);
+    assert!(!dir.path().join("bw-export-old.json").exists());
+    for kept in [
+        "bw-export-recent.json",
+        "bw-export-current.json",
+        "unrelated.txt",
+        "bw-export-latest",
+    ] {
+        assert!(dir.path().join(kept).exists(), "{kept} was deleted");
+    }
+    assert_eq!(prune_backups(dir.path(), 0, "", now).unwrap(), 0);
+}
+
+#[test]
+fn test_file_unlock_reads_and_trims_credentials_directory_files() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("pw"), "secret\n").unwrap();
+    // Only this test touches CREDENTIALS_DIRECTORY.
+    std::env::set_var("CREDENTIALS_DIRECTORY", dir.path());
+    let read = rbw::config::FileUnlock::read(std::path::Path::new(
+        "$CREDENTIALS_DIRECTORY/pw",
+    ))
+    .unwrap();
+    assert_eq!(read, "secret");
+    assert_eq!(
+        rbw::config::expand_credentials_directory(std::path::Path::new(
+            "${CREDENTIALS_DIRECTORY}/pw"
+        )),
+        dir.path().join("pw")
+    );
+    assert_eq!(
+        rbw::config::expand_credentials_directory(std::path::Path::new(
+            "/etc/pw"
+        )),
+        std::path::PathBuf::from("/etc/pw")
+    );
+}

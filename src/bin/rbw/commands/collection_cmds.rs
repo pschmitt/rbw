@@ -538,6 +538,8 @@ pub(super) fn mirror_vault_with_options(
     // preview shows real counts instead of vague "everything" language.
     crate::actions::set_active_account(Some(from.to_string()))?;
     unlock(None, None)?;
+    // The local cache may be hours old; mirror the server's current state.
+    crate::actions::sync()?;
     // A mirror into a destination collection fetches attachment contents
     // later, and only for the entries it creates or rewrites.
     let deferred_attachments = attachments && dest_collection.is_some();
@@ -683,6 +685,8 @@ pub(super) fn mirror_vault_with_options(
 
     crate::actions::set_active_account(Some(to.to_string()))?;
     unlock(None, None)?;
+    // The local cache may be hours old; mirror the server's current state.
+    crate::actions::sync()?;
 
     if create_destination_collection {
         if let Some(destination_collection) = dest_collection {

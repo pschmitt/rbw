@@ -283,6 +283,13 @@ pub use export_cmds::*;
     clippy::wildcard_imports,
     reason = "the command modules share one namespace, as they did in a single file"
 )]
+mod backup_cmds;
+pub use backup_cmds::*;
+
+#[allow(
+    clippy::wildcard_imports,
+    reason = "the command modules share one namespace, as they did in a single file"
+)]
 mod import_types;
 pub use import_types::*;
 

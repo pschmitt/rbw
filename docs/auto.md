@@ -16,7 +16,7 @@ It ships two ways, both from this repository and with rbw's own version:
 |---|---|---|
 | Container image | `ghcr.io/pschmitt/rbw-auto` (default command) | same image, `sync` command |
 | Nix package | `rbw-auto-backup` | `rbw-auto-sync` |
-| NixOS module | `services.rbw-auto.backupJobs.<name>` | `services.rbw-auto.syncJobs.<name>` |
+| NixOS module | `services.rbw.backups.<name>` (runs `rbw backup`) | `services.rbw.mirror` (runs `rbw mirror`) |
 
 The scripts, the container files and the NixOS module are licensed
 GPL-3.0 ([auto/LICENSE](../auto/LICENSE)), unlike the rest of rbw.
@@ -132,77 +132,85 @@ Modes:
 
 ## NixOS module
 
-The flake exports `nixosModules.auto`, which provides `services.rbw-auto`,
-and the `rbw-auto-backup` and `rbw-auto-sync` packages (also in
-`overlays.default`). Use the same `rbw` flake input for rbw itself and for
-these, so they stay in step.
+The flake exports `nixosModules.auto`, which provides `services.rbw`. It runs
+rbw itself, without the scripts above: `rbw backup DIR` for backups
+([backup.md](backup.md)) and `rbw mirror --config` for the mirror
+([mirror.md](mirror.md)). Accounts unlock unattended from systemd
+credentials (`unlock.files` in rbw's `config.json`): rbw reads the master
+password, generates a fresh TOTP code from the stored secret, and registers a
+new device with the personal API key when bitwarden.com asks for it. No
+secret enters the Nix store or a unit's environment.
 
 ```nix
 {
   imports = [ inputs.rbw.nixosModules.auto ];
 
-  services.rbw-auto.backupJobs.personal = {
-    account = {
-      name = "personal";
-      email = "me@example.com";
+  services.rbw = {
+    accounts = {
+      personal = {
+        email = "me@example.com";
+        passwordFile = config.sops.secrets."rbw/personal/password".path;
+        totpSecretFile = config.sops.secrets."rbw/personal/totp".path;
+        apiKey = {
+          clientIdFile = config.sops.secrets."rbw/personal/client-id".path;
+          clientSecretFile = config.sops.secrets."rbw/personal/client-secret".path;
+        };
+      };
+      vaultwarden = {
+        email = "me@example.com";
+        baseUrl = "https://vault.example.com";
+        passwordFile = config.sops.secrets."rbw/vaultwarden/password".path;
+      };
     };
-    environmentFiles = [ config.sops.secrets."rbw-auto-backup-personal".path ];
-  };
 
-  services.rbw-auto.syncJobs.personal = {
-    sourceAccount = {
-      name = "personal";
-      email = "me@example.com";
+    backups.personal = {
+      account = "personal";
+      path = "/srv/bw-backup";
+      retentionDays = 30;
+      passphraseFile = config.sops.secrets."rbw/backup/passphrase".path;
+      schedule = "0/6:00:00";
     };
-    destAccount = {
-      name = "vaultwarden";
-      email = "me@example.com";
-      baseUrl = "https://vault.example.com";
-    };
-    purgeDestination = true;
-    environmentFiles = [ config.sops.secrets."rbw-auto-sync-personal".path ];
-  };
 
-  services.rbw-auto.syncJobs.collections = {
-    sourceAccount = {
-      name = "personal";
-      email = "me@example.com";
+    mirror = {
+      enable = true;
+      from = "personal";
+      to = "vaultwarden";
+      collections = {
+        org = "Example-Org";
+        # A source collection of the same name is copied 1:1; any other
+        # name gets the source's personal vault (`fallback`).
+        names = [ "Personal vault" "Shared" ];
+      };
+      schedule = "0/6:10:00";
     };
-    destAccount = {
-      name = "vaultwarden";
-      email = "me@example.com";
-      baseUrl = "https://vault.example.com";
-    };
-    mode = "collections";
-    collections = {
-      org = "Example-Org";
-      names = [ "Shared" ];
-    };
-    environmentFiles = [ config.sops.secrets."rbw-auto-sync-org-collections".path ];
   };
 }
 ```
 
-`purgeDestination` defaults to `false`. Set it to `true` only when a missing
-source collection should clear that destination collection before the
-whole-vault fallback.
-
 How the module runs them:
 
-- Each backup job is its own service and timer, `rbw-auto-backup-<name>`.
-- All enabled sync jobs run in one `rbw-auto-sync` service and timer, one
-  after the other, from a single `rbw mirror --config` plan
-  ([mirror.md](mirror.md)). Sync jobs that share an account therefore never
-  race. They must use the same `period`; their `workDir` markers and Monit
-  checks stay separate.
-- All backup jobs run as one system user (`bw-backup` by default), all sync
-  jobs as another (`bw-sync`). Each user has one rbw `config.json` listing
-  its jobs' accounts.
-- Every service stops its rbw agents afterwards (`ExecStopPost`).
-- `services.rbw-auto.backupRandomizedDelaySec` and `syncRandomizedDelaySec`
-  (default `"1h"`) set the timers' `RandomizedDelaySec`.
+- Each backup is a `rbw-backup-<name>` service and timer; the mirror is one
+  `rbw-mirror` service and timer that runs every collection in turn.
+- Backups run as the `rbw-backup` system user, the mirror as `rbw-mirror`
+  (`backupUser`/`mirrorUser`). Each user's rbw `config.json` lists the
+  accounts its jobs use; the local vault cache is kept between runs.
+- Credentials reach the units through `LoadCredential`; the units are
+  sandboxed (read-only system, private `/tmp` and devices, no capabilities,
+  a system-call filter) and stop their rbw agents afterwards.
+- The mirror is reconciled by source id and, with `prune` (on by default),
+  moves copies whose source is gone to the trash ([mirror.md](mirror.md)).
+- `healthcheckUrlFile` pings a Healthchecks.io-style URL on start, success
+  and failure; `monit.enable` (on by default) adds a Monit check on the age of
+  the last success (`LAST_BACKUP` in the backup directory, `LAST_MIRROR` in
+  the mirror user's home).
+- `randomizedDelaySec` (default `"5m"`) sets the timers' `RandomizedDelaySec`.
+  Jobs that log into the same account should be scheduled apart: bitwarden.com
+  rejects a TOTP code that was already used.
 
-The full option list is in [nix/auto-module.nix](../nix/auto-module.nix).
+`services.rbw-auto` was removed; evaluating a configuration that still sets it
+fails with a pointer to these options. Its environment files become one file
+per credential. The full option list is in
+[nix/services-module.nix](../nix/services-module.nix).
 
 ## Running from a checkout
 

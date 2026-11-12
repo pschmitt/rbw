@@ -53,6 +53,63 @@ pub struct UnlockConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(rename = "secretService")]
     pub secret_service: Option<SecretServiceUnlock>,
+    // See `FileUnlock`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<FileUnlock>,
+}
+
+// Unattended unlock from files, e.g. systemd credentials: the master
+// password, and optionally a TOTP secret (a fresh code is generated for each
+// login) and the personal API key that `rbw register` needs for a first
+// login to bitwarden.com. A leading `$CREDENTIALS_DIRECTORY` (or
+// `${CREDENTIALS_DIRECTORY}`) in a path is replaced with that environment
+// variable, so one config file can serve several systemd units.
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct FileUnlock {
+    pub password_file: std::path::PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totp_secret_file: Option<std::path::PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id_file: Option<std::path::PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_secret_file: Option<std::path::PathBuf>,
+}
+
+impl FileUnlock {
+    // Reads one of the configured files: the whole content minus trailing
+    // line breaks.
+    pub fn read(path: &std::path::Path) -> std::io::Result<String> {
+        let path = expand_credentials_directory(path);
+        let mut value = std::fs::read_to_string(&path).map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!("failed to read {}: {e}", path.display()),
+            )
+        })?;
+        while value.ends_with('\n') || value.ends_with('\r') {
+            value.pop();
+        }
+        Ok(value)
+    }
+}
+
+pub fn expand_credentials_directory(
+    path: &std::path::Path,
+) -> std::path::PathBuf {
+    let text = path.to_string_lossy();
+    for prefix in ["${CREDENTIALS_DIRECTORY}", "$CREDENTIALS_DIRECTORY"] {
+        if let Some(rest) = text.strip_prefix(prefix) {
+            if let Some(dir) = std::env::var_os("CREDENTIALS_DIRECTORY") {
+                let mut expanded = std::path::PathBuf::from(dir);
+                expanded.push(rest.trim_start_matches('/'));
+                return expanded;
+            }
+        }
+    }
+    path.to_path_buf()
 }
 
 // Unlock an account with a master-password bundle protected by an

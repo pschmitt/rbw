@@ -4,6 +4,18 @@
 
 ### Added
 
+* `rbw backup DIR`: a rotated, optionally encrypted export for scheduled
+  jobs, with a `bw-export-latest` link, a `LAST_BACKUP` timestamp and
+  `--retention-days`.
+* Accounts can unlock unattended from files: `unlock.files` names the
+  master password, an optional TOTP secret (a fresh code per login) and
+  the personal API key, which rbw uses to register a new device when
+  bitwarden.com asks for it. A leading `$CREDENTIALS_DIRECTORY` is
+  expanded, for systemd credentials.
+* NixOS module `services.rbw` (`nixosModules.auto`): accounts with their
+  credential files, `backups.<name>` and one `mirror`, run as sandboxed
+  systemd units that call rbw directly with `LoadCredential`.
+
 * `rbw mirror --dest-collection` reconciles one way by source id: the
   pairing of copies and source entries lives in a state item in the
   destination account, so unchanged entries are skipped, same-name entries
@@ -18,6 +30,10 @@
 * `BW_BACKUP_RETENTION_DAYS` deletes backups older than a number of days.
 
 ### Changed
+
+* `services.rbw-auto` is replaced by `services.rbw`; the old options fail
+  evaluation with a pointer to the new ones. Environment files become one
+  file per credential. `rbw mirror` syncs both accounts before it starts.
 
 * Collection mirrors download source attachments only for entries they
   create or rewrite; the change digest covers attachment ids instead of

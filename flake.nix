@@ -261,7 +261,8 @@
       homeManagerModules.default = import ./nix/hm-module.nix { inherit self; };
 
       nixosModules.default = import ./nix/nixos-module.nix { inherit self; };
-      nixosModules.auto = import ./nix/auto-module.nix { inherit self; };
+      # Unattended backups and mirrors (`services.rbw.*`); was rbw-auto.
+      nixosModules.auto = import ./nix/services-module.nix { inherit self; };
 
       # Smoke test: build a minimal home-manager configuration exercising
       # `programs.rbw`, and assert the rendered `config.yaml`
@@ -396,8 +397,9 @@
           inherit (self.packages.${system}) browser-daemon-extension;
         }
         // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-          # Evaluates representative rbw-auto backup and sync services and checks
-          # that the module uses the packages from this flake.
+          # Evaluates a NixOS system with a backup and a mirror and checks the
+          # units it renders: rbw runs directly, credentials come in through
+          # LoadCredential and never through the store.
           nixos-module-auto =
             let
               nixos = nixpkgs.lib.nixosSystem {
@@ -405,21 +407,31 @@
                 modules = [
                   self.nixosModules.auto
                   {
-                    services.rbw-auto.backupJobs.smoke = {
-                      account = {
-                        name = "smoke";
-                        email = "smoke@example.invalid";
+                    services.rbw = {
+                      accounts = {
+                        smoke-source = {
+                          email = "source@example.invalid";
+                          passwordFile = "/run/secrets/source-password";
+                          totpSecretFile = "/run/secrets/source-totp";
+                        };
+                        smoke-dest = {
+                          email = "dest@example.invalid";
+                          baseUrl = "https://vault.example.invalid";
+                          passwordFile = "/run/secrets/dest-password";
+                        };
                       };
-                    };
-                    services.rbw-auto.syncJobs.smoke = {
-                      sourceAccount = {
-                        name = "smoke-source";
-                        email = "source@example.invalid";
+                      backups.smoke = {
+                        account = "smoke-source";
+                        passphraseFile = "/run/secrets/passphrase";
                       };
-                      destAccount = {
-                        name = "smoke-dest";
-                        email = "dest@example.invalid";
-                        baseUrl = "https://vault.example.invalid";
+                      mirror = {
+                        enable = true;
+                        from = "smoke-source";
+                        to = "smoke-dest";
+                        collections = {
+                          org = "Smoke";
+                          names = [ "Personal vault" ];
+                        };
                       };
                     };
                     boot.loader.grub.enable = false;
@@ -431,22 +443,18 @@
                   }
                 ];
               };
-              service = nixos.config.systemd.services.rbw-auto-backup-smoke;
-              start = builtins.unsafeDiscardStringContext service.serviceConfig.ExecStart;
-              startProgram = builtins.elemAt (nixpkgs.lib.splitString " " start) (
-                nixpkgs.lib.length (nixpkgs.lib.splitString " " start) - 1
-              );
-              backup = self.packages.${system}.rbw-auto-backup;
-              sync = self.packages.${system}.rbw-auto-sync;
-              syncStart = builtins.unsafeDiscardStringContext nixos.config.systemd.services.rbw-auto-sync.serviceConfig.ExecStart;
+              rbwBin = builtins.unsafeDiscardStringContext "${self.packages.${system}.default}/bin/rbw";
+              backup = nixos.config.systemd.services.rbw-backup-smoke.serviceConfig;
+              mirror = nixos.config.systemd.services.rbw-mirror.serviceConfig;
+              strip = builtins.unsafeDiscardStringContext;
+              hasInfix = nixpkgs.lib.hasInfix;
             in
-            assert nixos.config.services.rbw-auto.backupPackage == backup;
-            assert startProgram == builtins.unsafeDiscardStringContext "${backup}/bin/rbw-auto-backup";
-            assert nixos.config.services.rbw-auto.syncPackage == sync;
-            assert nixpkgs.lib.hasInfix (builtins.unsafeDiscardStringContext "${sync}/bin/rbw-auto-sync")
-              syncStart;
-            # The packages carry rbw's own version.
-            assert backup.version == self.packages.${system}.default.version;
+            assert hasInfix "${rbwBin} --account smoke-source backup" (strip backup.ExecStart);
+            assert hasInfix "--passphrase-file %d/rbw-backup-passphrase" (strip backup.ExecStart);
+            assert builtins.elem "rbw-smoke-source-password:/run/secrets/source-password" backup.LoadCredential;
+            assert builtins.elem "rbw-smoke-source-totp:/run/secrets/source-totp" mirror.LoadCredential;
+            assert builtins.elem "rbw-smoke-dest-password:/run/secrets/dest-password" mirror.LoadCredential;
+            assert hasInfix "${rbwBin} mirror --config" (strip mirror.ExecStart);
             pkgs.runCommand "rbw-auto-nixos-module-check" { } "touch $out";
 
           # Evaluates (without building rbw) a NixOS system enabling

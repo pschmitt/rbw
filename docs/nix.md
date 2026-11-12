@@ -24,7 +24,7 @@ extension source. Pin a tag (`github:pschmitt/rbw/vX.Y.Z`) for a release.
 | `overlays.default` | Sets `pkgs.rbw` and the two `pkgs.rbw-auto-*` packages |
 | `homeManagerModules.default` | `programs.rbw` |
 | `nixosModules.default` | `services.rbw-unlockd`, the fingerprint-enforcing unlock broker (see [desktop-unlock.md](desktop-unlock.md)) |
-| `nixosModules.auto` | `services.rbw-auto` backup and sync jobs (see [auto.md](auto.md)) |
+| `nixosModules.auto` | `services.rbw` unattended backups and mirror (see [auto.md](auto.md)) |
 
 The package builds with [crane](https://github.com/ipetkov/crane): rbw's
 dependencies are a separate derivation that only changes with `Cargo.lock` or

@@ -323,7 +323,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
     ),
     (
         "Import and export",
-        &["export", "export-info", "import", "mirror"],
+        &["backup", "export", "export-info", "import", "mirror"],
     ),
     ("Organizations", &["collection", "org"]),
     (
@@ -737,6 +737,36 @@ enum Opt {
         json: bool,
     },
 
+    #[command(
+        about = "Write a rotated backup of the vault into a directory",
+        long_about = "Write a backup of the active account into DIR, the way \
+            unattended backup jobs need it: an rbw export (gpg-encrypted \
+            with --passphrase-file or $RBW_EXPORT_PASSPHRASE, attachments \
+            included) named bw-export-<UTC timestamp>, a bw-export-latest \
+            link to it, and a LAST_BACKUP file holding the unix time of the \
+            last success. Backups older than --retention-days are deleted; \
+            the newest one is always kept. Syncs the account first."
+    )]
+    Backup {
+        #[arg(help = "Directory to write backups into (created if missing)")]
+        dir: std::path::PathBuf,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Delete backups older than this many days (0 keeps all)"
+        )]
+        retention_days: u64,
+        #[arg(long, help = "Leave attachment contents out of the backup")]
+        no_attachments: bool,
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Encrypt with the passphrase in FILE (default: \
+                $RBW_EXPORT_PASSPHRASE; unencrypted if neither is set). A \
+                leading $CREDENTIALS_DIRECTORY is expanded."
+        )]
+        passphrase_file: Option<std::path::PathBuf>,
+    },
     #[command(
         about = "Export the entire vault as decrypted JSON",
         long_about = "Export the entire vault as decrypted JSON\n\n\
@@ -2489,6 +2519,7 @@ impl Opt {
             Self::Status { .. } => "status".to_string(),
             Self::Sync { .. } => "sync".to_string(),
             Self::Tui { .. } => "tui".to_string(),
+            Self::Backup { .. } => "backup".to_string(),
             Self::Export { .. } => "export".to_string(),
             Self::ExportInfo { .. } => "export-info".to_string(),
             Self::Import { .. } => "import".to_string(),
@@ -4659,6 +4690,17 @@ fn main() {
             org.as_deref(),
             from_file.as_deref(),
             from_file_passphrase.as_deref(),
+        ),
+        Opt::Backup {
+            dir,
+            retention_days,
+            no_attachments,
+            passphrase_file,
+        } => commands::backup(
+            &dir,
+            retention_days,
+            !no_attachments,
+            passphrase_file.as_deref(),
         ),
         Opt::ExportInfo {
             file,

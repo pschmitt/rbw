@@ -67,6 +67,31 @@ attachment contents (base64-encoded) in the export; this makes the export
 considerably larger and slower to produce, but lets `import` restore
 attachments too.
 
+## Rotated backups (`rbw backup`)
+
+`rbw backup DIR` writes a backup of the active account the way a scheduled
+job needs it, after syncing the account:
+
+- `DIR/bw-export-<UTC timestamp>.tar.gz.gpg`: an rbw export with attachment
+  contents (`--no-attachments` leaves them out), gpg-encrypted with the
+  passphrase from `--passphrase-file FILE` or `$RBW_EXPORT_PASSPHRASE`.
+  Without either it is written unencrypted as `.json`, with a warning.
+- `DIR/bw-export-latest`: a link to the newest backup.
+- `DIR/LAST_BACKUP`: the unix time of the last successful backup, for
+  monitoring.
+
+`--retention-days N` deletes backups older than N days; the one just
+written is always kept. A backup is written under a temporary name and moved
+into place when complete, so a failed run never leaves a partial file that
+looks like a backup.
+
+```shell
+rbw --account personal backup /srv/bw-backup --retention-days 30 \
+  --passphrase-file /run/secrets/backup-passphrase
+```
+
+The NixOS module runs it on a timer ([auto.md](auto.md#nixos-module)).
+
 ## Upstream Bitwarden export formats
 
 `--format` (aliased `--type`) selects the export/import shape. `rbw export`

@@ -64,6 +64,45 @@ pub(super) fn login_resolving_credential_source(
     visited: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     let (password, totp) = resolve_unlock_credentials(visited)?;
+    login_registering_from_files(password, totp)
+}
+
+// `crate::actions::login`, plus: when the server wants this device
+// registered first and the account's `unlock.files` names its API key,
+// registers with it and logs in again (with a fresh TOTP code).
+pub(super) fn login_registering_from_files(
+    password: Option<String>,
+    totp: Option<String>,
+) -> anyhow::Result<()> {
+    let Err(error) = crate::actions::login(password.clone(), totp.clone())
+    else {
+        return Ok(());
+    };
+    let registration_required =
+        format!("{error:#}").contains("has not yet been registered");
+    let files = active_account()
+        .ok()
+        .and_then(|account| account.unlock.files);
+    let Some((Some(id_file), Some(secret_file))) = files
+        .as_ref()
+        .map(|f| (f.client_id_file.as_ref(), f.client_secret_file.as_ref()))
+    else {
+        return Err(error);
+    };
+    if !registration_required {
+        return Err(error);
+    }
+    crate::actions::register(
+        Some(rbw::config::FileUnlock::read(id_file)?),
+        Some(rbw::config::FileUnlock::read(secret_file)?),
+    )?;
+    let totp = match files.as_ref().and_then(|f| f.totp_secret_file.as_ref())
+    {
+        Some(file) => {
+            Some(generate_totp(&rbw::config::FileUnlock::read(file)?)?)
+        }
+        None => totp,
+    };
     crate::actions::login(password, totp)
 }
 
@@ -93,7 +132,7 @@ pub(super) fn unlock_impl(
         Some(password) => Some(password),
         None => resolve_password_dialog()?,
     };
-    crate::actions::login(password.clone(), totp)?;
+    login_registering_from_files(password.clone(), totp)?;
     crate::actions::unlock(password)?;
     // Several accounts can unlock in one run; say which one this was.
     match active_account() {
@@ -307,6 +346,15 @@ pub(super) fn resolve_unlock_credentials(
             return Ok((Some(password), None));
         }
         return Ok((Some(rbw::desktop::unlock(desktop)?), None));
+    }
+    if let Some(files) = account.unlock.files.as_ref() {
+        let password = rbw::config::FileUnlock::read(&files.password_file)?;
+        let totp = files
+            .totp_secret_file
+            .as_ref()
+            .map(|file| generate_totp(&rbw::config::FileUnlock::read(file)?))
+            .transpose()?;
+        return Ok((Some(password), totp));
     }
     if let Some(termux) = account.unlock.termux.filter(|_| !skip_scan) {
         let config = rbw::config::Config::load()?;
