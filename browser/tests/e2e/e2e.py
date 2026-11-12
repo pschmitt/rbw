@@ -9,7 +9,9 @@ run.sh, which isolates HOME and registers the stub native host.
 import argparse
 import os
 import sys
+import struct
 import time
+import zlib
 
 # Extension frames are not exposed to the drivers, so tests find the visible rbw
 # host in the page and click at fixed offsets inside it. The save prompt is the
@@ -20,7 +22,48 @@ HOST_JS = """(save) => { const el = [...document.documentElement.children].filte
   if (!el || getComputedStyle(el).visibility !== 'visible') return null; const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; }"""
 # A set-password chooser has a hint line above its rows; "New" sits at their right end.
 OFFSETS = {"setpw": (60, 140), "setpw-new": (-30, 140), "login": (60, 102), "card": (60, 102), "search": (60, 40), "result": (60, 130), "save": (70, 102)}
+# Page-controlled top-layer decoys, shown after rbw's chooser: a magenta sheet
+# over the whole viewport that lets clicks through to whatever is below it.
+TOP_DECOY_CSS = "position:fixed;inset:0;width:100vw;height:100vh;max-width:none;max-height:none;margin:0;padding:0;border:0;background:#f0f;pointer-events:none"
+TOP_DECOYS = [
+    ("page popover decoy", "() => { const d = document.createElement('div'); d.setAttribute('popover', 'manual'); d.style.cssText = '%s'; document.body.append(d); d.showPopover(); }" % TOP_DECOY_CSS),
+    ("closed-shadow popover decoy", "() => { const h = document.createElement('span'); document.body.append(h); const r = h.attachShadow({ mode: 'closed' }); const d = document.createElement('div'); d.setAttribute('popover', 'manual'); d.style.cssText = '%s'; r.append(d); d.showPopover(); }" % TOP_DECOY_CSS),
+    ("closed-shadow modal dialog decoy", "() => { const h = document.createElement('span'); document.body.append(h); const r = h.attachShadow({ mode: 'closed' }); const d = document.createElement('dialog'); d.style.cssText = '%s'; r.append(d); d.showModal(); }" % TOP_DECOY_CSS),
+]
+HAS_POPOVER_JS = "() => 'showPopover' in HTMLElement.prototype"
+# Whether the chooser is topmost at its click point with every page element made
+# hit-testable, as the background does before it accepts a click.
+TOPMOST_JS = """() => { const st = document.createElement('style'); st.textContent = '*,*::before,*::after{pointer-events:auto!important}'; document.head.append(st);
+  try { const host = [...document.documentElement.children].find(e => e.matches(':popover-open')); if (!host) return false; const r = host.getBoundingClientRect(); return document.elementsFromPoint(r.left + 60, r.top + 102)[0] === host; } finally { st.remove(); } }"""
 SHADOW_DECOY = "() => { const h = document.createElement('span'); document.documentElement.append(h); const r = h.attachShadow({ mode: 'closed' }); const d = document.createElement('div'); d.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;background:#fff'; r.append(d); }"
+
+
+def png_pixel(png, x, y):
+    """The (r, g, b) of pixel x, y of an 8-bit, non-interlaced RGB(A) PNG."""
+    pos, idat, width = 8, b"", 0
+    while pos < len(png):
+        length, kind = struct.unpack(">I4s", png[pos:pos + 8])
+        data = png[pos + 8:pos + 8 + length]
+        if kind == b"IHDR": width, height, depth, color = struct.unpack(">IIBB", data[:10])
+        elif kind == b"IDAT": idat += data
+        pos += 12 + length
+    channels = {2: 3, 6: 4}[color]
+    stride = width * channels
+    raw, rows, prev = zlib.decompress(idat), [], bytearray(stride)
+    for row in range(y + 1):
+        line = raw[row * (stride + 1):(row + 1) * (stride + 1)]
+        kind, cur = line[0], bytearray(line[1:])
+        for i in range(stride):
+            a = cur[i - channels] if i >= channels else 0
+            b, c = prev[i], prev[i - channels] if i >= channels else 0
+            if kind == 1: cur[i] = (cur[i] + a) & 255
+            elif kind == 2: cur[i] = (cur[i] + b) & 255
+            elif kind == 3: cur[i] = (cur[i] + (a + b) // 2) & 255
+            elif kind == 4:
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                cur[i] = (cur[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        prev = cur
+    return tuple(prev[x * channels:x * channels + 3])
 
 
 class ChromiumPage:
@@ -33,6 +76,7 @@ class ChromiumPage:
     def goto(self, url): self.page.goto(url); self.page.wait_for_load_state("load")
     def evaluate(self, js, arg=None): return self.page.evaluate(js, arg)
     def click_point(self, x, y): self.page.mouse.click(x, y)
+    def png(self): return self.page.screenshot()
     def click(self, selector): self.page.click(selector)
     def fill(self, selector, value): self.page.fill(selector, value)
     def key(self, key, selector=None): (self.page.press(selector, key) if selector else self.page.keyboard.press(key))
@@ -64,6 +108,7 @@ class FirefoxPage:
         if selector: self.driver.find_element("css selector", selector).send_keys(value)
         else: ActionChains(self.driver).send_keys(value).perform()
     def screenshot(self, path, _rect): self.driver.save_screenshot(path)
+    def png(self): return self.driver.get_screenshot_as_png()
     def type_text(self, text):
         from selenium.webdriver.common.action_chains import ActionChains
         ActionChains(self.driver).send_keys(text).perform()
@@ -153,8 +198,32 @@ def main():
         for name, decoy in [("pointer-events:none decoy", "() => { document.documentElement.append(decoy); decoy.style.display = 'block'; }"), ("closed-shadow pointer-events:none decoy", SHADOW_DECOY)]:
             fresh(); page.click("#pass")
             if host():
-                time.sleep(0.8); page.evaluate(decoy); click_in("login", settle=0.3)
-                check(f"{name} rejected", values()["pass"] == "")
+                time.sleep(0.8); page.evaluate(decoy)
+                if page.evaluate(HAS_POPOVER_JS):
+                    # The chooser is a popover in the top layer: no page element,
+                    # however late or high its z-index, can be painted over it.
+                    check(f"{name} cannot cover the chooser", page.evaluate(TOPMOST_JS))
+                else:
+                    click_in("login", settle=0.3)
+                    check(f"{name} rejected", values()["pass"] == "")
+
+        # A page can put its own elements into the top layer too. A click may
+        # only fill when the user could see the chooser at the click point:
+        # sample the screenshot there right before clicking.
+        if page.evaluate(HAS_POPOVER_JS):
+            for name, decoy in TOP_DECOYS:
+                fresh(); page.click("#pass")
+                rect = host()
+                if not rect:
+                    check(f"{name}: chooser opens", False); continue
+                # Where the user would click: the login row, as placed before the decoy.
+                dx, dy = OFFSETS["login"]
+                time.sleep(0.8); page.evaluate(decoy); time.sleep(0.6)
+                pixel = png_pixel(page.png(), int(rect["x"] + dx), int(rect["y"] + dy))
+                covered = pixel[0] > 200 and pixel[1] < 60 and pixel[2] > 200
+                page.click_point(rect["x"] + dx, rect["y"] + dy); time.sleep(1.5)
+                filled = values()["pass"] != ""
+                check(f"{name}: no fill through a covered chooser", not (covered and filled), f"covered={covered} filled={filled} pixel={pixel}")
 
         fresh("html>div:last-of-type{opacity:0!important;visibility:hidden!important}"); page.click("#pass")
         check("page !important restyle cannot hide the host", host() is not None)
