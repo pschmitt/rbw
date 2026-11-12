@@ -4663,8 +4663,8 @@ fn test_resolve_organization_lists_candidates_on_ambiguity() {
 #[test]
 fn test_mirror_vault_rejects_identical_from_and_to() {
     let err = mirror_vault(
-        "same", "same", None, None, None, None, false, false, false, true,
-        None, false,
+        "same", "same", None, None, None, None, false, false, false, false,
+        true, None, false,
     )
     .unwrap_err()
     .to_string();
@@ -4683,6 +4683,7 @@ fn test_mirror_vault_rejects_purge_dest_with_a_scope() {
         false,
         false,
         true,
+        false,
         true,
         None,
         false,
@@ -4702,6 +4703,7 @@ fn test_mirror_vault_rejects_purge_dest_with_a_scope() {
         false,
         false,
         true,
+        false,
         true,
         None,
         false,
@@ -4729,6 +4731,7 @@ fn test_mirror_vault_allows_purge_dest_with_dest_collection() {
         false,
         false,
         true,
+        false,
         true,
         None,
         false,
@@ -4881,4 +4884,165 @@ fn run_child_status_becomes_auditable_error_with_original_exit_code() {
     let signaled = std::process::ExitStatus::from_raw(9);
     let err = super::run_status_result(signaled).unwrap_err();
     assert_eq!(super::exit_status(&err), 137);
+}
+
+fn mirror_source(id: &str, name: &str, marker: &str) -> MirrorSource {
+    MirrorSource {
+        source_id: Some(id.to_string()),
+        key: (name.to_string(), None),
+        marker: Some(format!("v1:{id}:{marker}")),
+        attachments: Some(0),
+    }
+}
+
+fn mirror_dest(name: &str, marker: Option<String>) -> MirrorDest {
+    MirrorDest {
+        key: (name.to_string(), None),
+        marker,
+        attachments: 0,
+        org_ok: true,
+    }
+}
+
+#[test]
+fn test_mirror_marker_source_id() {
+    assert_eq!(mirror_marker_source_id("v1:abc:0123"), Some("abc"));
+    assert_eq!(mirror_marker_source_id("v1:abc:retry"), Some("abc"));
+    assert_eq!(mirror_marker_source_id("v2:abc:0123"), None);
+    assert_eq!(mirror_marker_source_id("v1::0123"), None);
+    assert_eq!(mirror_marker_source_id("v1:abc"), None);
+}
+
+#[test]
+fn test_plan_mirror_matches_by_source_id_not_name() {
+    // Two source entries share a name; each keeps its own copy.
+    let sources = [
+        mirror_source("a", "same", "d1"),
+        mirror_source("b", "same", "d2"),
+    ];
+    let dests = [
+        mirror_dest("same", Some("v1:b:d2".to_string())),
+        mirror_dest("same", Some("v1:a:old".to_string())),
+    ];
+    let plan = plan_mirror(&sources, &dests);
+    assert_eq!(
+        plan.actions,
+        vec![MirrorAction::Update(1), MirrorAction::Unchanged(0)]
+    );
+    assert_eq!(plan.stale, Vec::<usize>::new());
+}
+
+#[test]
+fn test_plan_mirror_creates_missing_and_reports_stale() {
+    let sources = [
+        mirror_source("a", "kept", "d1"),
+        mirror_source("c", "new", "d3"),
+    ];
+    let dests = [
+        mirror_dest("kept", Some("v1:a:d1".to_string())),
+        // Source "gone" was deleted.
+        mirror_dest("gone", Some("v1:gone:d9".to_string())),
+        // A second copy of "a" (e.g. an old duplicate) is stale too.
+        mirror_dest("kept", Some("v1:a:d1".to_string())),
+    ];
+    let plan = plan_mirror(&sources, &dests);
+    assert_eq!(
+        plan.actions,
+        vec![MirrorAction::Unchanged(0), MirrorAction::Create]
+    );
+    assert_eq!(plan.stale, vec![1, 2]);
+}
+
+#[test]
+fn test_plan_mirror_adopts_unmapped_copies_by_key_pairwise() {
+    // No state: three same-name sources, two unmapped copies. Two are
+    // adopted (and rewritten), the third is created; the unrelated
+    // unmapped copy is stale.
+    let sources = [
+        mirror_source("a", "dup", "d1"),
+        mirror_source("b", "dup", "d2"),
+        mirror_source("c", "dup", "d3"),
+    ];
+    let dests = [
+        mirror_dest("dup", None),
+        mirror_dest("other", None),
+        mirror_dest("dup", None),
+    ];
+    let plan = plan_mirror(&sources, &dests);
+    assert_eq!(
+        plan.actions,
+        vec![
+            MirrorAction::Update(0),
+            MirrorAction::Update(2),
+            MirrorAction::Create
+        ]
+    );
+    assert_eq!(plan.stale, vec![1]);
+}
+
+#[test]
+fn test_plan_mirror_never_reuses_copies_of_another_organization() {
+    let sources = [mirror_source("a", "x", "d1")];
+    let mut foreign = mirror_dest("x", Some("v1:a:d1".to_string()));
+    foreign.org_ok = false;
+    let plan = plan_mirror(&sources, &[foreign]);
+    assert_eq!(plan.actions, vec![MirrorAction::Create]);
+    assert_eq!(plan.stale, vec![0]);
+}
+
+#[test]
+fn test_plan_mirror_updates_when_attachment_count_differs() {
+    let mut source = mirror_source("a", "x", "d1");
+    source.attachments = Some(1);
+    let plan = plan_mirror(
+        &[source],
+        &[mirror_dest("x", Some("v1:a:d1".to_string()))],
+    );
+    assert_eq!(plan.actions, vec![MirrorAction::Update(0)]);
+
+    // Attachments not mirrored: never compared.
+    let mut source = mirror_source("a", "x", "d1");
+    source.attachments = None;
+    let mut dest = mirror_dest("x", Some("v1:a:d1".to_string()));
+    dest.attachments = 3;
+    assert_eq!(
+        plan_mirror(&[source], &[dest]).actions,
+        vec![MirrorAction::Unchanged(0)]
+    );
+}
+
+#[test]
+fn test_next_mirror_state_maps_results_and_only_unique_creations() {
+    let sources = [
+        mirror_source("a", "kept", "d1"),
+        mirror_source("b", "failed", "d2"),
+        mirror_source("c", "unique", "d3"),
+        mirror_source("d", "dup", "d4"),
+        mirror_source("e", "dup", "d5"),
+    ];
+    let actions = [
+        MirrorAction::Unchanged(0),
+        MirrorAction::Update(1),
+        MirrorAction::Create,
+        MirrorAction::Create,
+        MirrorAction::Create,
+    ];
+    let dest_ids = ["x0".to_string(), "x1".to_string()];
+    let failed: std::collections::HashSet<String> =
+        std::iter::once("x1".to_string()).collect();
+    let after = [
+        ("x0".to_string(), ("kept".to_string(), None)),
+        ("x1".to_string(), ("failed".to_string(), None)),
+        ("n1".to_string(), ("unique".to_string(), None)),
+        ("n2".to_string(), ("dup".to_string(), None)),
+        ("n3".to_string(), ("dup".to_string(), None)),
+    ];
+    let copies =
+        next_mirror_state(&sources, &actions, &dest_ids, &failed, &after);
+    let expected: std::collections::BTreeMap<String, String> =
+        [("x0", "v1:a:d1"), ("x1", "v1:b:retry"), ("n1", "v1:c:d3")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+    assert_eq!(copies, expected);
 }

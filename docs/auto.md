@@ -112,6 +112,7 @@ podman run -it --rm \
 | `BW_SYNC_MODE` | `personal` | `personal` or `collections`, see below. |
 | `DEST_BW_PURGE_VAULT` | | `personal` mode: `1` wipes the destination's personal vault first (server-side, like `rbw purge-vault`). Organization items are never touched. |
 | `BW_SYNC_PURGE_DEST_COLLECTION` | unset | `collections` mode: `1` wipes the destination collection before a whole-vault fallback. By default, existing destination entries are preserved. |
+| `BW_SYNC_PRUNE` | unset | `collections` mode: `1` moves destination entries whose source entry is gone to the trash (`rbw mirror --prune`). |
 | `DEST_BW_ORG`, `DEST_BW_COLLECTIONS` | | `collections` mode: the destination organization and a comma-separated list of collections, e.g. `default,Some Other Collection`. Missing ones are created. |
 | `BW_SYNC_ATTACHMENTS` | `1` | `0` skips attachments. |
 | `BW_SYNC_OVERWRITE` | `1` | `0` leaves existing destination entries alone. |

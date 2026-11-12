@@ -21,6 +21,7 @@ BW_SYNC_MODE="${BW_SYNC_MODE:-personal}"
 BW_SYNC_ATTACHMENTS="${BW_SYNC_ATTACHMENTS:-1}"
 BW_SYNC_OVERWRITE="${BW_SYNC_OVERWRITE:-1}"
 BW_SYNC_PURGE_DEST_COLLECTION="${BW_SYNC_PURGE_DEST_COLLECTION:-}"
+BW_SYNC_PRUNE="${BW_SYNC_PRUNE:-}"
 
 TMPDIR="${TMPDIR:-/tmp}"
 WORKDIR="${WORKDIR:-${TMPDIR}/bw-sync}"
@@ -254,6 +255,12 @@ mirror_collections() {
     purge_flags+=(--purge-dest)
   fi
 
+  local -a prune_flags=()
+  if [[ "$BW_SYNC_PRUNE" == "1" ]]
+  then
+    prune_flags+=(--prune)
+  fi
+
   local raw_name name src_id rc=0
   for raw_name in "${collections[@]}"
   do
@@ -271,7 +278,8 @@ mirror_collections() {
     then
       echo_info "Mirroring source collection '$name' -> destination collection '$name'"
       if ! rbw mirror --from "$SRC_ACCOUNT" --to "$DEST_ACCOUNT" --yes \
-        --collection "$src_id" --dest-collection "$name" --dest-org "$org_id" "${flags[@]}"
+        --collection "$src_id" --dest-collection "$name" --dest-org "$org_id" \
+        "${prune_flags[@]}" "${flags[@]}"
       then
         echo_error "Mirror of collection '$name' failed."
         rc=1
@@ -279,7 +287,8 @@ mirror_collections() {
     else
       echo_info "Mirroring entire vault -> destination collection: $name"
       if ! rbw mirror --from "$SRC_ACCOUNT" --to "$DEST_ACCOUNT" --yes \
-        --dest-collection "$name" --dest-org "$org_id" "${purge_flags[@]}" "${flags[@]}"
+        --dest-collection "$name" --dest-org "$org_id" "${purge_flags[@]}" \
+        "${prune_flags[@]}" "${flags[@]}"
       then
         echo_error "Mirror into collection '$name' failed."
         rc=1

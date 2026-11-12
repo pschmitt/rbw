@@ -2213,6 +2213,15 @@ enum Opt {
                 --org-id)"
         )]
         purge_dest: bool,
+        #[arg(
+            long,
+            conflicts_with = "config",
+            requires = "dest_collection",
+            help = "Move copies in --dest-collection whose source entry no \
+                longer exists to the trash, so the collection becomes an \
+                exact copy of the source"
+        )]
+        prune: bool,
         #[arg(short = 'y', long, help = "Skip confirmation prompt")]
         yes: bool,
         #[arg(
@@ -5713,6 +5722,7 @@ fn main() {
             attachments,
             overwrite,
             purge_dest,
+            prune,
             yes,
             stdin,
             dry_run,
@@ -5735,6 +5745,7 @@ fn main() {
                     attachments,
                     overwrite,
                     purge_dest,
+                    prune,
                     yes,
                     password,
                     dry_run,
@@ -6645,6 +6656,7 @@ mod test {
             "--attachments",
             "--overwrite",
             "--purge-dest",
+            "--prune",
             "-y",
             "--stdin",
             "--dry-run",
@@ -6660,6 +6672,7 @@ mod test {
             attachments,
             overwrite,
             purge_dest,
+            prune,
             yes,
             stdin,
             dry_run,
@@ -6677,6 +6690,7 @@ mod test {
         assert!(attachments);
         assert!(overwrite);
         assert!(purge_dest);
+        assert!(prune);
         assert!(yes);
         assert!(stdin);
         assert!(dry_run);

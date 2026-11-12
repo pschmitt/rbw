@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+* `rbw mirror --dest-collection` reconciles one way by source id: the
+  pairing of copies and source entries lives in a state item in the
+  destination account, so unchanged entries are skipped, same-name entries
+  no longer overwrite each other, and attachments follow their own entry.
+  `--prune` (config `prune`, rbw-auto `pruneDestination`/`BW_SYNC_PRUNE`)
+  moves copies whose source entry is gone to the trash.
+
 ### Fixed
 
 * Import duplicate-key entries into organizations through the organization

@@ -109,6 +109,7 @@ let
               destCollection = collection;
               destOrg = job.collections.org;
               purgeDest = job.purgeDestination;
+              prune = job.pruneDestination;
               fallbackToWholeVault = true;
             }
           ) job.collections.names
@@ -354,6 +355,18 @@ let
             collection only when its named source collection is missing and
             the whole-vault fallback runs. Both purges are disabled by
             default.
+          '';
+        };
+
+        pruneDestination = mkOption {
+          type = types.bool;
+          default = false;
+          description = ''
+            "collections" mode only: move entries of a destination
+            collection whose source entry no longer exists to the trash,
+            so each collection is an exact one-way copy. Copies are paired
+            with their source entries through a state item in the
+            destination account's personal vault, not by name.
           '';
         };
 

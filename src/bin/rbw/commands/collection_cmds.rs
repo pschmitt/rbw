@@ -128,6 +128,11 @@ pub(super) struct MirrorConfigEntry {
     pub(super) overwrite: bool,
     #[serde(default)]
     pub(super) purge_dest: bool,
+    // With `destCollection`: move copies in the destination collection
+    // whose source entry no longer exists to the trash, so the collection
+    // ends up an exact copy of the source.
+    #[serde(default)]
+    pub(super) prune: bool,
     // When true, a missing source collection means "mirror the whole source
     // vault" instead. This lets callers describe a destination collection
     // that is either a same-named source collection or a full-vault copy.
@@ -214,6 +219,7 @@ pub(super) fn mirror_vault_config_entry(
         mirror.attachments,
         mirror.overwrite,
         purge_dest,
+        mirror.prune,
         yes,
         password,
         dry_run,
@@ -353,6 +359,7 @@ pub fn move_entry_by_id(
         None,
         None,
         false,
+        None,
     )?;
     crate::actions::sync()?;
     let created = load_db()?.entries.into_iter().any(|e| {
@@ -449,6 +456,7 @@ pub fn mirror_vault(
     attachments: bool,
     overwrite: bool,
     purge_dest: bool,
+    prune: bool,
     yes: bool,
     password: Option<String>,
     dry_run: bool,
@@ -463,6 +471,7 @@ pub fn mirror_vault(
         attachments,
         overwrite,
         purge_dest,
+        prune,
         yes,
         password,
         dry_run,
@@ -481,6 +490,7 @@ pub(super) fn mirror_vault_with_options(
     attachments: bool,
     overwrite: bool,
     purge_dest: bool,
+    prune: bool,
     yes: bool,
     password: Option<String>,
     dry_run: bool,
@@ -488,6 +498,12 @@ pub(super) fn mirror_vault_with_options(
 ) -> anyhow::Result<()> {
     if from == to {
         anyhow::bail!("--from and --to must name different accounts");
+    }
+    if prune && dest_collection.is_none() {
+        anyhow::bail!(
+            "--prune needs --dest-collection: only a mirror into one \
+             destination collection is reconciled by source id"
+        );
     }
 
     if purge_dest && (collection.is_some() || org_id.is_some()) {
@@ -555,14 +571,28 @@ pub(super) fn mirror_vault_with_options(
     if attachments {
         eprintln!("  attachments: included");
     }
-    eprintln!(
-        "  existing entries at destination: {}",
-        if overwrite {
-            "will be overwritten"
-        } else {
-            "will be skipped"
+    if dest_collection.is_some() {
+        eprintln!(
+            "  matching: by source id (kept in the destination's \
+             '{}' item); unchanged entries are skipped",
+            mirror_state_name("<collection id>")
+        );
+        if prune {
+            eprintln!(
+                "  stale copies in the destination collection: moved to \
+                 the trash"
+            );
         }
-    );
+    } else {
+        eprintln!(
+            "  existing entries at destination: {}",
+            if overwrite {
+                "will be overwritten"
+            } else {
+                "will be skipped"
+            }
+        );
+    }
     if purge_dest {
         if let Some(needle) = dest_collection {
             eprintln!(
@@ -637,26 +667,46 @@ pub(super) fn mirror_vault_with_options(
 
     let (bw, attachments_flat) = exported_vault_to_bw(&vault);
 
-    let attachments_map = if attachments {
-        let mut map: std::collections::HashMap<
-            String,
-            Vec<crate::import_bitwarden::ZipAttachment>,
-        > = std::collections::HashMap::new();
-        for (name, file_name, data) in attachments_flat {
-            map.entry(crate::import_bitwarden::sanitize_zip_folder_name(
-                &name,
-            ))
-            .or_default()
-            .push(crate::import_bitwarden::ZipAttachment { file_name, data });
+    // Attachments are handed over by source entry id rather than through
+    // the name-keyed zip-folder map `bw_vault_to_imported` uses for export
+    // files: entries sharing a name would otherwise trade attachments.
+    drop(attachments_flat);
+    let mut imported = bw_vault_to_imported(bw, None);
+    if attachments {
+        let by_id: std::collections::HashMap<&str, &ExportedEntry> = vault
+            .entries
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry))
+            .collect();
+        for entry in &mut imported.entries {
+            if let Some(source) =
+                entry.id.as_deref().and_then(|id| by_id.get(id))
+            {
+                entry.attachments = source
+                    .attachments
+                    .iter()
+                    .map(|a| {
+                        serde_json::json!({
+                            "file_name": a.file_name,
+                            "data_base64": a.data_base64,
+                        })
+                    })
+                    .collect();
+            }
         }
-        Some(map)
-    } else {
-        None
-    };
+    }
 
-    let imported = bw_vault_to_imported(bw, attachments_map);
-
-    import_vault(imported, dest_collection, dest_org, overwrite)
+    // A mirror into one destination collection is reconciled by source id
+    // (`mirror_sync`); it always updates changed copies.
+    let mirror_sync = dest_collection
+        .map(|_| MirrorSync::from_vault(&vault, attachments, prune));
+    import_vault(
+        imported,
+        dest_collection,
+        dest_org,
+        overwrite || mirror_sync.is_some(),
+        mirror_sync.as_ref(),
+    )
 }
 
 // Resolve or create the destination organization/collection named by a

@@ -372,6 +372,9 @@ pub(super) fn import_overwrite_entry(
     refresh_token: &mut String,
     existing: &rbw::db::Entry,
     imported: &ImportedEntry,
+    // Mirror updates: make the copy's attachments exactly the source's by
+    // deleting the existing ones before uploading.
+    replace_attachments: bool,
 ) -> anyhow::Result<(usize, usize)> {
     // The edit endpoint may reject trashed entries. Restore one temporarily;
     // `apply_imported_status` below reapplies the source flags afterward.
@@ -432,7 +435,9 @@ pub(super) fn import_overwrite_entry(
         save_db(db)?;
     }
 
-    let attachment_result = if imported.attachments.is_empty() {
+    let attachment_result = if imported.attachments.is_empty()
+        && (!replace_attachments || existing.attachments.is_empty())
+    {
         Ok((0, 0))
     } else {
         crate::actions::sync()?;
@@ -446,16 +451,38 @@ pub(super) fn import_overwrite_entry(
             anyhow::bail!("entry disappeared from the vault after update");
         };
 
+        if replace_attachments {
+            for attachment in &refreshed.attachments {
+                if let (Some(tokens), ()) = rbw::actions::delete_attachment(
+                    access_token,
+                    refresh_token,
+                    &refreshed.id,
+                    &attachment.id,
+                )? {
+                    access_token.clone_from(&tokens.access_token);
+                    db.access_token = Some(tokens.access_token);
+                    if let Some(new_refresh_token) = tokens.refresh_token {
+                        refresh_token.clone_from(&new_refresh_token);
+                        db.refresh_token = Some(new_refresh_token);
+                    }
+                    save_db(db)?;
+                }
+            }
+        }
         let already_attached: std::collections::HashSet<String> =
-            decrypt_cipher(&refreshed).map_or_else(
-                |_| std::collections::HashSet::new(),
-                |d| {
-                    d.attachments
-                        .into_iter()
-                        .filter_map(|a| a.file_name)
-                        .collect()
-                },
-            );
+            if replace_attachments {
+                std::collections::HashSet::new()
+            } else {
+                decrypt_cipher(&refreshed).map_or_else(
+                    |_| std::collections::HashSet::new(),
+                    |d| {
+                        d.attachments
+                            .into_iter()
+                            .filter_map(|a| a.file_name)
+                            .collect()
+                    },
+                )
+            };
 
         upload_imported_attachments(
             db,
@@ -1202,7 +1229,7 @@ pub fn import(
         }
     };
 
-    import_vault(vault, collection, org, overwrite)
+    import_vault(vault, collection, org, overwrite, None)
 }
 
 // Creates/updates entries and collections in the currently active account
@@ -1225,6 +1252,9 @@ pub(super) fn import_vault(
     collection: Option<&str>,
     dest_org: Option<&str>,
     overwrite: bool,
+    // `rbw mirror` into a destination collection: match copies by their
+    // source-id marker instead of name/username (see `mirror_sync`).
+    mirror: Option<&MirrorSync>,
 ) -> anyhow::Result<()> {
     unlock(None, None)?;
 
@@ -1270,6 +1300,7 @@ pub(super) fn import_vault(
             entry.collection_ids = vec![dest_id.clone()];
         }
     }
+    let mirror = mirror.filter(|_| dest_collection.is_some());
 
     let mut collections_created = 0usize;
     let mut collections_reused = 0usize;
@@ -1441,13 +1472,87 @@ pub(super) fn import_vault(
     // request in `bulk_create_batch` below instead of one create call per
     // entry).
     let mut to_overwrite: Vec<(&ImportedEntry, rbw::db::Entry)> = Vec::new();
+    let mut to_create: Vec<&ImportedEntry> = Vec::new();
     let mut personal_batch: Vec<&ImportedEntry> = Vec::new();
     let mut org_batches: std::collections::HashMap<
         String,
         Vec<&ImportedEntry>,
     > = std::collections::HashMap::new();
+    let mut entries_unchanged = 0usize;
+    let mut stale_entries: Vec<rbw::db::Entry> = Vec::new();
+    let mut failed_updates: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    // (sources, actions, destination ids, previous state) of a mirror run,
+    // for writing the state back afterwards.
+    let mut mirror_run: Option<(
+        Vec<MirrorSource>,
+        Vec<MirrorAction>,
+        Vec<String>,
+        MirrorState,
+    )> = None;
+
+    let mirror_classified =
+        if let (Some(mirror), Some((dest_id, dest_org_id))) =
+            (mirror, &dest_collection)
+        {
+            let state = load_mirror_state(&mut db, dest_id)?;
+            access_token = db.access_token.clone().unwrap_or_default();
+            refresh_token = db.refresh_token.clone().unwrap_or_default();
+            let (dest_entries, dests): (Vec<_>, Vec<_>) =
+                read_mirror_dests(&db, dest_id, dest_org_id, &state)?
+                    .into_iter()
+                    .unzip();
+            let sources: Vec<MirrorSource> = vault
+                .entries
+                .iter()
+                .map(|imported| {
+                    let id = imported.id.as_deref();
+                    MirrorSource {
+                        source_id: imported.id.clone(),
+                        key: imported_entry_key(imported),
+                        marker: id
+                            .and_then(|id| mirror.markers.get(id))
+                            .cloned(),
+                        attachments: mirror.attachments.then(|| {
+                            id.and_then(|id| mirror.attachment_counts.get(id))
+                                .copied()
+                                .unwrap_or(imported.attachments.len())
+                        }),
+                    }
+                })
+                .collect();
+            let plan = plan_mirror(&sources, &dests);
+            for (imported, &action) in vault.entries.iter().zip(&plan.actions)
+            {
+                match action {
+                    MirrorAction::Unchanged(_) => entries_unchanged += 1,
+                    MirrorAction::Update(index) => {
+                        to_overwrite
+                            .push((imported, dest_entries[index].clone()));
+                    }
+                    MirrorAction::Create => to_create.push(imported),
+                }
+            }
+            stale_entries = plan
+                .stale
+                .iter()
+                .map(|&index| dest_entries[index].clone())
+                .collect();
+            mirror_run = Some((
+                sources,
+                plan.actions,
+                dest_entries.into_iter().map(|entry| entry.id).collect(),
+                state,
+            ));
+            true
+        } else {
+            false
+        };
 
     for imported in &vault.entries {
+        if mirror_classified {
+            break;
+        }
         let key = imported_entry_key(imported);
 
         if let Some(existing) = existing_index.get(&key) {
@@ -1474,7 +1579,10 @@ pub(super) fn import_vault(
                 imported.name,
             );
         }
+        to_create.push(imported);
+    }
 
+    for imported in to_create {
         let target_org = imported
             .org_id
             .as_deref()
@@ -1502,6 +1610,7 @@ pub(super) fn import_vault(
                 &mut refresh_token,
                 existing,
                 imported,
+                mirror.is_some_and(|m| m.attachments),
             ) {
                 Ok((restored, failed)) => {
                     attachments_restored += restored;
@@ -1528,6 +1637,7 @@ pub(super) fn import_vault(
                     entries_failed += 1;
                     failed_names
                         .push((imported.name.clone(), format!("{e:#}")));
+                    failed_updates.insert(existing.id.clone());
                 }
             }
             pb.inc(1);
@@ -1567,6 +1677,109 @@ pub(super) fn import_vault(
         attachments_failed += att_failed;
     }
 
+    let mut entries_trashed = 0usize;
+    let stale_count = stale_entries.len();
+    let prune = mirror.is_some_and(|m| m.prune);
+    if prune && !stale_entries.is_empty() {
+        if vault.entries.is_empty() {
+            eprintln!(
+                "{} the source is empty; not moving {stale_count} \
+                 destination entr{} to the trash",
+                style_error("Warning:", c),
+                if stale_count == 1 { "y" } else { "ies" },
+            );
+        } else {
+            eprintln!(
+                "{} moving {stale_count} stale entr{} to the trash...",
+                style::section("Pruning:", c),
+                if stale_count == 1 { "y" } else { "ies" },
+            );
+            for stale in &stale_entries {
+                match rbw::actions::remove(
+                    &access_token,
+                    &refresh_token,
+                    &stale.id,
+                ) {
+                    Ok((tokens, ())) => {
+                        if let Some(tokens) = tokens {
+                            access_token.clone_from(&tokens.access_token);
+                            db.access_token = Some(tokens.access_token);
+                            if let Some(new_refresh_token) =
+                                tokens.refresh_token
+                            {
+                                refresh_token.clone_from(&new_refresh_token);
+                                db.refresh_token = Some(new_refresh_token);
+                            }
+                            save_db(&db)?;
+                        }
+                        entries_trashed += 1;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "{} failed to move stale entry {} to the \
+                             trash: {e:#}",
+                            style_error("Error:", c),
+                            stale.id,
+                        );
+                        entries_failed += 1;
+                        failed_names.push((
+                            format!("stale entry {}", stale.id),
+                            format!("{e:#}"),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if let (
+        Some((sources, actions, dest_ids, state)),
+        Some((dest_id, dest_org_id)),
+    ) = (mirror_run, &dest_collection)
+    {
+        crate::actions::sync()?;
+        db = load_db()?;
+        access_token = db.access_token.clone().unwrap_or_default();
+        refresh_token = db.refresh_token.clone().unwrap_or_default();
+        let after: Vec<(String, (String, Option<String>))> =
+            read_mirror_dests(
+                &db,
+                dest_id,
+                dest_org_id,
+                &MirrorState::default(),
+            )?
+            .into_iter()
+            .map(|(entry, dest)| (entry.id, dest.key))
+            .collect();
+        let copies = next_mirror_state(
+            &sources,
+            &actions,
+            &dest_ids,
+            &failed_updates,
+            &after,
+        );
+        if copies != state.copies {
+            let next = MirrorState {
+                version: 1,
+                dest_collection_id: dest_id.clone(),
+                copies,
+            };
+            if let Err(e) = save_mirror_state(
+                &mut db,
+                &mut access_token,
+                &mut refresh_token,
+                &next,
+            ) {
+                // Not fatal: the next run adopts unmapped copies by
+                // name/username and rewrites them.
+                eprintln!(
+                    "{} failed to save the mirror state: {e:#}",
+                    style::warning("Warning:", c),
+                );
+            }
+        }
+    }
+
     eprintln!();
     eprintln!("{}", style::section("Import summary:", c));
     eprintln!(
@@ -1577,6 +1790,21 @@ pub(super) fn import_vault(
         eprintln!(
             "  entries updated:      {}",
             style::success(&entries_updated.to_string(), c)
+        );
+    }
+    if entries_unchanged > 0 {
+        eprintln!("  entries unchanged:    {entries_unchanged}");
+    }
+    if entries_trashed > 0 {
+        eprintln!(
+            "  stale moved to trash: {}",
+            style::success(&entries_trashed.to_string(), c)
+        );
+    }
+    if stale_count > 0 && !prune {
+        eprintln!(
+            "  stale (kept):         {}",
+            style::warning(&stale_count.to_string(), c)
         );
     }
     if entries_skipped > 0 {

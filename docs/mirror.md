@@ -31,6 +31,21 @@ scoped-purge implementation for a partial source copy). This is a
 account's master password non-interactively (only meaningful with
 `--purge-dest`), and `-y`/`--yes` skips the confirmation prompt entirely.
 
+With `--dest-collection`, the mirror is reconciled one way by source id
+rather than by name. Servers give every imported cipher a new id, so the
+pairing of each copy with its source entry is kept in one secure note per
+destination collection, `rbw mirror state <collection id>`, in the
+destination account's personal vault (outside the collection, so the copies
+stay identical to their sources). It stores, as a JSON attachment, each
+copy's source id and a digest of the source entry's contents. Unchanged
+entries are skipped, changed ones are rewritten (attachments included),
+missing ones are created, and entries that share a name no longer collide.
+`--prune` also moves copies whose source entry is gone to the trash, so the
+collection becomes an exact copy. Deleting the state item is safe: the next
+run pairs unmapped copies by name/username, rewrites them from their
+sources and records the pairing again. Nothing is stored on the machine
+running the mirror, and the source account is only ever read.
+
 `--dry-run` prints the same plan (accounts, scope, entry/collection counts,
 flags) and exits without touching the destination or prompting -- useful for
 checking what a mirror run would do before committing to it.
@@ -72,5 +87,5 @@ the whole source vault when that source collection does not exist; this is
 useful when a destination collection should hold either a same-named source
 collection or a full-vault copy. `purgeDest` defaults to `false`; set it to
 `true` to clear the destination collection before that fallback imports the
-whole source vault. `--yes`, `--stdin`, and `--dry-run` remain command-line
+whole source vault. `prune: true` is the config form of `--prune`. `--yes`, `--stdin`, and `--dry-run` remain command-line
 controls and can be combined with `--config`.

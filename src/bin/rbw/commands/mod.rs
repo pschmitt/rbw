@@ -297,6 +297,17 @@ pub use file_vault::*;
     clippy::wildcard_imports,
     reason = "the command modules share one namespace, as they did in a single file"
 )]
+mod mirror_sync;
+#[allow(
+    clippy::wildcard_imports,
+    reason = "the command modules share one namespace, as they did in a single file"
+)]
+use mirror_sync::*;
+
+#[allow(
+    clippy::wildcard_imports,
+    reason = "the command modules share one namespace, as they did in a single file"
+)]
 mod import_cmds;
 pub use import_cmds::*;
 
