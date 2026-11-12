@@ -81,7 +81,7 @@ sha1 = "0.11.0"
 sha2 = "0.11.0"
 signature = "3"
 # ssh-key 0.6 implements the signer trait from signature 2.
-signature_2 = { package = "signature", version = "2.2" }
+signature_2 = { package = "signature", version = "3.0" }
 ssh-agent-lib = "0.6.0"
 tar = "0.4.46"
 tempfile = "3.24.0"
