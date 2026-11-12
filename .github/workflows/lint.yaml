@@ -24,13 +24,6 @@ jobs:
       check-command: cd browser && npm ci && npm run lint
   release-script:
     uses: pschmitt/ci-workflows/.github/workflows/release-script.yaml@main
-  # rbw-auto's backup and sync scripts (auto/, see docs/auto.md).
-  shellcheck-auto:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - run: shellcheck -x -- *.sh
-        working-directory: auto
   msrv:
     runs-on: ubuntu-latest
     steps:

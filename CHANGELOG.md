@@ -31,6 +31,13 @@
 
 ### Changed
 
+* The `rbw-auto` container image runs rbw directly: `rbw` is the
+  entrypoint, cron (with a mounted `/etc/cron.d/rbw`) runs schedules, and
+  accounts unlock from mounted credential files. The `rbw-auto-backup` and
+  `rbw-auto-sync` scripts, their Nix packages and the environment-variable
+  interface are removed (breaking for container users).
+* rbw-auto's files are MIT-licensed like the rest of rbw.
+
 * `services.rbw-auto` is replaced by `services.rbw`; the old options fail
   evaluation with a pointer to the new ones. Environment files become one
   file per credential. `rbw mirror` syncs both accounts before it starts.

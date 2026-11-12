@@ -132,8 +132,6 @@
               '';
             }
           );
-          rbwAutoBackup = pkgs.callPackage ./nix/rbw-auto-backup.nix { inherit rbw; };
-          rbwAutoSync = pkgs.callPackage ./nix/rbw-auto-sync.nix { inherit rbw; };
 
           rbwTermux =
             let
@@ -211,8 +209,6 @@
         in
         {
           inherit rbw;
-          rbw-auto-backup = rbwAutoBackup;
-          rbw-auto-sync = rbwAutoSync;
 
           # This output is built on Linux by Nix's Android cross set. Its
           # metadata describes files for the Termux bundle exporter, which
@@ -254,8 +250,6 @@
 
       overlays.default = final: _prev: {
         rbw = self.packages.${final.stdenv.hostPlatform.system}.default;
-        rbw-auto-backup = self.packages.${final.stdenv.hostPlatform.system}.rbw-auto-backup;
-        rbw-auto-sync = self.packages.${final.stdenv.hostPlatform.system}.rbw-auto-sync;
       };
 
       homeManagerModules.default = import ./nix/hm-module.nix { inherit self; };

@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: GPL-3.0-only
-# Successor of the rbw-auto module (auto/), licensed GPL-3.0 like it; see auto/LICENSE.
 # NixOS module for unattended rbw jobs: rotated vault backups
 # (`rbw backup`) and a one-way mirror into another account
 # (`rbw mirror --config`). The units run rbw directly. Accounts unlock

@@ -1,3 +1,6 @@
 *.env
 data/
 result
+config/
+secrets/
+crontab

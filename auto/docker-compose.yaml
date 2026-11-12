@@ -1,25 +1,32 @@
-x-rbw-auto-base: &rbw-auto-base
-  image: ghcr.io/pschmitt/rbw-auto:latest
-  build: .
-  restart: no
-  env_file:
-    - secrets.env
-  volumes:
-    # persistent storage
-    - ./data:/data
-    # devel
-    - ./rbw-auto-backup.sh:/usr/local/bin/rbw-auto-backup:ro
-    - ./rbw-auto-sync.sh:/usr/local/bin/rbw-auto-sync:ro
-    - ./entrypoint.sh:/entrypoint.sh:ro
-    - ./lib.sh:/usr/local/bin/lib.sh:ro
-
+# Example: a nightly encrypted backup and a mirror every six hours, scheduled
+# by cron inside the container. Credentials are Docker secrets; config.json
+# points rbw at them (see docs/auto.md).
 services:
-  rbw-auto-backup:
-    <<: *rbw-auto-base
-    container_name: rbw-auto-backup
-    command: backup
+  rbw:
+    image: ghcr.io/pschmitt/rbw-auto:latest
+    build: .
+    entrypoint: ["cron", "-f"]
+    restart: unless-stopped
+    volumes:
+      - ./config:/root/.config/rbw:ro
+      - ./crontab:/etc/cron.d/rbw:ro
+      - state:/root/.local/share/rbw
+      - ./data:/data
+    secrets:
+      - personal-password
+      - personal-totp
+      - vaultwarden-password
+      - backup-passphrase
 
-  rbw-auto-sync:
-    <<: *rbw-auto-base
-    container_name: rbw-auto-sync
-    command: sync
+secrets:
+  personal-password:
+    file: ./secrets/personal-password
+  personal-totp:
+    file: ./secrets/personal-totp
+  vaultwarden-password:
+    file: ./secrets/vaultwarden-password
+  backup-passphrase:
+    file: ./secrets/backup-passphrase
+
+volumes:
+  state:

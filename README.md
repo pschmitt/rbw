@@ -28,8 +28,9 @@ timeout.
 - **Passkeys** synced, shown and usable from the CLI and the browser.
 - **Built-in SSH agent** for keys stored in the vault.
 - **Backup, import and mirroring** between accounts, in rbw and Bitwarden
-  formats, plus scheduled, unattended backup and sync jobs (`rbw-auto`:
-  container image and NixOS module, see [docs/auto.md](docs/auto.md)).
+  formats, plus scheduled, unattended backups and mirrors (`rbw backup`,
+  `rbw mirror`; NixOS module and container image, see
+  [docs/auto.md](docs/auto.md)).
 - **`rbw inject` and `rbw run`** to render templates and environment files
   with secrets.
 - **Organizations and collections** management.
@@ -83,7 +84,7 @@ rest. On bitwarden.com, run `rbw register` first
 | [Organizations](docs/organizations.md) | `rbw org` and `rbw collection` |
 | [Backup and restore](docs/backup.md) | `export`, `import`, file-backed vaults |
 | [Mirroring](docs/mirror.md) | Copying vaults between accounts |
-| [Scheduled backup and sync](docs/auto.md) | `rbw-auto`: container image and NixOS module |
+| [Unattended backups and mirrors](docs/auto.md) | `services.rbw` NixOS module and the `rbw-auto` container image |
 | [Injection](docs/inject.md) | `rbw inject` and `rbw run` |
 | [MCP server](docs/mcp.md) | `rbw mcp` for AI agents |
 | [SSH agent](docs/ssh-agent.md) | Using vault SSH keys |

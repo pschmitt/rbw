@@ -40,17 +40,18 @@ rather than fork the logic. The bundle's files are listed twice: `SHARED` in
 `browser/build.py` and the fileset of `browser-daemon-extension` in
 `nix/browser.nix`; keep them in step, or the flake check fails on a missing file.
 
-## rbw-auto
+## Unattended jobs (`services.rbw`, rbw-auto image)
 
-rbw-auto (scheduled backup and sync, documented in `docs/auto.md`) is
-licensed GPL-3.0, unlike the rest of rbw: the scripts and container files in
-`auto/` (with its `LICENSE`) and the Nix files `nix/rbw-auto-*.nix` and
-`nix/auto-module.nix` (SPDX headers). Keep new rbw-auto code in those places
-and keep rbw's own code out of them. Its packages and image carry rbw's
-version; `docker-auto` builds the image after `docker` succeeds, and a
-release tag also publishes it as `rbw-auto:X.Y.Z`. Never rename the module's
-default users or state directories (`bw-backup`, `bw-sync`,
-`/var/lib/bw-*`): deployed hosts keep their state there.
+Scheduled backups and mirrors (documented in `docs/auto.md`) are rbw
+itself: `rbw backup`, `rbw mirror --config` and `unlock.files` credentials.
+The NixOS module is `nix/services-module.nix` (exported as
+`nixosModules.auto`); the container image is `auto/Dockerfile`, which has no
+wrapper scripts. Don't add scripts back: put job logic into rbw. The image
+carries rbw's version; `docker-auto` builds it after `docker` succeeds, and
+a release tag also publishes it as `rbw-auto:X.Y.Z`. Never rename the
+module's default users or state directories (`rbw-backup`, `rbw-mirror`,
+`/var/lib/rbw-*`): deployed hosts keep their state (device ids, caches)
+there. They replaced rbw-auto's `bw-backup`/`bw-sync` on 2026-11-12.
 
 ## Agent protocol
 

@@ -1,73 +1,105 @@
-# Scheduled backup and sync (`rbw-auto`)
+# Unattended backups and mirrors
 
-`rbw-auto` runs unattended vault backups and vault-to-vault syncs. It is a
-thin layer of shell scripts around `rbw export` ([backup.md](backup.md)) and
-`rbw mirror` ([mirror.md](mirror.md)) that adds what a scheduled job needs:
+rbw runs scheduled jobs itself, without wrapper scripts:
 
-- non-interactive login and unlock, with TOTP codes generated from a stored
-  secret and the one-time `rbw register` for bitwarden.com done for you;
-- backup rotation;
-- [Healthchecks.io](https://healthchecks.io) pings (start, success, failure);
-- creation of missing destination organizations and collections.
+- `rbw backup DIR` writes a rotated, optionally gpg-encrypted backup of an
+  account ([backup.md](backup.md#rotated-backups-rbw-backup)).
+- `rbw mirror --config FILE` mirrors one account into another, one way: into
+  the destination's personal vault, or into organization collections
+  reconciled by source id ([mirror.md](mirror.md)).
 
-It ships two ways, both from this repository and with rbw's own version:
+What a scheduled job needs beyond that comes from the account configuration:
+an account whose `unlock.files` names its credential files logs in, registers
+a new device with the personal API key when bitwarden.com asks for it, and
+unlocks without prompting, generating a fresh TOTP code from the stored
+secret for every login.
 
-| | Backup | Sync |
-|---|---|---|
-| Container image | `ghcr.io/pschmitt/rbw-auto` (default command) | same image, `sync` command |
-| Nix package | `rbw-auto-backup` | `rbw-auto-sync` |
-| NixOS module | `services.rbw.backups.<name>` (runs `rbw backup`) | `services.rbw.mirror` (runs `rbw mirror`) |
+It ships two ways:
 
-The scripts, the container files and the NixOS module are licensed
-GPL-3.0 ([auto/LICENSE](../auto/LICENSE)), unlike the rest of rbw.
+| | How the jobs run |
+|---|---|
+| NixOS module (`nixosModules.auto`) | `services.rbw`: sandboxed systemd units and timers, credentials via `LoadCredential` |
+| Container image `ghcr.io/pschmitt/rbw-auto` | rbw as the entrypoint, cron for schedules, credentials as mounted files (Docker secrets) |
 
 ## Accounts and credentials
 
-Each account a job uses must be an rbw account (name, email, server URL).
-The container renders rbw's `config.json` from environment variables on every
-start; the NixOS module renders it from its options. Only that non-secret
-metadata is written to disk. Master passwords, TOTP secrets and personal API
-keys stay in environment variables (an env file for Docker,
-`environmentFiles` for NixOS) and reach rbw over stdin.
+Each account a job uses is an rbw account in `config.json` with an
+`unlock.files` block. Paths may start with `$CREDENTIALS_DIRECTORY`, which
+rbw expands, so systemd credentials work directly:
 
-The official bitwarden.com server requires a one-time `rbw register` with a
-[personal API key](https://bitwarden.com/help/article/personal-api-key/)
-before a script can log in (bot detection). Both jobs run it before logging
-in when the account's `*_REGISTER_CLIENT_ID` and `*_REGISTER_CLIENT_SECRET`
-variables are set, and skip it otherwise.
-
-## Backup
-
-```shell
-podman run -it --rm \
-  -v /tmp/data:/data \
-  -e ACCOUNT_EMAIL=me@example.com \
-  -e BW_PASSWORD=xxxx \
-  -e ENCRYPTION_PASSPHRASE=mySecret1234 \
-  -e BW_BACKUP_RETENTION=30 \
-  -e CRON="0 23 * * *" \
-  ghcr.io/pschmitt/rbw-auto:latest
+```json
+{
+  "accounts": [
+    {
+      "name": "personal",
+      "email": "me@example.com",
+      "unlock": {
+        "files": {
+          "passwordFile": "/run/secrets/personal-password",
+          "totpSecretFile": "/run/secrets/personal-totp",
+          "clientIdFile": "/run/secrets/personal-client-id",
+          "clientSecretFile": "/run/secrets/personal-client-secret"
+        }
+      }
+    },
+    {
+      "name": "vaultwarden",
+      "email": "me@example.com",
+      "baseUrl": "https://vault.example.com",
+      "unlock": { "files": { "passwordFile": "/run/secrets/vaultwarden-password" } }
+    }
+  ],
+  "primaryAccount": "personal"
+}
 ```
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `ACCOUNT` | `backup` | The rbw account name. |
-| `ACCOUNT_EMAIL` | | The account's email address. |
-| `ACCOUNT_BASE_URL` | | The account's server URL. Omit for bitwarden.com. |
-| `BW_PASSWORD` | | The account's master password. |
-| `BW_TOTP_SECRET` | | Base32 TOTP secret, if the account uses TOTP 2FA. A fresh code is generated for each login and unlock (`oathtool`). |
-| `BW_BACKUP_REGISTER_CLIENT_ID`, `BW_BACKUP_REGISTER_CLIENT_SECRET` | | Personal API key for `rbw register` on bitwarden.com. |
-| `BW_BACKUP_ATTACHMENTS` | `1` | `0` skips attachment contents: faster and smaller, but attachments cannot be restored from that backup. |
-| `ENCRYPTION_PASSPHRASE` | | When set, backups are gpg-encrypted (`rbw export --encrypt`). |
-| `BW_BACKUP_RETENTION` | `30` | Backups to keep; `0` keeps all. Replaces the deprecated `KEEP`. |
-| `BW_BACKUP_RETENTION_DAYS` | unset | Also delete backups older than this many days; the newest is always kept. The NixOS module sets this from `retentionDays` (and `BW_BACKUP_RETENTION=0`). |
-| `CRON` | | Run on this schedule instead of once. |
-| `HEALTHCHECK_URL` | | Healthchecks.io (or compatible) URL to ping. |
-| `BW_BACKUP_DIR` | `/data` | Where backups are written. Mount your volume there. |
+Only `passwordFile` is required. `totpSecretFile` is the base32 secret of the
+account's TOTP two-step login. `clientIdFile`/`clientSecretFile` are the
+[personal API key](https://bitwarden.com/help/article/personal-api-key/)
+that bitwarden.com wants before a new device's first login; rbw registers
+with it only when the server asks. Keep rbw's data directory
+(`~/.local/share/rbw`, with the device id) between runs, or every run is a
+new device.
 
-A backup is whatever `rbw export` writes: rbw's JSON, as a gpg-encrypted
-tar.gz archive when a passphrase is set. Archives from the older
-`bw`-CLI-based rbw-auto have another format and need that old tooling.
+## Container image
+
+The image has `rbw` as its entrypoint, so a one-off job is a plain rbw
+command:
+
+```shell
+docker run --rm \
+  -v ./config:/root/.config/rbw:ro \
+  -v rbw-state:/root/.local/share/rbw \
+  -v ./data:/data \
+  -v ./secrets:/run/secrets:ro \
+  ghcr.io/pschmitt/rbw-auto:latest \
+  --account personal backup /data --retention-days 30 \
+  --passphrase-file /run/secrets/backup-passphrase
+```
+
+For schedules, run cron in the foreground and mount a crontab (system format,
+with a user field) at `/etc/cron.d/rbw`:
+
+```shell
+# /etc/cron.d/rbw
+0 3 * * *    root rbw --account personal backup /data --retention-days 30 --passphrase-file /run/secrets/backup-passphrase >/proc/1/fd/1 2>&1
+10 */6 * * * root rbw mirror --config /root/.config/rbw/mirrors.yaml --yes >/proc/1/fd/1 2>&1
+```
+
+```shell
+docker run -d --entrypoint cron ... ghcr.io/pschmitt/rbw-auto:latest -f
+```
+
+[auto/docker-compose.yaml](../auto/docker-compose.yaml) is a complete
+example with Docker secrets. The image is built from
+[auto/Dockerfile](../auto/Dockerfile) on top of `ghcr.io/pschmitt/rbw` and
+carries rbw's version.
+
+## Backups
+
+A backup is what `rbw export` writes: rbw's JSON, as a gpg-encrypted tar.gz
+archive when a passphrase is given. Archives from the older `bw`-CLI-based
+rbw-auto have another format and need that old tooling.
 
 ### Restoring
 
@@ -86,49 +118,28 @@ command that reads `--from-file`, and how to convert a backup to the upstream
 Bitwarden formats. Attachments are only in backups made with attachments on
 (the default).
 
-## Sync between two vaults
+## Mirrors
 
-The `sync` command mirrors one account's vault into another with
-`rbw mirror` (entries and attachments, no temporary files). The source
-account is only read.
+`rbw mirror --config` runs a list of mirror specifications in turn
+([mirror.md](mirror.md)). Into a destination collection, the mirror is
+reconciled by source id: unchanged entries are skipped, changed ones
+rewritten, missing ones created, and with `prune: true` copies whose source
+entry is gone move to the trash. A destination collection with no
+equally-named source collection receives the source's personal vault
+(`fallbackToPersonalVault: true`) or the whole vault
+(`fallbackToWholeVault: true`).
 
-```shell
-podman run -it --rm \
-  -e SRC_ACCOUNT_EMAIL=you@example.com \
-  -e SRC_BW_PASSWORD=xxxx \
-  -e DEST_ACCOUNT_EMAIL=you@vaultwarden.example \
-  -e DEST_ACCOUNT_BASE_URL=https://vault.example.com \
-  -e DEST_BW_PASSWORD=xxxx \
-  ghcr.io/pschmitt/rbw-auto:latest sync
+```yaml
+mirrors:
+  - from: personal
+    to: vaultwarden
+    collection: Personal vault
+    destCollection: Personal vault
+    destOrg: Example-Org
+    attachments: true
+    prune: true
+    fallbackToPersonalVault: true
 ```
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `SRC_ACCOUNT`, `DEST_ACCOUNT` | `source`, `destination` | The rbw account names. |
-| `SRC_ACCOUNT_EMAIL`, `DEST_ACCOUNT_EMAIL` | | Email addresses. |
-| `SRC_ACCOUNT_BASE_URL`, `DEST_ACCOUNT_BASE_URL` | | Server URLs. Omit for bitwarden.com. |
-| `SRC_BW_PASSWORD`, `DEST_BW_PASSWORD` | | Master passwords. |
-| `SRC_BW_TOTP_SECRET`, `DEST_BW_TOTP_SECRET` | | TOTP secrets, as for backups. |
-| `SRC_REGISTER_CLIENT_ID`, `SRC_REGISTER_CLIENT_SECRET`, `DEST_REGISTER_CLIENT_ID`, `DEST_REGISTER_CLIENT_SECRET` | | Personal API keys for `rbw register`. |
-| `BW_SYNC_MODE` | `personal` | `personal` or `collections`, see below. |
-| `DEST_BW_PURGE_VAULT` | | `personal` mode: `1` wipes the destination's personal vault first (server-side, like `rbw purge-vault`). Organization items are never touched. |
-| `BW_SYNC_PURGE_DEST_COLLECTION` | unset | `collections` mode: `1` wipes the destination collection before a whole-vault fallback. By default, existing destination entries are preserved. |
-| `BW_SYNC_PRUNE` | unset | `collections` mode: `1` moves destination entries whose source entry is gone to the trash (`rbw mirror --prune`). |
-| `DEST_BW_ORG`, `DEST_BW_COLLECTIONS` | | `collections` mode: the destination organization and a comma-separated list of collections, e.g. `default,Some Other Collection`. Missing ones are created. |
-| `BW_SYNC_ATTACHMENTS` | `1` | `0` skips attachments. |
-| `BW_SYNC_OVERWRITE` | `1` | `0` leaves existing destination entries alone. |
-| `HEALTHCHECK_URL` | | As for backups. |
-
-Modes:
-
-- `personal` mirrors the whole source vault into the destination's personal
-  vault, 1:1.
-- `collections` mirrors into one or more destination collections. A
-  collection whose name also exists on the source side gets a scoped 1:1
-  mirror of just that source collection. Any other gets the whole source
-  vault (useful for a "whole vault" collection). When that fallback runs,
-  destination entries are preserved by default; set
-  `BW_SYNC_PURGE_DEST_COLLECTION=1` to clear the collection first.
 
 ## NixOS module
 
@@ -211,15 +222,3 @@ How the module runs them:
 fails with a pointer to these options. Its environment files become one file
 per credential. The full option list is in
 [nix/services-module.nix](../nix/services-module.nix).
-
-## Running from a checkout
-
-`auto/run.sh` builds the image and runs the scripts from the working tree
-through `auto/docker-compose.yaml` (backups land in `auto/data/`), with
-credentials in `auto/secrets.env` (start from
-[auto/secrets.env.sample](../auto/secrets.env.sample)). `-d` sets `DEBUG=1`.
-
-```shell
-auto/run.sh backup
-auto/run.sh sync
-```
