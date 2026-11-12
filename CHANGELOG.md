@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.45.4] - 2026-11-12
+
 ### Fixed
 
 * When mirroring into a collection, don't overwrite an existing item whose
