@@ -354,7 +354,12 @@ function connectNativePort() {
     }
     const entry = nativeRequests.get(response.id); if (!entry || entry.port !== port) return;
     nativeRequests.delete(response.id);
-    if (response.error) entry.reject(new Error(response.error)); else entry.resolve(response.result);
+    if (response.error) {
+      const error = new Error(response.error);
+      // Technical reason from the host, already sanitized there; shown behind "Details".
+      if (typeof response.detail === "string") error.detail = response.detail.slice(0, 2000);
+      entry.reject(error);
+    } else entry.resolve(response.result);
     closeIfRetired(port);
   });
   port.onDisconnect.addListener(() => {
@@ -1226,7 +1231,7 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
     operation.then(result => {
       respond({ result });
       if (["unlock", "sync", "save", "mutate", "set_preferences", "import", "save_offer_apply", "unsaved_login_apply", "passkey_approve"].includes(message.action)) settings().then(() => refreshActiveBadge()).catch(() => {});
-    }, error => respond({ error: error.message || "Operation failed.", diagnostic: error.diagnostic || null })); return true;
+    }, error => respond({ error: error.message || "Operation failed.", diagnostic: error.diagnostic || null, detail: error.detail || null })); return true;
   }
   if (!sender.tab || !["passkey_request", "passkey_cancel", "passkey_available", "save_offer", "inline_open", "keyboard_fill_shortcut", "autofill_load", "undo_fill", "dismiss_fill", "open_settings", "open_generator"].includes(message?.action)) return false;
   pageMessage(message, sender, respond).catch(() => respond({ error: "Request failed." })); return true;

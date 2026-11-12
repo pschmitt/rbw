@@ -84,6 +84,14 @@ conditional account-picker integration and other algorithms are not implemented.
 Conditional requests can be approved through the rbw toolbar popup. Sites that
 require unimplemented capabilities can use the other-authenticator fallback.
 
+When a request fails, the native host answers with a specific message and a
+sanitized `detail` (the error chain, with long opaque tokens redacted); the
+extension shows the message in its banner and the detail behind a "Details"
+disclosure. The host also writes both to its stderr (the browser's log, so
+`journalctl --user` when the browser runs in the user session). While a
+`browser-debug` file exists next to the agent's pidfile, the full chains are
+also appended to `browser-errors.log` there.
+
 Filling traverses open shadow roots and same-origin frames; closed shadow roots,
 cross-origin iframe filling and unusual nonstandard controls need further work.
 Linked custom fields are resolved for the supported item fields. Capture suggestions require a native HTML

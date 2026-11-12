@@ -75,6 +75,7 @@ async function request(action, values = {}) {
     if (response?.error) {
       const error = new Error(response.error);
       if (response.diagnostic) error.diagnostic = response.diagnostic;
+      if (response.detail) error.detail = response.detail;
       throw error;
     }
     if (!response) throw new Error("Extension background unavailable.");
@@ -82,8 +83,10 @@ async function request(action, values = {}) {
   } finally { if (busy) loading(false); }
 }
 // An optional action ({ label, run }) adds a button and keeps the notification
-// open until it is used or dismissed.
-function message(text, error = false, action = null) {
+// open until it is used or dismissed. The detail is the native host's sanitized
+// technical reason; it is shown behind a "Details" disclosure and only when it
+// adds something to the text.
+function message(text, error = false, action = null, detail = "") {
   clearTimeout(notificationTimer);
   if (!error && /^(Working|Unlocking|Waiting for rbw|Checking vault locally|Loading Sends|Uploading)/.test(text)) return;
   const kind = error ? "error"
@@ -93,6 +96,9 @@ function message(text, error = false, action = null) {
   notification.dataset.kind = kind;
   $("message-icon").replaceChildren(icon(kind === "success" ? "check" : kind === "info" ? "info" : "warning"));
   $("message-text").textContent = text;
+  const showDetail = typeof detail === "string" && detail.trim() !== "" && detail.trim() !== text;
+  $("message-details").hidden = !showDetail; $("message-details").open = false;
+  $("message-detail").textContent = showDetail ? detail : "";
   $("message-action").hidden = !action; $("message-action").textContent = action?.label || "";
   $("message-action").onclick = action ? () => { message(""); attempt(action.run); } : null;
   notification.classList.toggle("is-error", error);
@@ -126,7 +132,7 @@ async function attempt(fn) { try { await fn(); } catch (error) {
     message("HTTP is unencrypted. Change this in rbw settings.", true, { label: "Open settings", run: async () => show("settings") });
     return;
   }
-  message(error.message, true);
+  message(error.message, true, null, error.detail);
 } }
 function showDiagnostic(diagnostic, summary) {
   const trace = {

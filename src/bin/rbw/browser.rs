@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use crate::{actions, commands};
 
 pub mod attachments;
+mod failure;
 mod passkeys;
 use crate::sends;
 mod transfer;
@@ -497,8 +498,16 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
             );
             result.map_or_else(
                 |error| {
-                    log_error(&error);
-                    json!({"id": id, "error": if commands::exit_status(&error) == 2 { "The server write succeeded, but synchronization failed. Sync and inspect your vault before retrying to avoid duplicates." } else if moving { "Could not move the item; it was not deleted. Both accounts must be unlocked, and the other account must not already have an item with the same name and username." } else if fingerprint { "Fingerprint unlock failed. Scan again, or unlock with your master password." } else if format!("{error:#}").contains("site mismatch") { "This item has no URI matching this page. Use Autofill from the item's menu to fill it anyway." } else if unlocking { "Could not unlock this account. Check your master password and account configuration." } else { "Operation failed. Unlock this account or sync your vault, then try again." }})
+                    let failure = failure::describe(
+                        &error,
+                        failure::Context {
+                            moving,
+                            fingerprint,
+                            unlocking,
+                        },
+                    );
+                    log_error(operation, &error, &failure);
+                    json!({"id": id, "error": failure.message, "detail": failure.detail})
                 },
                 |result| json!({"id": id, "result": result}),
             )
@@ -516,12 +525,23 @@ pub fn run(arguments: &[std::ffi::OsString]) -> anyhow::Result<()> {
     }
 }
 
-// The responses to the browser hide backend errors, so diagnosing a failure
-// means asking for them: while a `browser-debug` file exists next to the
-// agent's pidfile, the error chains are appended to `browser-errors.log`
-// there (same user-only runtime directory; remove the file to stop).
-fn log_error(error: &anyhow::Error) {
+// Every failure is logged to stderr (the browser's own log, so the journal
+// when the browser runs in a user session): the operation and the sanitized
+// chain that the extension also gets as `detail`. In addition, while a
+// `browser-debug` file exists next to the agent's pidfile, the full
+// (unsanitized) chains are appended to `browser-errors.log` there (same
+// user-only runtime directory; remove the file to stop).
+fn log_error(
+    operation: &str,
+    error: &anyhow::Error,
+    failure: &failure::Failure,
+) {
     use std::io::Write as _;
+    eprintln!(
+        "rbw-browser: {operation} failed: {} [{}]",
+        failure.message,
+        failure.detail.replace('\n', " | ")
+    );
     let dir = rbw::dirs::pid_file();
     if !dir.with_file_name("browser-debug").exists() {
         return;
