@@ -18,6 +18,8 @@ jobs:
     with:
       apt-packages: libudev-dev libgtk-4-dev
       deny: true
+  nix:
+    uses: pschmitt/ci-workflows/.github/workflows/nix-lint.yaml@main
   lint-extension:
     uses: pschmitt/ci-workflows/.github/workflows/extension-lint.yaml@main
     with:
