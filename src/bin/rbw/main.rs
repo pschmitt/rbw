@@ -2222,6 +2222,13 @@ enum Opt {
                 exact copy of the source"
         )]
         prune: bool,
+        #[arg(
+            long,
+            conflicts_with_all = ["config", "collection", "org_id"],
+            help = "Copy only the source's personal vault (entries outside \
+                any organization)"
+        )]
+        personal_only: bool,
         #[arg(short = 'y', long, help = "Skip confirmation prompt")]
         yes: bool,
         #[arg(
@@ -5723,6 +5730,7 @@ fn main() {
             overwrite,
             purge_dest,
             prune,
+            personal_only,
             yes,
             stdin,
             dry_run,
@@ -5746,6 +5754,7 @@ fn main() {
                     overwrite,
                     purge_dest,
                     prune,
+                    personal_only,
                     yes,
                     password,
                     dry_run,
@@ -6673,6 +6682,7 @@ mod test {
             overwrite,
             purge_dest,
             prune,
+            personal_only,
             yes,
             stdin,
             dry_run,
@@ -6691,6 +6701,7 @@ mod test {
         assert!(overwrite);
         assert!(purge_dest);
         assert!(prune);
+        assert!(!personal_only);
         assert!(yes);
         assert!(stdin);
         assert!(dry_run);

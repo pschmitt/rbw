@@ -1254,7 +1254,7 @@ pub(super) fn import_vault(
     overwrite: bool,
     // `rbw mirror` into a destination collection: match copies by their
     // source-id marker instead of name/username (see `mirror_sync`).
-    mirror: Option<&MirrorSync>,
+    mirror: Option<&MirrorSync<'_>>,
 ) -> anyhow::Result<()> {
     unlock(None, None)?;
 
@@ -1484,6 +1484,8 @@ pub(super) fn import_vault(
         std::collections::HashSet::new();
     // (sources, actions, destination ids, previous state) of a mirror run,
     // for writing the state back afterwards.
+    let mut mirror_actions: Option<(Vec<MirrorAction>, Vec<rbw::db::Entry>)> =
+        None;
     let mut mirror_run: Option<(
         Vec<MirrorSource>,
         Vec<MirrorAction>,
@@ -1495,7 +1497,7 @@ pub(super) fn import_vault(
         if let (Some(mirror), Some((dest_id, dest_org_id))) =
             (mirror, &dest_collection)
         {
-            let state = load_mirror_state(&mut db, dest_id)?;
+            let state = load_mirror_state(&mut db, dest_id, dest_org_id)?;
             access_token = db.access_token.clone().unwrap_or_default();
             refresh_token = db.refresh_token.clone().unwrap_or_default();
             let (dest_entries, dests): (Vec<_>, Vec<_>) =
@@ -1522,22 +1524,44 @@ pub(super) fn import_vault(
                 })
                 .collect();
             let plan = plan_mirror(&sources, &dests);
-            for (imported, &action) in vault.entries.iter().zip(&plan.actions)
-            {
-                match action {
-                    MirrorAction::Unchanged(_) => entries_unchanged += 1,
-                    MirrorAction::Update(index) => {
-                        to_overwrite
-                            .push((imported, dest_entries[index].clone()));
+
+            // Only entries that are created or rewritten need their source
+            // attachments; unchanged ones are never downloaded.
+            if let Some(fetch) = mirror.fetch_attachments {
+                let needed: Vec<String> = sources
+                    .iter()
+                    .zip(&plan.actions)
+                    .filter(|(source, action)| {
+                        !matches!(action, MirrorAction::Unchanged(_))
+                            && source.attachments.is_some_and(|n| n > 0)
+                    })
+                    .filter_map(|(source, _)| source.source_id.clone())
+                    .collect();
+                if !needed.is_empty() {
+                    eprintln!(
+                        "{} downloading the attachments of {} entr{}...",
+                        style::section("Attachments:", c),
+                        needed.len(),
+                        if needed.len() == 1 { "y" } else { "ies" },
+                    );
+                    let fetched = fetch(&needed)?;
+                    for entry in &mut vault.entries {
+                        if let Some(attachments) =
+                            entry.id.as_ref().and_then(|id| fetched.get(id))
+                        {
+                            entry.attachments.clone_from(attachments);
+                        }
                     }
-                    MirrorAction::Create => to_create.push(imported),
                 }
             }
+
             stale_entries = plan
                 .stale
                 .iter()
                 .map(|&index| dest_entries[index].clone())
                 .collect();
+            mirror_actions =
+                Some((plan.actions.clone(), dest_entries.clone()));
             mirror_run = Some((
                 sources,
                 plan.actions,
@@ -1548,6 +1572,19 @@ pub(super) fn import_vault(
         } else {
             false
         };
+
+    if let Some((actions, dest_entries)) = &mirror_actions {
+        for (imported, &action) in vault.entries.iter().zip(actions) {
+            match action {
+                MirrorAction::Unchanged(_) => entries_unchanged += 1,
+                MirrorAction::Update(index) => {
+                    to_overwrite
+                        .push((imported, dest_entries[index].clone()));
+                }
+                MirrorAction::Create => to_create.push(imported),
+            }
+        }
+    }
 
     for imported in &vault.entries {
         if mirror_classified {
@@ -1769,6 +1806,7 @@ pub(super) fn import_vault(
                 &mut access_token,
                 &mut refresh_token,
                 &next,
+                dest_org_id,
             ) {
                 // Not fatal: the next run adopts unmapped copies by
                 // name/username and rewrites them.

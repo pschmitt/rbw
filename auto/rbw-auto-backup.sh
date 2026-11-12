@@ -20,6 +20,7 @@ then
   BW_BACKUP_RETENTION_EXPLICIT=1
 fi
 BW_BACKUP_RETENTION="${BW_BACKUP_RETENTION:-${KEEP:-30}}"
+BW_BACKUP_RETENTION_DAYS="${BW_BACKUP_RETENTION_DAYS:-}"
 BW_BACKUP_ATTACHMENTS="${BW_BACKUP_ATTACHMENTS:-1}"
 BW_CURRENT_BACKUP_FILE=""
 
@@ -110,6 +111,34 @@ backup_rotate() {
   done
 }
 
+# Deletes backups older than BW_BACKUP_RETENTION_DAYS days. The newest backup
+# (the one just written) is always kept, even if the clock is off.
+backup_rotate_days() {
+  if [[ -z "$BW_BACKUP_RETENTION_DAYS" || "$BW_BACKUP_RETENTION_DAYS" == "0" ]]
+  then
+    return 0
+  fi
+
+  if ! [[ "$BW_BACKUP_RETENTION_DAYS" =~ ^[0-9]+$ ]]
+  then
+    echo_error "Invalid BW_BACKUP_RETENTION_DAYS: '$BW_BACKUP_RETENTION_DAYS' (expected integer)"
+    return 1
+  fi
+
+  echo_info "Pruning backups older than $BW_BACKUP_RETENTION_DAYS days"
+
+  local file
+  find "$BW_BACKUP_DIR" -type f -name 'bw-export-*' \
+    -mtime "+$((BW_BACKUP_RETENTION_DAYS - 1))" | while read -r file
+  do
+    if [[ "$file" == "$BW_CURRENT_BACKUP_FILE" ]]
+    then
+      continue
+    fi
+    rm -vf "$file"
+  done
+}
+
 cleanup() {
   rbw_cleanup_account "$ACCOUNT"
   rm -f "$LOCKFILE"
@@ -143,7 +172,7 @@ then
     exit "$RC"
   fi
 
-  if ! backup_rotate
+  if ! backup_rotate || ! backup_rotate_days
   then
     RC=$?
     healthcheck_ping fail "Backup rotation failed (rc: $RC)"

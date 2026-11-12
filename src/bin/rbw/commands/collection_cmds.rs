@@ -138,6 +138,11 @@ pub(super) struct MirrorConfigEntry {
     // that is either a same-named source collection or a full-vault copy.
     #[serde(default)]
     pub(super) fallback_to_whole_vault: bool,
+    // Like `fallback_to_whole_vault`, but the fallback copies only the
+    // source's personal vault (entries outside any organization), so
+    // organization entries live in their own collections only.
+    #[serde(default)]
+    pub(super) fallback_to_personal_vault: bool,
 }
 
 pub(super) fn load_mirror_config(
@@ -193,20 +198,22 @@ pub(super) fn mirror_vault_config_entry(
     password: Option<String>,
     dry_run: bool,
 ) -> anyhow::Result<()> {
-    let (collection, purge_dest) =
-        if mirror.fallback_to_whole_vault && mirror.collection.is_some() {
+    let fallback =
+        mirror.fallback_to_whole_vault || mirror.fallback_to_personal_vault;
+    let (collection, purge_dest, personal_only) =
+        if fallback && mirror.collection.is_some() {
             crate::actions::set_active_account(Some(mirror.from.clone()))?;
             unlock(None, None)?;
             if source_collection_is_present(
                 mirror.collection.as_deref().unwrap(),
                 mirror.org_id.as_deref(),
             )? {
-                (mirror.collection.as_deref(), false)
+                (mirror.collection.as_deref(), false, false)
             } else {
-                (None, mirror.purge_dest)
+                (None, mirror.purge_dest, mirror.fallback_to_personal_vault)
             }
         } else {
-            (mirror.collection.as_deref(), mirror.purge_dest)
+            (mirror.collection.as_deref(), mirror.purge_dest, false)
         };
 
     mirror_vault_with_options(
@@ -220,6 +227,7 @@ pub(super) fn mirror_vault_config_entry(
         mirror.overwrite,
         purge_dest,
         mirror.prune,
+        personal_only,
         yes,
         password,
         dry_run,
@@ -457,6 +465,7 @@ pub fn mirror_vault(
     overwrite: bool,
     purge_dest: bool,
     prune: bool,
+    personal_only: bool,
     yes: bool,
     password: Option<String>,
     dry_run: bool,
@@ -472,6 +481,7 @@ pub fn mirror_vault(
         overwrite,
         purge_dest,
         prune,
+        personal_only,
         yes,
         password,
         dry_run,
@@ -491,6 +501,9 @@ pub(super) fn mirror_vault_with_options(
     overwrite: bool,
     purge_dest: bool,
     prune: bool,
+    // Copy only the source's personal vault: entries outside any
+    // organization.
+    personal_only: bool,
     yes: bool,
     password: Option<String>,
     dry_run: bool,
@@ -525,8 +538,35 @@ pub(super) fn mirror_vault_with_options(
     // preview shows real counts instead of vague "everything" language.
     crate::actions::set_active_account(Some(from.to_string()))?;
     unlock(None, None)?;
-    let vault =
-        build_exported_vault(attachments, collection, org_id, true, false)?;
+    // A mirror into a destination collection fetches attachment contents
+    // later, and only for the entries it creates or rewrites.
+    let deferred_attachments = attachments && dest_collection.is_some();
+    let mut vault = build_exported_vault(
+        attachments && !deferred_attachments,
+        collection,
+        org_id,
+        true,
+        false,
+    )?;
+    if personal_only {
+        vault.entries.retain(|entry| entry.org_id.is_none());
+        vault.collections.clear();
+    }
+    let attachment_ids: std::collections::HashMap<String, Vec<String>> = {
+        let wanted: std::collections::HashSet<&str> =
+            vault.entries.iter().map(|e| e.id.as_str()).collect();
+        load_db()?
+            .entries
+            .into_iter()
+            .filter(|entry| wanted.contains(entry.id.as_str()))
+            .map(|entry| {
+                (
+                    entry.id,
+                    entry.attachments.into_iter().map(|a| a.id).collect(),
+                )
+            })
+            .collect()
+    };
 
     let entry_count = vault.entries.len();
     let collection_count = vault.collections.len();
@@ -555,6 +595,8 @@ pub(super) fn mirror_vault_with_options(
         eprintln!("  scope: collection '{needle}'");
     } else if let Some(org) = org_id {
         eprintln!("  scope: organization '{org}'");
+    } else if personal_only {
+        eprintln!("  scope: personal vault (entries outside organizations)");
     } else {
         eprintln!("  scope: entire vault");
     }
@@ -698,8 +740,17 @@ pub(super) fn mirror_vault_with_options(
 
     // A mirror into one destination collection is reconciled by source id
     // (`mirror_sync`); it always updates changed copies.
-    let mirror_sync = dest_collection
-        .map(|_| MirrorSync::from_vault(&vault, attachments, prune));
+    let fetch: &FetchAttachments<'_> =
+        &|ids: &[String]| fetch_source_attachments(from, to, ids);
+    let mirror_sync = dest_collection.map(|_| {
+        MirrorSync::from_vault(
+            &vault,
+            &attachment_ids,
+            attachments,
+            prune,
+            deferred_attachments.then_some(fetch),
+        )
+    });
     import_vault(
         imported,
         dest_collection,
@@ -707,6 +758,53 @@ pub(super) fn mirror_vault_with_options(
         overwrite || mirror_sync.is_some(),
         mirror_sync.as_ref(),
     )
+}
+
+// Downloads the attachments of the given source entries, switching to the
+// source account for the download and back to the destination afterwards
+// (also on failure).
+fn fetch_source_attachments(
+    from: &str,
+    to: &str,
+    ids: &[String],
+) -> anyhow::Result<std::collections::HashMap<String, Vec<serde_json::Value>>>
+{
+    let fetch = || -> anyhow::Result<_> {
+        crate::actions::set_active_account(Some(from.to_string()))?;
+        unlock(None, None)?;
+        let mut db = load_db()?;
+        let mut out = std::collections::HashMap::new();
+        for id in ids {
+            let Some(entry) =
+                db.entries.iter().find(|e| &e.id == id).cloned()
+            else {
+                continue;
+            };
+            if entry.attachments.is_empty() {
+                continue;
+            }
+            let decrypted = decrypt_cipher(&entry)?;
+            let attachments =
+                export_attachments(&mut db, &entry, &decrypted.attachments)?;
+            out.insert(
+                id.clone(),
+                attachments
+                    .into_iter()
+                    .map(|a| {
+                        serde_json::json!({
+                            "file_name": a.file_name,
+                            "data_base64": a.data_base64,
+                        })
+                    })
+                    .collect(),
+            );
+        }
+        Ok(out)
+    };
+    let result = fetch();
+    crate::actions::set_active_account(Some(to.to_string()))?;
+    unlock(None, None)?;
+    result
 }
 
 // Resolve or create the destination organization/collection named by a

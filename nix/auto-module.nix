@@ -110,7 +110,8 @@ let
               destOrg = job.collections.org;
               purgeDest = job.purgeDestination;
               prune = job.pruneDestination;
-              fallbackToWholeVault = true;
+              fallbackToWholeVault = job.collections.fallback == "whole-vault";
+              fallbackToPersonalVault = job.collections.fallback == "personal-vault";
             }
           ) job.collections.names
       ) (lib.attrValues jobs);
@@ -238,6 +239,12 @@ let
   backupJobModule = types.submodule (
     { name, ... }:
     {
+      imports = [
+        (lib.mkRemovedOptionModule [ "retention" ] ''
+          Backups are now kept for a number of days: set `retentionDays`.
+        '')
+      ];
+
       options = {
         enable = mkOption {
           type = types.bool;
@@ -262,10 +269,13 @@ let
           description = "Directory where this job's backups are written.";
         };
 
-        retention = mkOption {
-          type = types.int;
+        retentionDays = mkOption {
+          type = types.ints.unsigned;
           default = 30;
-          description = "Number of backups to keep (0 disables rotation).";
+          description = ''
+            Delete backups older than this many days (0 keeps all). The
+            newest backup is always kept.
+          '';
         };
 
         schedule = mkOption {
@@ -371,6 +381,20 @@ let
         };
 
         collections = {
+          fallback = mkOption {
+            type = types.enum [
+              "whole-vault"
+              "personal-vault"
+            ];
+            default = "whole-vault";
+            description = ''
+              What a destination collection without an equally-named
+              source collection receives: a copy of the whole source vault,
+              or only the source's personal vault (entries outside any
+              organization), so organization entries are not copied twice.
+            '';
+          };
+
           org = mkOption {
             type = types.nullOr types.str;
             default = null;
@@ -703,7 +727,8 @@ in
                 {
                   ACCOUNT = job.account.name;
                   BW_BACKUP_DIR = job.backupPath;
-                  BW_BACKUP_RETENTION = toString job.retention;
+                  BW_BACKUP_RETENTION = "0";
+                  BW_BACKUP_RETENTION_DAYS = toString job.retentionDays;
                 }
                 // job.environment
               );

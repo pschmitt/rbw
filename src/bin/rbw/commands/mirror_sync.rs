@@ -5,9 +5,10 @@ use super::*;
 //
 // Servers assign fresh cipher ids on import, so a copy can't keep its
 // source id. The pairing lives in one state item per destination
-// collection instead: a secure note in the destination account's personal
-// vault (outside the mirrored collection, so the collection stays an exact
-// copy) with a JSON attachment mapping
+// collection instead: a secure note in the destination organization's
+// "rbw mirror state" collection (outside the mirrored collections, so they
+// stay exact copies, and out of the destination's personal vault) with a
+// JSON attachment mapping
 //
 //   destination cipher id -> v1:<source cipher id>:<content digest>
 //
@@ -21,8 +22,16 @@ use super::*;
 // username) and rewritten from their source, which re-establishes the map.
 const MIRROR_MARKER_VERSION: &str = "v1";
 const MIRROR_STATE_FILE_PREFIX: &str = "rbw-mirror-state-";
+pub(super) const MIRROR_STATE_COLLECTION: &str = "rbw mirror state";
 
-pub(super) struct MirrorSync {
+// Downloads the attachments of the given source entries, by source id.
+pub(super) type FetchAttachments<'a> = dyn Fn(
+        &[String],
+    ) -> anyhow::Result<
+        std::collections::HashMap<String, Vec<serde_json::Value>>,
+    > + 'a;
+
+pub(super) struct MirrorSync<'a> {
     // Source cipher id -> full marker value for that entry.
     pub(super) markers: std::collections::HashMap<String, String>,
     // Source cipher id -> number of attachments it carries, when
@@ -33,21 +42,30 @@ pub(super) struct MirrorSync {
     pub(super) attachments: bool,
     // Move stale copies in the destination collection to the trash.
     pub(super) prune: bool,
+    // Downloads source attachments on demand: only entries that are
+    // created or updated need their contents.
+    pub(super) fetch_attachments: Option<&'a FetchAttachments<'a>>,
 }
 
-impl MirrorSync {
+impl<'a> MirrorSync<'a> {
+    // `vault` is exported without attachment contents; `attachment_ids`
+    // lists each source entry's attachment ids instead.
     pub(super) fn from_vault(
         vault: &ExportedVault,
+        attachment_ids: &std::collections::HashMap<String, Vec<String>>,
         attachments: bool,
         prune: bool,
+        fetch_attachments: Option<&'a FetchAttachments<'a>>,
     ) -> Self {
         let mut markers = std::collections::HashMap::new();
         let mut attachment_counts = std::collections::HashMap::new();
         for entry in &vault.entries {
-            markers.insert(entry.id.clone(), mirror_marker_value(entry));
+            let ids =
+                attachment_ids.get(&entry.id).map_or(&[][..], Vec::as_slice);
+            let ids: &[String] = if attachments { ids } else { &[] };
+            markers.insert(entry.id.clone(), mirror_marker_value(entry, ids));
             if attachments {
-                attachment_counts
-                    .insert(entry.id.clone(), entry.attachments.len());
+                attachment_counts.insert(entry.id.clone(), ids.len());
             }
         }
         Self {
@@ -55,18 +73,27 @@ impl MirrorSync {
             attachment_counts,
             attachments,
             prune,
+            fetch_attachments,
         }
     }
 }
 
-pub(super) fn mirror_marker_value(entry: &ExportedEntry) -> String {
+pub(super) fn mirror_marker_value(
+    entry: &ExportedEntry,
+    attachment_ids: &[String],
+) -> String {
     use sha2::Digest as _;
     // `ExportedEntry` serializes deterministically (struct field order,
-    // `Vec`s in vault order) and includes attachment contents when they
-    // were exported, so any source change -- including a replaced
-    // attachment -- changes the digest.
-    let bytes = serde_json::to_vec(entry).unwrap_or_default();
-    let digest = sha2::Sha256::digest(&bytes);
+    // `Vec`s in vault order). Attachments are covered by their ids rather
+    // than their contents, so the digest needs no downloads: the server
+    // gives a replaced attachment a new id.
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(serde_json::to_vec(entry).unwrap_or_default());
+    for id in attachment_ids {
+        hasher.update(b"\0attachment:");
+        hasher.update(id.as_bytes());
+    }
+    let digest = hasher.finalize();
     let hex = digest.iter().take(16).fold(String::new(), |mut hex, b| {
         let _ = write!(hex, "{b:02x}");
         hex
@@ -222,9 +249,23 @@ pub(super) struct MirrorState {
     pub(super) copies: std::collections::BTreeMap<String, String>,
 }
 
-// The destination account's state item for `dest_collection_id`, if any.
+// The id of the destination organization's state collection, if it exists.
+fn mirror_state_collection_id(
+    db: &rbw::db::Db,
+    dest_org_id: &str,
+) -> anyhow::Result<Option<String>> {
+    Ok(decrypt_collections(db)?
+        .into_iter()
+        .find(|c| {
+            c.org_id == dest_org_id && c.name == MIRROR_STATE_COLLECTION
+        })
+        .map(|c| c.id))
+}
+
+// The state item for `dest_collection_id` in the state collection, if any.
 pub(super) fn find_mirror_state_entry(
     db: &rbw::db::Db,
+    state_collection_id: &str,
     dest_collection_id: &str,
 ) -> Option<rbw::db::Entry> {
     let wanted = mirror_state_name(dest_collection_id);
@@ -232,12 +273,19 @@ pub(super) fn find_mirror_state_entry(
         .iter()
         .filter(|entry| {
             !entry.deleted
-                && entry.org_id.is_none()
                 && matches!(entry.data, rbw::db::EntryData::SecureNote)
+                && entry
+                    .collection_ids
+                    .iter()
+                    .any(|id| id == state_collection_id)
         })
         .find(|entry| {
-            crate::actions::decrypt(&entry.name, entry.key.as_deref(), None)
-                .is_ok_and(|name| name == wanted)
+            crate::actions::decrypt(
+                &entry.name,
+                entry.key.as_deref(),
+                entry.org_id.as_deref(),
+            )
+            .is_ok_and(|name| name == wanted)
         })
         .cloned()
 }
@@ -247,8 +295,16 @@ pub(super) fn find_mirror_state_entry(
 pub(super) fn load_mirror_state(
     db: &mut rbw::db::Db,
     dest_collection_id: &str,
+    dest_org_id: &str,
 ) -> anyhow::Result<MirrorState> {
-    let Some(entry) = find_mirror_state_entry(db, dest_collection_id) else {
+    let Some(state_collection_id) =
+        mirror_state_collection_id(db, dest_org_id)?
+    else {
+        return Ok(MirrorState::default());
+    };
+    let Some(entry) =
+        find_mirror_state_entry(db, &state_collection_id, dest_collection_id)
+    else {
         return Ok(MirrorState::default());
     };
     let decrypted = decrypt_cipher(&entry)?;
@@ -305,40 +361,73 @@ pub(super) fn save_mirror_state(
     access_token: &mut String,
     refresh_token: &mut String,
     state: &MirrorState,
+    dest_org_id: &str,
 ) -> anyhow::Result<()> {
-    let entry = if let Some(entry) =
-        find_mirror_state_entry(db, &state.dest_collection_id)
-    {
-        entry
-    } else {
-        let name = crate::actions::encrypt(
-            &mirror_state_name(&state.dest_collection_id),
-            None,
-            None,
-        )?;
-        let notes = crate::actions::encrypt(
-            "Maintained by `rbw mirror`: maps the copies in a mirrored \
-             collection to their source entries. Deleting it is safe; the \
-             next mirror run rebuilds it.",
-            None,
-            None,
-        )?;
-        let (tokens, _id) = rbw::actions::add(
-            access_token,
-            refresh_token,
-            &name,
-            &rbw::db::EntryData::SecureNote,
-            &[],
-            Some(&notes),
-            None,
-        )?;
-        store_tokens(db, access_token, refresh_token, tokens)?;
+    let reload = |db: &mut rbw::db::Db,
+                  access_token: &mut String,
+                  refresh_token: &mut String|
+     -> anyhow::Result<()> {
         crate::actions::sync()?;
         *db = load_db()?;
         *access_token = db.access_token.clone().unwrap_or_default();
         *refresh_token = db.refresh_token.clone().unwrap_or_default();
-        find_mirror_state_entry(db, &state.dest_collection_id)
-            .context("the mirror state item was not created")?
+        Ok(())
+    };
+
+    let state_collection_id =
+        if let Some(id) = mirror_state_collection_id(db, dest_org_id)? {
+            id
+        } else {
+            ensure_destination_collection(
+                MIRROR_STATE_COLLECTION,
+                Some(dest_org_id),
+            )?;
+            reload(db, access_token, refresh_token)?;
+            mirror_state_collection_id(db, dest_org_id)?
+                .context("the mirror state collection was not created")?
+        };
+
+    let entry = if let Some(entry) = find_mirror_state_entry(
+        db,
+        &state_collection_id,
+        &state.dest_collection_id,
+    ) {
+        entry
+    } else {
+        let org = Some(dest_org_id);
+        let cipher = rbw::actions::ImportCipherEntry {
+            name: crate::actions::encrypt(
+                &mirror_state_name(&state.dest_collection_id),
+                None,
+                org,
+            )?,
+            data: rbw::db::EntryData::SecureNote,
+            fields: Vec::new(),
+            notes: Some(crate::actions::encrypt(
+                "Maintained by `rbw mirror`: maps the copies in a mirrored \
+                 collection to their source entries. Deleting it is safe; \
+                 the next mirror run rebuilds it.",
+                None,
+                org,
+            )?),
+            history: Vec::new(),
+            folder_id: None,
+            collection_ids: vec![state_collection_id.clone()],
+        };
+        let (tokens, ()) = rbw::actions::import_organization_ciphers(
+            access_token,
+            refresh_token,
+            dest_org_id,
+            &[cipher],
+        )?;
+        store_tokens(db, access_token, refresh_token, tokens)?;
+        reload(db, access_token, refresh_token)?;
+        find_mirror_state_entry(
+            db,
+            &state_collection_id,
+            &state.dest_collection_id,
+        )
+        .context("the mirror state item was not created")?
     };
 
     let stamp = std::time::SystemTime::now()

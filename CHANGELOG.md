@@ -10,6 +10,22 @@
   no longer overwrite each other, and attachments follow their own entry.
   `--prune` (config `prune`, rbw-auto `pruneDestination`/`BW_SYNC_PRUNE`)
   moves copies whose source entry is gone to the trash.
+* Mirror state items live in a "rbw mirror state" collection of the
+  destination organization, not in the destination's personal vault.
+* `rbw mirror --personal-only` (config `fallbackToPersonalVault`, rbw-auto
+  `collections.fallback = "personal-vault"`) copies only the source's
+  personal vault, so organization entries are not mirrored twice.
+* `BW_BACKUP_RETENTION_DAYS` deletes backups older than a number of days.
+
+### Changed
+
+* Collection mirrors download source attachments only for entries they
+  create or rewrite; the change digest covers attachment ids instead of
+  their contents.
+* rbw-auto: `backupJobs.<name>.retention` (a number of backups) is replaced
+  by `retentionDays`.
+* Collection-mode whole-vault fallbacks preserve destination entries by
+  default. Purging the destination collection is now opt-in.
 
 ### Fixed
 
@@ -19,11 +35,6 @@
   entries. The server stores no empty usernames, so such an entry never
   matched its own copy: imports reported it as not created, and mirrors
   created a new copy on every run.
-
-### Changed
-
-* Collection-mode whole-vault fallbacks preserve destination entries by
-  default. Purging the destination collection is now opt-in.
 
 ## [2.45.4] - 2026-11-12
 

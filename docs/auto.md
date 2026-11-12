@@ -60,6 +60,7 @@ podman run -it --rm \
 | `BW_BACKUP_ATTACHMENTS` | `1` | `0` skips attachment contents: faster and smaller, but attachments cannot be restored from that backup. |
 | `ENCRYPTION_PASSPHRASE` | | When set, backups are gpg-encrypted (`rbw export --encrypt`). |
 | `BW_BACKUP_RETENTION` | `30` | Backups to keep; `0` keeps all. Replaces the deprecated `KEEP`. |
+| `BW_BACKUP_RETENTION_DAYS` | unset | Also delete backups older than this many days; the newest is always kept. The NixOS module sets this from `retentionDays` (and `BW_BACKUP_RETENTION=0`). |
 | `CRON` | | Run on this schedule instead of once. |
 | `HEALTHCHECK_URL` | | Healthchecks.io (or compatible) URL to ping. |
 | `BW_BACKUP_DIR` | `/data` | Where backups are written. Mount your volume there. |

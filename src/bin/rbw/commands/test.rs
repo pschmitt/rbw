@@ -4664,7 +4664,7 @@ fn test_resolve_organization_lists_candidates_on_ambiguity() {
 fn test_mirror_vault_rejects_identical_from_and_to() {
     let err = mirror_vault(
         "same", "same", None, None, None, None, false, false, false, false,
-        true, None, false,
+        false, true, None, false,
     )
     .unwrap_err()
     .to_string();
@@ -4683,6 +4683,7 @@ fn test_mirror_vault_rejects_purge_dest_with_a_scope() {
         false,
         false,
         true,
+        false,
         false,
         true,
         None,
@@ -4703,6 +4704,7 @@ fn test_mirror_vault_rejects_purge_dest_with_a_scope() {
         false,
         false,
         true,
+        false,
         false,
         true,
         None,
@@ -4731,6 +4733,7 @@ fn test_mirror_vault_allows_purge_dest_with_dest_collection() {
         false,
         false,
         true,
+        false,
         false,
         true,
         None,
