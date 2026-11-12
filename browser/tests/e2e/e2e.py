@@ -13,9 +13,10 @@ import time
 
 # Extension frames are not exposed to the drivers, so tests find the visible rbw
 # host in the page and click at fixed offsets inside it. The save prompt is the
-# host pinned to a corner (`inset:16px ...`); every host's style also starts
-# with top-layer.js's reset (`inset:auto`), so a bare "inset" cannot tell them apart.
-HOST_JS = """(save) => { const el = [...document.documentElement.children].filter(e => e.tagName === 'DIV' && (e.getAttribute('style') || '').includes('2147483647') && (e.getAttribute('style') || '').includes('inset:16px') === !!save).pop();
+# host pinned to a corner (`inset: 16px ...`); every host's style also starts
+# with top-layer.js's reset (`inset: auto`), so a bare "inset" cannot tell them
+# apart. The browser re-serializes the style attribute ("inset: 16px"), hence \s*.
+HOST_JS = """(save) => { const el = [...document.documentElement.children].filter(e => e.tagName === 'DIV' && (e.getAttribute('style') || '').includes('2147483647') && /inset:\\s*16px/.test(e.getAttribute('style') || '') === !!save).pop();
   if (!el || getComputedStyle(el).visibility !== 'visible') return null; const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; }"""
 # A set-password chooser has a hint line above its rows; "New" sits at their right end.
 OFFSETS = {"setpw": (60, 140), "setpw-new": (-30, 140), "login": (60, 102), "card": (60, 102), "search": (60, 40), "result": (60, 130), "save": (70, 102)}
