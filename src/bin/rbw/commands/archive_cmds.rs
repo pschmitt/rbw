@@ -284,7 +284,7 @@ pub(super) fn archive_or_unarchive(
                             );
                             continue;
                         }
-                        pending.push((entry, decrypted.name.clone()));
+                        pending.push((entry, decrypted.name));
                     }
                 }
             }
@@ -623,7 +623,7 @@ pub fn restore(
                 }
                 Ok(entries) => {
                     for (entry, decrypted) in entries {
-                        pending.push((entry, decrypted.name.clone()));
+                        pending.push((entry, decrypted.name));
                     }
                 }
             }

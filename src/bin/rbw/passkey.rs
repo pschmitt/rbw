@@ -240,7 +240,7 @@ fn entry_for_allow(
                     })
         });
         if listed {
-            ids.push(entry.id.clone());
+            ids.push(entry.id);
         }
     }
     Ok((ids.len() == 1).then(|| ids.remove(0)))

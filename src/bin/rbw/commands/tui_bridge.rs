@@ -475,7 +475,7 @@ pub fn account_states(
             unlocked: active_account_unlocked(),
             excluded: account.excluded_from(ctx),
             policy: account.unlock.policy,
-            name: account.name.clone(),
+            name: account.name,
         });
     }
     crate::actions::set_active_account(None)?;
