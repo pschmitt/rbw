@@ -195,6 +195,7 @@ jobs:
     name: build (aarch64-apple-darwin)
     needs: [release]
     runs-on: macos-latest
+    continue-on-error: true
     permissions:
       contents: write
       id-token: write
