@@ -6,6 +6,10 @@
 
 * Import duplicate-key entries into organizations through the organization
   import endpoint, avoiding personal-cipher edits that Vaultwarden rejects.
+* Treat an empty login username as no username when matching imported
+  entries. The server stores no empty usernames, so such an entry never
+  matched its own copy: imports reported it as not created, and mirrors
+  created a new copy on every run.
 
 ### Changed
 

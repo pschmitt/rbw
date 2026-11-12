@@ -206,6 +206,23 @@ fn test_imported_entry_key_ignores_username_for_non_logins() {
 }
 
 #[test]
+fn test_imported_entry_key_treats_empty_username_as_none() {
+    // The server never stores an empty username (it is dropped before
+    // encryption), so the created copy decrypts to `None`; both sides of
+    // the match must agree or the entry is recreated on every mirror run.
+    let login = imported_login("foo", Some(""));
+    assert_eq!(imported_entry_key(&login), ("foo".to_string(), None));
+    assert_eq!(
+        imported_entry_key(&login),
+        entry_match_key("foo".to_string(), None)
+    );
+    assert_eq!(
+        entry_match_key("foo".to_string(), Some(String::new())),
+        ("foo".to_string(), None)
+    );
+}
+
+#[test]
 fn test_imported_entry_key_distinguishes_by_username() {
     let a = imported_login("shared-name", Some("alice"));
     let b = imported_login("shared-name", Some("bob"));

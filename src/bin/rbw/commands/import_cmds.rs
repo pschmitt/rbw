@@ -491,7 +491,20 @@ pub(super) fn imported_entry_key(
         ImportedData::Login { username, .. } => username.clone(),
         _ => None,
     };
-    (imported.name.clone(), username)
+    entry_match_key(imported.name.clone(), username)
+}
+
+// Builds the (name, username) matching key, treating an empty username as
+// no username. `editable_to_encrypted` drops empty strings instead of
+// encrypting them, so a source login whose username is `""` comes back from
+// the server with no username at all. Without this normalization that
+// entry would never match its own freshly created (or previously mirrored)
+// copy: it was reported as "not created" and recreated on every run.
+pub(super) fn entry_match_key(
+    name: String,
+    username: Option<String>,
+) -> (String, Option<String>) {
+    (name, username.filter(|u| !u.is_empty()))
 }
 
 // The pre-bulk-import creation path, one entry at a time via
@@ -970,7 +983,10 @@ fn bulk_create_batch_inner(
         let mut index = std::collections::HashMap::new();
         for (entry, plan) in new_entries.iter().zip(plans) {
             if let Ok(decrypted) = plan.resolve(&results) {
-                index.insert((decrypted.name, decrypted.user), entry.clone());
+                index.insert(
+                    entry_match_key(decrypted.name, decrypted.user),
+                    entry.clone(),
+                );
             }
         }
         index
@@ -1387,7 +1403,7 @@ pub(super) fn import_vault(
             let Ok(decrypted) = plan.resolve(&results) else {
                 continue;
             };
-            let key = (decrypted.name, decrypted.user);
+            let key = entry_match_key(decrypted.name, decrypted.user);
             if let Some((dest_id, dest_org_id)) = &dest_collection {
                 if !entry.collection_ids.contains(dest_id) {
                     continue;
