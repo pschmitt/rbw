@@ -253,14 +253,24 @@ let
     }
   );
 
+  # Credentials are gone by the time ExecStopPost runs, so the start ping
+  # keeps a copy of the URL in the unit's runtime directory for the stop
+  # ping. A failed ping never fails the job.
   healthcheckScript = pkgs.writeShellScript "rbw-healthcheck" ''
     set -u
-    url=$(${pkgs.coreutils}/bin/cat "$CREDENTIALS_DIRECTORY/rbw-healthcheck-url")
+    stash="$XDG_RUNTIME_DIR/healthcheck-url"
     case "$1" in
-      start) suffix=/start ;;
-      stop) if [ "''${SERVICE_RESULT:-}" = success ]; then suffix=; else suffix=/fail; fi ;;
+      start)
+        ${pkgs.coreutils}/bin/install -m 0600 "$CREDENTIALS_DIRECTORY/rbw-healthcheck-url" "$stash" || exit 0
+        suffix=/start
+        ;;
+      stop)
+        if [ "''${SERVICE_RESULT:-}" = success ]; then suffix=; else suffix=/fail; fi
+        ;;
       *) exit 0 ;;
     esac
+    [ -s "$stash" ] || exit 0
+    url=$(${pkgs.coreutils}/bin/cat "$stash")
     ${lib.getExe pkgs.curl} -fsS -m 10 --retry 3 -o /dev/null "$url$suffix" || true
   '';
 
@@ -540,6 +550,9 @@ in
       tmpfiles.rules =
         lib.optionals (enabledBackups != { }) (
           [
+            # tmpfiles refuses to create a root-owned directory below the
+            # user's home (an unsafe path transition), so declare each level.
+            "d ${userHome cfg.backupUser}/.config 0700 ${cfg.backupUser} ${cfg.backupUser} -"
             "d ${userHome cfg.backupUser}/.config/rbw 0700 ${cfg.backupUser} ${cfg.backupUser} -"
             "L+ ${userHome cfg.backupUser}/.config/rbw/config.json - - - - ${rbwConfigFile backupAccounts}"
           ]
@@ -553,6 +566,7 @@ in
           )
         )
         ++ lib.optionals mirror.enable [
+          "d ${mirrorStateDir}/.config 0700 ${cfg.mirrorUser} ${cfg.mirrorUser} -"
           "d ${mirrorStateDir}/.config/rbw 0700 ${cfg.mirrorUser} ${cfg.mirrorUser} -"
           "L+ ${mirrorStateDir}/.config/rbw/config.json - - - - ${rbwConfigFile mirrorAccounts}"
         ];
@@ -562,6 +576,8 @@ in
           name: job:
           lib.nameValuePair "rbw-backup-${name}" {
             description = "rbw backup (${name})";
+            # `rbw backup` encrypts with gpg.
+            path = [ pkgs.gnupg ];
             after = [ "network-online.target" ];
             wants = [ "network-online.target" ];
             serviceConfig = commonServiceConfig cfg.backupUser "rbw-backup-${name}" // {
