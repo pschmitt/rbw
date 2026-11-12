@@ -15,7 +15,7 @@ jobs:
   # from Cargo.toml (without the `v` of the git tag) on version tags, plus
   # build provenance, signed by the shared workflow; verify with
   # `gh attestation verify oci://ghcr.io/pschmitt/rbw:latest -R pschmitt/rbw --signer-repo pschmitt/ci-workflows`.
-  # docker-auto.yaml builds rbw-auto on top once this workflow succeeds.
+  # The rbw-auto job below builds rbw-auto on top once this job succeeds.
   docker:
     permissions:
       contents: read
@@ -25,3 +25,51 @@ jobs:
     uses: pschmitt/ci-workflows/.github/workflows/docker-native.yaml@main
     with:
       image-name: pschmitt/rbw
+
+  # ghcr.io/pschmitt/rbw-auto: rbw for unattended jobs (auto/Dockerfile), on
+  # top of the rbw image this run just pushed. Published from main and
+  # version tags only.
+  rbw-auto:
+    needs: docker
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: ./auto
+          file: ./auto/Dockerfile
+          build-args: |
+            RBW_IMAGE=ghcr.io/pschmitt/rbw:sha-${{ github.sha }}
+          push: true
+          tags: ghcr.io/pschmitt/rbw-auto:sha-${{ github.sha }}
+      # Runs of this workflow for different refs can overlap: only move
+      # `latest` while rbw:latest is still this commit's image.
+      - name: Publish latest if the rbw latest image still matches
+        run: |
+          latest_digest=$(docker buildx imagetools inspect ghcr.io/pschmitt/rbw:latest --format '{{json .Manifest}}' | jq -r .digest)
+          source_digest=$(docker buildx imagetools inspect "ghcr.io/pschmitt/rbw:sha-$GITHUB_SHA" --format '{{json .Manifest}}' | jq -r .digest)
+          if [[ -n "$latest_digest" && "$latest_digest" == "$source_digest" ]]
+          then
+            docker buildx imagetools create \
+              --tag ghcr.io/pschmitt/rbw-auto:latest \
+              "ghcr.io/pschmitt/rbw-auto:sha-$GITHUB_SHA"
+          else
+            echo "Skipping latest: rbw:latest is not this commit's image"
+          fi
+      # A release tag publishes the image under rbw's version too, like rbw's own.
+      - name: Publish the release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          docker buildx imagetools create \
+            --tag "ghcr.io/pschmitt/rbw-auto:${GITHUB_REF_NAME#v}" \
+            "ghcr.io/pschmitt/rbw-auto:sha-$GITHUB_SHA"

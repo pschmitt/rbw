@@ -47,8 +47,9 @@ itself: `rbw backup`, `rbw mirror --config` and `unlock.files` credentials.
 The NixOS module is `nix/services-module.nix` (exported as
 `nixosModules.auto`); the container image is `auto/Dockerfile`, which has no
 wrapper scripts. Don't add scripts back: put job logic into rbw. The image
-carries rbw's version; `docker-auto` builds it after `docker` succeeds, and
-a release tag also publishes it as `rbw-auto:X.Y.Z`. Never rename the
+carries rbw's version; the `rbw-auto` job of the `docker` workflow builds it
+after the rbw image, and a release tag also publishes it as
+`rbw-auto:X.Y.Z`. Never rename the
 module's default users or state directories (`rbw-backup`, `rbw-mirror`,
 `/var/lib/rbw-*`): deployed hosts keep their state (device ids, caches)
 there. They replaced rbw-auto's `bw-backup`/`bw-sync` on 2026-11-12.
