@@ -239,13 +239,16 @@ let
   backupJobModule = types.submodule (
     { name, ... }:
     {
-      imports = [
-        (lib.mkRemovedOptionModule [ "retention" ] ''
-          Backups are now kept for a number of days: set `retentionDays`.
-        '')
-      ];
-
       options = {
+        # Removed: backups are kept for `retentionDays` now. Kept as a hidden
+        # option so a leftover definition fails with a pointer to the new
+        # one (see `assertions` below) instead of an unknown-option error.
+        retention = mkOption {
+          type = types.nullOr types.int;
+          default = null;
+          visible = false;
+        };
+
         enable = mkOption {
           type = types.bool;
           default = true;
@@ -625,6 +628,14 @@ in
 
   config = lib.mkIf (anyBackups || anySyncs) {
     assertions = [
+      {
+        assertion = lib.all (job: job.retention == null) (lib.attrValues cfg.backupJobs);
+        message = ''
+          services.rbw-auto.backupJobs.<name>.retention (a number of
+          backups) was removed: set retentionDays (keep backups for this
+          many days) instead.
+        '';
+      }
       {
         assertion =
           (conflictingAccountNames backupAccountsRaw == [ ])
