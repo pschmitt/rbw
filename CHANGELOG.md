@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.46.0] - 2026-11-12
+
 ### Added
 
 * Browser extension: a failed request shows a specific message, with the
