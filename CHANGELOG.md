@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Import duplicate-key entries into organizations through the organization
+  import endpoint, avoiding personal-cipher edits that Vaultwarden rejects.
+
+### Changed
+
+* Collection-mode whole-vault fallbacks preserve destination entries by
+  default. Purging the destination collection is now opt-in.
+
 ## [2.45.4] - 2026-11-12
 
 ### Fixed

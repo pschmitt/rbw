@@ -108,7 +108,7 @@ let
               inherit collection;
               destCollection = collection;
               destOrg = job.collections.org;
-              purgeDest = true;
+              purgeDest = job.purgeDestination;
               fallbackToWholeVault = true;
             }
           ) job.collections.names
@@ -349,11 +349,11 @@ let
           type = types.bool;
           default = false;
           description = ''
-            "personal" mode only: wipe the destination's personal vault
-            before importing (via `rbw mirror --purge-dest`, the same
-            server-side purge endpoint `rbw purge-vault` uses). Entries
-            assigned to an organization collection are never touched by
-            this, regardless.
+            In "personal" mode, wipe the destination's personal vault before
+            importing. In "collections" mode, wipe the destination
+            collection only when its named source collection is missing and
+            the whole-vault fallback runs. Both purges are disabled by
+            default.
           '';
         };
 

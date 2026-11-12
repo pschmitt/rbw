@@ -70,5 +70,7 @@ mirrors:
 be created. `fallbackToWholeVault: true` makes a spec with `collection` use
 the whole source vault when that source collection does not exist; this is
 useful when a destination collection should hold either a same-named source
-collection or a full-vault copy. `--yes`, `--stdin`, and `--dry-run` remain
-command-line controls and can be combined with `--config`.
+collection or a full-vault copy. `purgeDest` defaults to `false`; set it to
+`true` to clear the destination collection before that fallback imports the
+whole source vault. `--yes`, `--stdin`, and `--dry-run` remain command-line
+controls and can be combined with `--config`.

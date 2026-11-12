@@ -213,6 +213,12 @@ fn test_imported_entry_key_distinguishes_by_username() {
 }
 
 #[test]
+fn test_duplicate_org_entries_use_organization_import() {
+    assert!(duplicate_entries_use_organization_import(Some("org-id")));
+    assert!(!duplicate_entries_use_organization_import(None));
+}
+
+#[test]
 fn test_mirror_overwrite_requires_destination_organization_match() {
     assert!(entry_organization_matches_destination(
         Some("destination-org"),

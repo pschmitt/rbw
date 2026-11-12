@@ -111,6 +111,7 @@ podman run -it --rm \
 | `SRC_REGISTER_CLIENT_ID`, `SRC_REGISTER_CLIENT_SECRET`, `DEST_REGISTER_CLIENT_ID`, `DEST_REGISTER_CLIENT_SECRET` | | Personal API keys for `rbw register`. |
 | `BW_SYNC_MODE` | `personal` | `personal` or `collections`, see below. |
 | `DEST_BW_PURGE_VAULT` | | `personal` mode: `1` wipes the destination's personal vault first (server-side, like `rbw purge-vault`). Organization items are never touched. |
+| `BW_SYNC_PURGE_DEST_COLLECTION` | unset | `collections` mode: `1` wipes the destination collection before a whole-vault fallback. By default, existing destination entries are preserved. |
 | `DEST_BW_ORG`, `DEST_BW_COLLECTIONS` | | `collections` mode: the destination organization and a comma-separated list of collections, e.g. `default,Some Other Collection`. Missing ones are created. |
 | `BW_SYNC_ATTACHMENTS` | `1` | `0` skips attachments. |
 | `BW_SYNC_OVERWRITE` | `1` | `0` leaves existing destination entries alone. |
@@ -123,7 +124,9 @@ Modes:
 - `collections` mirrors into one or more destination collections. A
   collection whose name also exists on the source side gets a scoped 1:1
   mirror of just that source collection. Any other gets the whole source
-  vault (useful for a "whole vault" collection).
+  vault (useful for a "whole vault" collection). When that fallback runs,
+  destination entries are preserved by default; set
+  `BW_SYNC_PURGE_DEST_COLLECTION=1` to clear the collection first.
 
 ## NixOS module
 
@@ -177,6 +180,10 @@ these, so they stay in step.
   };
 }
 ```
+
+`purgeDestination` defaults to `false`. Set it to `true` only when a missing
+source collection should clear that destination collection before the
+whole-vault fallback.
 
 How the module runs them:
 

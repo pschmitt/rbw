@@ -20,6 +20,7 @@ DEST_ACCOUNT="${DEST_ACCOUNT:-destination}"
 BW_SYNC_MODE="${BW_SYNC_MODE:-personal}"
 BW_SYNC_ATTACHMENTS="${BW_SYNC_ATTACHMENTS:-1}"
 BW_SYNC_OVERWRITE="${BW_SYNC_OVERWRITE:-1}"
+BW_SYNC_PURGE_DEST_COLLECTION="${BW_SYNC_PURGE_DEST_COLLECTION:-}"
 
 TMPDIR="${TMPDIR:-/tmp}"
 WORKDIR="${WORKDIR:-${TMPDIR}/bw-sync}"
@@ -247,6 +248,12 @@ mirror_collections() {
   local -a collections
   IFS=',' read -ra collections <<< "$DEST_BW_COLLECTIONS"
 
+  local -a purge_flags=()
+  if [[ "$BW_SYNC_PURGE_DEST_COLLECTION" == "1" ]]
+  then
+    purge_flags+=(--purge-dest)
+  fi
+
   local raw_name name src_id rc=0
   for raw_name in "${collections[@]}"
   do
@@ -272,7 +279,7 @@ mirror_collections() {
     else
       echo_info "Mirroring entire vault -> destination collection: $name"
       if ! rbw mirror --from "$SRC_ACCOUNT" --to "$DEST_ACCOUNT" --yes \
-        --dest-collection "$name" --dest-org "$org_id" --purge-dest "${flags[@]}"
+        --dest-collection "$name" --dest-org "$org_id" "${purge_flags[@]}" "${flags[@]}"
       then
         echo_error "Mirror into collection '$name' failed."
         rc=1
@@ -338,3 +345,5 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]
 then
   main "$@"
 fi
+
+# vim: set ft=sh et ts=2 sw=2 :

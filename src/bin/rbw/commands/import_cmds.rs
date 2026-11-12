@@ -581,20 +581,17 @@ pub(super) fn create_entries_individually(
 // behavior exactly (same encryption, same collection/folder resolution,
 // same attachment restoration) -- just batched.
 //
-// Two things force a per-entry fallback despite the bulk call:
-// 1. Two entries in this same batch sharing a (name, username) key: the
-//    bulk endpoints don't return per-cipher ids, so recovering them
-//    afterward means matching newly-appeared entries back to their
-//    intended import entry by that same key -- which is ambiguous if two
-//    entries in the batch share one. Routed to individual creation before
-//    the bulk call is even made.
-// 2. An entry intended for the batch that isn't found among the newly-
-//    appeared entries after syncing post-bulk-call: either the whole bulk
-//    call failed outright, or the server silently dropped that one cipher
-//    (Vaultwarden's import handler validates the whole batch up front, but
-//    swallows a per-cipher failure during the actual creation loop).
-//    Either way, retried individually rather than silently reported as
-//    missing.
+// Two things force one-entry requests despite the bulk endpoint:
+// 1. Two entries in this batch sharing a (name, username) key: the bulk
+//    endpoint doesn't return per-cipher ids, so matching newly-appeared
+//    entries back to their intended imports would be ambiguous. Org-owned
+//    entries still use the organization import endpoint one at a time;
+//    creating them in the personal vault and editing them into an org is
+//    rejected by some servers.
+// 2. An entry intended for the batch that isn't found after syncing:
+//    either the whole request failed or the server silently dropped that
+//    cipher during its creation loop. Retry it through a one-entry import
+//    request rather than silently reporting it as missing.
 pub(super) fn bulk_create_batch(
     db: &mut rbw::db::Db,
     access_token: &mut String,
@@ -602,6 +599,38 @@ pub(super) fn bulk_create_batch(
     collection_id_map: &std::collections::HashMap<String, String>,
     org_id: Option<&str>,
     entries: &[&ImportedEntry],
+) -> anyhow::Result<(usize, Vec<(String, String)>, usize, usize)> {
+    bulk_create_batch_inner(
+        db,
+        access_token,
+        refresh_token,
+        collection_id_map,
+        org_id,
+        entries,
+        OrganizationImportRetry::SplitBatch,
+    )
+}
+
+pub(super) fn duplicate_entries_use_organization_import(
+    org_id: Option<&str>,
+) -> bool {
+    org_id.is_some()
+}
+
+#[derive(Clone, Copy)]
+enum OrganizationImportRetry {
+    SplitBatch,
+    FinalAttempt,
+}
+
+fn bulk_create_batch_inner(
+    db: &mut rbw::db::Db,
+    access_token: &mut String,
+    refresh_token: &mut String,
+    collection_id_map: &std::collections::HashMap<String, String>,
+    org_id: Option<&str>,
+    entries: &[&ImportedEntry],
+    retry_policy: OrganizationImportRetry,
 ) -> anyhow::Result<(usize, Vec<(String, String)>, usize, usize)> {
     if entries.is_empty() {
         return Ok((0, Vec::new(), 0, 0));
@@ -631,34 +660,58 @@ pub(super) fn bulk_create_batch(
     let mut attachments_failed = 0usize;
 
     if !individual_entries.is_empty() {
-        eprintln!(
-            "{} {} entr{} share a name/username with another entry in this \
-             batch -- creating {} individually to avoid ambiguity",
-            style::warning("Note:", c),
-            individual_entries.len(),
-            if individual_entries.len() == 1 {
-                "y"
-            } else {
-                "ies"
-            },
-            if individual_entries.len() == 1 {
-                "it"
-            } else {
-                "them"
-            },
-        );
-        let (c2, f2, ar2, af2) = create_entries_individually(
-            db,
-            access_token,
-            refresh_token,
-            collection_id_map,
-            &individual_entries,
-            "",
-        );
-        created += c2;
-        failed_names.extend(f2);
-        attachments_restored += ar2;
-        attachments_failed += af2;
+        if duplicate_entries_use_organization_import(org_id) {
+            eprintln!(
+                "{} {} duplicate-key entr{} will use individual organization imports to avoid ambiguous matching",
+                style::warning("Note:", c),
+                individual_entries.len(),
+                if individual_entries.len() == 1 { "y" } else { "ies" },
+            );
+            for imported in individual_entries {
+                let (c2, f2, ar2, af2) = bulk_create_batch_inner(
+                    db,
+                    access_token,
+                    refresh_token,
+                    collection_id_map,
+                    org_id,
+                    &[imported],
+                    OrganizationImportRetry::FinalAttempt,
+                )?;
+                created += c2;
+                failed_names.extend(f2);
+                attachments_restored += ar2;
+                attachments_failed += af2;
+            }
+        } else {
+            eprintln!(
+                "{} {} entr{} share a name/username with another entry in this \
+                 batch -- creating {} individually to avoid ambiguity",
+                style::warning("Note:", c),
+                individual_entries.len(),
+                if individual_entries.len() == 1 {
+                    "y"
+                } else {
+                    "ies"
+                },
+                if individual_entries.len() == 1 {
+                    "it"
+                } else {
+                    "them"
+                },
+            );
+            let (c2, f2, ar2, af2) = create_entries_individually(
+                db,
+                access_token,
+                refresh_token,
+                collection_id_map,
+                &individual_entries,
+                "",
+            );
+            created += c2;
+            failed_names.extend(f2);
+            attachments_restored += ar2;
+            attachments_failed += af2;
+        }
     }
 
     if bulk_entries.is_empty() {
@@ -817,6 +870,37 @@ pub(super) fn bulk_create_batch(
                  creation for this batch",
                 style_error("Warning:", c),
             );
+            if org_id.is_some() {
+                if matches!(retry_policy, OrganizationImportRetry::SplitBatch)
+                {
+                    for imported in &bulk_entries {
+                        let (c2, f2, ar2, af2) = bulk_create_batch_inner(
+                            db,
+                            access_token,
+                            refresh_token,
+                            collection_id_map,
+                            org_id,
+                            &[imported],
+                            OrganizationImportRetry::FinalAttempt,
+                        )?;
+                        created += c2;
+                        failed_names.extend(f2);
+                        attachments_restored += ar2;
+                        attachments_failed += af2;
+                    }
+                } else {
+                    failed_names.extend(bulk_entries.iter().map(
+                        |imported| (imported.name.clone(), format!("{e:#}")),
+                    ));
+                }
+                return Ok((
+                    created,
+                    failed_names,
+                    attachments_restored,
+                    attachments_failed,
+                ));
+            }
+
             let (c2, f2, ar2, af2) = create_entries_individually(
                 db,
                 access_token,
@@ -982,18 +1066,46 @@ pub(super) fn bulk_create_batch(
             if bulk_entries.len() == 1 { "y" } else { "ies" },
             if retry.len() == 1 { "it" } else { "them" },
         );
-        let (c2, f2, ar2, af2) = create_entries_individually(
-            db,
-            access_token,
-            refresh_token,
-            collection_id_map,
-            &retry,
-            " (recovered)",
-        );
-        created += c2;
-        failed_names.extend(f2);
-        attachments_restored += ar2;
-        attachments_failed += af2;
+        if org_id.is_some() {
+            if matches!(retry_policy, OrganizationImportRetry::SplitBatch) {
+                for imported in retry {
+                    let (c2, f2, ar2, af2) = bulk_create_batch_inner(
+                        db,
+                        access_token,
+                        refresh_token,
+                        collection_id_map,
+                        org_id,
+                        &[imported],
+                        OrganizationImportRetry::FinalAttempt,
+                    )?;
+                    created += c2;
+                    failed_names.extend(f2);
+                    attachments_restored += ar2;
+                    attachments_failed += af2;
+                }
+            } else {
+                failed_names.extend(retry.into_iter().map(|imported| {
+                    (
+                        imported.name.clone(),
+                        "organization import did not create the entry"
+                            .to_string(),
+                    )
+                }));
+            }
+        } else {
+            let (c2, f2, ar2, af2) = create_entries_individually(
+                db,
+                access_token,
+                refresh_token,
+                collection_id_map,
+                &retry,
+                " (recovered)",
+            );
+            created += c2;
+            failed_names.extend(f2);
+            attachments_restored += ar2;
+            attachments_failed += af2;
+        }
     }
 
     Ok((
