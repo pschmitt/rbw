@@ -104,13 +104,14 @@ pub fn api_client_list() -> anyhow::Result<()> {
     for client in store.clients.values() {
         let fields: usize = client.items.values().map(Vec::len).sum();
         println!(
-            "{}\t{}\t{}\t{} item(s), {fields} field grant(s), account-wide fields [{}], status [{}]",
+            "{}\t{}\t{}\t{} item(s), {fields} field grant(s), account-wide fields [{}], status [{}], unlock [{}]",
             client.id,
             client.name,
             client.account.as_deref().unwrap_or("unscoped"),
             client.items.len(),
             client.all_items.iter().map(rbw::remote_api::FieldRef::path_token).collect::<Vec<_>>().join(", "),
             rbw::remote_api::granted_status_accounts(client).join(", "),
+            client.unlock_accounts.join(", "),
         );
     }
     Ok(())
@@ -154,6 +155,24 @@ pub fn api_status_revoke(
     } else {
         println!("Revoked all status grants for client {client_id}");
     }
+    Ok(())
+}
+
+pub fn api_unlock_grant(
+    client_id: &str,
+    account: &str,
+) -> anyhow::Result<()> {
+    rbw::remote_api::grant_unlock(client_id, account)?;
+    println!("Granted unlock for account {account} to client {client_id}; no status or item fields were granted");
+    Ok(())
+}
+
+pub fn api_unlock_revoke(
+    client_id: &str,
+    account: Option<&str>,
+) -> anyhow::Result<()> {
+    rbw::remote_api::revoke_unlock(client_id, account)?;
+    println!("Revoked unlock grants for client {client_id}");
     Ok(())
 }
 

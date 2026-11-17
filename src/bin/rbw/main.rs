@@ -2662,6 +2662,23 @@ enum ApiCmd {
         )]
         account: Option<String>,
     },
+    #[command(
+        about = "Grant a client permission to unlock one configured account"
+    )]
+    UnlockGrant {
+        client_id: String,
+        #[arg(long)]
+        account: String,
+    },
+    #[command(about = "Revoke a client's unlock permission")]
+    UnlockRevoke {
+        client_id: String,
+        #[arg(
+            long,
+            help = "Account to revoke; omit to revoke all unlock grants"
+        )]
+        account: Option<String>,
+    },
     #[command(about = "Manage mTLS client credentials")]
     Client {
         #[command(subcommand)]
@@ -2720,6 +2737,8 @@ impl ApiCmd {
             Self::Status => "status".to_owned(),
             Self::StatusGrant { .. } => "status-grant".to_owned(),
             Self::StatusRevoke { .. } => "status-revoke".to_owned(),
+            Self::UnlockGrant { .. } => "unlock-grant".to_owned(),
+            Self::UnlockRevoke { .. } => "unlock-revoke".to_owned(),
             Self::Client { .. } => "client".to_owned(),
             Self::Grant { .. } => "grant".to_owned(),
             Self::Revoke { .. } => "revoke".to_owned(),
@@ -4588,6 +4607,12 @@ fn main() {
             ApiCmd::StatusRevoke { client_id, account } => {
                 commands::api_status_revoke(&client_id, account.as_deref())
             }
+            ApiCmd::UnlockGrant { client_id, account } => {
+                commands::api_unlock_grant(&client_id, &account)
+            }
+            ApiCmd::UnlockRevoke { client_id, account } => {
+                commands::api_unlock_revoke(&client_id, account.as_deref())
+            }
             ApiCmd::Client { client } => match client {
                 ApiClientCmd::Create { name } => {
                     commands::api_client_create(&name)
@@ -6027,6 +6052,35 @@ mod test {
         ])
         .is_err());
         assert!(Cli::try_parse_from(["rbw", "mcp"]).is_ok());
+    }
+
+    #[test]
+    fn unlock_grant_cli_requires_an_explicit_account() {
+        assert!(Cli::try_parse_from([
+            "rbw",
+            "api",
+            "unlock-grant",
+            "client-1"
+        ])
+        .is_err());
+        for action in ["unlock-grant", "unlock-revoke"] {
+            assert!(Cli::try_parse_from([
+                "rbw",
+                "api",
+                action,
+                "client-1",
+                "--account",
+                "personal"
+            ])
+            .is_ok());
+        }
+        assert!(Cli::try_parse_from([
+            "rbw",
+            "api",
+            "unlock-revoke",
+            "client-1"
+        ])
+        .is_ok());
     }
 
     #[test]

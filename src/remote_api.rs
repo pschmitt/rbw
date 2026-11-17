@@ -268,6 +268,9 @@ pub struct ClientPolicy {
     /// files created before per-account status grants were introduced.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub status_accounts: Vec<String>,
+    /// Accounts this client may unlock with a supplied master password.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unlock_accounts: Vec<String>,
     #[serde(default)]
     pub items: std::collections::BTreeMap<String, Vec<FieldRef>>,
     /// Explicit field grants applying to all items in the scoped account.
@@ -799,6 +802,7 @@ pub fn create_client(name: &str) -> anyhow::Result<ClientPolicy> {
         account: None,
         status: false,
         status_accounts: Vec::new(),
+        unlock_accounts: Vec::new(),
         items: std::collections::BTreeMap::new(),
         all_items: Vec::new(),
     };
@@ -875,6 +879,41 @@ pub fn grant_status(
             .context("remote API client was not found")?;
         for account in accounts {
             grant_status_policy(client, account);
+        }
+        Ok(())
+    })
+}
+
+/// Grant unlock independently of status and item access.
+pub fn grant_unlock(client_id: &str, account: &str) -> anyhow::Result<()> {
+    crate::config::Config::load()?.account(Some(account))?;
+    update_policy_store(|store| {
+        let client = store
+            .clients
+            .get_mut(client_id)
+            .context("remote API client was not found")?;
+        if !client.unlock_accounts.iter().any(|name| name == account) {
+            client.unlock_accounts.push(account.to_owned());
+            client.unlock_accounts.sort();
+        }
+        Ok(())
+    })
+}
+
+/// Revoke one account's unlock grant, or all unlock grants.
+pub fn revoke_unlock(
+    client_id: &str,
+    account: Option<&str>,
+) -> anyhow::Result<()> {
+    update_policy_store(|store| {
+        let client = store
+            .clients
+            .get_mut(client_id)
+            .context("remote API client was not found")?;
+        if let Some(account) = account {
+            client.unlock_accounts.retain(|name| name != account);
+        } else {
+            client.unlock_accounts.clear();
         }
         Ok(())
     })
@@ -1426,6 +1465,7 @@ if errors:
             account: None,
             status: false,
             status_accounts: Vec::new(),
+            unlock_accounts: Vec::new(),
             items: std::collections::BTreeMap::new(),
             all_items: Vec::new(),
         };
@@ -1467,6 +1507,7 @@ if errors:
             account: None,
             status: false,
             status_accounts: vec![],
+            unlock_accounts: vec![],
             items: std::collections::BTreeMap::new(),
             all_items: vec![],
         };
@@ -1507,6 +1548,7 @@ if errors:
             account: Some("personal".to_owned()),
             status: true,
             status_accounts: Vec::new(),
+            unlock_accounts: Vec::new(),
             items: std::collections::BTreeMap::from([(
                 "item-1".to_owned(),
                 vec![FieldRef::Username],

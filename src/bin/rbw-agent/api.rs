@@ -945,13 +945,11 @@ fn authorized_unlock_account(
         .map(str::to_owned)
         .or_else(|| client.account.clone())
         .unwrap_or_else(|| "default".to_owned());
-    let allowed_via_default =
-        client.account.as_deref() == Some(target.as_str());
-    let allowed_via_status = client.status
-        && rbw::remote_api::granted_status_accounts(client)
-            .iter()
-            .any(|account| account == &target);
-    if !allowed_via_default && !allowed_via_status {
+    if !client
+        .unlock_accounts
+        .iter()
+        .any(|account| account == &target)
+    {
         return Err(ApiError::new(ErrorCode::Forbidden));
     }
     Ok(target)
@@ -1046,6 +1044,155 @@ mod tests {
     };
     use std::sync::Arc;
 
+    #[tokio::test]
+    async fn revoked_unlock_is_denied_before_unlocker_runs() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let cert = b"synthetic-client";
+        let (mut state, policy, _) =
+            test_state(cert, true, Arc::new(AtomicUsize::new(0)));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let unlock_calls = calls.clone();
+        state.unlocker = Arc::new(move |account, _| {
+            unlock_calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                Ok(UnlockResponse {
+                    account,
+                    state: VaultLockState::Unlocked,
+                })
+            })
+        });
+        assert!(unlock_account_inner(
+            &state,
+            Some(cert),
+            Some("personal"),
+            "password".into()
+        )
+        .await
+        .0
+        .is_ok());
+        policy
+            .write()
+            .await
+            .1
+            .clients
+            .get_mut("client-1")
+            .unwrap()
+            .unlock_accounts
+            .clear();
+        let result = unlock_account_inner(
+            &state,
+            Some(cert),
+            Some("personal"),
+            "password".into(),
+        )
+        .await
+        .0;
+        assert!(matches!(result.unwrap_err().code, ErrorCode::Forbidden));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(read_status_inner(&state, Some(cert)).await.is_ok());
+        assert!(read_field_inner(&state, Some(cert), "item-1", "password")
+            .await
+            .0
+            .is_ok());
+    }
+
+    #[test]
+    fn unlock_is_explicit_account_scoped_and_revocable() {
+        let cert = b"synthetic-client";
+        let client: ClientPolicy =
+            serde_json::from_value(serde_json::json!({
+                "id": "test", "name": "test",
+                "fingerprint": rbw::remote_api::certificate_fingerprint(cert),
+                "account": "personal", "status": true,
+                "statusAccounts": ["work"],
+                "items": {"item": ["password"]}
+            }))
+            .unwrap();
+        assert_eq!(client.unlock_accounts, Vec::<String>::new());
+        let mut store = PolicyStore {
+            clients: std::collections::BTreeMap::from([(
+                "test".into(),
+                client,
+            )]),
+        };
+        for account in [None, Some("personal"), Some("work")] {
+            assert!(matches!(
+                authorized_unlock_account(true, &store, Some(cert), account)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::Forbidden
+            ));
+        }
+        store
+            .clients
+            .get_mut("test")
+            .unwrap()
+            .unlock_accounts
+            .push("work".into());
+        assert_eq!(
+            authorized_unlock_account(true, &store, Some(cert), Some("work"))
+                .unwrap(),
+            "work"
+        );
+        assert!(authorized_unlock_account(
+            true,
+            &store,
+            Some(cert),
+            Some("personal")
+        )
+        .is_err());
+        assert!(authorized_unlock_account(
+            false,
+            &store,
+            Some(cert),
+            Some("work")
+        )
+        .is_err());
+        assert!(authorized_unlock_account(true, &store, None, Some("work"))
+            .is_err());
+        assert!(authorized_unlock_account(
+            true,
+            &store,
+            Some(b"unknown"),
+            Some("work")
+        )
+        .is_err());
+        let client = store.clients.get_mut("test").unwrap();
+        client.account = None;
+        client.status = false;
+        client.status_accounts.clear();
+        client.items.clear();
+        assert!(authorized_unlock_account(
+            true,
+            &store,
+            Some(cert),
+            Some("work")
+        )
+        .is_ok());
+        assert!(authorized_status_accounts(true, &store, Some(cert)).is_err());
+        assert!(authorized_account(
+            true,
+            &store,
+            Some(cert),
+            "item",
+            &FieldRef::Password
+        )
+        .is_err());
+        store
+            .clients
+            .get_mut("test")
+            .unwrap()
+            .unlock_accounts
+            .clear();
+        assert!(authorized_unlock_account(
+            true,
+            &store,
+            Some(cert),
+            Some("work")
+        )
+        .is_err());
+    }
+
     #[test]
     fn uri_match_requires_same_uri_grant() {
         let cert = b"synthetic-client";
@@ -1056,6 +1203,7 @@ mod tests {
             account: Some("personal".into()),
             status: false,
             status_accounts: vec![],
+            unlock_accounts: vec![],
             items: std::collections::BTreeMap::from([(
                 "item".into(),
                 vec![FieldRef::Uri(0)],
@@ -1112,6 +1260,7 @@ mod tests {
             account: Some("personal".into()),
             status: false,
             status_accounts: vec![],
+            unlock_accounts: vec![],
             items: std::collections::BTreeMap::new(),
             all_items: vec![
                 FieldRef::Username,
@@ -1307,6 +1456,7 @@ mod tests {
             account: Some("personal".to_owned()),
             status: true,
             status_accounts: vec!["personal".to_owned()],
+            unlock_accounts: vec!["personal".to_owned()],
             items: std::collections::BTreeMap::from([(
                 "item-1".to_owned(),
                 vec![FieldRef::Password],

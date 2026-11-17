@@ -72,6 +72,31 @@ rbw api status-revoke '<client-id>'
 rbw api status-revoke '<client-id>' --account '<account-name>'
 ```
 
+## Unlock permission is separate and denied by default
+
+Status and item-field grants never authorize unlocking. Existing clients without
+an explicit `unlockAccounts` grant also cannot unlock after upgrading. To opt in
+for a single configured account:
+
+```sh
+rbw api unlock-grant '<client-id>' --account '<account-name>'
+rbw api unlock-revoke '<client-id>' --account '<account-name>'
+# Omit --account to revoke all unlock grants.
+rbw api unlock-revoke '<client-id>'
+```
+
+`POST /v1/unlock` accepts `{"account":"<account-name>","password":"<master-password>"}`.
+It requires both an explicit unlock grant for that account and its master password.
+Unlock grants do not grant status or item access. Changes apply on the next
+request, including for connected clients. `rbw api client list` shows unlock grants.
+For a least-privilege Home Assistant client, grant only the needed status accounts
+and item fields; do not grant unlock. Reads never unlock or prompt: secret reads
+against a locked vault fail with `vault_locked` (HTTP 423). There is no remote
+lock endpoint. These rules apply to the HTTPS API, not the local agent socket.
+
+Older agents cannot load policies containing `unlockAccounts`; remove all unlock
+grants before downgrading. Downgrading restores the older implicit-unlock behavior.
+
 ## Grant the minimum fields
 
 Grant a client exact fields on an item, scoped to a configured account:
