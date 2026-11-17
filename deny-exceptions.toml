@@ -1,0 +1,17 @@
+# cargo-deny 0.20 cannot enforce expiry or dependency-path restrictions.
+# tools/check_advisory_exceptions.py checks these against Cargo.lock in CI.
+# Dependency/version changes require a fresh review, not a silent extension.
+
+[[exceptions]]
+id = "RUSTSEC-2026-0542"
+crate = "humantime"
+version = "2.4.0"
+expires = 2026-12-17
+allow = ["rbw 2.46.0"]
+
+[[exceptions]]
+id = "RUSTSEC-2026-0543"
+crate = "chrono"
+version = "0.4.45"
+expires = 2026-12-17
+allow = ["rmcp 3.10.0", "schemars 1.2.3"]
