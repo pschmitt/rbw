@@ -3,7 +3,7 @@
 # Build stage: compile the two binaries this repo produces (`rbw` and
 # `rbw-agent`, both under src/bin/) with plain cargo. The version pinned
 # here should track Cargo.toml's `rust-version` (MSRV); bump both together.
-FROM rust:1.99-bookworm AS chef
+FROM rust:1.100-bookworm AS chef
 RUN cargo install cargo-chef --locked --version 0.1.78
 WORKDIR /build
 
