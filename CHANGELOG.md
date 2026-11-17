@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [2.46.1] - 2026-11-17
+
+### Security
+
+* Remote API unlock now requires an explicit per-account `unlockAccounts`
+  grant. Status visibility, account scope and field grants no longer authorize
+  unlock implicitly. **Existing API clients cannot unlock after upgrading**
+  until granted permission with `rbw api unlock-grant CLIENT --account ACCOUNT`.
+  Field reads still never unlock the vault, and there is no remote lock endpoint.
+
+### Added
+
+* `rbw api unlock-grant` and `unlock-revoke` manage unlock permissions
+  independently of status and field access. `rbw api client-list` shows them.
+
+### Changed
+
+* Refresh dependencies and lockfiles, including Clap, shell completions, UUID,
+  Zeroize, the public suffix list, ESLint and the Rust container toolchain.
+  Run the maintenance-exception CI check on Python 3.15.
+* Temporarily accept the maintenance-only notices for `humantime` and `chrono`.
+  CI enforces a December 17, 2026 deadline and the approved dependency versions
+  and direct dependers; other advisory checks remain unchanged.
+* Consolidate Docker and Nix lint CI, split native ARM builds from checks, and
+  keep scarce macOS runners from blocking releases. Fix redundant clones
+  reported by the updated linter.
+
 ## [2.46.0] - 2026-11-12
 
 ### Added
