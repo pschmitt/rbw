@@ -385,8 +385,14 @@ impl Frontend for TerminalDialog {
             || size_class(area.width, area.height) == SizeClass::TooSmall;
         let mask =
             (!self.state.no_echo).then(|| self.state.secret.char_count());
+        let public_input = view.public_field.map(|_| {
+            std::str::from_utf8(self.state.secret.bytes.data())
+                .unwrap_or_default()
+        });
         let issue = self.state.issue;
-        self.terminal.draw(|frame| draw(frame, view, mask, issue))?;
+        self.terminal.draw(|frame| {
+            draw_input(frame, view, mask, issue, public_input)
+        })?;
         Ok(())
     }
     fn clear_secret(&mut self) {
@@ -477,11 +483,20 @@ fn mask_text(
     mask: Option<usize>,
     max: usize,
     short: bool,
+    public_input: Option<&str>,
 ) -> String {
+    if let Some(input) = public_input {
+        return input
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(max)
+            .collect();
+    }
     match mask {
         None => String::new(),
         Some(0) if view.success => String::new(),
         Some(0) if view.checking => "Checking password…".to_string(),
+        Some(0) if view.server_auth => "Enter response…".to_string(),
         Some(0) if short => "Type password…".to_string(),
         Some(0) => "Type your password…".to_string(),
         Some(length) => "•".repeat(length.min(max)),
@@ -522,18 +537,31 @@ fn wrapped_rows(text: &str, width: u16) -> u16 {
     u16::try_from(rows).unwrap_or(u16::MAX)
 }
 
+#[cfg(test)]
 fn draw(
     frame: &mut Frame<'_>,
     view: &View<'_>,
     mask: Option<usize>,
     issue: Option<&'static str>,
 ) {
+    draw_input(frame, view, mask, issue, None);
+}
+
+fn draw_input(
+    frame: &mut Frame<'_>,
+    view: &View<'_>,
+    mask: Option<usize>,
+    issue: Option<&'static str>,
+    public_input: Option<&str>,
+) {
     let area = frame.area();
     frame
         .render_widget(Block::default().style(Style::default().bg(BG)), area);
     match size_class(area.width, area.height) {
-        SizeClass::Full => draw_full(frame, view, mask, issue),
-        SizeClass::Compact => draw_compact(frame, view, mask, issue),
+        SizeClass::Full => draw_full(frame, view, mask, issue, public_input),
+        SizeClass::Compact => {
+            draw_compact(frame, view, mask, issue, public_input)
+        }
         SizeClass::TooSmall => frame.render_widget(
             Paragraph::new("rbw: enlarge window. Esc cancels.")
                 .style(Style::default().fg(INK))
@@ -551,6 +579,7 @@ fn draw_compact(
     view: &View<'_>,
     mask: Option<usize>,
     issue: Option<&'static str>,
+    public_input: Option<&str>,
 ) {
     let area = frame.area();
     let margin = u16::from(area.width >= 24);
@@ -655,19 +684,23 @@ fn draw_compact(
         );
     } else if boxed {
         let field = Block::default()
-            .title(match (mask.is_none(), short) {
-                (true, true) => " Password (no echo) ",
-                (true, false) => " Master password (no echo) ",
-                (false, true) => " Password ",
-                (false, false) => " Master password ",
-            })
+            .title(view.public_field.unwrap_or(
+                match (view.server_auth, mask.is_none(), short) {
+                    (false, true, true) => " Password (no echo) ",
+                    (false, true, false) => " Master password (no echo) ",
+                    (false, false, true) => " Password ",
+                    (false, false, false) => " Master password ",
+                    (true, true, _) => " Response (no echo) ",
+                    (true, false, _) => " Response ",
+                },
+            ))
             .borders(Borders::ALL)
             .padding(Padding::horizontal(1))
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(border));
         let max = usize::from(width.saturating_sub(4));
         frame.render_widget(
-            Paragraph::new(mask_text(view, mask, max, short))
+            Paragraph::new(mask_text(view, mask, max, short, public_input))
                 .style(Style::default().fg(if mask == Some(0) {
                     MUTED
                 } else {
@@ -683,7 +716,7 @@ fn draw_compact(
             Paragraph::new(Line::from(vec![
                 Span::styled(label, Style::default().fg(border)),
                 Span::styled(
-                    mask_text(view, mask, max, true),
+                    mask_text(view, mask, max, true, public_input),
                     Style::default().fg(if mask == Some(0) {
                         MUTED
                     } else {
@@ -727,6 +760,7 @@ fn draw_full(
     view: &View<'_>,
     mask: Option<usize>,
     issue: Option<&'static str>,
+    public_input: Option<&str>,
 ) {
     let area = frame.area();
     let width = area.width.saturating_sub(4).min(CRAB_CARD_WIDTH);
@@ -843,11 +877,14 @@ fn draw_full(
         );
     } else {
         let field = Block::default()
-            .title(if mask.is_none() {
-                " Master password (no echo) "
-            } else {
-                " Master password "
-            })
+            .title(view.public_field.unwrap_or(
+                match (view.server_auth, mask.is_none()) {
+                    (true, true) => " Response (no echo) ",
+                    (true, false) => " Response ",
+                    (false, true) => " Master password (no echo) ",
+                    (false, false) => " Master password ",
+                },
+            ))
             .borders(Borders::ALL)
             .padding(Padding::horizontal(1))
             .border_type(BorderType::Rounded)
@@ -866,6 +903,7 @@ fn draw_full(
                 mask,
                 usize::from(content(6, 3).width.saturating_sub(4)),
                 false,
+                public_input,
             ))
             .style(Style::default().fg(if mask == Some(0) {
                 MUTED
@@ -997,6 +1035,8 @@ mod tests {
     fn dialog_renders_only_masked_input_and_public_status() {
         let mut terminal = Terminal::new(TestBackend::new(90, 28)).unwrap();
         let view = View {
+            public_field: None,
+            server_auth: false,
             title: "Unlock demo vault",
             fingerprint: FingerprintStatus::Ready,
             hide_disabled: false,
@@ -1026,6 +1066,8 @@ mod tests {
                 draw(
                     frame,
                     &View {
+                        public_field: None,
+                        server_auth: false,
                         title: "Demo",
                         fingerprint: FingerprintStatus::Disabled,
                         hide_disabled: false,
@@ -1075,6 +1117,8 @@ mod tests {
     }
 
     const DEMO: View<'static> = View {
+        public_field: None,
+        server_auth: false,
         title: "Unlock account default",
         fingerprint: FingerprintStatus::Ready,
         hide_disabled: false,
@@ -1126,6 +1170,8 @@ mod tests {
                 draw(
                     frame,
                     &View {
+                        public_field: None,
+                        server_auth: false,
                         title: "Demo",
                         fingerprint: FingerprintStatus::Disabled,
                         hide_disabled: false,

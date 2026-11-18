@@ -550,6 +550,9 @@ enum Opt {
 
     #[command(about = "Log in to the Bitwarden server")]
     Login {
+        #[cfg(target_os = "linux")]
+        #[arg(long, conflicts_with_all = ["stdin", "totp"], help = "Set up and sign in using the terminal interface")]
+        tui: bool,
         #[arg(long, help = "Read the password from standard input")]
         stdin: bool,
         #[arg(
@@ -4642,9 +4645,20 @@ fn main() {
             };
             commands::register(client_id, client_secret)
         }
-        Opt::Login { stdin, totp } => {
-            let password = stdin.then(read_stdin_password);
-            commands::login(password, totp)
+        Opt::Login {
+            stdin,
+            totp,
+            #[cfg(target_os = "linux")]
+            tui,
+        } => {
+            #[cfg(target_os = "linux")]
+            if tui {
+                commands::login_tui()
+            } else {
+                commands::login(stdin.then(read_stdin_password), totp)
+            }
+            #[cfg(not(target_os = "linux"))]
+            commands::login(stdin.then(read_stdin_password), totp)
         }
         Opt::Version => {
             println!("rbw {}", env!("CARGO_PKG_VERSION"));

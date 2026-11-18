@@ -280,7 +280,7 @@ fn socket_audit_operation(
 
     Some(match action {
         Action::Register { .. } => "socket.register",
-        Action::Login { .. } => "socket.login",
+        Action::Login { .. } | Action::LoginWithUi => "socket.login",
         Action::Unlock { .. } => "socket.unlock",
         // Recorded as agent.stop / agent.reexec instead.
         Action::CheckLock
@@ -441,6 +441,16 @@ async fn dispatch(
                 environment,
                 locked_password.as_ref(),
                 totp.as_deref(),
+                account,
+            )
+            .await?;
+            true
+        }
+        rbw::protocol::Action::LoginWithUi => {
+            crate::actions::login_with_ui(
+                sock,
+                state.clone(),
+                environment,
                 account,
             )
             .await?;

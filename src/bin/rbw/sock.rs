@@ -29,6 +29,18 @@ impl Sock {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn send_login_secret(
+        &mut self,
+        secret: &rbw::locked::Password,
+    ) -> anyhow::Result<()> {
+        let bytes = secret.password();
+        self.0
+            .write_all(&u16::try_from(bytes.len())?.to_be_bytes())?;
+        self.0.write_all(bytes)?;
+        Ok(())
+    }
+
     // The next response, or `None` once the agent closed the connection.
     pub fn recv_or_eof(
         &mut self,

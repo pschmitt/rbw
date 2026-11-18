@@ -72,6 +72,44 @@ pub fn login(
     simple_action(rbw::protocol::Action::Login { password, totp })
 }
 
+#[cfg(target_os = "linux")]
+pub fn login_with_ui(
+    options: rbw::unlock_ui::Options,
+    timeout: u64,
+) -> anyhow::Result<()> {
+    use rbw::protocol::{Action, Request, Response};
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()?;
+    let mut sock = connect()?;
+    sock.send(&Request::with_account(
+        get_environment(),
+        current_account(),
+        Action::LoginWithUi,
+    ))?;
+    loop {
+        match sock.recv()? {
+            Response::LoginPrompt { title, error } => {
+                let input =
+                    runtime.block_on(rbw::unlock_ui::prompt_login(
+                        options,
+                        &title,
+                        timeout,
+                        error.as_deref(),
+                        None,
+                    ))?;
+                sock.send_login_secret(&input)?;
+            }
+            Response::Ack => return Ok(()),
+            Response::Error { error } => anyhow::bail!("{error}"),
+            response => {
+                anyhow::bail!("unexpected login response: {response:?}")
+            }
+        }
+    }
+}
+
 pub fn unlock(password: Option<String>) -> anyhow::Result<()> {
     simple_action(rbw::protocol::Action::Unlock { password })
 }

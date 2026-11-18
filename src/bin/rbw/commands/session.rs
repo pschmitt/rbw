@@ -35,6 +35,117 @@ pub fn login(
     )
 }
 
+/// Configure an unconfigured account and use the terminal unlock frontend
+/// for the authentication prompts.
+#[cfg(target_os = "linux")]
+pub fn login_tui() -> anyhow::Result<()> {
+    use rbw::config::{Config, UnlockUi};
+    let mut config = match Config::load() {
+        Ok(config) => config,
+        Err(rbw::error::Error::LoadConfig { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Config::new()
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let selected = crate::actions::current_account();
+    let account = config.account(selected.as_deref())?;
+    let options = rbw::unlock_ui::Options {
+        mode: UnlockUi::Terminal,
+        no_echo: config.unlock_no_echo,
+        hide_fingerprint_notice: true,
+    };
+    let timeout = config.pinentry.timeout;
+    if account.email.is_none() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()?;
+        let field = |title, label, error| -> anyhow::Result<String> {
+            let input = runtime.block_on(rbw::unlock_ui::prompt_login(
+                options,
+                title,
+                timeout,
+                error,
+                Some(label),
+            ))?;
+            Ok(std::str::from_utf8(input.password())?.trim().to_owned())
+        };
+        let base_url = if account.base_url.is_none() {
+            let mut error = None;
+            loop {
+                let url = field(
+                    "Bitwarden sign-in · Server URL",
+                    " Server URL ",
+                    error,
+                )?;
+                if let Ok(parsed) = reqwest::Url::parse(&url) {
+                    if matches!(parsed.scheme(), "http" | "https")
+                        && parsed.host_str().is_some()
+                        && parsed.username().is_empty()
+                        && parsed.password().is_none()
+                        && parsed.query().is_none()
+                        && parsed.fragment().is_none()
+                    {
+                        break match parsed.as_str().trim_end_matches('/') {
+                            "https://bitwarden.com"
+                            | "https://vault.bitwarden.com"
+                            | "https://api.bitwarden.com" => None,
+                            "https://bitwarden.eu"
+                            | "https://vault.bitwarden.eu"
+                            | "https://api.bitwarden.eu" => {
+                                Some("https://api.bitwarden.eu".to_owned())
+                            }
+                            other => Some(other.to_owned()),
+                        };
+                    }
+                }
+                error = Some("Enter an HTTP or HTTPS server URL, such as https://bitwarden.com.");
+            }
+        } else {
+            None
+        };
+        let mut error = None;
+        let email = loop {
+            let email = field(
+                "Bitwarden sign-in · Email address",
+                " Email address ",
+                error,
+            )?;
+            if !email.is_empty() && !email.chars().any(char::is_whitespace) {
+                break email;
+            }
+            error = Some("Enter your Bitwarden email address.");
+        };
+        let account = if let Some(name) = selected.as_deref() {
+            config
+                .accounts
+                .iter_mut()
+                .find(|account| account.name == name)
+                .context("configured account is missing")?
+        } else {
+            config.primary_mut()
+        };
+        if let Some(base_url) = base_url {
+            account.base_url = Some(base_url.into());
+        }
+        account.email = Some(email.into());
+        config.save()?;
+        stop_agent_for("config_change")?;
+        crate::actions::set_active_account(selected)?;
+    }
+    ensure_agent()?;
+    let (password, totp) = resolve_unlock_credentials(&mut Vec::new())?;
+    if password.is_some() {
+        login_registering_from_files(password, totp)
+    } else {
+        login_with_registration_retry(
+            |_| crate::actions::login_with_ui(options, timeout),
+            None,
+        )
+    }
+}
+
 pub fn unlock_pinentry() -> anyhow::Result<()> {
     ensure_agent()?;
     crate::actions::login(None, None)?;
@@ -74,8 +185,17 @@ pub(super) fn login_registering_from_files(
     password: Option<String>,
     totp: Option<String>,
 ) -> anyhow::Result<()> {
-    let Err(error) = crate::actions::login(password.clone(), totp.clone())
-    else {
+    login_with_registration_retry(
+        |totp| crate::actions::login(password.clone(), totp),
+        totp,
+    )
+}
+
+fn login_with_registration_retry(
+    login: impl Fn(Option<String>) -> anyhow::Result<()>,
+    totp: Option<String>,
+) -> anyhow::Result<()> {
+    let Err(error) = login(totp.clone()) else {
         return Ok(());
     };
     let registration_required =
@@ -103,7 +223,7 @@ pub(super) fn login_registering_from_files(
         }
         None => totp,
     };
-    crate::actions::login(password, totp)
+    login(totp)
 }
 
 // `visited` accumulates the chain of account names already being unlocked
@@ -132,8 +252,33 @@ pub(super) fn unlock_impl(
         Some(password) => Some(password),
         None => resolve_password_dialog()?,
     };
-    login_registering_from_files(password.clone(), totp)?;
-    crate::actions::unlock(password)?;
+    #[cfg(target_os = "linux")]
+    let ui = if password.is_none() {
+        let config = rbw::config::Config::load()?;
+        let options = unlock_dialog_options(&config)?;
+        (options.mode != rbw::config::UnlockUi::Pinentry)
+            .then_some((options, config.pinentry.timeout))
+    } else {
+        None
+    };
+    #[cfg(target_os = "linux")]
+    if let Some((options, timeout)) = ui {
+        login_with_registration_retry(
+            |_| crate::actions::login_with_ui(options, timeout),
+            totp,
+        )?;
+        // Server authentication loaded the vault keys. Check the lock state
+        // without falling back to an external prompt on this path.
+        crate::actions::unlocked()?;
+    } else {
+        login_registering_from_files(password.clone(), totp)?;
+        crate::actions::unlock(password)?;
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        login_registering_from_files(password.clone(), totp)?;
+        crate::actions::unlock(password)?;
+    }
     // Several accounts can unlock in one run; say which one this was.
     match active_account() {
         Ok(account) => eprintln!("✓ Vault unlocked ({}).", account.name),
@@ -301,8 +446,7 @@ pub(super) fn resolve_unlock_credentials(
         if desktop.fingerprint {
             let config = rbw::config::Config::load()?;
             let Ok(db) = load_db() else {
-                // Initial login has no local verifier yet. Let the agent
-                // authenticate the password through its normal pinentry flow.
+                // Initial login has no local verifier yet.
                 return Ok((None, None));
             };
             #[cfg(target_os = "linux")]
@@ -373,36 +517,46 @@ pub(super) fn resolve_unlock_credentials(
 }
 
 #[cfg(target_os = "linux")]
-pub(super) fn resolve_password_dialog() -> anyhow::Result<Option<String>> {
-    let account = active_account()?;
-    if let Ok(db) = load_db() {
-        let config = rbw::config::Config::load()?;
-        let mode = rbw::unlock_ui::resolve(
+fn unlock_dialog_options(
+    config: &rbw::config::Config,
+) -> anyhow::Result<rbw::unlock_ui::Options> {
+    Ok(rbw::unlock_ui::Options {
+        mode: rbw::unlock_ui::resolve(
             UNLOCK_UI_OVERRIDE
                 .with(std::cell::Cell::get)
                 .unwrap_or(config.unlock_ui),
-        )?;
-        if mode != rbw::config::UnlockUi::Pinentry {
-            let title = format!("Unlock account {}", account.name);
-            let password = rbw::desktop::unlock_with_dialog(
-                None,
-                rbw::unlock_ui::Options {
-                    mode,
-                    no_echo: config.unlock_no_echo
-                        || UNLOCK_NO_ECHO.with(std::cell::Cell::get),
-                    hide_fingerprint_notice: config
-                        .unlock_hide_fingerprint_notice,
-                },
-                &title,
-                config.pinentry.timeout,
-                std::sync::Arc::new(move |password| {
-                    verify_cached_password(&account, &db, password)
-                }),
-            )?;
-            return Ok(Some(password));
-        }
+        )?,
+        no_echo: config.unlock_no_echo
+            || UNLOCK_NO_ECHO.with(std::cell::Cell::get),
+        hide_fingerprint_notice: config.unlock_hide_fingerprint_notice,
+    })
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn resolve_password_dialog() -> anyhow::Result<Option<String>> {
+    let account = active_account()?;
+    let Ok(db) = load_db() else {
+        return Ok(None);
+    };
+    if db.needs_login() || db.protected_private_key.is_none() {
+        return Ok(None);
     }
-    Ok(None)
+    let config = rbw::config::Config::load()?;
+    let options = unlock_dialog_options(&config)?;
+    if options.mode == rbw::config::UnlockUi::Pinentry {
+        return Ok(None);
+    }
+    let title = format!("Unlock account {}", account.name);
+    let password = rbw::desktop::unlock_with_dialog(
+        None,
+        options,
+        &title,
+        config.pinentry.timeout,
+        std::sync::Arc::new(move |password| {
+            verify_cached_password(&account, &db, password)
+        }),
+    )?;
+    Ok(Some(password))
 }
 
 // If the currently-active account has a `credential_source` configured,

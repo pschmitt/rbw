@@ -206,7 +206,9 @@ pub(crate) struct View<'a> {
     pub hide_disabled: bool,
     pub checking: bool,
     pub success: bool,
-    pub error: Option<&'static str>,
+    pub error: Option<&'a str>,
+    pub public_field: Option<&'a str>,
+    pub server_auth: bool,
     pub tick: u64,
 }
 
@@ -237,6 +239,8 @@ async fn show_confirmation(
             checking: false,
             success: true,
             error: None,
+            public_field: None,
+            server_auth: false,
             tick,
         })?;
         // Pump GTK events while showing the noninteractive confirmation.
@@ -292,11 +296,69 @@ pub async fn prompt(
     options: Options,
     title: &str,
     timeout_seconds: u64,
-    mut status: watch::Receiver<FingerprintStatus>,
+    status: watch::Receiver<FingerprintStatus>,
     validate: Validator,
-    mut cancel: oneshot::Receiver<()>,
+    cancel: oneshot::Receiver<()>,
     session_cancel: oneshot::Sender<()>,
 ) -> anyhow::Result<String> {
+    let password = run_prompt(
+        options,
+        title,
+        timeout_seconds,
+        status,
+        Some(validate),
+        cancel,
+        session_cancel,
+        None,
+        None,
+    )
+    .await?;
+    Ok(std::str::from_utf8(password.password())
+        .context("master password is not UTF-8")?
+        .to_owned())
+}
+
+/// Collect input for server-side authentication or a public setup field.
+pub async fn prompt_login(
+    mut options: Options,
+    title: &str,
+    timeout_seconds: u64,
+    error: Option<&str>,
+    public_field: Option<&str>,
+) -> anyhow::Result<crate::locked::Password> {
+    options.hide_fingerprint_notice = true;
+    let (_status, status) = watch::channel(FingerprintStatus::Disabled);
+    let (_cancel, cancel) = oneshot::channel();
+    let (session_cancel, _session) = oneshot::channel();
+    run_prompt(
+        options,
+        title,
+        timeout_seconds,
+        status,
+        None,
+        cancel,
+        session_cancel,
+        error,
+        public_field,
+    )
+    .await
+}
+
+#[allow(
+    clippy::future_not_send,
+    reason = "the frontend stays on the calling thread"
+)]
+async fn run_prompt(
+    options: Options,
+    title: &str,
+    timeout_seconds: u64,
+    mut status: watch::Receiver<FingerprintStatus>,
+    validate: Option<Validator>,
+    mut cancel: oneshot::Receiver<()>,
+    session_cancel: oneshot::Sender<()>,
+    initial_error: Option<&str>,
+    public_field: Option<&str>,
+) -> anyhow::Result<crate::locked::Password> {
     protect_process()?;
     let _quiet_logs = QuietLogs::new();
     let title: String = title
@@ -326,7 +388,14 @@ pub async fn prompt(
     let mut worker: Option<
         tokio::task::JoinHandle<anyhow::Result<crate::locked::Password>>,
     > = None;
-    let mut error = None;
+    let initial_error = initial_error.map(|error| {
+        error
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(180)
+            .collect::<String>()
+    });
+    let mut error = initial_error.as_deref();
     let mut tick = 0;
     let mut timer = tokio::time::interval(Duration::from_millis(16));
     let mut session_cancel = Some(session_cancel);
@@ -351,7 +420,7 @@ pub async fn prompt(
                 Ok(password) => {
                     let fingerprint = *status.borrow_and_update();
                     show_confirmation(frontend.as_mut(), &title, fingerprint, options.hide_fingerprint_notice).await?;
-                    break std::str::from_utf8(password.password()).map(str::to_owned).map_err(|_| anyhow::anyhow!("master password is not UTF-8"));
+                    break Ok(password);
                 },
                 Err(failure) if matches!(failure.downcast_ref::<crate::error::Error>(), Some(crate::error::Error::IncorrectPassword { .. })) => {
                     error = Some("That password didn’t unlock the vault. Try again.");
@@ -368,7 +437,9 @@ pub async fn prompt(
             }
             Some(Action::Submit(password)) if worker.is_none() => {
                 error = None;
-                let validate = validate.clone();
+                let Some(validate) = validate.clone() else {
+                    break Ok(password);
+                };
                 worker = Some(tokio::task::spawn_blocking(move || {
                     validate(&password)?;
                     Ok(password)
@@ -376,7 +447,7 @@ pub async fn prompt(
             }
             Some(Action::Submit(_)) | None => {},
         }
-        frontend.render(&View { title: &title, fingerprint: *status.borrow_and_update(), hide_disabled: options.hide_fingerprint_notice, checking: worker.is_some(), success: false, error, tick })?;
+        frontend.render(&View { title: &title, fingerprint: *status.borrow_and_update(), hide_disabled: options.hide_fingerprint_notice, checking: worker.is_some(), success: false, error, public_field, server_auth: validate.is_none() && public_field.is_none(), tick })?;
         tick = tick.wrapping_add(1);
     }
     } .await;

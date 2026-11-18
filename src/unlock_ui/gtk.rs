@@ -285,6 +285,9 @@ impl Frontend for GtkDialog {
     }
     fn render(&mut self, view: &View<'_>) -> anyhow::Result<()> {
         self.title.set_label(view.title);
+        if view.server_auth {
+            self.button.set_label("Continue");
+        }
         self.status.set_label(view.fingerprint.text());
         self.status.set_visible(
             !(view.fingerprint == super::FingerprintStatus::Disabled
@@ -353,6 +356,8 @@ mod tests {
             let mut dialog = GtkDialog::new(no_echo).unwrap();
             dialog
                 .render(&View {
+                    public_field: None,
+                    server_auth: false,
                     title: "Disposable UI test",
                     fingerprint: super::super::FingerprintStatus::Ready,
                     hide_disabled: false,
