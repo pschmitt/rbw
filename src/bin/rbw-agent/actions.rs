@@ -1,3 +1,5 @@
+pub mod browser;
+
 use anyhow::Context as _;
 use sha2::Digest as _;
 
@@ -2077,6 +2079,56 @@ pub async fn read_remote_field(
                     field,
                     value: Some(value),
                     sensitive: false,
+                },
+                item_name,
+            ));
+        }
+        (FieldRef::CustomAll, _) => {
+            let mut fields = Vec::new();
+            for custom in &entry.fields {
+                use rbw::api::FieldType;
+                let linked = match custom.ty {
+                    None | Some(FieldType::Text) => false,
+                    Some(FieldType::Linked) => true,
+                    _ => continue,
+                };
+                let Some(name) = decrypt_remote_value(
+                    state.clone(),
+                    environment,
+                    custom.name.as_deref(),
+                    entry,
+                    &account,
+                )
+                .await?
+                else {
+                    continue;
+                };
+                let value = if linked {
+                    None
+                } else {
+                    decrypt_remote_value(
+                        state.clone(),
+                        environment,
+                        custom.value.as_deref(),
+                        entry,
+                        &account,
+                    )
+                    .await?
+                };
+                fields.push(serde_json::json!({
+                    "name": name,
+                    "type": if linked { 3 } else { 0 },
+                    "linkedId": custom.linked_id,
+                    "value": value,
+                }));
+            }
+            return Ok((
+                FieldReadResponse {
+                    field,
+                    value: Some(serde_json::to_string(&fields).map_err(
+                        |_| ApiError::new(ErrorCode::Unavailable),
+                    )?),
+                    sensitive: true,
                 },
                 item_name,
             ));

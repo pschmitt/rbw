@@ -1,6 +1,8 @@
+mod browser;
+
 use anyhow::Context as _;
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -31,6 +33,7 @@ type NamesFuture = BoxFuture<
 
 #[derive(Clone)]
 struct ApiState {
+    agent: Option<Arc<tokio::sync::Mutex<crate::state::State>>>,
     policy: std::sync::Arc<dyn Fn() -> PolicyFuture + Send + Sync>,
     reader: std::sync::Arc<
         dyn Fn(rbw::remote_api::FieldReadRequest, String) -> ReaderFuture
@@ -145,10 +148,11 @@ impl ApiState {
                 .unwrap_or_default()
             })
         });
+        let unlock_agent = agent.clone();
         let unlocker: std::sync::Arc<
             dyn Fn(String, String) -> UnlockFuture + Send + Sync,
         > = std::sync::Arc::new(move |account, password| {
-            let agent = agent.clone();
+            let agent = unlock_agent.clone();
             Box::pin(async move {
                 crate::actions::unlock_remote_account(
                     agent, &account, password,
@@ -157,6 +161,7 @@ impl ApiState {
             })
         });
         Self {
+            agent: Some(agent),
             policy,
             reader,
             status_reader,
@@ -168,8 +173,8 @@ impl ApiState {
 }
 
 struct RunningListener {
-    listen: String,
-    hostname: String,
+    config: rbw::config::ApiConfig,
+    addresses: Vec<std::net::SocketAddr>,
     cancel: tokio_util::sync::CancellationToken,
     task: tokio::task::JoinHandle<()>,
 }
@@ -194,13 +199,8 @@ pub async fn supervise(
                 continue;
             }
         };
-        let desired_listen = config.api.listen.clone();
+        let desired_listen = config.api.listen.to_string();
         let desired_hostname = config.api.hostname.clone();
-        let same_config = running.as_ref().is_some_and(|listener| {
-            listener.listen == desired_listen
-                && listener.hostname == desired_hostname
-                && !listener.task.is_finished()
-        });
 
         if !config.api.enabled {
             if let Some(listener) = running.take() {
@@ -211,8 +211,10 @@ pub async fn supervise(
                 rbw::remote_api::ListenerStatus {
                     enabled: false,
                     listening: false,
+                    addresses: Vec::new(),
                     listen: desired_listen,
                     hostname: desired_hostname,
+                    hostname_aliases: config.api.hostname_aliases.clone(),
                     pid: std::process::id(),
                     error: None,
                 },
@@ -220,10 +222,20 @@ pub async fn supervise(
             continue;
         }
 
-        if same_config {
+        let addresses = rbw::remote_api::listen_addresses(&config.api.listen);
+        if running.as_ref().is_some_and(|listener| {
+            listener.config == config.api
+                && addresses
+                    .as_ref()
+                    .is_ok_and(|addresses| listener.addresses == *addresses)
+                && !listener.task.is_finished()
+        }) {
             continue;
         }
-        if !backoff.ready(&desired_listen, &desired_hostname) {
+        let listen_key = format!("{desired_listen} {addresses:?}");
+        let hostname_key =
+            format!("{desired_hostname} {:?}", config.api.hostname_aliases);
+        if !backoff.ready(&listen_key, &hostname_key) {
             continue;
         }
         if let Some(listener) = running.take() {
@@ -233,6 +245,8 @@ pub async fn supervise(
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let cancel = tokio_util::sync::CancellationToken::new();
         let listener_config = config.api.clone();
+        let actual_addresses =
+            addresses.as_ref().map_or_else(|_| Vec::new(), Clone::clone);
         let listener_cancel = cancel.clone();
         let listener_agent = agent.clone();
         // A listener that never started is reported once below ("did not
@@ -244,6 +258,7 @@ pub async fn supervise(
             if let Err(error) = run(
                 listener_agent,
                 listener_config,
+                addresses,
                 ready_tx,
                 listener_cancel,
             )
@@ -267,22 +282,33 @@ pub async fn supervise(
                     rbw::remote_api::ListenerStatus {
                         enabled: true,
                         listening: true,
-                        listen: desired_listen.clone(),
-                        hostname: desired_hostname.clone(),
+                        addresses: match &config.api.listen {
+                            rbw::config::ApiListen::One(address)
+                                if address
+                                    .parse::<std::net::SocketAddr>()
+                                    .is_ok() =>
+                            {
+                                Vec::new()
+                            }
+                            _ => actual_addresses.clone(),
+                        },
+                        listen: desired_listen,
+                        hostname: desired_hostname,
+                        hostname_aliases: config.api.hostname_aliases.clone(),
                         pid: std::process::id(),
                         error: None,
                     },
                 );
                 running = Some(RunningListener {
-                    listen: desired_listen,
-                    hostname: desired_hostname,
+                    config: config.api,
+                    addresses: actual_addresses,
                     cancel,
                     task,
                 });
             }
             Ok(Err(error)) => {
                 if let Some(retry) =
-                    backoff.failed(&desired_listen, &desired_hostname, &error)
+                    backoff.failed(&listen_key, &hostname_key, &error)
                 {
                     log::error!(
                         "remote API did not start: {error} (retrying with \
@@ -297,8 +323,10 @@ pub async fn supervise(
                     rbw::remote_api::ListenerStatus {
                         enabled: true,
                         listening: false,
+                        addresses: Vec::new(),
                         listen: desired_listen,
                         hostname: desired_hostname,
+                        hostname_aliases: config.api.hostname_aliases.clone(),
                         pid: std::process::id(),
                         error: Some(error),
                     },
@@ -409,7 +437,9 @@ fn save_status_if_changed(
         previous.enabled != status.enabled
             || previous.listening != status.listening
             || previous.listen != status.listen
+            || previous.addresses != status.addresses
             || previous.hostname != status.hostname
+            || previous.hostname_aliases != status.hostname_aliases
             || previous.error != status.error
     });
     if changed {
@@ -435,10 +465,14 @@ async fn stop_listener(listener: RunningListener) {
 async fn run(
     agent: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     config: rbw::config::ApiConfig,
+    addresses: anyhow::Result<Vec<std::net::SocketAddr>>,
     ready: tokio::sync::oneshot::Sender<Result<(), String>>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<()> {
-    let prepared = prepare(agent, &config).await;
+    let prepared = match addresses {
+        Ok(addresses) => prepare(agent, &config, addresses).await,
+        Err(error) => Err(error),
+    };
     let server = match prepared {
         Ok(server) => server,
         Err(error) => {
@@ -456,31 +490,42 @@ async fn run(
 async fn prepare(
     agent: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     config: &rbw::config::ApiConfig,
+    addresses: Vec<std::net::SocketAddr>,
 ) -> anyhow::Result<
     impl std::future::Future<Output = anyhow::Result<()>> + Send,
 > {
-    let listen: std::net::SocketAddr = config
-        .listen
-        .parse()
-        .context("invalid remote API listen address")?;
-    let tls =
-        rbw::remote_api::with_tls_material(&config.hostname, tls_config_at)?;
+    anyhow::ensure!(
+        !addresses.is_empty(),
+        "no configured API interface has an address"
+    );
+    let tls = rbw::remote_api::with_tls_material(config, tls_config_at)?;
     let router = router(ApiState::production(agent));
     let acceptor = axum_server::tls_rustls::RustlsAcceptor::new(tls);
 
-    let listener = tokio::net::TcpListener::bind(listen)
-        .await
-        .context("failed to bind remote API listener")?;
-    let listener = listener
-        .into_std()
-        .context("failed to prepare remote API listener")?;
-    let server = axum_server::from_tcp(listener)?.acceptor(acceptor);
-    log::info!("rbw remote field API listening on {listen}");
+    let mut servers = Vec::with_capacity(addresses.len());
+    for address in addresses {
+        let listener =
+            tokio::net::TcpListener::bind(address).await.with_context(
+                || format!("failed to bind remote API listener on {address}"),
+            )?;
+        let listener = listener
+            .into_std()
+            .context("failed to prepare remote API listener")?;
+        servers.push((
+            address,
+            axum_server::from_tcp(listener)?.acceptor(acceptor.clone()),
+        ));
+    }
     Ok(async move {
-        server
-            .serve(router.into_make_service())
-            .await
-            .context("remote API listener failed")
+        futures::future::try_join_all(servers.into_iter().map(
+            |(address, server)| {
+                log::info!("rbw remote field API listening on {address}");
+                server.serve(router.clone().into_make_service())
+            },
+        ))
+        .await
+        .context("remote API listener failed")?;
+        Ok(())
     })
 }
 
@@ -522,6 +567,12 @@ fn router(state: ApiState) -> Router {
     Router::new()
         .route("/v1/items/{item_id}/fields/{*field}", get(read_field))
         .route("/v1/items", get(list_items))
+        .route("/v1/passkeys", get(browser::find_passkeys))
+        .route(
+            "/v1/passkeys/assert",
+            axum::routing::post(browser::assert_passkey)
+                .layer(axum::extract::DefaultBodyLimit::max(16 * 1024)),
+        )
         .route("/v1/status", get(read_status))
         .route("/v1/unlock", axum::routing::post(unlock_account))
         .with_state(state)
@@ -569,9 +620,25 @@ async fn list_items(
     State(state): State<ApiState>,
     Extension(tls): Extension<Arc<TlsInfo>>,
     headers: axum::http::HeaderMap,
+    Query(query): Query<browser::ItemQuery>,
 ) -> Response {
     let cert_der = tls.peer_certificates.first().map(Vec::as_slice);
     let actor = audit_actor(&state, cert_der).await;
+    if query.url.is_some() {
+        let result = browser::search(&state, cert_der, query).await;
+        let outcome = api_audit_outcome(&result);
+        record_api_event(
+            actor,
+            "api.items_searched",
+            ApiAuditMeta {
+                client: extract_consumer(&headers),
+                ..ApiAuditMeta::default()
+            },
+            outcome,
+        )
+        .await;
+        return api_response(result);
+    }
     let result = list_items_inner(&state, cert_der).await;
     let meta = ApiAuditMeta {
         client: extract_consumer(&headers),
@@ -978,29 +1045,7 @@ fn authorized_account(
         .account
         .clone()
         .ok_or_else(|| ApiError::new(ErrorCode::Forbidden))?;
-    let authorized_field = match field {
-        rbw::remote_api::FieldRef::UriMatch(index) => {
-            rbw::remote_api::FieldRef::Uri(*index)
-        }
-        _ => field.clone(),
-    };
-    let allowed = client
-        .items
-        .get(item_id)
-        .into_iter()
-        .chain(std::iter::once(&client.all_items))
-        .any(|fields| {
-            fields.contains(&authorized_field)
-                || matches!(
-                    authorized_field,
-                    rbw::remote_api::FieldRef::Uri(_)
-                ) && fields.contains(&rbw::remote_api::FieldRef::UriAll)
-                || matches!(
-                    authorized_field,
-                    rbw::remote_api::FieldRef::Custom(_)
-                ) && fields.contains(&rbw::remote_api::FieldRef::CustomAll)
-        });
-    if !allowed {
+    if !client.permits(item_id, field) {
         return Err(ApiError::new(ErrorCode::Forbidden));
     }
     Ok(account)
@@ -1554,6 +1599,7 @@ mod tests {
         });
         (
             ApiState {
+                agent: None,
                 policy,
                 reader,
                 status_reader,

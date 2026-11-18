@@ -435,14 +435,22 @@ let
               '';
             };
             listen = mkOption {
-              type = types.str;
+              type = types.either types.str (types.listOf types.str);
               default = "127.0.0.1:24871";
-              description = "TCP address for the HTTPS field API listener.";
+              description = ''
+                TCP endpoints for the HTTPS field API. Each entry is an IP
+                address and port or an interface in the form if:NAME:PORT.
+              '';
             };
             hostname = mkOption {
               type = types.str;
               default = "localhost";
-              description = "DNS name placed in the generated HTTPS server certificate.";
+              description = "Primary DNS name or IP for the server certificate and advertised URL.";
+            };
+            hostnameAliases = mkOption {
+              type = types.listOf types.str;
+              default = [ ];
+              description = "Additional DNS names or IP addresses in the HTTPS server certificate.";
             };
           };
         };

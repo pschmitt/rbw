@@ -281,15 +281,43 @@ pub struct AgentConfig {
     pub lock_timeout: u64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default = "default_api_listen")]
-    pub listen: String,
+    pub listen: ApiListen,
     #[serde(default = "default_api_hostname")]
     pub hostname: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hostname_aliases: Vec<String>,
+}
+
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
+#[serde(untagged)]
+pub enum ApiListen {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl ApiListen {
+    pub fn entries(&self) -> &[String] {
+        match self {
+            Self::One(address) => std::slice::from_ref(address),
+            Self::Many(addresses) => addresses,
+        }
+    }
+}
+
+impl std::fmt::Display for ApiListen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.entries().join(", "))
+    }
 }
 
 /// What happens when rbw is upgraded while an agent is running.
@@ -363,6 +391,7 @@ impl Default for ApiConfig {
             enabled: false,
             listen: default_api_listen(),
             hostname: default_api_hostname(),
+            hostname_aliases: Vec::new(),
         }
     }
 }
@@ -373,16 +402,8 @@ impl ApiConfig {
     }
 }
 
-impl PartialEq for ApiConfig {
-    fn eq(&self, other: &Self) -> bool {
-        self.enabled == other.enabled
-            && self.listen == other.listen
-            && self.hostname == other.hostname
-    }
-}
-
-pub fn default_api_listen() -> String {
-    "127.0.0.1:24871".to_owned()
+pub fn default_api_listen() -> ApiListen {
+    ApiListen::One("127.0.0.1:24871".to_owned())
 }
 
 pub fn default_api_hostname() -> String {

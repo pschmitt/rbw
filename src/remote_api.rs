@@ -25,6 +25,7 @@ pub enum FieldRef {
     Name,
     Username,
     Password,
+    Passkey,
     Totp,
     Uri(usize),
     /// Match policy for a granted URI; shares the URI's authorization.
@@ -67,6 +68,7 @@ impl FieldRef {
         matches!(
             self,
             Self::Password
+                | Self::Passkey
                 | Self::Totp
                 | Self::Notes
                 | Self::CardNumber
@@ -82,6 +84,7 @@ impl FieldRef {
             Self::Name => "name".to_owned(),
             Self::Username => "username".to_owned(),
             Self::Password => "password".to_owned(),
+            Self::Passkey => "passkey".to_owned(),
             Self::Totp => "totp".to_owned(),
             Self::Uri(index) => format!("uri/{index}"),
             Self::UriMatch(index) => format!("uri_match/{index}"),
@@ -112,6 +115,7 @@ impl FromStr for FieldRef {
             "name" => Self::Name,
             "username" => Self::Username,
             "password" => Self::Password,
+            "passkey" => Self::Passkey,
             "totp" => Self::Totp,
             "uri_all" => Self::UriAll,
             "custom_all" => Self::CustomAll,
@@ -188,6 +192,59 @@ pub struct ItemSummary {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ItemListResponse {
     pub items: Vec<ItemSummary>,
+}
+
+/// Browser metadata returned only when a URL search is requested.
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SearchItem {
+    pub id: String,
+    pub name: String,
+    pub fields: Vec<String>,
+    pub username: Option<String>,
+    pub folder: Option<String>,
+    pub favicon_host: Option<String>,
+    pub site: bool,
+    pub has_password: bool,
+    pub has_totp: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SearchResponse {
+    pub items: Vec<SearchItem>,
+}
+
+/// Passkey selection metadata, with the same field names as the CLI.
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct PasskeyItem {
+    pub id: String,
+    pub name: String,
+    pub user: Option<String>,
+    pub rp_id: String,
+    pub passkey_user: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct PasskeyListResponse {
+    pub items: Vec<PasskeyItem>,
+}
+
+/// A request to sign a single assertion using a granted passkey.
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PasskeyAssertionRequest {
+    #[serde(default)]
+    pub item_id: Option<String>,
+    pub rp_id: String,
+    pub origin: String,
+    pub challenge: String,
+    #[serde(default)]
+    pub allow_credentials: Vec<String>,
+    #[serde(default)]
+    pub user_verified: bool,
 }
 
 /// Request body for unlocking an explicitly authorized vault account.
@@ -278,6 +335,36 @@ pub struct ClientPolicy {
     pub all_items: Vec<FieldRef>,
 }
 
+impl ClientPolicy {
+    pub fn fields_for(
+        &self,
+        item_id: &str,
+    ) -> std::collections::BTreeSet<&FieldRef> {
+        self.all_items
+            .iter()
+            .chain(self.items.get(item_id).into_iter().flatten())
+            .collect()
+    }
+
+    pub fn permits(&self, item_id: &str, field: &FieldRef) -> bool {
+        let field = match field {
+            FieldRef::UriMatch(index) => &FieldRef::Uri(*index),
+            field => field,
+        };
+        self.items
+            .get(item_id)
+            .into_iter()
+            .chain(std::iter::once(&self.all_items))
+            .any(|fields| {
+                fields.contains(field)
+                    || matches!(field, FieldRef::Uri(_))
+                        && fields.contains(&FieldRef::UriAll)
+                    || matches!(field, FieldRef::Custom(_))
+                        && fields.contains(&FieldRef::CustomAll)
+            })
+    }
+}
+
 /// Account lock state visible to a status-authorized client.
 #[derive(
     serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq,
@@ -315,6 +402,116 @@ pub struct AccountStatus {
     pub state: VaultLockState,
 }
 
+enum ListenEndpoint<'a> {
+    Address(std::net::SocketAddr),
+    Interface(&'a str, u16),
+}
+
+impl<'a> ListenEndpoint<'a> {
+    fn parse(value: &'a str) -> anyhow::Result<Self> {
+        if let Some(interface) = value.strip_prefix("if:") {
+            let (name, port) = interface
+                .rsplit_once(':')
+                .context("interface listeners use if:NAME:PORT")?;
+            anyhow::ensure!(
+                !name.is_empty()
+                    && !name.contains(':')
+                    && !name.chars().any(char::is_whitespace),
+                "invalid API interface name"
+            );
+            return Ok(Self::Interface(
+                name,
+                port.parse().context("invalid API interface port")?,
+            ));
+        }
+        Ok(Self::Address(value.parse().with_context(|| {
+            format!(
+                "invalid API endpoint {value:?}; use IP:PORT or if:NAME:PORT"
+            )
+        })?))
+    }
+
+    fn port(&self) -> u16 {
+        match self {
+            Self::Address(address) => address.port(),
+            Self::Interface(_, port) => *port,
+        }
+    }
+}
+
+fn listen_endpoints(
+    listen: &crate::config::ApiListen,
+) -> anyhow::Result<Vec<ListenEndpoint<'_>>> {
+    anyhow::ensure!(
+        !listen.entries().is_empty(),
+        "configure at least one API listener"
+    );
+    listen
+        .entries()
+        .iter()
+        .map(|entry| ListenEndpoint::parse(entry))
+        .collect()
+}
+
+/// Port used in the advertised URL, taken from the first configured endpoint.
+pub fn primary_listen_port(
+    listen: &crate::config::ApiListen,
+) -> anyhow::Result<u16> {
+    Ok(listen_endpoints(listen)?[0].port())
+}
+
+/// Resolve configured interfaces to their current assigned addresses.
+pub fn listen_addresses(
+    listen: &crate::config::ApiListen,
+) -> anyhow::Result<Vec<std::net::SocketAddr>> {
+    use std::net::SocketAddr;
+
+    let endpoints = listen_endpoints(listen)?;
+    let mut addresses = std::collections::BTreeSet::new();
+    let mut interfaces = Vec::new();
+    for endpoint in endpoints {
+        match endpoint {
+            ListenEndpoint::Address(address) => {
+                addresses.insert(address);
+            }
+            ListenEndpoint::Interface(name, port) => {
+                interfaces.push((name, port));
+            }
+        }
+    }
+    if !interfaces.is_empty() {
+        for interface in nix::ifaddrs::getifaddrs()
+            .context("could not list API interfaces")?
+        {
+            if !interface
+                .flags
+                .contains(nix::net::if_::InterfaceFlags::IFF_UP)
+            {
+                continue;
+            }
+            let Some(address) = interface.address else {
+                continue;
+            };
+            let socket: SocketAddr =
+                if let Some(v4) = address.as_sockaddr_in() {
+                    (*v4).into()
+                } else if let Some(v6) = address.as_sockaddr_in6() {
+                    (*v6).into()
+                } else {
+                    continue;
+                };
+            for &(name, port) in &interfaces {
+                if name == interface.interface_name {
+                    let mut socket = socket;
+                    socket.set_port(port);
+                    addresses.insert(socket);
+                }
+            }
+        }
+    }
+    Ok(addresses.into_iter().collect())
+}
+
 /// Current state of the remote listener, for the local CLI only.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -322,7 +519,11 @@ pub struct ListenerStatus {
     pub enabled: bool,
     pub listening: bool,
     pub listen: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<std::net::SocketAddr>,
     pub hostname: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hostname_aliases: Vec<String>,
     pub pid: u32,
     pub error: Option<String>,
 }
@@ -491,19 +692,30 @@ pub fn certificate_fingerprint(certificate_der: &[u8]) -> String {
 
 /// Ensure rbw-owned CA and HTTPS server certificates exist. A hostname change
 /// rotates only the server certificate; client certificates keep their trust.
-pub fn ensure_tls_material(hostname: &str) -> anyhow::Result<()> {
-    with_tls_material(hostname, |_| Ok(()))
+pub fn ensure_tls_material(
+    config: &crate::config::ApiConfig,
+) -> anyhow::Result<()> {
+    with_tls_material(config, |_| Ok(()))
 }
 
 /// Ensure the HTTPS identity is complete, then use its files while holding the
 /// interprocess PKI lock so certificate and private-key reads cannot interleave
 /// with a rotation.
 pub fn with_tls_material<T>(
-    hostname: &str,
+    config: &crate::config::ApiConfig,
     use_material: impl FnOnce(&std::path::Path) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
+    let names = std::iter::once(config.hostname.as_str())
+        .chain(config.hostname_aliases.iter().map(String::as_str))
+        .collect::<std::collections::BTreeSet<_>>();
+    anyhow::ensure!(
+        names.iter().all(|name| !name.is_empty()
+            && !name.chars().any(|c| c.is_control() || c.is_whitespace())),
+        "invalid API certificate name"
+    );
+    let identity = names.into_iter().collect::<Vec<_>>().join("\n");
     let api_dir = ensure_private_dir()?;
-    with_tls_material_at(&api_dir, hostname, use_material)
+    with_tls_material_at(&api_dir, &identity, use_material)
 }
 
 fn with_tls_material_at<T>(
@@ -608,8 +820,9 @@ fn rotate_server_certificate(
     let ca_key = rcgen::KeyPair::from_pem(&ca_key_pem)?;
     let issuer = rcgen::Issuer::from_ca_cert_pem(&ca_pem, ca_key)?;
     let server_key = rcgen::KeyPair::generate()?;
-    let mut params =
-        rcgen::CertificateParams::new(vec![hostname.to_owned()])?;
+    let mut params = rcgen::CertificateParams::new(
+        hostname.lines().map(str::to_owned).collect::<Vec<_>>(),
+    )?;
     params.extended_key_usages =
         vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
     params.use_authority_key_identifier_extension = true;
@@ -633,8 +846,9 @@ fn write_server_certificate(
     use rcgen::ExtendedKeyUsagePurpose;
     let issuer = rcgen::Issuer::from_params(ca_params, ca_key);
     let server_key = rcgen::KeyPair::generate()?;
-    let mut params =
-        rcgen::CertificateParams::new(vec![hostname.to_owned()])?;
+    let mut params = rcgen::CertificateParams::new(
+        hostname.lines().map(str::to_owned).collect::<Vec<_>>(),
+    )?;
     params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
     params.use_authority_key_identifier_extension = true;
     let cert = params.signed_by(&server_key, &issuer)?;
@@ -792,7 +1006,7 @@ pub fn client_export_paths(
 pub fn create_client(name: &str) -> anyhow::Result<ClientPolicy> {
     anyhow::ensure!(!name.trim().is_empty(), "client name must not be empty");
     let config = crate::config::Config::load()?;
-    ensure_tls_material(&config.api.hostname)?;
+    ensure_tls_material(&config.api)?;
     let id = uuid::Uuid::new_v4().simple().to_string();
     let (fingerprint, _, _) = issue_client_certificate(&id)?;
     let policy = ClientPolicy {
@@ -1103,6 +1317,66 @@ impl ErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listen_accepts_legacy_addresses_and_multiple_entries() {
+        use crate::config::ApiListen;
+        let legacy: ApiListen =
+            serde_yaml::from_str("127.0.0.1:24871").unwrap();
+        assert_eq!(primary_listen_port(&legacy).unwrap(), 24871);
+        let list: ApiListen = serde_yaml::from_str(
+            r#"["127.0.0.1:24871", "[::1]:23456", "127.0.0.1:24871", "if:rbw-test-missing:24871"]"#,
+        ).unwrap();
+        assert_eq!(primary_listen_port(&list).unwrap(), 24871);
+        assert_eq!(
+            listen_addresses(&list).unwrap(),
+            [
+                "127.0.0.1:24871".parse::<std::net::SocketAddr>().unwrap(),
+                "[::1]:23456".parse::<std::net::SocketAddr>().unwrap(),
+            ]
+        );
+        for invalid in
+            ["[]", "if::24871", "if:lo:bogus", "example.invalid:24871"]
+        {
+            let listen: ApiListen = serde_yaml::from_str(invalid).unwrap();
+            assert!(primary_listen_port(&listen).is_err(), "{invalid}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn interface_listener_resolves_the_assigned_address() {
+        let listen = crate::config::ApiListen::One("if:lo:24871".to_owned());
+        assert!(listen_addresses(&listen)
+            .unwrap()
+            .contains(&"127.0.0.1:24871".parse().unwrap()));
+    }
+
+    #[test]
+    fn certificate_aliases_preserve_the_ca_and_cover_old_client_urls() {
+        use x509_parser::extensions::GeneralName;
+        let dir = tempfile::tempdir().unwrap();
+        create_pki(dir.path(), "127.0.0.1").unwrap();
+        let ca = std::fs::read(dir.path().join("ca.pem")).unwrap();
+        ensure_server_certificate(
+            dir.path(),
+            "127.0.0.1\nrbw.example.invalid",
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(dir.path().join("ca.pem")).unwrap(), ca);
+        let pem = std::fs::read(dir.path().join("server.pem")).unwrap();
+        let (_, pem) = x509_parser::pem::parse_x509_pem(&pem).unwrap();
+        let cert = pem.parse_x509().unwrap();
+        let san = cert.subject_alternative_name().unwrap().unwrap();
+        assert!(san
+            .value
+            .general_names
+            .contains(&GeneralName::IPAddress(&[127, 0, 0, 1])));
+        assert!(san
+            .value
+            .general_names
+            .contains(&GeneralName::DNSName("rbw.example.invalid")));
+    }
 
     fn write_legacy_server_certificate(dir: &std::path::Path) {
         let ca_pem = std::fs::read_to_string(dir.join("ca.pem")).unwrap();

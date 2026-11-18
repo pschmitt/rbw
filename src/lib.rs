@@ -12,6 +12,7 @@ pub mod error;
 pub mod identity;
 pub mod json;
 pub mod locked;
+pub mod passkey;
 pub mod pinentry;
 mod prelude;
 pub mod protocol;
@@ -19,6 +20,7 @@ pub mod pwgen;
 pub mod remote_api;
 pub mod rotate;
 pub mod termux;
+pub mod uri_match;
 pub mod wordlist;
 
 #[cfg(target_os = "linux")]

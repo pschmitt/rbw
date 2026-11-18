@@ -13,18 +13,48 @@ rbw api enable
 rbw api status
 ```
 
-For remote access, configure a reachable local interface address and the DNS
-name clients use to reach the server. rbw generates and manages its CA and TLS
-certificates. The DNS name is placed in the server certificate; the listen
-address is only the bind address.
+For remote access, set the bind endpoints and the DNS name or IP clients use to
+connect. Repeat `--listen` for multiple endpoints. An `if:NAME:PORT` endpoint
+follows the IPv4 and IPv6 addresses assigned to that interface as they change.
+If an interface is down or absent, its endpoint contributes no addresses.
 
 ```sh
-rbw api enable --listen '<reachable-interface-address>:24871' --hostname '<server-dns-name>'
+rbw api enable \
+  --listen '192.0.2.10:24871' \
+  --listen 'if:tailscale0:24871' \
+  --hostname 'rbw.example.net' \
+  --hostname-alias '192.0.2.10'
 ```
+
+In configuration, `api.listen` accepts a single endpoint or a list.
+`api.hostname` is the primary TLS certificate name and the name used in the
+advertised URL. Add any other DNS names or IP addresses clients use to
+`api.hostnameAliases` or pass repeated `--hostname-alias` flags. Every
+listener uses the same CA, server certificate, and client grants. Updating
+the names rotates the server certificate with the existing CA.
 
 Allow inbound TCP only from the intended client network in the host firewall.
 The default loopback address is suitable for clients running on the same
 machine. Do not expose the listener to an untrusted network.
+
+## Browser integration
+
+* `GET /v1/items?url=PAGE&q=WORDS` searches granted login items with Bitwarden
+  URI match rules and the configured `defaultUriMatch`. It returns at most 50
+  items, with site matches first. Username, folder, favicon host and the
+  password and TOTP availability flags respect the client's field grants.
+  An ordinary `GET /v1/items` keeps its existing response shape.
+* `GET /v1/passkeys?rp_id=RP` lists passkeys for that relying party. To sign,
+  post `rpId`, `origin`, `challenge`, and optionally `itemId`,
+  `allowCredentials` and `userVerified` to `/v1/passkeys/assert`.
+  Grant `passkey` on the item to authorize signing. This grants use of the
+  passkey for its relying party, and the private key stays in rbw. Set
+  `userVerified` only after the client has verified the user. Tracked
+  counters are reserved in the vault before rbw returns a signature.
+* A `custom_all` field read returns the usual field response, with `value`
+  containing a JSON array of text and linked custom fields. Linked fields
+  identify their target with `linkedId`. Read the target through its own
+  field grant.
 
 ## Provision a client
 
@@ -41,8 +71,8 @@ it with owner-only permissions, and remove any temporary transfer copy. Do not
 paste private key contents into chat, logs, shell arguments, or source control.
 The server keeps its own copy of the client key so rbw can revoke and remove it.
 
-The client must use the printed HTTPS server name, trust the CA certificate,
-and present the client certificate and private key for every request. Client
+The client must connect using a DNS name or IP in the server certificate,
+trust the CA, and present its client certificate and key for every request. Client
 identity comes from the verified TLS certificate; a request parameter cannot
 choose or impersonate a client.
 

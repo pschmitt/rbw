@@ -3976,6 +3976,7 @@ dependencies = [
  "is-terminal",
  "libc",
  "log",
+ "nix 0.31.3",
  "open",
  "p256 0.14.0",
  "pbkdf2",

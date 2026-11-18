@@ -1,35 +1,42 @@
 use super::*;
 
 pub fn api_enable(
-    listen: Option<&str>,
+    listen: Vec<String>,
     hostname: Option<&str>,
+    hostname_aliases: Vec<String>,
 ) -> anyhow::Result<()> {
     let mut config = rbw::config::Config::load()?;
-    if let Some(listen) = listen {
-        listen
-            .parse::<std::net::SocketAddr>()
-            .context("API listen address must be a socket address")?;
-        listen.clone_into(&mut config.api.listen);
+    let previous = config.api.clone();
+    match listen.as_slice() {
+        [] => {}
+        [address] => {
+            config.api.listen = rbw::config::ApiListen::One(address.clone());
+        }
+        _ => config.api.listen = rbw::config::ApiListen::Many(listen),
     }
+    rbw::remote_api::primary_listen_port(&config.api.listen)?;
     if let Some(hostname) = hostname {
-        anyhow::ensure!(
-            !hostname.trim().is_empty(),
-            "API hostname must not be empty"
-        );
         hostname.clone_into(&mut config.api.hostname);
     }
-    rbw::remote_api::ensure_tls_material(&config.api.hostname)?;
+    if !hostname_aliases.is_empty() {
+        config.api.hostname_aliases = hostname_aliases;
+    }
+    rbw::remote_api::ensure_tls_material(&config.api)?;
     config.api.enabled = true;
     config.save()?;
     let enable_result =
         ensure_agent().and_then(|()| wait_for_listener(&config.api));
     if let Err(error) = enable_result {
-        config.api.enabled = false;
+        config.api = previous;
         config.save()?;
-        let shutdown = wait_for_listener_stopped();
-        if let Err(shutdown_error) = shutdown {
+        let rollback = if config.api.enabled {
+            wait_for_listener(&config.api)
+        } else {
+            wait_for_listener_stopped()
+        };
+        if let Err(rollback_error) = rollback {
             return Err(error.context(format!(
-                "API enable failed; configuration was rolled back, but listener shutdown also failed: {shutdown_error:#}"
+                "API enable failed; configuration was rolled back, but restoring listener state also failed: {rollback_error:#}"
             )));
         }
         return Err(error);
@@ -75,6 +82,11 @@ pub fn api_status() -> anyhow::Result<()> {
         config.api.listen,
         api_server_url(&config)?
     );
+    if let Some(status) = status.filter(|status| status.listening) {
+        for address in status.addresses {
+            println!("listening={address}");
+        }
+    }
     Ok(())
 }
 
@@ -223,26 +235,24 @@ pub fn api_revoke(
 }
 
 fn api_server_url(config: &rbw::config::Config) -> anyhow::Result<String> {
-    let listen: std::net::SocketAddr = config
-        .api
-        .listen
-        .parse()
-        .context("invalid remote API listen address")?;
+    let port = rbw::remote_api::primary_listen_port(&config.api.listen)?;
     let hostname =
         if config.api.hostname.parse::<std::net::Ipv6Addr>().is_ok() {
             format!("[{}]", config.api.hostname)
         } else {
             config.api.hostname.clone()
         };
-    Ok(format!("https://{hostname}:{}", listen.port()))
+    Ok(format!("https://{hostname}:{port}"))
 }
 
 fn wait_for_listener(config: &rbw::config::ApiConfig) -> anyhow::Result<()> {
+    let listen = config.listen.to_string();
     for _ in 0..50 {
         if let Some(status) = rbw::remote_api::load_listener_status()? {
             if status.enabled
-                && status.listen == config.listen
+                && status.listen == listen
                 && status.hostname == config.hostname
+                && status.hostname_aliases == config.hostname_aliases
             {
                 if status.listening {
                     return Ok(());

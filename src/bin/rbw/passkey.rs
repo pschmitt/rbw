@@ -2,6 +2,9 @@
 //! Reserve the next counter before injection so an interrupted browser cannot
 //! leave the vault behind an assertion already accepted by the relying party.
 
+use rbw::passkey::{
+    checked_origin, next_counter, sign_assertion_with_verification,
+};
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt as _;
 
@@ -489,14 +492,9 @@ fn normalize_base64(value: &str) -> anyhow::Result<String> {
 }
 
 fn credential_id(value: &str) -> anyhow::Result<String> {
-    uuid::Uuid::parse_str(value).map_or_else(
-        |_| normalize_base64(value.strip_prefix("b64.").unwrap_or(value)),
-        |id| Ok(rbw::base64::encode(id.as_bytes())),
-    )
-}
-
-fn next_counter(current: u32) -> anyhow::Result<u32> {
-    current.checked_add(1).context("passkey counter exhausted")
+    Ok(rbw::base64::encode(rbw::passkey::credential_id_bytes(
+        value,
+    )?))
 }
 
 /// Whether a passkey at `current` may be advanced. A passkey that already
@@ -635,26 +633,6 @@ impl Cdp {
     }
 }
 
-/// The page's origin, if it may use a passkey of `rp` (its host is the relying
-/// party or a subdomain of it; https, or http on localhost).
-fn checked_origin(origin: &str, rp: &str) -> anyhow::Result<String> {
-    let page = url::Url::parse(origin)
-        .map_err(|_| anyhow::anyhow!("invalid --origin"))?;
-    let host = page.host_str().context("--origin has no host")?;
-    anyhow::ensure!(
-        page.scheme() == "https"
-            || (page.scheme() == "http" && host == "localhost"),
-        "passkeys need an https origin"
-    );
-    anyhow::ensure!(
-        host == rp || host.ends_with(&format!(".{rp}")),
-        "{host} may not use a passkey for {rp}"
-    );
-    Ok(page.origin().ascii_serialization())
-}
-
-/// `clientDataJSON`, `authenticatorData` and the DER signature over both, as a
-/// passkey provider produces them for a `get()` request.
 fn sign_assertion(
     key: &p256::ecdsa::SigningKey,
     rp: &str,
@@ -665,36 +643,6 @@ fn sign_assertion(
     sign_assertion_with_verification(
         key, rp, origin, challenge, counter, true,
     )
-}
-
-fn sign_assertion_with_verification(
-    key: &p256::ecdsa::SigningKey,
-    rp: &str,
-    origin: &str,
-    challenge: &str,
-    counter: u32,
-    verified: bool,
-) -> anyhow::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
-    use p256::ecdsa::signature::Signer as _;
-    use sha2::Digest as _;
-    let client_data = serde_json::to_vec(&json!({
-        "type": "webauthn.get",
-        "challenge": challenge,
-        "origin": origin,
-        "crossOrigin": false,
-    }))?;
-    // Flags: user present, user verified, backup eligible, backed up (synced).
-    let mut auth_data = sha2::Sha256::digest(rp.as_bytes()).to_vec();
-    auth_data.push(0x01 | 0x08 | 0x10 | if verified { 0x04 } else { 0 });
-    auth_data.extend_from_slice(&counter.to_be_bytes());
-    let mut signed = auth_data.clone();
-    signed.extend_from_slice(&sha2::Sha256::digest(&client_data));
-    let signature: p256::ecdsa::Signature = key.sign(&signed);
-    Ok((
-        client_data,
-        auth_data,
-        signature.to_der().as_bytes().to_vec(),
-    ))
 }
 
 /// Sign one `WebAuthn` assertion and print it as JSON (base64url fields), for a

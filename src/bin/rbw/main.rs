@@ -2627,10 +2627,21 @@ enum AgentCmd {
 enum ApiCmd {
     #[command(about = "Enable HTTPS field reads (loopback by default)")]
     Enable {
-        #[arg(long, help = "TCP listener address (default 127.0.0.1:24871)")]
-        listen: Option<String>,
-        #[arg(long, help = "HTTPS certificate name (default localhost)")]
+        #[arg(
+            long,
+            help = "TCP endpoint IP:PORT or if:NAME:PORT (repeatable)"
+        )]
+        listen: Vec<String>,
+        #[arg(
+            long,
+            help = "Primary HTTPS certificate DNS name or IP (default localhost)"
+        )]
         hostname: Option<String>,
+        #[arg(
+            long = "hostname-alias",
+            help = "Additional HTTPS certificate DNS name or IP (repeatable)"
+        )]
+        hostname_aliases: Vec<String>,
     },
     #[command(about = "Disable the API and stop its listener immediately")]
     Disable,
@@ -4599,9 +4610,15 @@ fn main() {
             } => commands::agent_restart(kill, unlock, lock, if_outdated),
         },
         Opt::Api { api } => match api {
-            ApiCmd::Enable { listen, hostname } => {
-                commands::api_enable(listen.as_deref(), hostname.as_deref())
-            }
+            ApiCmd::Enable {
+                listen,
+                hostname,
+                hostname_aliases,
+            } => commands::api_enable(
+                listen,
+                hostname.as_deref(),
+                hostname_aliases,
+            ),
             ApiCmd::Disable => commands::api_disable(),
             ApiCmd::Status => commands::api_status(),
             ApiCmd::StatusGrant {
