@@ -72,6 +72,64 @@ pub fn login(
     simple_action(rbw::protocol::Action::Login { password, totp })
 }
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[derive(Default)]
+pub struct LoginInput {
+    pub password: Option<rbw::locked::Password>,
+    pub totp: Option<rbw::locked::Password>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub fn login_with_ui(
+    options: rbw::unlock_ui::Options,
+    timeout: u64,
+    initial: &mut LoginInput,
+) -> anyhow::Result<()> {
+    use rbw::protocol::{Action, LoginPromptKind, Request, Response};
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()?;
+    let mut sock = connect()?;
+    sock.send(&Request::with_account(
+        get_environment(),
+        current_account(),
+        Action::LoginWithUi,
+    ))?;
+    loop {
+        match sock.recv()? {
+            Response::LoginPrompt { kind, title, error } => {
+                let input = match kind {
+                    Some(LoginPromptKind::Password) => {
+                        initial.password.take()
+                    }
+                    Some(LoginPromptKind::Authenticator) => {
+                        initial.totp.take()
+                    }
+                    _ => None,
+                };
+                let input =
+                    if let Some(input) = input.filter(|_| error.is_none()) {
+                        input
+                    } else {
+                        runtime.block_on(rbw::unlock_ui::prompt_login(
+                            options,
+                            &title,
+                            timeout,
+                            error.as_deref(),
+                        ))?
+                    };
+                sock.send_login_secret(&input)?;
+            }
+            Response::Ack => return Ok(()),
+            Response::Error { error } => anyhow::bail!("{error}"),
+            response => {
+                anyhow::bail!("unexpected login response: {response:?}")
+            }
+        }
+    }
+}
+
 pub fn unlock(password: Option<String>) -> anyhow::Result<()> {
     simple_action(rbw::protocol::Action::Unlock { password })
 }

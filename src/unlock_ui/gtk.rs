@@ -1,10 +1,32 @@
-use super::{Action, Frontend, SecretInput, View};
+use super::{Action, Frontend, SetupCredentials, View, SETUP_FIELDS};
 use anyhow::Context as _;
 use gtk::prelude::*;
 use gtk4 as gtk;
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell};
 use std::ffi::CStr;
 use std::rc::Rc;
+
+thread_local! {
+    // A sign-in opens several dialogs on this thread. Keep the registered
+    // application alive and reuse it across those windows.
+    static APPLICATION: OnceCell<gtk::Application> = const { OnceCell::new() };
+}
+
+fn application() -> anyhow::Result<gtk::Application> {
+    APPLICATION.with(|cell| {
+        if let Some(application) = cell.get() {
+            return Ok(application.clone());
+        }
+        let application = gtk::Application::builder()
+            .application_id("org.rbw.Unlock")
+            .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
+            .build();
+        application
+            .register(None::<&gtk::gio::Cancellable>)
+            .context("could not register the unlock dialog")?;
+        Ok(cell.get_or_init(|| application).clone())
+    })
+}
 
 pub(super) struct GtkDialog {
     window: gtk::Window,
@@ -26,21 +48,24 @@ pub(super) struct GtkDialog {
 }
 
 impl GtkDialog {
-    pub fn new(no_echo: bool) -> anyhow::Result<Self> {
+    pub fn new(
+        no_echo: bool,
+        server_auth: bool,
+        setup: bool,
+    ) -> anyhow::Result<Self> {
+        let login = server_auth || setup;
         gtk::init().context("could not open GTK unlock window")?;
-        let application = gtk::Application::builder()
-            .application_id("org.rbw.Unlock")
-            .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
-            .build();
-        application
-            .register(None::<&gtk::gio::Cancellable>)
-            .context("could not register the unlock dialog")?;
+        let application = application()?;
         let window = gtk::Window::builder()
             .application(&application)
             .modal(true)
             .resizable(false)
-            .title(concat!("Unlock rbw ", env!("CARGO_PKG_VERSION")))
-            .default_width(540)
+            .title(if login {
+                "Sign in to rbw"
+            } else {
+                concat!("Unlock rbw ", env!("CARGO_PKG_VERSION"))
+            })
+            .default_width(if login { 420 } else { 540 })
             .build();
         window.set_icon_name(Some("rbw"));
         // Cancel lives in the header bar, Unlock next to the password field;
@@ -49,6 +74,10 @@ impl GtkDialog {
         header.set_show_title_buttons(false);
         let title = gtk::Label::new(None);
         title.add_css_class("title");
+        if login {
+            title.set_wrap(true);
+            title.set_max_width_chars(36);
+        }
         header.set_title_widget(Some(&title));
         let cancel_button = gtk::Button::with_label("Cancel");
         header.pack_start(&cancel_button);
@@ -60,10 +89,15 @@ impl GtkDialog {
         let logo = gtk::Image::from_pixbuf(Some(&logo));
         logo.set_pixel_size(64);
         logo.set_valign(gtk::Align::Center);
+        let submit = Rc::new(Cell::new(false));
         // GtkPasswordEntry uses GtkPasswordEntryBuffer, backed by GTK's secure
         // allocator. No reveal button, undo history, or app clipboard actions.
         let entry = gtk::PasswordEntry::builder()
-            .placeholder_text("Master password")
+            .placeholder_text(if server_auth && !setup {
+                "Enter response"
+            } else {
+                "Master password"
+            })
             .show_peek_icon(false)
             .hexpand(true)
             .build();
@@ -97,8 +131,12 @@ impl GtkDialog {
                 gtk::glib::Propagation::Proceed
             }
         });
-        entry.add_controller(toggle);
-        entry.set_tooltip_text(Some("Tab shows or hides the dots"));
+        if !setup {
+            entry.add_controller(toggle);
+            entry.set_tooltip_text(Some("Tab shows or hides the dots"));
+        }
+        let signal = submit.clone();
+        entry.connect_activate(move |_| signal.set(true));
         let status = gtk::Label::new(None);
         status.add_css_class("dim-label");
         status.add_css_class("caption");
@@ -117,7 +155,11 @@ impl GtkDialog {
         error_row.set_visible(false);
         let form = gtk::Box::new(gtk::Orientation::Vertical, 8);
         form.set_valign(gtk::Align::Center);
-        let button = gtk::Button::with_label("Unlock");
+        let button = gtk::Button::with_label(if login {
+            "Continue"
+        } else {
+            "Unlock"
+        });
         button.add_css_class("suggested-action");
         let input_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         input_row.append(&entry);
@@ -154,10 +196,7 @@ impl GtkDialog {
         window.set_child(Some(&body));
         // The red outline of a rejected password goes once the user types.
         entry.connect_changed(|entry| entry.remove_css_class("error"));
-        let submit = Rc::new(Cell::new(false));
         let cancel = Rc::new(Cell::new(false));
-        let signal = submit.clone();
-        entry.connect_activate(move |_| signal.set(true));
         let signal = submit.clone();
         button.connect_clicked(move |_| signal.set(true));
         let signal = cancel.clone();
@@ -186,12 +225,14 @@ impl GtkDialog {
         // "delete next word".
         let clear = gtk::EventControllerKey::new();
         clear.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let field = entry.clone();
+        let input = entry.downgrade();
         clear.connect_key_pressed(move |_, key, _, modifiers| {
             if matches!(key, gtk::gdk::Key::Delete | gtk::gdk::Key::KP_Delete)
                 && modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK)
             {
-                field.set_text("");
+                if let Some(input) = input.upgrade() {
+                    input.set_text("");
+                }
                 gtk::glib::Propagation::Stop
             } else {
                 gtk::glib::Propagation::Proceed
@@ -221,6 +262,134 @@ impl GtkDialog {
 
 // A centred icon (or spinner) above a short message, both styled with
 // `class` (themes color labels and icons, not their container).
+fn editable_bytes<T: IsA<gtk::Editable>>(entry: &T) -> &[u8] {
+    let entry = entry.as_ref();
+    // SAFETY: this borrow is bounded by the GTK editable reference. Callers
+    // copy or validate it before changing the entry or pumping GTK events.
+    unsafe {
+        CStr::from_ptr(gtk::ffi::gtk_editable_get_text(entry.as_ptr().cast()))
+            .to_bytes()
+    }
+}
+
+fn locked_input(bytes: &[u8]) -> anyhow::Result<crate::locked::Password> {
+    anyhow::ensure!(
+        bytes.len() <= crate::locked::CAPACITY,
+        "sign-in input is too long"
+    );
+    let mut bytes_locked = crate::locked::Vec::try_new()?;
+    bytes_locked.extend(bytes.iter().copied());
+    Ok(crate::locked::Password::new(bytes_locked))
+}
+
+#[allow(
+    clippy::future_not_send,
+    reason = "GTK widgets stay on the calling thread"
+)]
+pub(super) async fn setup(
+    no_echo: bool,
+    server_hint: &str,
+    deadline: Option<std::time::Instant>,
+) -> anyhow::Result<SetupCredentials> {
+    let dialog = GtkDialog::new(no_echo, true, true)?;
+    dialog.title.set_label("Sign in to Bitwarden");
+    dialog.button.set_label("Sign in");
+    let form = dialog
+        .pages
+        .child_by_name("form")
+        .and_downcast::<gtk::Box>()
+        .context("missing sign-in form")?;
+    let row = dialog
+        .button
+        .parent()
+        .and_downcast::<gtk::Box>()
+        .context("missing sign-in button row")?;
+    row.remove(&dialog.button);
+    let url = gtk::Entry::builder()
+        .placeholder_text(server_hint)
+        .hexpand(true)
+        .build();
+    let email = gtk::Entry::builder()
+        .placeholder_text(SETUP_FIELDS[1])
+        .hexpand(true)
+        .build();
+    let totp = gtk::PasswordEntry::builder()
+        .placeholder_text(SETUP_FIELDS[3])
+        .show_peek_icon(false)
+        .hexpand(true)
+        .build();
+    totp.set_enable_undo(false);
+    if no_echo {
+        let text = totp
+            .delegate()
+            .and_downcast::<gtk::Text>()
+            .context("GTK code input does not support no-echo mode")?;
+        text.set_invisible_char('\0');
+    }
+    let url_label = gtk::Label::new(Some(SETUP_FIELDS[0]));
+    url_label.set_xalign(0.0);
+    form.prepend(&email);
+    form.prepend(&url);
+    form.prepend(&url_label);
+    form.insert_child_after(&totp, Some(&row));
+    form.insert_child_after(&dialog.button, Some(&totp));
+    for entry in [&url, &email] {
+        let submit = dialog.submit.clone();
+        entry.connect_activate(move |_| submit.set(true));
+    }
+    let submit = dialog.submit.clone();
+    totp.connect_activate(move |_| submit.set(true));
+    url.grab_focus();
+    let mut timer =
+        tokio::time::interval(std::time::Duration::from_millis(16));
+    let result = loop {
+        pump();
+        if deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            break Err(anyhow::anyhow!("sign-in setup timed out"));
+        }
+        if dialog.cancel.get() {
+            break Err(anyhow::anyhow!("sign-in setup cancelled"));
+        }
+        if dialog.submit.replace(false) {
+            let password = editable_bytes(&dialog.entry);
+            let code = editable_bytes(&totp);
+            if password.len() > crate::locked::CAPACITY {
+                dialog.error.set_label("Master password is too long.");
+                dialog.error_row.set_visible(true);
+            } else {
+                match super::setup_account(
+                    &url.text(),
+                    &email.text(),
+                    password,
+                    code,
+                ) {
+                    Ok((base_url, email)) => {
+                        break Ok(SetupCredentials {
+                            base_url,
+                            email,
+                            password: locked_input(password)?,
+                            totp: if code.is_empty() {
+                                None
+                            } else {
+                                Some(locked_input(code)?)
+                            },
+                        });
+                    }
+                    Err(error) => {
+                        dialog.error.set_label(error);
+                        dialog.error_row.set_visible(true);
+                    }
+                }
+            }
+        }
+        timer.tick().await;
+    };
+    totp.set_text("");
+    result
+}
+
 fn result_page(icon: &gtk::Widget, text: &str, class: &str) -> gtk::Box {
     let page = gtk::Box::new(gtk::Orientation::Vertical, 10);
     page.set_valign(gtk::Align::Center);
@@ -254,31 +423,20 @@ impl Frontend for GtkDialog {
             return Ok(Some(Action::Cancel));
         }
         if self.submit.replace(false) && !self.busy {
-            let mut input = SecretInput::new()?;
-            // SAFETY: GTK is initialized and this entry stays alive on this
-            // thread. GTK owns the NUL-terminated buffer; borrow it only long
-            // enough to copy directly into locked memory, never a Rust String.
-            let bytes = unsafe {
-                let pointer = gtk::ffi::gtk_editable_get_text(
-                    self.entry.as_ptr().cast(),
-                );
-                CStr::from_ptr(pointer).to_bytes()
-            };
+            let bytes = editable_bytes(&self.entry);
             let too_long = bytes.len() > crate::locked::CAPACITY;
-            if !too_long {
-                for byte in bytes {
-                    input.push(*byte);
-                }
-            }
+            let input = (!too_long && !bytes.is_empty())
+                .then(|| locked_input(bytes))
+                .transpose()?;
             self.entry.set_text("");
             if too_long {
                 self.issue = Some("Password is too long. Please try again.");
-            } else if !input.is_empty() {
+            } else if let Some(input) = input {
                 self.issue = None;
                 self.busy = true;
                 self.entry.set_sensitive(false);
                 self.button.set_sensitive(false);
-                return Ok(Some(Action::Submit(input.take()?)));
+                return Ok(Some(Action::Submit(input)));
             }
         }
         Ok(None)
@@ -350,9 +508,10 @@ mod tests {
     #[ignore = "requires a real desktop display"]
     fn live_gtk_password_and_cancel() {
         for no_echo in [false, true] {
-            let mut dialog = GtkDialog::new(no_echo).unwrap();
+            let mut dialog = GtkDialog::new(no_echo, false, false).unwrap();
             dialog
                 .render(&View {
+                    server_auth: false,
                     title: "Disposable UI test",
                     fingerprint: super::super::FingerprintStatus::Ready,
                     hide_disabled: false,

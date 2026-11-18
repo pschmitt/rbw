@@ -143,7 +143,7 @@ pub async fn login(
             )
             .await?;
         } else {
-            login_interactively(sock, state, environment, db, account)
+            login_interactively(sock, state, environment, db, account, false)
                 .await?;
         }
     }
@@ -151,6 +151,22 @@ pub async fn login(
     respond_ack(sock).await?;
 
     Ok(())
+}
+
+pub async fn login_with_ui(
+    sock: &mut crate::sock::Sock,
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    environment: &rbw::protocol::Environment,
+    account: &rbw::config::Account,
+) -> anyhow::Result<()> {
+    let db = load_db(account)
+        .await
+        .unwrap_or_else(|_| rbw::db::Db::new());
+    if db.needs_login() || db.protected_private_key.is_none() {
+        login_interactively(sock, state, environment, db, account, true)
+            .await?;
+    }
+    respond_ack(sock).await
 }
 
 // Single-shot login using a password resolved via the client's
@@ -268,6 +284,7 @@ async fn login_interactively(
     environment: &rbw::protocol::Environment,
     db: rbw::db::Db,
     account: &rbw::config::Account,
+    client_ui: bool,
 ) -> anyhow::Result<()> {
     let url_str = account.base_url()?;
     let url =
@@ -288,18 +305,17 @@ async fn login_interactively(
                 env_password_tried = true;
                 pw
             } else {
-                rbw::pinentry::getpin(
-                    &config_pinentry().await?,
+                login_prompt(
+                    sock,
+                    client_ui,
+                    rbw::protocol::LoginPromptKind::Password,
                     "Master Password",
                     &format!("Log in to {host}"),
                     None,
                     environment,
                     true,
-                    Some(sock.inner()),
-                    config_pinentry_timeout().await?,
                 )
-                .await
-                .context("failed to read password from pinentry")?
+                .await?
             }
         } else {
             let err = Some(format!(
@@ -307,18 +323,17 @@ async fn login_interactively(
                 err_msg.as_ref().unwrap(),
                 if env_password_tried { i - 1 } else { i }
             ));
-            rbw::pinentry::getpin(
-                &config_pinentry().await?,
+            login_prompt(
+                sock,
+                client_ui,
+                rbw::protocol::LoginPromptKind::Password,
                 "Master Password",
                 &format!("Log in to {host}"),
                 err.as_deref(),
                 environment,
                 true,
-                Some(sock.inner()),
-                config_pinentry_timeout().await?,
             )
-            .await
-            .context("failed to read password from pinentry")?
+            .await?
         };
         match rbw::actions::login(&email, password.clone(), None, None).await
         {
@@ -416,6 +431,7 @@ async fn login_interactively(
                                     &email,
                                     password.clone(),
                                     provider,
+                                    client_ui,
                                 )
                                 .await?
                             }
@@ -469,12 +485,56 @@ async fn login_interactively(
     Ok(())
 }
 
+async fn login_prompt(
+    sock: &mut crate::sock::Sock,
+    client_ui: bool,
+    kind: rbw::protocol::LoginPromptKind,
+    prompt: &str,
+    description: &str,
+    error: Option<&str>,
+    environment: &rbw::protocol::Environment,
+    grab: bool,
+) -> anyhow::Result<rbw::locked::Password> {
+    if client_ui {
+        sock.send(&rbw::protocol::Response::LoginPrompt {
+            kind: Some(kind),
+            title: format!("{prompt} · {description}"),
+            error: error.map(str::to_owned),
+        })
+        .await?;
+        let timeout = config_pinentry_timeout().await?;
+        return if timeout == 0 {
+            sock.recv_login_secret().await
+        } else {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(timeout),
+                sock.recv_login_secret(),
+            )
+            .await
+            .context("login prompt timed out")?
+        };
+    }
+    rbw::pinentry::getpin(
+        &config_pinentry().await?,
+        prompt,
+        description,
+        error,
+        environment,
+        grab,
+        Some(sock.inner()),
+        config_pinentry_timeout().await?,
+    )
+    .await
+    .context("failed to read login input from pinentry")
+}
+
 async fn two_factor(
     sock: &mut crate::sock::Sock,
     environment: &rbw::protocol::Environment,
     email: &str,
     password: rbw::locked::Password,
     provider: rbw::api::TwoFactorProviderType,
+    client_ui: bool,
 ) -> anyhow::Result<(
     String,
     String,
@@ -493,18 +553,22 @@ async fn two_factor(
         } else {
             None
         };
-        let code = rbw::pinentry::getpin(
-            &config_pinentry().await?,
+        let code = login_prompt(
+            sock,
+            client_ui,
+            match provider {
+                rbw::api::TwoFactorProviderType::Authenticator => {
+                    rbw::protocol::LoginPromptKind::Authenticator
+                }
+                _ => rbw::protocol::LoginPromptKind::Other,
+            },
             provider.header(),
             provider.message(),
             err.as_deref(),
             environment,
             provider.grab(),
-            Some(sock.inner()),
-            config_pinentry_timeout().await?,
         )
-        .await
-        .context("failed to read code from pinentry")?;
+        .await?;
         let code = std::str::from_utf8(code.password())
             .context("code was not valid utf8")?;
         match rbw::actions::login(

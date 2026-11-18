@@ -1,6 +1,6 @@
 //! Unlock UI: only public status and a constant mask reach render buffers.
 //! Password input has no Debug implementation and is kept in locked memory.
-#[cfg(feature = "gtk-ui")]
+#[cfg(all(target_os = "linux", feature = "gtk-ui"))]
 mod gtk;
 mod terminal;
 
@@ -195,6 +195,101 @@ impl SecretInput {
     }
 }
 
+pub struct SetupCredentials {
+    pub base_url: Option<String>,
+    pub email: String,
+    pub password: crate::locked::Password,
+    pub totp: Option<crate::locked::Password>,
+}
+
+const SETUP_FIELDS: [&str; 4] = [
+    "Server URL",
+    "Email address",
+    "Master password",
+    "Authenticator code (optional)",
+];
+
+fn setup_account(
+    url: &str,
+    email: &str,
+    password: &[u8],
+    totp: &[u8],
+) -> Result<(Option<String>, String), &'static str> {
+    let url = url.trim();
+    let base_url = if url.is_empty() {
+        None
+    } else {
+        let parsed = reqwest::Url::parse(url)
+            .ok()
+            .filter(|parsed| {
+                matches!(parsed.scheme(), "http" | "https")
+                    && parsed.host_str().is_some()
+                    && parsed.username().is_empty()
+                    && parsed.password().is_none()
+                    && parsed.query().is_none()
+                    && parsed.fragment().is_none()
+            })
+            .ok_or("Enter a valid HTTP or HTTPS server URL.")?;
+        Some(match parsed.as_str().trim_end_matches('/') {
+            "https://bitwarden.com"
+            | "https://vault.bitwarden.com"
+            | "https://api.bitwarden.com" => String::new(),
+            "https://bitwarden.eu"
+            | "https://vault.bitwarden.eu"
+            | "https://api.bitwarden.eu" => {
+                "https://api.bitwarden.eu".to_owned()
+            }
+            other => other.to_owned(),
+        })
+    };
+    let email = email.trim();
+    if email.is_empty() || email.chars().any(char::is_whitespace) {
+        return Err("Enter your Bitwarden email address.");
+    }
+    if password.is_empty() || std::str::from_utf8(password).is_err() {
+        return Err("Enter your master password.");
+    }
+    if !(totp.is_empty()
+        || totp.len() == 6 && totp.iter().all(u8::is_ascii_digit))
+    {
+        return Err(
+            "Enter a six-digit authenticator code or leave it blank.",
+        );
+    }
+    Ok((base_url, email.to_owned()))
+}
+
+/// Collect all initial login fields in one form.
+#[allow(
+    clippy::future_not_send,
+    reason = "the frontend stays on the calling thread"
+)]
+pub async fn setup(
+    options: Options,
+    timeout_seconds: u64,
+    configured_server: bool,
+) -> anyhow::Result<SetupCredentials> {
+    protect_process()?;
+    let _quiet_logs = QuietLogs::new();
+    let hint = if configured_server {
+        "Configured server"
+    } else {
+        "https://bitwarden.com"
+    };
+    let deadline = (timeout_seconds != 0)
+        .then(|| Instant::now() + Duration::from_secs(timeout_seconds));
+    match options.mode {
+        crate::config::UnlockUi::Terminal => {
+            terminal::setup(options.no_echo, hint, deadline).await
+        }
+        #[cfg(all(target_os = "linux", feature = "gtk-ui"))]
+        crate::config::UnlockUi::Gtk => {
+            gtk::setup(options.no_echo, hint, deadline).await
+        }
+        _ => anyhow::bail!("unsupported setup interface"),
+    }
+}
+
 pub(crate) enum Action {
     Submit(crate::locked::Password),
     Cancel,
@@ -206,7 +301,8 @@ pub(crate) struct View<'a> {
     pub hide_disabled: bool,
     pub checking: bool,
     pub success: bool,
-    pub error: Option<&'static str>,
+    pub error: Option<&'a str>,
+    pub server_auth: bool,
     pub tick: u64,
 }
 
@@ -237,6 +333,7 @@ async fn show_confirmation(
             checking: false,
             success: true,
             error: None,
+            server_auth: false,
             tick,
         })?;
         // Pump GTK events while showing the noninteractive confirmation.
@@ -255,7 +352,7 @@ pub fn resolve(
     let mode = if mode == UnlockUi::Auto {
         if std::io::stdin().is_terminal() {
             UnlockUi::Terminal
-        } else if cfg!(feature = "gtk-ui")
+        } else if cfg!(all(target_os = "linux", feature = "gtk-ui"))
             && (std::env::var_os("WAYLAND_DISPLAY").is_some()
                 || std::env::var_os("DISPLAY").is_some())
         {
@@ -266,7 +363,9 @@ pub fn resolve(
     } else {
         mode
     };
-    if mode == UnlockUi::Gtk && !cfg!(feature = "gtk-ui") {
+    if mode == UnlockUi::Gtk
+        && !cfg!(all(target_os = "linux", feature = "gtk-ui"))
+    {
         anyhow::bail!(
             "GTK unlock requires an rbw build with the gtk-ui feature"
         );
@@ -292,11 +391,96 @@ pub async fn prompt(
     options: Options,
     title: &str,
     timeout_seconds: u64,
-    mut status: watch::Receiver<FingerprintStatus>,
+    status: watch::Receiver<FingerprintStatus>,
     validate: Validator,
-    mut cancel: oneshot::Receiver<()>,
+    cancel: oneshot::Receiver<()>,
     session_cancel: oneshot::Sender<()>,
 ) -> anyhow::Result<String> {
+    let password = run_prompt(
+        options,
+        title,
+        timeout_seconds,
+        status,
+        Some(validate),
+        cancel,
+        session_cancel,
+        None,
+    )
+    .await?;
+    Ok(std::str::from_utf8(password.password())
+        .context("master password is not UTF-8")?
+        .to_owned())
+}
+
+/// Unlock a cached vault on Android without a desktop fingerprint provider.
+#[cfg(target_os = "android")]
+#[allow(
+    clippy::future_not_send,
+    reason = "the terminal stays on the calling thread"
+)]
+pub async fn prompt_local(
+    options: Options,
+    title: &str,
+    timeout_seconds: u64,
+    validate: Validator,
+) -> anyhow::Result<String> {
+    let (_status, status) = watch::channel(FingerprintStatus::Disabled);
+    let (_cancel, cancel) = oneshot::channel();
+    let (session_cancel, _session) = oneshot::channel();
+    prompt(
+        options,
+        title,
+        timeout_seconds,
+        status,
+        validate,
+        cancel,
+        session_cancel,
+    )
+    .await
+}
+
+/// Collect a password or MFA response requested by the agent.
+#[allow(
+    clippy::future_not_send,
+    reason = "GTK widgets and terminal ownership stay on the calling thread"
+)]
+pub async fn prompt_login(
+    mut options: Options,
+    title: &str,
+    timeout_seconds: u64,
+    error: Option<&str>,
+) -> anyhow::Result<crate::locked::Password> {
+    options.hide_fingerprint_notice = true;
+    let (_status, status) = watch::channel(FingerprintStatus::Disabled);
+    let (_cancel, cancel) = oneshot::channel();
+    let (session_cancel, _session) = oneshot::channel();
+    run_prompt(
+        options,
+        title,
+        timeout_seconds,
+        status,
+        None,
+        cancel,
+        session_cancel,
+        error,
+    )
+    .await
+}
+
+#[allow(
+    clippy::future_not_send,
+    reason = "the frontend stays on the calling thread"
+)]
+async fn run_prompt(
+    options: Options,
+    title: &str,
+    timeout_seconds: u64,
+    mut status: watch::Receiver<FingerprintStatus>,
+    validate: Option<Validator>,
+    mut cancel: oneshot::Receiver<()>,
+    session_cancel: oneshot::Sender<()>,
+    initial_error: Option<&str>,
+) -> anyhow::Result<crate::locked::Password> {
     protect_process()?;
     let _quiet_logs = QuietLogs::new();
     let title: String = title
@@ -304,14 +488,17 @@ pub async fn prompt(
         .filter(|character| !character.is_control())
         .take(100)
         .collect();
+    let server_auth = validate.is_none();
     let frontend: anyhow::Result<Box<dyn Frontend>> = match options.mode {
         crate::config::UnlockUi::Terminal => {
             terminal::TerminalDialog::new(options.no_echo)
                 .map(|dialog| -> Box<dyn Frontend> { Box::new(dialog) })
         }
-        #[cfg(feature = "gtk-ui")]
-        crate::config::UnlockUi::Gtk => gtk::GtkDialog::new(options.no_echo)
-            .map(|dialog| -> Box<dyn Frontend> { Box::new(dialog) }),
+        #[cfg(all(target_os = "linux", feature = "gtk-ui"))]
+        crate::config::UnlockUi::Gtk => {
+            gtk::GtkDialog::new(options.no_echo, server_auth, false)
+                .map(|dialog| -> Box<dyn Frontend> { Box::new(dialog) })
+        }
         _ => Err(anyhow::anyhow!("unsupported custom unlock interface")),
     };
     let mut frontend = match frontend {
@@ -326,7 +513,14 @@ pub async fn prompt(
     let mut worker: Option<
         tokio::task::JoinHandle<anyhow::Result<crate::locked::Password>>,
     > = None;
-    let mut error = None;
+    let initial_error = initial_error.map(|error| {
+        error
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(180)
+            .collect::<String>()
+    });
+    let mut error = initial_error.as_deref();
     let mut tick = 0;
     let mut timer = tokio::time::interval(Duration::from_millis(16));
     let mut session_cancel = Some(session_cancel);
@@ -351,7 +545,7 @@ pub async fn prompt(
                 Ok(password) => {
                     let fingerprint = *status.borrow_and_update();
                     show_confirmation(frontend.as_mut(), &title, fingerprint, options.hide_fingerprint_notice).await?;
-                    break std::str::from_utf8(password.password()).map(str::to_owned).map_err(|_| anyhow::anyhow!("master password is not UTF-8"));
+                    break Ok(password);
                 },
                 Err(failure) if matches!(failure.downcast_ref::<crate::error::Error>(), Some(crate::error::Error::IncorrectPassword { .. })) => {
                     error = Some("That password didn’t unlock the vault. Try again.");
@@ -368,7 +562,9 @@ pub async fn prompt(
             }
             Some(Action::Submit(password)) if worker.is_none() => {
                 error = None;
-                let validate = validate.clone();
+                let Some(validate) = validate.clone() else {
+                    break Ok(password);
+                };
                 worker = Some(tokio::task::spawn_blocking(move || {
                     validate(&password)?;
                     Ok(password)
@@ -376,7 +572,7 @@ pub async fn prompt(
             }
             Some(Action::Submit(_)) | None => {},
         }
-        frontend.render(&View { title: &title, fingerprint: *status.borrow_and_update(), hide_disabled: options.hide_fingerprint_notice, checking: worker.is_some(), success: false, error, tick })?;
+        frontend.render(&View { title: &title, fingerprint: *status.borrow_and_update(), hide_disabled: options.hide_fingerprint_notice, checking: worker.is_some(), success: false, error, server_auth, tick })?;
         tick = tick.wrapping_add(1);
     }
     } .await;

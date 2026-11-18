@@ -37,6 +37,24 @@ impl Sock {
         Ok(())
     }
 
+    pub async fn recv_login_secret(
+        &mut self,
+    ) -> anyhow::Result<rbw::locked::Password> {
+        use tokio::io::AsyncReadExt as _;
+        let len = usize::from(self.0.read_u16().await?);
+        anyhow::ensure!(
+            (1..=rbw::locked::CAPACITY).contains(&len),
+            "invalid login input length"
+        );
+        let mut bytes = rbw::locked::Vec::try_new()?;
+        bytes.zero();
+        self.0.read_exact(&mut bytes.data_mut()[..len]).await?;
+        bytes.truncate(len);
+        std::str::from_utf8(bytes.data())
+            .context("login input is not UTF-8")?;
+        Ok(rbw::locked::Password::new(bytes))
+    }
+
     pub async fn recv(
         &mut self,
     ) -> anyhow::Result<std::result::Result<rbw::protocol::Request, String>>
@@ -60,4 +78,29 @@ pub fn listen() -> anyhow::Result<tokio::net::UnixListener> {
         .context("failed to listen on socket")?;
     log::debug!("listening on socket {}", path.to_string_lossy());
     Ok(sock)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn login_input_frames_are_bounded_and_read_individually() {
+        let (mut client, agent) = tokio::net::UnixStream::pair().unwrap();
+        let mut agent = Sock::new(agent);
+        client
+            .write_all(b"\0\x05first\0\x06second\xff\xff")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            agent.recv_login_secret().await.unwrap().password(),
+            b"first"
+        );
+        assert_eq!(
+            agent.recv_login_secret().await.unwrap().password(),
+            b"second"
+        );
+        assert!(agent.recv_login_secret().await.is_err());
+    }
 }

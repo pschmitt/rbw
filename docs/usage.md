@@ -21,6 +21,22 @@ so does `rbw agent restart --lock`. `rbw agent restart --unlock` unlocks right
 away afterwards. With `upgrade.autoRestart` set, the first `rbw` command after
 an upgrade does this by itself (see [Configuration](configuration.md)).
 
+On Linux and Android, interactive `rbw login` opens the terminal setup and sign-in dialog
+by default when run from a terminal. Use `--ui gtk` for the compact GTK
+dialog on builds with `gtk-ui`, `--tui` to select the terminal explicitly,
+or `--pinentry` for the existing pinentry flow. For a new account, the
+setup dialog shows the server URL, email address, master password, and an
+optional authenticator code together. In the terminal, click a field or use
+Tab and Shift+Tab to move between fields.
+Use `https://bitwarden.com` for the US cloud, `https://bitwarden.eu` for the
+EU cloud, or the base URL of your self-hosted server. Leave the authenticator
+code blank if you use another two-factor method or want to enter the code
+when the server asks for it.
+
+An account that is already configured can also sign in on its first
+`rbw unlock`. The first sign-in uses the selected unlock interface, including
+`--ui terminal`, `--ui gtk` when available, or `--pinentry`.
+
 `rbw status` shows the rbw version, whether the agent is running, and one
 line per configured account: lock state, email, item count and last sync
 time. `rbw status --full` adds the agent's lock timeout and sync interval and,

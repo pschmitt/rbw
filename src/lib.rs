@@ -23,7 +23,7 @@ pub mod wordlist;
 
 #[cfg(target_os = "linux")]
 pub mod creds;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod unlock_ui;
 #[cfg(target_os = "linux")]
 pub mod unlockd;

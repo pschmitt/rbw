@@ -1,0 +1,9 @@
+{
+  "requests": [
+    {"tty": null, "environment": {"tty": null, "env_vars": []}, "account": "work", "action": {"type": "LoginWithUi"}}
+  ],
+  "responses": [
+    {"type": "LoginPrompt", "kind": "Password", "title": "Master Password", "error": null},
+    {"type": "LoginPrompt", "kind": "Authenticator", "title": "Two-factor authentication", "error": "Try again"}
+  ]
+}

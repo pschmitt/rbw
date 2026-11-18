@@ -1,14 +1,20 @@
-use super::{Action, FingerprintStatus, Frontend, SecretInput, View};
+use super::{
+    Action, FingerprintStatus, Frontend, SecretInput, SetupCredentials, View,
+    SETUP_FIELDS,
+};
 use anyhow::Context as _;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::{
     cursor::{Hide, Show},
-    event::{DisableBracketedPaste, EnableBracketedPaste},
+    event::{
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
+        EnableMouseCapture,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap},
@@ -163,11 +169,12 @@ pub(super) struct TerminalDialog {
     input: File,
     original: libc::termios,
     state: InputState,
+    mouse_capture: bool,
 }
 
 struct InputState {
     secret: SecretInput,
-    escape: [u8; 8],
+    escape: [u8; 24],
     escape_len: usize,
     escape_started: Option<Instant>,
     paste: bool,
@@ -232,6 +239,7 @@ impl TerminalDialog {
             input,
             original,
             state,
+            mouse_capture: false,
         };
         execute!(
             dialog.terminal.backend_mut(),
@@ -248,13 +256,32 @@ impl TerminalDialog {
         )?;
         Ok(dialog)
     }
+    fn capture_mouse(&mut self) -> anyhow::Result<()> {
+        self.mouse_capture = true;
+        execute!(self.terminal.backend_mut(), EnableMouseCapture)?;
+        Ok(())
+    }
+
+    fn read_input(
+        &mut self,
+        buffer: &mut [u8],
+    ) -> anyhow::Result<Option<usize>> {
+        match self.input.read(buffer) {
+            Ok(0) => Ok(None),
+            Ok(length) => Ok(Some(length)),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                Ok(Some(0))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
 }
 
 impl InputState {
     fn new() -> anyhow::Result<Self> {
         Ok(Self {
             secret: SecretInput::new()?,
-            escape: [0; 8],
+            escape: [0; 24],
             escape_len: 0,
             escape_started: None,
             paste: false,
@@ -363,13 +390,8 @@ impl Frontend for TerminalDialog {
         // Read bytes directly into a wiped stack buffer. Terminal libraries
         // and paste events must never allocate a String containing the password.
         let mut buffer = Zeroizing::new([0u8; 256]);
-        let length = match self.input.read(&mut buffer[..]) {
-            Ok(0) => return Ok(Some(Action::Cancel)),
-            Ok(length) => length,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                return Ok(None)
-            }
-            Err(error) => return Err(error.into()),
+        let Some(length) = self.read_input(&mut buffer[..])? else {
+            return Ok(Some(Action::Cancel));
         };
         for byte in &buffer[..length] {
             if let Some(action) = self.state.input_byte(*byte)? {
@@ -386,7 +408,9 @@ impl Frontend for TerminalDialog {
         let mask =
             (!self.state.no_echo).then(|| self.state.secret.char_count());
         let issue = self.state.issue;
-        self.terminal.draw(|frame| draw(frame, view, mask, issue))?;
+        self.terminal.draw(|frame| {
+            draw(frame, view, mask, issue);
+        })?;
         Ok(())
     }
     fn clear_secret(&mut self) {
@@ -395,9 +419,276 @@ impl Frontend for TerminalDialog {
     }
 }
 
+fn mouse_click(sequence: &[u8], terminator: u8) -> Option<Position> {
+    // SGR sends CSI < button ; column ; row M on press and m on release.
+    let sequence = std::str::from_utf8(sequence.strip_prefix(b"[<")?).ok()?;
+    let mut parts = sequence.split(';');
+    let button = parts.next()?.parse::<u8>().ok()?;
+    let x = parts.next()?.parse::<u16>().ok()?.checked_sub(1)?;
+    let y = parts.next()?.parse::<u16>().ok()?.checked_sub(1)?;
+    // A primary-button press may carry Shift, Alt, or Ctrl modifier bits.
+    (terminator == b'M' && button & !0b11100 == 0 && parts.next().is_none())
+        .then_some(Position::new(x, y))
+}
+
+#[allow(
+    clippy::future_not_send,
+    reason = "the terminal stays on the calling thread"
+)]
+pub(super) async fn setup(
+    no_echo: bool,
+    server_hint: &str,
+    deadline: Option<Instant>,
+) -> anyhow::Result<SetupCredentials> {
+    let mut dialog = TerminalDialog::new(no_echo)?;
+    dialog.capture_mouse()?;
+    let mut field_areas = [Rect::default(); SETUP_FIELDS.len()];
+    let mut fields = [
+        InputState::new()?,
+        InputState::new()?,
+        InputState::new()?,
+        InputState::new()?,
+    ];
+    let mut selected = 0;
+    let mut error = None;
+    let mut timer = tokio::time::interval(Duration::from_millis(16));
+    loop {
+        anyhow::ensure!(
+            deadline.is_none_or(|deadline| Instant::now() < deadline),
+            "sign-in setup timed out"
+        );
+        anyhow::ensure!(
+            fields[selected].escape_started.is_none_or(|start| start
+                .elapsed()
+                < Duration::from_millis(80)),
+            "sign-in setup cancelled"
+        );
+        let area = dialog.terminal.size()?;
+        let too_small = area.height < 8 || area.width < 20;
+        let mut buffer = Zeroizing::new([0u8; 256]);
+        let length = dialog
+            .read_input(&mut buffer[..])?
+            .context("sign-in setup cancelled")?;
+        for &byte in &buffer[..length] {
+            let field = &mut fields[selected];
+            field.busy = too_small;
+            let escape = &field.escape[..field.escape_len];
+            if !field.paste
+                && matches!(byte, b'M' | b'm')
+                && escape.starts_with(b"[<")
+            {
+                let click = mouse_click(escape, byte);
+                field.escape_started = None;
+                field.escape_len = 0;
+                if let Some(index) =
+                    click.filter(|_| !too_small).and_then(|position| {
+                        field_areas
+                            .iter()
+                            .position(|area| area.contains(position))
+                    })
+                {
+                    selected = index;
+                }
+                continue;
+            }
+
+            if !field.paste && !field.busy {
+                if byte == b'Z'
+                    && field.escape_started.is_some()
+                    && field.escape_len == 1
+                    && field.escape[0] == b'['
+                {
+                    field.escape_started = None;
+                    field.escape_len = 0;
+                    selected = (selected + fields.len() - 1) % fields.len();
+                    continue;
+                }
+                if field.escape_started.is_none() && byte == b'\t' {
+                    selected = (selected + 1) % fields.len();
+                    continue;
+                }
+                if field.escape_started.is_none()
+                    && matches!(byte, b'\n' | b'\r')
+                {
+                    let [url, email, password, totp] = &mut fields;
+                    let account = super::setup_account(
+                        std::str::from_utf8(url.secret.bytes.data())
+                            .unwrap_or("\0"),
+                        std::str::from_utf8(email.secret.bytes.data())
+                            .unwrap_or("\0"),
+                        password.secret.bytes.data(),
+                        totp.secret.bytes.data(),
+                    );
+                    if let Ok((base_url, email)) = account {
+                        if !fields.iter().any(|field| field.blocked) {
+                            return Ok(SetupCredentials {
+                                base_url,
+                                email,
+                                password: fields[2].secret.take()?,
+                                totp: if fields[3].secret.is_empty() {
+                                    None
+                                } else {
+                                    Some(fields[3].secret.take()?)
+                                },
+                            });
+                        }
+                    } else {
+                        error = account.err();
+                    }
+                    continue;
+                }
+            }
+            if matches!(field.input_byte(byte)?, Some(Action::Cancel)) {
+                anyhow::bail!("sign-in setup cancelled");
+            }
+            error = None;
+        }
+        dialog.terminal.draw(|frame| {
+            field_areas = draw_setup(
+                frame,
+                &fields,
+                selected,
+                server_hint,
+                no_echo,
+                error,
+            );
+        })?;
+        timer.tick().await;
+    }
+}
+
+fn draw_setup(
+    frame: &mut Frame<'_>,
+    fields: &[InputState; 4],
+    selected: usize,
+    server_hint: &str,
+    no_echo: bool,
+    error: Option<&str>,
+) -> [Rect; SETUP_FIELDS.len()] {
+    let mut field_areas = [Rect::default(); SETUP_FIELDS.len()];
+    let area = frame.area();
+    frame
+        .render_widget(Block::default().style(Style::default().bg(BG)), area);
+    if area.height < 8 || area.width < 20 {
+        frame.render_widget(
+            Paragraph::new("Enlarge terminal · Esc cancels")
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+        return field_areas;
+    }
+    let (height, top, field_height, field_gap) = match area.height {
+        20.. => (20, 2, 3, 1),
+        17..=19 => (17, 2, 3, 0),
+        _ => (area.height.min(9), 1, 1, 0),
+    };
+    let width = area.width.min(70);
+    let card = Rect::new(
+        (area.width - width) / 2,
+        (area.height - height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(
+        Block::bordered()
+            .title(" Sign in to Bitwarden ")
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+            .style(Style::default().bg(BG)),
+        card,
+    );
+    let boxed = field_height == 3;
+    let stride = field_height + field_gap;
+    let fields_height = field_height * 4 + field_gap * 3;
+    let mut x = card.x + 2;
+    let mut width = card.width - 4;
+    let sprite: Option<(&[&str], u16, u16)> = match (boxed, card.width) {
+        (true, 66..) => Some((&CRAB, CRAB_WIDTH, CRAB_ROWS)),
+        (true, 52..=65) => {
+            Some((&CRAB_TINY, CRAB_TINY_WIDTH, CRAB_TINY_ROWS))
+        }
+        _ => None,
+    };
+    if let Some((sprite, sprite_width, sprite_height)) = sprite {
+        let y = card.y + top + (fields_height - sprite_height) / 2;
+        frame.render_widget(
+            Paragraph::new(crab_lines(sprite, 0)),
+            Rect::new(x, y, sprite_width, sprite_height),
+        );
+        x += sprite_width + 3;
+        width -= sprite_width + 3;
+    }
+    for (index, (field, label)) in fields.iter().zip(SETUP_FIELDS).enumerate()
+    {
+        let input = if index >= 2 {
+            if no_echo {
+                String::new()
+            } else {
+                "•".repeat(field.secret.char_count().min(usize::from(width)))
+            }
+        } else if index == 0 && field.secret.is_empty() {
+            server_hint.to_owned()
+        } else {
+            std::str::from_utf8(field.secret.bytes.data())
+                .unwrap_or_default()
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(usize::from(width))
+                .collect()
+        };
+        let style =
+            Style::default().fg(if index == selected { ACCENT } else { INK });
+        let rect = Rect::new(
+            x,
+            card.y + top + stride * u16::try_from(index).unwrap_or_default(),
+            width,
+            field_height,
+        );
+        field_areas[index] = rect;
+        if boxed {
+            frame.render_widget(
+                Paragraph::new(input).block(
+                    Block::bordered()
+                        .title(format!(" {label} "))
+                        .border_type(BorderType::Rounded)
+                        .padding(Padding::horizontal(1))
+                        .border_style(style),
+                ),
+                rect,
+            );
+        } else {
+            frame.render_widget(
+                Paragraph::new(format!("{label}: {input}")).style(style),
+                rect,
+            );
+        }
+    }
+    let inset = u16::from(boxed);
+    if let Some(error) = fields[selected].issue.or(error) {
+        frame.render_widget(
+            Paragraph::new(error).style(Style::default().fg(Color::LightRed)),
+            Rect::new(x + inset, card.y + height - 3, width - inset, 1),
+        );
+    }
+    let keys = if width - inset >= 37 {
+        "Tab next · Enter sign in · Esc cancel"
+    } else {
+        "Tab  Enter  Esc"
+    };
+    frame.render_widget(
+        Paragraph::new(keys).style(Style::default().fg(MUTED)),
+        Rect::new(x + inset, card.y + height - 2, width - inset, 1),
+    );
+    field_areas
+}
+
 impl Drop for TerminalDialog {
     fn drop(&mut self) {
         self.state.secret.clear();
+        if self.mouse_capture {
+            let _ =
+                execute!(self.terminal.backend_mut(), DisableMouseCapture);
+        }
         let _ = execute!(
             self.terminal.backend_mut(),
             DisableBracketedPaste,
@@ -482,6 +773,7 @@ fn mask_text(
         None => String::new(),
         Some(0) if view.success => String::new(),
         Some(0) if view.checking => "Checking password…".to_string(),
+        Some(0) if view.server_auth => "Enter response…".to_string(),
         Some(0) if short => "Type password…".to_string(),
         Some(0) => "Type your password…".to_string(),
         Some(length) => "•".repeat(length.min(max)),
@@ -533,7 +825,9 @@ fn draw(
         .render_widget(Block::default().style(Style::default().bg(BG)), area);
     match size_class(area.width, area.height) {
         SizeClass::Full => draw_full(frame, view, mask, issue),
-        SizeClass::Compact => draw_compact(frame, view, mask, issue),
+        SizeClass::Compact => {
+            draw_compact(frame, view, mask, issue);
+        }
         SizeClass::TooSmall => frame.render_widget(
             Paragraph::new("rbw: enlarge window. Esc cancels.")
                 .style(Style::default().fg(INK))
@@ -655,11 +949,13 @@ fn draw_compact(
         );
     } else if boxed {
         let field = Block::default()
-            .title(match (mask.is_none(), short) {
-                (true, true) => " Password (no echo) ",
-                (true, false) => " Master password (no echo) ",
-                (false, true) => " Password ",
-                (false, false) => " Master password ",
+            .title(match (view.server_auth, mask.is_none(), short) {
+                (false, true, true) => " Password (no echo) ",
+                (false, true, false) => " Master password (no echo) ",
+                (false, false, true) => " Password ",
+                (false, false, false) => " Master password ",
+                (true, true, _) => " Response (no echo) ",
+                (true, false, _) => " Response ",
             })
             .borders(Borders::ALL)
             .padding(Padding::horizontal(1))
@@ -843,10 +1139,11 @@ fn draw_full(
         );
     } else {
         let field = Block::default()
-            .title(if mask.is_none() {
-                " Master password (no echo) "
-            } else {
-                " Master password "
+            .title(match (view.server_auth, mask.is_none()) {
+                (true, true) => " Response (no echo) ",
+                (true, false) => " Response ",
+                (false, true) => " Master password (no echo) ",
+                (false, false) => " Master password ",
             })
             .borders(Borders::ALL)
             .padding(Padding::horizontal(1))
@@ -997,6 +1294,7 @@ mod tests {
     fn dialog_renders_only_masked_input_and_public_status() {
         let mut terminal = Terminal::new(TestBackend::new(90, 28)).unwrap();
         let view = View {
+            server_auth: false,
             title: "Unlock demo vault",
             fingerprint: FingerprintStatus::Ready,
             hide_disabled: false,
@@ -1026,6 +1324,7 @@ mod tests {
                 draw(
                     frame,
                     &View {
+                        server_auth: false,
                         title: "Demo",
                         fingerprint: FingerprintStatus::Disabled,
                         hide_disabled: false,
@@ -1075,6 +1374,7 @@ mod tests {
     }
 
     const DEMO: View<'static> = View {
+        server_auth: false,
         title: "Unlock account default",
         fingerprint: FingerprintStatus::Ready,
         hide_disabled: false,
@@ -1083,6 +1383,75 @@ mod tests {
         error: None,
         tick: 0,
     };
+
+    #[test]
+    fn mouse_focus_accepts_only_primary_button_presses() {
+        assert_eq!(
+            mouse_click(b"[<0;20;10", b'M'),
+            Some(Position::new(19, 9))
+        );
+        assert_eq!(
+            mouse_click(b"[<16;20;10", b'M'),
+            Some(Position::new(19, 9))
+        );
+        for (packet, terminator) in [
+            (&b"[<0;20;10"[..], b'm'),
+            (&b"[<1;20;10"[..], b'M'),
+            (&b"[<32;20;10"[..], b'M'),
+            (&b"[<0;0;10"[..], b'M'),
+            (&b"[<0;20;10;11"[..], b'M'),
+        ] {
+            assert!(mouse_click(packet, terminator).is_none());
+        }
+    }
+
+    #[test]
+    fn setup_keeps_all_fields_and_shortcuts_visible() {
+        let fields = std::array::from_fn(|_| InputState::new().unwrap());
+        for (width, height) in [(86, 28), (66, 17), (40, 10)] {
+            let mut terminal =
+                Terminal::new(TestBackend::new(width, height)).unwrap();
+            let mut field_areas = [Rect::default(); SETUP_FIELDS.len()];
+            terminal
+                .draw(|frame| {
+                    field_areas = draw_setup(
+                        frame,
+                        &fields,
+                        0,
+                        "https://bitwarden.com",
+                        false,
+                        None,
+                    );
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let lines = buffer
+                .content
+                .chunks(usize::from(width))
+                .map(|row| {
+                    row.iter()
+                        .map(ratatui::buffer::Cell::symbol)
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>();
+            let row = |label: &str| {
+                lines.iter().position(|line| line.contains(label)).unwrap()
+            };
+            let positions = SETUP_FIELDS.map(row);
+            assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+            assert!(positions[3] < row("Esc"));
+            for (area, label_row) in field_areas.iter().zip(positions) {
+                assert_eq!(usize::from(area.y), label_row);
+                assert!(area.contains(Position::new(area.x, area.y)));
+            }
+            if height >= 20 {
+                assert_eq!(positions[0], row("Sign in to Bitwarden") + 2);
+                assert!(positions
+                    .windows(2)
+                    .all(|pair| pair[0] + 4 == pair[1]));
+            }
+        }
+    }
 
     #[test]
     fn narrow_and_short_terminals_keep_the_password_field() {
@@ -1126,6 +1495,7 @@ mod tests {
                 draw(
                     frame,
                     &View {
+                        server_auth: false,
                         title: "Demo",
                         fingerprint: FingerprintStatus::Disabled,
                         hide_disabled: false,

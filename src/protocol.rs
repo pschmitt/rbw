@@ -246,6 +246,9 @@ pub enum Action {
         password: Option<String>,
         totp: Option<String>,
     },
+    // After each LoginPrompt response, send a big-endian u16 length followed
+    // by that many UTF-8 bytes on the same stream. Disconnect to cancel.
+    LoginWithUi,
     // `client_id`/`client_secret` let the client supply a pre-obtained
     // personal API key (e.g. from `--stdin`) instead of the agent prompting
     // for both via pinentry. Both `None` (the common case) preserves the
@@ -376,6 +379,13 @@ pub enum Action {
     },
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy)]
+pub enum LoginPromptKind {
+    Password,
+    Authenticator,
+    Other,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(tag = "type")]
 pub enum Response {
@@ -383,6 +393,12 @@ pub enum Response {
         data: Vec<u8>,
     },
     Ack,
+    LoginPrompt {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        kind: Option<LoginPromptKind>,
+        title: String,
+        error: Option<String>,
+    },
     Progress {
         message: String,
     },

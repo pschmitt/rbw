@@ -550,6 +550,15 @@ enum Opt {
 
     #[command(about = "Log in to the Bitwarden server")]
     Login {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[arg(long, conflicts_with_all = ["stdin", "totp", "ui", "pinentry"], help = "Use the terminal interface")]
+        tui: bool,
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[arg(long, value_enum, conflicts_with_all = ["stdin", "totp", "pinentry"], help = "Choose the sign-in interface")]
+        ui: Option<rbw::config::UnlockUi>,
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[arg(long, conflicts_with_all = ["stdin", "totp", "ui"], help = "Use pinentry for sign-in")]
+        pinentry: bool,
         #[arg(long, help = "Read the password from standard input")]
         stdin: bool,
         #[arg(
@@ -4642,9 +4651,32 @@ fn main() {
             };
             commands::register(client_id, client_secret)
         }
-        Opt::Login { stdin, totp } => {
-            let password = stdin.then(read_stdin_password);
-            commands::login(password, totp)
+        Opt::Login {
+            stdin,
+            totp,
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            tui,
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            ui,
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            pinentry,
+        } => {
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            if stdin || totp.is_some() {
+                commands::login(stdin.then(read_stdin_password), totp)
+            } else {
+                use rbw::config::UnlockUi;
+                let ui = if tui {
+                    Some(UnlockUi::Terminal)
+                } else if pinentry {
+                    Some(UnlockUi::Pinentry)
+                } else {
+                    ui
+                };
+                commands::login_interactive(ui)
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "android")))]
+            commands::login(stdin.then(read_stdin_password), totp)
         }
         Opt::Version => {
             println!("rbw {}", env!("CARGO_PKG_VERSION"));
