@@ -29,7 +29,7 @@ impl Sock {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub fn send_login_secret(
         &mut self,
         secret: &rbw::locked::Password,

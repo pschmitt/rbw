@@ -1,6 +1,6 @@
 //! Unlock UI: only public status and a constant mask reach render buffers.
 //! Password input has no Debug implementation and is kept in locked memory.
-#[cfg(feature = "gtk-ui")]
+#[cfg(all(target_os = "linux", feature = "gtk-ui"))]
 mod gtk;
 mod terminal;
 
@@ -259,7 +259,7 @@ pub fn resolve(
     let mode = if mode == UnlockUi::Auto {
         if std::io::stdin().is_terminal() {
             UnlockUi::Terminal
-        } else if cfg!(feature = "gtk-ui")
+        } else if cfg!(all(target_os = "linux", feature = "gtk-ui"))
             && (std::env::var_os("WAYLAND_DISPLAY").is_some()
                 || std::env::var_os("DISPLAY").is_some())
         {
@@ -270,7 +270,9 @@ pub fn resolve(
     } else {
         mode
     };
-    if mode == UnlockUi::Gtk && !cfg!(feature = "gtk-ui") {
+    if mode == UnlockUi::Gtk
+        && !cfg!(all(target_os = "linux", feature = "gtk-ui"))
+    {
         anyhow::bail!(
             "GTK unlock requires an rbw build with the gtk-ui feature"
         );
@@ -318,7 +320,38 @@ pub async fn prompt(
         .to_owned())
 }
 
+/// Unlock a cached vault on Android without a desktop fingerprint provider.
+#[cfg(target_os = "android")]
+#[allow(
+    clippy::future_not_send,
+    reason = "the terminal stays on the calling thread"
+)]
+pub async fn prompt_local(
+    options: Options,
+    title: &str,
+    timeout_seconds: u64,
+    validate: Validator,
+) -> anyhow::Result<String> {
+    let (_status, status) = watch::channel(FingerprintStatus::Disabled);
+    let (_cancel, cancel) = oneshot::channel();
+    let (session_cancel, _session) = oneshot::channel();
+    prompt(
+        options,
+        title,
+        timeout_seconds,
+        status,
+        validate,
+        cancel,
+        session_cancel,
+    )
+    .await
+}
+
 /// Collect input for server-side authentication or a public setup field.
+#[allow(
+    clippy::future_not_send,
+    reason = "GTK widgets and terminal ownership stay on the calling thread"
+)]
 pub async fn prompt_login(
     mut options: Options,
     title: &str,
@@ -366,14 +399,17 @@ async fn run_prompt(
         .filter(|character| !character.is_control())
         .take(100)
         .collect();
+    let server_auth = validate.is_none() && public_field.is_none();
     let frontend: anyhow::Result<Box<dyn Frontend>> = match options.mode {
         crate::config::UnlockUi::Terminal => {
             terminal::TerminalDialog::new(options.no_echo)
                 .map(|dialog| -> Box<dyn Frontend> { Box::new(dialog) })
         }
-        #[cfg(feature = "gtk-ui")]
-        crate::config::UnlockUi::Gtk => gtk::GtkDialog::new(options.no_echo)
-            .map(|dialog| -> Box<dyn Frontend> { Box::new(dialog) }),
+        #[cfg(all(target_os = "linux", feature = "gtk-ui"))]
+        crate::config::UnlockUi::Gtk => {
+            gtk::GtkDialog::new(options.no_echo, public_field, server_auth)
+                .map(|dialog| -> Box<dyn Frontend> { Box::new(dialog) })
+        }
         _ => Err(anyhow::anyhow!("unsupported custom unlock interface")),
     };
     let mut frontend = match frontend {
@@ -447,7 +483,7 @@ async fn run_prompt(
             }
             Some(Action::Submit(_)) | None => {},
         }
-        frontend.render(&View { title: &title, fingerprint: *status.borrow_and_update(), hide_disabled: options.hide_fingerprint_notice, checking: worker.is_some(), success: false, error, public_field, server_auth: validate.is_none() && public_field.is_none(), tick })?;
+        frontend.render(&View { title: &title, fingerprint: *status.borrow_and_update(), hide_disabled: options.hide_fingerprint_notice, checking: worker.is_some(), success: false, error, public_field, server_auth, tick })?;
         tick = tick.wrapping_add(1);
     }
     } .await;

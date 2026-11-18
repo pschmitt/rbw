@@ -35,10 +35,12 @@ pub fn login(
     )
 }
 
-/// Configure an unconfigured account and use the terminal unlock frontend
+/// Configure an unconfigured account and use the selected unlock frontend
 /// for the authentication prompts.
-#[cfg(target_os = "linux")]
-pub fn login_tui() -> anyhow::Result<()> {
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub fn login_interactive(
+    ui: Option<rbw::config::UnlockUi>,
+) -> anyhow::Result<()> {
     use rbw::config::{Config, UnlockUi};
     let mut config = match Config::load() {
         Ok(config) => config,
@@ -49,10 +51,14 @@ pub fn login_tui() -> anyhow::Result<()> {
         }
         Err(error) => return Err(error.into()),
     };
+    let mode = rbw::unlock_ui::resolve(ui.unwrap_or(config.unlock_ui))?;
+    if mode == UnlockUi::Pinentry {
+        return login(None, None);
+    }
     let selected = crate::actions::current_account();
     let account = config.account(selected.as_deref())?;
     let options = rbw::unlock_ui::Options {
-        mode: UnlockUi::Terminal,
+        mode,
         no_echo: config.unlock_no_echo,
         hide_fingerprint_notice: true,
     };
@@ -137,7 +143,7 @@ pub fn login_tui() -> anyhow::Result<()> {
     ensure_agent()?;
     let (password, totp) = resolve_unlock_credentials(&mut Vec::new())?;
     if password.is_some() {
-        login_registering_from_files(password, totp)
+        login_registering_from_files(password.as_deref(), totp)
     } else {
         login_with_registration_retry(
             |_| crate::actions::login_with_ui(options, timeout),
@@ -175,18 +181,18 @@ pub(super) fn login_resolving_credential_source(
     visited: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     let (password, totp) = resolve_unlock_credentials(visited)?;
-    login_registering_from_files(password, totp)
+    login_registering_from_files(password.as_deref(), totp)
 }
 
 // `crate::actions::login`, plus: when the server wants this device
 // registered first and the account's `unlock.files` names its API key,
 // registers with it and logs in again (with a fresh TOTP code).
 pub(super) fn login_registering_from_files(
-    password: Option<String>,
+    password: Option<&str>,
     totp: Option<String>,
 ) -> anyhow::Result<()> {
     login_with_registration_retry(
-        |totp| crate::actions::login(password.clone(), totp),
+        |totp| crate::actions::login(password.map(str::to_owned), totp),
         totp,
     )
 }
@@ -247,12 +253,12 @@ pub(super) fn unlock_impl(
         || resolve_unlock_credentials(visited),
         |password| Ok((Some(password), totp)),
     )?;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     let password = match password {
         Some(password) => Some(password),
         None => resolve_password_dialog()?,
     };
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     let ui = if password.is_none() {
         let config = rbw::config::Config::load()?;
         let options = unlock_dialog_options(&config)?;
@@ -261,7 +267,7 @@ pub(super) fn unlock_impl(
     } else {
         None
     };
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     if let Some((options, timeout)) = ui {
         login_with_registration_retry(
             |_| crate::actions::login_with_ui(options, timeout),
@@ -271,12 +277,12 @@ pub(super) fn unlock_impl(
         // without falling back to an external prompt on this path.
         crate::actions::unlocked()?;
     } else {
-        login_registering_from_files(password.clone(), totp)?;
+        login_registering_from_files(password.as_deref(), totp)?;
         crate::actions::unlock(password)?;
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
-        login_registering_from_files(password.clone(), totp)?;
+        login_registering_from_files(password.as_deref(), totp)?;
         crate::actions::unlock(password)?;
     }
     // Several accounts can unlock in one run; say which one this was.
@@ -516,7 +522,7 @@ pub(super) fn resolve_unlock_credentials(
     Ok((None, None))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn unlock_dialog_options(
     config: &rbw::config::Config,
 ) -> anyhow::Result<rbw::unlock_ui::Options> {
@@ -532,7 +538,7 @@ fn unlock_dialog_options(
     })
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(super) fn resolve_password_dialog() -> anyhow::Result<Option<String>> {
     let account = active_account()?;
     let Ok(db) = load_db() else {
@@ -547,15 +553,28 @@ pub(super) fn resolve_password_dialog() -> anyhow::Result<Option<String>> {
         return Ok(None);
     }
     let title = format!("Unlock account {}", account.name);
+    let validate: rbw::unlock_ui::Validator =
+        std::sync::Arc::new(move |password| {
+            verify_cached_password(&account, &db, password)
+        });
+    #[cfg(target_os = "linux")]
     let password = rbw::desktop::unlock_with_dialog(
         None,
         options,
         &title,
         config.pinentry.timeout,
-        std::sync::Arc::new(move |password| {
-            verify_cached_password(&account, &db, password)
-        }),
+        validate,
     )?;
+    #[cfg(target_os = "android")]
+    let password = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()?
+        .block_on(rbw::unlock_ui::prompt_local(
+            options,
+            &title,
+            config.pinentry.timeout,
+            validate,
+        ))?;
     Ok(Some(password))
 }
 

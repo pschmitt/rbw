@@ -391,7 +391,7 @@ impl Frontend for TerminalDialog {
         });
         let issue = self.state.issue;
         self.terminal.draw(|frame| {
-            draw_input(frame, view, mask, issue, public_input)
+            draw_input(frame, view, mask, issue, public_input);
         })?;
         Ok(())
     }
@@ -560,7 +560,7 @@ fn draw_input(
     match size_class(area.width, area.height) {
         SizeClass::Full => draw_full(frame, view, mask, issue, public_input),
         SizeClass::Compact => {
-            draw_compact(frame, view, mask, issue, public_input)
+            draw_compact(frame, view, mask, issue, public_input);
         }
         SizeClass::TooSmall => frame.render_widget(
             Paragraph::new("rbw: enlarge window. Esc cancels.")
@@ -684,7 +684,7 @@ fn draw_compact(
         );
     } else if boxed {
         let field = Block::default()
-            .title(view.public_field.unwrap_or(
+            .title(view.public_field.unwrap_or_else(|| {
                 match (view.server_auth, mask.is_none(), short) {
                     (false, true, true) => " Password (no echo) ",
                     (false, true, false) => " Master password (no echo) ",
@@ -692,8 +692,8 @@ fn draw_compact(
                     (false, false, false) => " Master password ",
                     (true, true, _) => " Response (no echo) ",
                     (true, false, _) => " Response ",
-                },
-            ))
+                }
+            }))
             .borders(Borders::ALL)
             .padding(Padding::horizontal(1))
             .border_type(BorderType::Rounded)
@@ -877,14 +877,14 @@ fn draw_full(
         );
     } else {
         let field = Block::default()
-            .title(view.public_field.unwrap_or(
+            .title(view.public_field.unwrap_or_else(|| {
                 match (view.server_auth, mask.is_none()) {
                     (true, true) => " Response (no echo) ",
                     (true, false) => " Response ",
                     (false, true) => " Master password (no echo) ",
                     (false, false) => " Master password ",
-                },
-            ))
+                }
+            }))
             .borders(Borders::ALL)
             .padding(Padding::horizontal(1))
             .border_type(BorderType::Rounded)

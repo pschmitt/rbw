@@ -72,7 +72,7 @@ pub fn login(
     simple_action(rbw::protocol::Action::Login { password, totp })
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn login_with_ui(
     options: rbw::unlock_ui::Options,
     timeout: u64,

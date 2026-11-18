@@ -550,9 +550,15 @@ enum Opt {
 
     #[command(about = "Log in to the Bitwarden server")]
     Login {
-        #[cfg(target_os = "linux")]
-        #[arg(long, conflicts_with_all = ["stdin", "totp"], help = "Set up and sign in using the terminal interface")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[arg(long, conflicts_with_all = ["stdin", "totp", "ui", "pinentry"], help = "Use the terminal interface")]
         tui: bool,
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[arg(long, value_enum, conflicts_with_all = ["stdin", "totp", "pinentry"], help = "Choose the sign-in interface")]
+        ui: Option<rbw::config::UnlockUi>,
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[arg(long, conflicts_with_all = ["stdin", "totp", "ui"], help = "Use pinentry for sign-in")]
+        pinentry: bool,
         #[arg(long, help = "Read the password from standard input")]
         stdin: bool,
         #[arg(
@@ -4648,16 +4654,28 @@ fn main() {
         Opt::Login {
             stdin,
             totp,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             tui,
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            ui,
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            pinentry,
         } => {
-            #[cfg(target_os = "linux")]
-            if tui {
-                commands::login_tui()
-            } else {
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            if stdin || totp.is_some() {
                 commands::login(stdin.then(read_stdin_password), totp)
+            } else {
+                use rbw::config::UnlockUi;
+                let ui = if tui {
+                    Some(UnlockUi::Terminal)
+                } else if pinentry {
+                    Some(UnlockUi::Pinentry)
+                } else {
+                    ui
+                };
+                commands::login_interactive(ui)
             }
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(any(target_os = "linux", target_os = "android")))]
             commands::login(stdin.then(read_stdin_password), totp)
         }
         Opt::Version => {

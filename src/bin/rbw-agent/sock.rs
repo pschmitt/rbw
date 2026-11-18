@@ -93,11 +93,13 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(
-            agent.recv_login_secret().await.unwrap().password() == b"first"
+        assert_eq!(
+            agent.recv_login_secret().await.unwrap().password(),
+            b"first"
         );
-        assert!(
-            agent.recv_login_secret().await.unwrap().password() == b"second"
+        assert_eq!(
+            agent.recv_login_secret().await.unwrap().password(),
+            b"second"
         );
         assert!(agent.recv_login_secret().await.is_err());
     }
