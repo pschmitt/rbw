@@ -308,6 +308,7 @@ async fn login_interactively(
                 login_prompt(
                     sock,
                     client_ui,
+                    rbw::protocol::LoginPromptKind::Password,
                     "Master Password",
                     &format!("Log in to {host}"),
                     None,
@@ -325,6 +326,7 @@ async fn login_interactively(
             login_prompt(
                 sock,
                 client_ui,
+                rbw::protocol::LoginPromptKind::Password,
                 "Master Password",
                 &format!("Log in to {host}"),
                 err.as_deref(),
@@ -486,6 +488,7 @@ async fn login_interactively(
 async fn login_prompt(
     sock: &mut crate::sock::Sock,
     client_ui: bool,
+    kind: rbw::protocol::LoginPromptKind,
     prompt: &str,
     description: &str,
     error: Option<&str>,
@@ -494,6 +497,7 @@ async fn login_prompt(
 ) -> anyhow::Result<rbw::locked::Password> {
     if client_ui {
         sock.send(&rbw::protocol::Response::LoginPrompt {
+            kind: Some(kind),
             title: format!("{prompt} · {description}"),
             error: error.map(str::to_owned),
         })
@@ -552,6 +556,12 @@ async fn two_factor(
         let code = login_prompt(
             sock,
             client_ui,
+            match provider {
+                rbw::api::TwoFactorProviderType::Authenticator => {
+                    rbw::protocol::LoginPromptKind::Authenticator
+                }
+                _ => rbw::protocol::LoginPromptKind::Other,
+            },
             provider.header(),
             provider.message(),
             err.as_deref(),

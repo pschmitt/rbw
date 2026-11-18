@@ -1,4 +1,7 @@
-use super::{Action, FingerprintStatus, Frontend, SecretInput, View};
+use super::{
+    Action, FingerprintStatus, Frontend, SecretInput, SetupCredentials, View,
+    SETUP_FIELDS,
+};
 use anyhow::Context as _;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::{
@@ -248,6 +251,19 @@ impl TerminalDialog {
         )?;
         Ok(dialog)
     }
+    fn read_input(
+        &mut self,
+        buffer: &mut [u8],
+    ) -> anyhow::Result<Option<usize>> {
+        match self.input.read(buffer) {
+            Ok(0) => Ok(None),
+            Ok(length) => Ok(Some(length)),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                Ok(Some(0))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
 }
 
 impl InputState {
@@ -363,13 +379,8 @@ impl Frontend for TerminalDialog {
         // Read bytes directly into a wiped stack buffer. Terminal libraries
         // and paste events must never allocate a String containing the password.
         let mut buffer = Zeroizing::new([0u8; 256]);
-        let length = match self.input.read(&mut buffer[..]) {
-            Ok(0) => return Ok(Some(Action::Cancel)),
-            Ok(length) => length,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                return Ok(None)
-            }
-            Err(error) => return Err(error.into()),
+        let Some(length) = self.read_input(&mut buffer[..])? else {
+            return Ok(Some(Action::Cancel));
         };
         for byte in &buffer[..length] {
             if let Some(action) = self.state.input_byte(*byte)? {
@@ -385,13 +396,9 @@ impl Frontend for TerminalDialog {
             || size_class(area.width, area.height) == SizeClass::TooSmall;
         let mask =
             (!self.state.no_echo).then(|| self.state.secret.char_count());
-        let public_input = view.public_field.map(|_| {
-            std::str::from_utf8(self.state.secret.bytes.data())
-                .unwrap_or_default()
-        });
         let issue = self.state.issue;
         self.terminal.draw(|frame| {
-            draw_input(frame, view, mask, issue, public_input);
+            draw(frame, view, mask, issue);
         })?;
         Ok(())
     }
@@ -399,6 +406,206 @@ impl Frontend for TerminalDialog {
         self.state.secret.clear();
         self.state.issue = None;
     }
+}
+
+#[allow(
+    clippy::future_not_send,
+    reason = "the terminal stays on the calling thread"
+)]
+pub(super) async fn setup(
+    no_echo: bool,
+    server_hint: &str,
+    deadline: Option<Instant>,
+) -> anyhow::Result<SetupCredentials> {
+    let mut dialog = TerminalDialog::new(no_echo)?;
+    let mut fields = [
+        InputState::new()?,
+        InputState::new()?,
+        InputState::new()?,
+        InputState::new()?,
+    ];
+    let mut selected = 0;
+    let mut error = None;
+    let mut timer = tokio::time::interval(Duration::from_millis(16));
+    loop {
+        anyhow::ensure!(
+            deadline.is_none_or(|deadline| Instant::now() < deadline),
+            "sign-in setup timed out"
+        );
+        anyhow::ensure!(
+            fields[selected].escape_started.is_none_or(|start| start
+                .elapsed()
+                < Duration::from_millis(80)),
+            "sign-in setup cancelled"
+        );
+        let area = dialog.terminal.size()?;
+        let too_small = area.height < 8 || area.width < 20;
+        let mut buffer = Zeroizing::new([0u8; 256]);
+        let length = dialog
+            .read_input(&mut buffer[..])?
+            .context("sign-in setup cancelled")?;
+        for &byte in &buffer[..length] {
+            let field = &mut fields[selected];
+            field.busy = too_small;
+            if !field.paste && !field.busy {
+                if byte == b'Z'
+                    && field.escape_started.is_some()
+                    && field.escape_len == 1
+                    && field.escape[0] == b'['
+                {
+                    field.escape_started = None;
+                    field.escape_len = 0;
+                    selected = (selected + fields.len() - 1) % fields.len();
+                    continue;
+                }
+                if field.escape_started.is_none() && byte == b'\t' {
+                    selected = (selected + 1) % fields.len();
+                    continue;
+                }
+                if field.escape_started.is_none()
+                    && matches!(byte, b'\n' | b'\r')
+                {
+                    let [url, email, password, totp] = &mut fields;
+                    let account = super::setup_account(
+                        std::str::from_utf8(url.secret.bytes.data())
+                            .unwrap_or("\0"),
+                        std::str::from_utf8(email.secret.bytes.data())
+                            .unwrap_or("\0"),
+                        password.secret.bytes.data(),
+                        totp.secret.bytes.data(),
+                    );
+                    if let Ok((base_url, email)) = account {
+                        if !fields.iter().any(|field| field.blocked) {
+                            return Ok(SetupCredentials {
+                                base_url,
+                                email,
+                                password: fields[2].secret.take()?,
+                                totp: if fields[3].secret.is_empty() {
+                                    None
+                                } else {
+                                    Some(fields[3].secret.take()?)
+                                },
+                            });
+                        }
+                    } else {
+                        error = account.err();
+                    }
+                    continue;
+                }
+            }
+            if matches!(field.input_byte(byte)?, Some(Action::Cancel)) {
+                anyhow::bail!("sign-in setup cancelled");
+            }
+            error = None;
+        }
+        dialog.terminal.draw(|frame| {
+            draw_setup(frame, &fields, selected, server_hint, no_echo, error);
+        })?;
+        timer.tick().await;
+    }
+}
+
+fn draw_setup(
+    frame: &mut Frame<'_>,
+    fields: &[InputState; 4],
+    selected: usize,
+    server_hint: &str,
+    no_echo: bool,
+    error: Option<&str>,
+) {
+    let area = frame.area();
+    frame
+        .render_widget(Block::default().style(Style::default().bg(BG)), area);
+    if area.height < 8 || area.width < 20 {
+        frame.render_widget(
+            Paragraph::new("Enlarge terminal · Esc cancels")
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+        return;
+    }
+    let height = area.height.min(18);
+    let width = area.width.min(CRAB_CARD_WIDTH);
+    let card = Rect::new(
+        (area.width - width) / 2,
+        (area.height - height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(
+        Block::bordered()
+            .title(" Sign in to Bitwarden ")
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+            .style(Style::default().bg(BG)),
+        card,
+    );
+    let boxed = height >= 16;
+    let mut x = card.x + 2;
+    let mut width = card.width - 4;
+    if boxed && width >= 64 {
+        frame.render_widget(
+            Paragraph::new(crab_lines(&CRAB_TINY, 0)),
+            Rect::new(x, card.y + 5, CRAB_TINY_WIDTH, CRAB_TINY_ROWS),
+        );
+        x += CRAB_TINY_WIDTH + 2;
+        width -= CRAB_TINY_WIDTH + 2;
+    }
+    let stride = if boxed { 3 } else { 1 };
+    for (index, (field, label)) in fields.iter().zip(SETUP_FIELDS).enumerate()
+    {
+        let input = if index >= 2 {
+            if no_echo {
+                String::new()
+            } else {
+                "•".repeat(field.secret.char_count().min(usize::from(width)))
+            }
+        } else if index == 0 && field.secret.is_empty() {
+            server_hint.to_owned()
+        } else {
+            std::str::from_utf8(field.secret.bytes.data())
+                .unwrap_or_default()
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(usize::from(width))
+                .collect()
+        };
+        let style =
+            Style::default().fg(if index == selected { ACCENT } else { INK });
+        let rect = Rect::new(
+            x,
+            card.y + 1 + stride * u16::try_from(index).unwrap_or_default(),
+            width,
+            stride,
+        );
+        if boxed {
+            frame.render_widget(
+                Paragraph::new(input).block(
+                    Block::bordered()
+                        .title(label)
+                        .border_type(BorderType::Rounded)
+                        .border_style(style),
+                ),
+                rect,
+            );
+        } else {
+            frame.render_widget(
+                Paragraph::new(format!("{label}: {input}")).style(style),
+                rect,
+            );
+        }
+    }
+    if let Some(error) = fields[selected].issue.or(error) {
+        frame.render_widget(
+            Paragraph::new(error).style(Style::default().fg(Color::LightRed)),
+            Rect::new(x, card.y + height - 3, width, 1),
+        );
+    }
+    frame.render_widget(
+        Paragraph::new("Tab next · Enter sign in · Esc cancel")
+            .style(Style::default().fg(INK)),
+        Rect::new(x, card.y + height - 2, width, 1),
+    );
 }
 
 impl Drop for TerminalDialog {
@@ -483,15 +690,7 @@ fn mask_text(
     mask: Option<usize>,
     max: usize,
     short: bool,
-    public_input: Option<&str>,
 ) -> String {
-    if let Some(input) = public_input {
-        return input
-            .chars()
-            .filter(|c| !c.is_control())
-            .take(max)
-            .collect();
-    }
     match mask {
         None => String::new(),
         Some(0) if view.success => String::new(),
@@ -537,30 +736,19 @@ fn wrapped_rows(text: &str, width: u16) -> u16 {
     u16::try_from(rows).unwrap_or(u16::MAX)
 }
 
-#[cfg(test)]
 fn draw(
     frame: &mut Frame<'_>,
     view: &View<'_>,
     mask: Option<usize>,
     issue: Option<&'static str>,
 ) {
-    draw_input(frame, view, mask, issue, None);
-}
-
-fn draw_input(
-    frame: &mut Frame<'_>,
-    view: &View<'_>,
-    mask: Option<usize>,
-    issue: Option<&'static str>,
-    public_input: Option<&str>,
-) {
     let area = frame.area();
     frame
         .render_widget(Block::default().style(Style::default().bg(BG)), area);
     match size_class(area.width, area.height) {
-        SizeClass::Full => draw_full(frame, view, mask, issue, public_input),
+        SizeClass::Full => draw_full(frame, view, mask, issue),
         SizeClass::Compact => {
-            draw_compact(frame, view, mask, issue, public_input);
+            draw_compact(frame, view, mask, issue);
         }
         SizeClass::TooSmall => frame.render_widget(
             Paragraph::new("rbw: enlarge window. Esc cancels.")
@@ -579,7 +767,6 @@ fn draw_compact(
     view: &View<'_>,
     mask: Option<usize>,
     issue: Option<&'static str>,
-    public_input: Option<&str>,
 ) {
     let area = frame.area();
     let margin = u16::from(area.width >= 24);
@@ -684,23 +871,21 @@ fn draw_compact(
         );
     } else if boxed {
         let field = Block::default()
-            .title(view.public_field.unwrap_or_else(|| {
-                match (view.server_auth, mask.is_none(), short) {
-                    (false, true, true) => " Password (no echo) ",
-                    (false, true, false) => " Master password (no echo) ",
-                    (false, false, true) => " Password ",
-                    (false, false, false) => " Master password ",
-                    (true, true, _) => " Response (no echo) ",
-                    (true, false, _) => " Response ",
-                }
-            }))
+            .title(match (view.server_auth, mask.is_none(), short) {
+                (false, true, true) => " Password (no echo) ",
+                (false, true, false) => " Master password (no echo) ",
+                (false, false, true) => " Password ",
+                (false, false, false) => " Master password ",
+                (true, true, _) => " Response (no echo) ",
+                (true, false, _) => " Response ",
+            })
             .borders(Borders::ALL)
             .padding(Padding::horizontal(1))
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(border));
         let max = usize::from(width.saturating_sub(4));
         frame.render_widget(
-            Paragraph::new(mask_text(view, mask, max, short, public_input))
+            Paragraph::new(mask_text(view, mask, max, short))
                 .style(Style::default().fg(if mask == Some(0) {
                     MUTED
                 } else {
@@ -716,7 +901,7 @@ fn draw_compact(
             Paragraph::new(Line::from(vec![
                 Span::styled(label, Style::default().fg(border)),
                 Span::styled(
-                    mask_text(view, mask, max, true, public_input),
+                    mask_text(view, mask, max, true),
                     Style::default().fg(if mask == Some(0) {
                         MUTED
                     } else {
@@ -760,7 +945,6 @@ fn draw_full(
     view: &View<'_>,
     mask: Option<usize>,
     issue: Option<&'static str>,
-    public_input: Option<&str>,
 ) {
     let area = frame.area();
     let width = area.width.saturating_sub(4).min(CRAB_CARD_WIDTH);
@@ -877,14 +1061,12 @@ fn draw_full(
         );
     } else {
         let field = Block::default()
-            .title(view.public_field.unwrap_or_else(|| {
-                match (view.server_auth, mask.is_none()) {
-                    (true, true) => " Response (no echo) ",
-                    (true, false) => " Response ",
-                    (false, true) => " Master password (no echo) ",
-                    (false, false) => " Master password ",
-                }
-            }))
+            .title(match (view.server_auth, mask.is_none()) {
+                (true, true) => " Response (no echo) ",
+                (true, false) => " Response ",
+                (false, true) => " Master password (no echo) ",
+                (false, false) => " Master password ",
+            })
             .borders(Borders::ALL)
             .padding(Padding::horizontal(1))
             .border_type(BorderType::Rounded)
@@ -903,7 +1085,6 @@ fn draw_full(
                 mask,
                 usize::from(content(6, 3).width.saturating_sub(4)),
                 false,
-                public_input,
             ))
             .style(Style::default().fg(if mask == Some(0) {
                 MUTED
@@ -1035,7 +1216,6 @@ mod tests {
     fn dialog_renders_only_masked_input_and_public_status() {
         let mut terminal = Terminal::new(TestBackend::new(90, 28)).unwrap();
         let view = View {
-            public_field: None,
             server_auth: false,
             title: "Unlock demo vault",
             fingerprint: FingerprintStatus::Ready,
@@ -1066,7 +1246,6 @@ mod tests {
                 draw(
                     frame,
                     &View {
-                        public_field: None,
                         server_auth: false,
                         title: "Demo",
                         fingerprint: FingerprintStatus::Disabled,
@@ -1117,7 +1296,6 @@ mod tests {
     }
 
     const DEMO: View<'static> = View {
-        public_field: None,
         server_auth: false,
         title: "Unlock account default",
         fingerprint: FingerprintStatus::Ready,
@@ -1170,7 +1348,6 @@ mod tests {
                 draw(
                     frame,
                     &View {
-                        public_field: None,
                         server_auth: false,
                         title: "Demo",
                         fingerprint: FingerprintStatus::Disabled,

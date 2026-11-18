@@ -25,10 +25,12 @@ On Linux and Android, interactive `rbw login` opens the terminal setup and sign-
 by default when run from a terminal. Use `--ui gtk` for the compact GTK
 dialog on builds with `gtk-ui`, `--tui` to select the terminal explicitly,
 or `--pinentry` for the existing pinentry flow. For a new account, the
-setup dialog asks for the server URL and email address.
+setup dialog shows the server URL, email address, master password, and an
+optional authenticator code together.
 Use `https://bitwarden.com` for the US cloud, `https://bitwarden.eu` for the
-EU cloud, or the base URL of your self-hosted server. The same dialog then
-collects your master password and any required two-factor code.
+EU cloud, or the base URL of your self-hosted server. Leave the authenticator
+code blank if you use another two-factor method or want to enter the code
+when the server asks for it.
 
 An account that is already configured can also sign in on its first
 `rbw unlock`. The first sign-in uses the selected unlock interface, including

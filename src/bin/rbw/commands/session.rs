@@ -63,66 +63,16 @@ pub fn login_interactive(
         hide_fingerprint_notice: true,
     };
     let timeout = config.pinentry.timeout;
+    let mut initial = crate::actions::LoginInput::default();
     if account.email.is_none() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()?;
-        let field = |title, label, error| -> anyhow::Result<String> {
-            let input = runtime.block_on(rbw::unlock_ui::prompt_login(
-                options,
-                title,
-                timeout,
-                error,
-                Some(label),
-            ))?;
-            Ok(std::str::from_utf8(input.password())?.trim().to_owned())
-        };
-        let base_url = if account.base_url.is_none() {
-            let mut error = None;
-            loop {
-                let url = field(
-                    "Bitwarden sign-in · Server URL",
-                    " Server URL ",
-                    error,
-                )?;
-                if let Ok(parsed) = reqwest::Url::parse(&url) {
-                    if matches!(parsed.scheme(), "http" | "https")
-                        && parsed.host_str().is_some()
-                        && parsed.username().is_empty()
-                        && parsed.password().is_none()
-                        && parsed.query().is_none()
-                        && parsed.fragment().is_none()
-                    {
-                        break match parsed.as_str().trim_end_matches('/') {
-                            "https://bitwarden.com"
-                            | "https://vault.bitwarden.com"
-                            | "https://api.bitwarden.com" => None,
-                            "https://bitwarden.eu"
-                            | "https://vault.bitwarden.eu"
-                            | "https://api.bitwarden.eu" => {
-                                Some("https://api.bitwarden.eu".to_owned())
-                            }
-                            other => Some(other.to_owned()),
-                        };
-                    }
-                }
-                error = Some("Enter an HTTP or HTTPS server URL, such as https://bitwarden.com.");
-            }
-        } else {
-            None
-        };
-        let mut error = None;
-        let email = loop {
-            let email = field(
-                "Bitwarden sign-in · Email address",
-                " Email address ",
-                error,
-            )?;
-            if !email.is_empty() && !email.chars().any(char::is_whitespace) {
-                break email;
-            }
-            error = Some("Enter your Bitwarden email address.");
-        };
+        let setup = runtime.block_on(rbw::unlock_ui::setup(
+            options,
+            timeout,
+            account.base_url.is_some(),
+        ))?;
         let account = if let Some(name) = selected.as_deref() {
             config
                 .accounts
@@ -132,10 +82,13 @@ pub fn login_interactive(
         } else {
             config.primary_mut()
         };
-        if let Some(base_url) = base_url {
-            account.base_url = Some(base_url.into());
+        if let Some(base_url) = setup.base_url {
+            account.base_url =
+                (!base_url.is_empty()).then(|| base_url.into());
         }
-        account.email = Some(email.into());
+        account.email = Some(setup.email.into());
+        initial.password = Some(setup.password);
+        initial.totp = setup.totp;
         config.save()?;
         stop_agent_for("config_change")?;
         crate::actions::set_active_account(selected)?;
@@ -146,7 +99,7 @@ pub fn login_interactive(
         login_registering_from_files(password.as_deref(), totp)
     } else {
         login_with_registration_retry(
-            |_| crate::actions::login_with_ui(options, timeout),
+            |_| crate::actions::login_with_ui(options, timeout, &mut initial),
             None,
         )
     }
@@ -198,7 +151,7 @@ pub(super) fn login_registering_from_files(
 }
 
 fn login_with_registration_retry(
-    login: impl Fn(Option<String>) -> anyhow::Result<()>,
+    mut login: impl FnMut(Option<String>) -> anyhow::Result<()>,
     totp: Option<String>,
 ) -> anyhow::Result<()> {
     let Err(error) = login(totp.clone()) else {
@@ -270,7 +223,13 @@ pub(super) fn unlock_impl(
     #[cfg(any(target_os = "linux", target_os = "android"))]
     if let Some((options, timeout)) = ui {
         login_with_registration_retry(
-            |_| crate::actions::login_with_ui(options, timeout),
+            |_| {
+                crate::actions::login_with_ui(
+                    options,
+                    timeout,
+                    &mut crate::actions::LoginInput::default(),
+                )
+            },
             totp,
         )?;
         // Server authentication loaded the vault keys. Check the lock state

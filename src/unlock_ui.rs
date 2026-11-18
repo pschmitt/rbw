@@ -195,6 +195,101 @@ impl SecretInput {
     }
 }
 
+pub struct SetupCredentials {
+    pub base_url: Option<String>,
+    pub email: String,
+    pub password: crate::locked::Password,
+    pub totp: Option<crate::locked::Password>,
+}
+
+const SETUP_FIELDS: [&str; 4] = [
+    "Server URL",
+    "Email address",
+    "Master password",
+    "Authenticator code (optional)",
+];
+
+fn setup_account(
+    url: &str,
+    email: &str,
+    password: &[u8],
+    totp: &[u8],
+) -> Result<(Option<String>, String), &'static str> {
+    let url = url.trim();
+    let base_url = if url.is_empty() {
+        None
+    } else {
+        let parsed = reqwest::Url::parse(url)
+            .ok()
+            .filter(|parsed| {
+                matches!(parsed.scheme(), "http" | "https")
+                    && parsed.host_str().is_some()
+                    && parsed.username().is_empty()
+                    && parsed.password().is_none()
+                    && parsed.query().is_none()
+                    && parsed.fragment().is_none()
+            })
+            .ok_or("Enter a valid HTTP or HTTPS server URL.")?;
+        Some(match parsed.as_str().trim_end_matches('/') {
+            "https://bitwarden.com"
+            | "https://vault.bitwarden.com"
+            | "https://api.bitwarden.com" => String::new(),
+            "https://bitwarden.eu"
+            | "https://vault.bitwarden.eu"
+            | "https://api.bitwarden.eu" => {
+                "https://api.bitwarden.eu".to_owned()
+            }
+            other => other.to_owned(),
+        })
+    };
+    let email = email.trim();
+    if email.is_empty() || email.chars().any(char::is_whitespace) {
+        return Err("Enter your Bitwarden email address.");
+    }
+    if password.is_empty() || std::str::from_utf8(password).is_err() {
+        return Err("Enter your master password.");
+    }
+    if !(totp.is_empty()
+        || totp.len() == 6 && totp.iter().all(u8::is_ascii_digit))
+    {
+        return Err(
+            "Enter a six-digit authenticator code or leave it blank.",
+        );
+    }
+    Ok((base_url, email.to_owned()))
+}
+
+/// Collect all initial login fields in one form.
+#[allow(
+    clippy::future_not_send,
+    reason = "the frontend stays on the calling thread"
+)]
+pub async fn setup(
+    options: Options,
+    timeout_seconds: u64,
+    configured_server: bool,
+) -> anyhow::Result<SetupCredentials> {
+    protect_process()?;
+    let _quiet_logs = QuietLogs::new();
+    let hint = if configured_server {
+        "Configured server"
+    } else {
+        "https://bitwarden.com"
+    };
+    let deadline = (timeout_seconds != 0)
+        .then(|| Instant::now() + Duration::from_secs(timeout_seconds));
+    match options.mode {
+        crate::config::UnlockUi::Terminal => {
+            terminal::setup(options.no_echo, hint, deadline).await
+        }
+        #[cfg(all(target_os = "linux", feature = "gtk-ui"))]
+        crate::config::UnlockUi::Gtk => {
+            gtk::setup(options.no_echo, hint, deadline).await
+        }
+        _ => anyhow::bail!("unsupported setup interface"),
+    }
+}
+
 pub(crate) enum Action {
     Submit(crate::locked::Password),
     Cancel,
@@ -207,7 +302,6 @@ pub(crate) struct View<'a> {
     pub checking: bool,
     pub success: bool,
     pub error: Option<&'a str>,
-    pub public_field: Option<&'a str>,
     pub server_auth: bool,
     pub tick: u64,
 }
@@ -239,7 +333,6 @@ async fn show_confirmation(
             checking: false,
             success: true,
             error: None,
-            public_field: None,
             server_auth: false,
             tick,
         })?;
@@ -312,7 +405,6 @@ pub async fn prompt(
         cancel,
         session_cancel,
         None,
-        None,
     )
     .await?;
     Ok(std::str::from_utf8(password.password())
@@ -347,7 +439,7 @@ pub async fn prompt_local(
     .await
 }
 
-/// Collect input for server-side authentication or a public setup field.
+/// Collect a password or MFA response requested by the agent.
 #[allow(
     clippy::future_not_send,
     reason = "GTK widgets and terminal ownership stay on the calling thread"
@@ -357,7 +449,6 @@ pub async fn prompt_login(
     title: &str,
     timeout_seconds: u64,
     error: Option<&str>,
-    public_field: Option<&str>,
 ) -> anyhow::Result<crate::locked::Password> {
     options.hide_fingerprint_notice = true;
     let (_status, status) = watch::channel(FingerprintStatus::Disabled);
@@ -372,7 +463,6 @@ pub async fn prompt_login(
         cancel,
         session_cancel,
         error,
-        public_field,
     )
     .await
 }
@@ -390,7 +480,6 @@ async fn run_prompt(
     mut cancel: oneshot::Receiver<()>,
     session_cancel: oneshot::Sender<()>,
     initial_error: Option<&str>,
-    public_field: Option<&str>,
 ) -> anyhow::Result<crate::locked::Password> {
     protect_process()?;
     let _quiet_logs = QuietLogs::new();
@@ -399,7 +488,7 @@ async fn run_prompt(
         .filter(|character| !character.is_control())
         .take(100)
         .collect();
-    let server_auth = validate.is_none() && public_field.is_none();
+    let server_auth = validate.is_none();
     let frontend: anyhow::Result<Box<dyn Frontend>> = match options.mode {
         crate::config::UnlockUi::Terminal => {
             terminal::TerminalDialog::new(options.no_echo)
@@ -407,7 +496,7 @@ async fn run_prompt(
         }
         #[cfg(all(target_os = "linux", feature = "gtk-ui"))]
         crate::config::UnlockUi::Gtk => {
-            gtk::GtkDialog::new(options.no_echo, public_field, server_auth)
+            gtk::GtkDialog::new(options.no_echo, server_auth, false)
                 .map(|dialog| -> Box<dyn Frontend> { Box::new(dialog) })
         }
         _ => Err(anyhow::anyhow!("unsupported custom unlock interface")),
@@ -483,7 +572,7 @@ async fn run_prompt(
             }
             Some(Action::Submit(_)) | None => {},
         }
-        frontend.render(&View { title: &title, fingerprint: *status.borrow_and_update(), hide_disabled: options.hide_fingerprint_notice, checking: worker.is_some(), success: false, error, public_field, server_auth, tick })?;
+        frontend.render(&View { title: &title, fingerprint: *status.borrow_and_update(), hide_disabled: options.hide_fingerprint_notice, checking: worker.is_some(), success: false, error, server_auth, tick })?;
         tick = tick.wrapping_add(1);
     }
     } .await;

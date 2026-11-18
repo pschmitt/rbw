@@ -379,6 +379,13 @@ pub enum Action {
     },
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy)]
+pub enum LoginPromptKind {
+    Password,
+    Authenticator,
+    Other,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(tag = "type")]
 pub enum Response {
@@ -387,6 +394,8 @@ pub enum Response {
     },
     Ack,
     LoginPrompt {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        kind: Option<LoginPromptKind>,
         title: String,
         error: Option<String>,
     },
