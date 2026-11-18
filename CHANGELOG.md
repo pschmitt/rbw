@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+## [2.47.0] - 2026-11-19
+
+### Added
+
+* The remote field API can listen on several IP endpoints or follow the
+  addresses of named network interfaces. Additional certificate names keep
+  existing client URLs working through the same CA and access grants.
+* The remote API supports granted browser URL search, passkey discovery and
+  signing, and bulk text and linked custom fields. Passkey use requires a
+  separate grant, and signing keys stay in rbw.
+* Interactive `rbw login` opens a terminal setup form when run from a
+  terminal on Linux or Android. New accounts can enter the server URL,
+  email address, master password and optional authenticator code together.
+  Use `--ui gtk` for the compact graphical form in builds with GTK support.
+* The terminal setup form supports mouse clicks, Tab and Shift+Tab to focus
+  fields. Wide layouts show the full-size unlocker crab.
+
+### Fixed
+
+* First-time `rbw unlock` honors the selected terminal or GTK interface
+  before a local database exists. Server-side password retries and
+  two-factor authentication use the existing agent login flow.
+* Native Termux builds provide the integrated terminal UI for first sign-in
+  and for unlocking a cached vault.
+
+### Changed
+
+* Refresh rmcp, regex, the public suffix list, ZIP handling and the Python setup
+  action used for advisory-exception checks.
+
 ## [2.46.1] - 2026-11-17
 
 ### Security
