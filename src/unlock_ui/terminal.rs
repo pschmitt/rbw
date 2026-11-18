@@ -524,8 +524,12 @@ fn draw_setup(
         );
         return;
     }
-    let height = area.height.min(18);
-    let width = area.width.min(CRAB_CARD_WIDTH);
+    let (height, top, field_height, field_gap) = match area.height {
+        20.. => (20, 2, 3, 1),
+        17..=19 => (17, 2, 3, 0),
+        _ => (area.height.min(9), 1, 1, 0),
+    };
+    let width = area.width.min(70);
     let card = Rect::new(
         (area.width - width) / 2,
         (area.height - height) / 2,
@@ -540,18 +544,27 @@ fn draw_setup(
             .style(Style::default().bg(BG)),
         card,
     );
-    let boxed = height >= 16;
+    let boxed = field_height == 3;
+    let stride = field_height + field_gap;
+    let fields_height = field_height * 4 + field_gap * 3;
     let mut x = card.x + 2;
     let mut width = card.width - 4;
-    if boxed && width >= 64 {
+    let sprite: Option<(&[&str], u16, u16)> = match (boxed, card.width) {
+        (true, 66..) => Some((&CRAB, CRAB_WIDTH, CRAB_ROWS)),
+        (true, 52..=65) => {
+            Some((&CRAB_TINY, CRAB_TINY_WIDTH, CRAB_TINY_ROWS))
+        }
+        _ => None,
+    };
+    if let Some((sprite, sprite_width, sprite_height)) = sprite {
+        let y = card.y + top + (fields_height - sprite_height) / 2;
         frame.render_widget(
-            Paragraph::new(crab_lines(&CRAB_TINY, 0)),
-            Rect::new(x, card.y + 5, CRAB_TINY_WIDTH, CRAB_TINY_ROWS),
+            Paragraph::new(crab_lines(sprite, 0)),
+            Rect::new(x, y, sprite_width, sprite_height),
         );
-        x += CRAB_TINY_WIDTH + 2;
-        width -= CRAB_TINY_WIDTH + 2;
+        x += sprite_width + 3;
+        width -= sprite_width + 3;
     }
-    let stride = if boxed { 3 } else { 1 };
     for (index, (field, label)) in fields.iter().zip(SETUP_FIELDS).enumerate()
     {
         let input = if index >= 2 {
@@ -574,16 +587,17 @@ fn draw_setup(
             Style::default().fg(if index == selected { ACCENT } else { INK });
         let rect = Rect::new(
             x,
-            card.y + 1 + stride * u16::try_from(index).unwrap_or_default(),
+            card.y + top + stride * u16::try_from(index).unwrap_or_default(),
             width,
-            stride,
+            field_height,
         );
         if boxed {
             frame.render_widget(
                 Paragraph::new(input).block(
                     Block::bordered()
-                        .title(label)
+                        .title(format!(" {label} "))
                         .border_type(BorderType::Rounded)
+                        .padding(Padding::horizontal(1))
                         .border_style(style),
                 ),
                 rect,
@@ -595,16 +609,21 @@ fn draw_setup(
             );
         }
     }
+    let inset = u16::from(boxed);
     if let Some(error) = fields[selected].issue.or(error) {
         frame.render_widget(
             Paragraph::new(error).style(Style::default().fg(Color::LightRed)),
-            Rect::new(x, card.y + height - 3, width, 1),
+            Rect::new(x + inset, card.y + height - 3, width - inset, 1),
         );
     }
+    let keys = if width - inset >= 37 {
+        "Tab next · Enter sign in · Esc cancel"
+    } else {
+        "Tab  Enter  Esc"
+    };
     frame.render_widget(
-        Paragraph::new("Tab next · Enter sign in · Esc cancel")
-            .style(Style::default().fg(INK)),
-        Rect::new(x, card.y + height - 2, width, 1),
+        Paragraph::new(keys).style(Style::default().fg(MUTED)),
+        Rect::new(x + inset, card.y + height - 2, width - inset, 1),
     );
 }
 
@@ -1305,6 +1324,49 @@ mod tests {
         error: None,
         tick: 0,
     };
+
+    #[test]
+    fn setup_keeps_all_fields_and_shortcuts_visible() {
+        let fields = std::array::from_fn(|_| InputState::new().unwrap());
+        for (width, height) in [(86, 28), (66, 17), (40, 10)] {
+            let mut terminal =
+                Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    draw_setup(
+                        frame,
+                        &fields,
+                        0,
+                        "https://bitwarden.com",
+                        false,
+                        None,
+                    );
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let lines = buffer
+                .content
+                .chunks(usize::from(width))
+                .map(|row| {
+                    row.iter()
+                        .map(ratatui::buffer::Cell::symbol)
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>();
+            let row = |label: &str| {
+                lines.iter().position(|line| line.contains(label)).unwrap()
+            };
+            let positions = SETUP_FIELDS.map(row);
+            assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+            assert!(positions[3] < row("Esc"));
+            if height >= 20 {
+                assert_eq!(positions[0], row("Sign in to Bitwarden") + 2);
+                assert!(positions
+                    .windows(2)
+                    .all(|pair| pair[0] + 4 == pair[1]));
+            }
+        }
+    }
 
     #[test]
     fn narrow_and_short_terminals_keep_the_password_field() {
