@@ -6,12 +6,15 @@ use anyhow::Context as _;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::{
     cursor::{Hide, Show},
-    event::{DisableBracketedPaste, EnableBracketedPaste},
+    event::{
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
+        EnableMouseCapture,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap},
@@ -166,11 +169,12 @@ pub(super) struct TerminalDialog {
     input: File,
     original: libc::termios,
     state: InputState,
+    mouse_capture: bool,
 }
 
 struct InputState {
     secret: SecretInput,
-    escape: [u8; 8],
+    escape: [u8; 24],
     escape_len: usize,
     escape_started: Option<Instant>,
     paste: bool,
@@ -235,6 +239,7 @@ impl TerminalDialog {
             input,
             original,
             state,
+            mouse_capture: false,
         };
         execute!(
             dialog.terminal.backend_mut(),
@@ -251,6 +256,12 @@ impl TerminalDialog {
         )?;
         Ok(dialog)
     }
+    fn capture_mouse(&mut self) -> anyhow::Result<()> {
+        self.mouse_capture = true;
+        execute!(self.terminal.backend_mut(), EnableMouseCapture)?;
+        Ok(())
+    }
+
     fn read_input(
         &mut self,
         buffer: &mut [u8],
@@ -270,7 +281,7 @@ impl InputState {
     fn new() -> anyhow::Result<Self> {
         Ok(Self {
             secret: SecretInput::new()?,
-            escape: [0; 8],
+            escape: [0; 24],
             escape_len: 0,
             escape_started: None,
             paste: false,
@@ -408,6 +419,18 @@ impl Frontend for TerminalDialog {
     }
 }
 
+fn mouse_click(sequence: &[u8], terminator: u8) -> Option<Position> {
+    // SGR sends CSI < button ; column ; row M on press and m on release.
+    let sequence = std::str::from_utf8(sequence.strip_prefix(b"[<")?).ok()?;
+    let mut parts = sequence.split(';');
+    let button = parts.next()?.parse::<u8>().ok()?;
+    let x = parts.next()?.parse::<u16>().ok()?.checked_sub(1)?;
+    let y = parts.next()?.parse::<u16>().ok()?.checked_sub(1)?;
+    // A primary-button press may carry Shift, Alt, or Ctrl modifier bits.
+    (terminator == b'M' && button & !0b11100 == 0 && parts.next().is_none())
+        .then_some(Position::new(x, y))
+}
+
 #[allow(
     clippy::future_not_send,
     reason = "the terminal stays on the calling thread"
@@ -418,6 +441,8 @@ pub(super) async fn setup(
     deadline: Option<Instant>,
 ) -> anyhow::Result<SetupCredentials> {
     let mut dialog = TerminalDialog::new(no_echo)?;
+    dialog.capture_mouse()?;
+    let mut field_areas = [Rect::default(); SETUP_FIELDS.len()];
     let mut fields = [
         InputState::new()?,
         InputState::new()?,
@@ -447,6 +472,26 @@ pub(super) async fn setup(
         for &byte in &buffer[..length] {
             let field = &mut fields[selected];
             field.busy = too_small;
+            let escape = &field.escape[..field.escape_len];
+            if !field.paste
+                && matches!(byte, b'M' | b'm')
+                && escape.starts_with(b"[<")
+            {
+                let click = mouse_click(escape, byte);
+                field.escape_started = None;
+                field.escape_len = 0;
+                if let Some(index) =
+                    click.filter(|_| !too_small).and_then(|position| {
+                        field_areas
+                            .iter()
+                            .position(|area| area.contains(position))
+                    })
+                {
+                    selected = index;
+                }
+                continue;
+            }
+
             if !field.paste && !field.busy {
                 if byte == b'Z'
                     && field.escape_started.is_some()
@@ -499,7 +544,14 @@ pub(super) async fn setup(
             error = None;
         }
         dialog.terminal.draw(|frame| {
-            draw_setup(frame, &fields, selected, server_hint, no_echo, error);
+            field_areas = draw_setup(
+                frame,
+                &fields,
+                selected,
+                server_hint,
+                no_echo,
+                error,
+            );
         })?;
         timer.tick().await;
     }
@@ -512,7 +564,8 @@ fn draw_setup(
     server_hint: &str,
     no_echo: bool,
     error: Option<&str>,
-) {
+) -> [Rect; SETUP_FIELDS.len()] {
+    let mut field_areas = [Rect::default(); SETUP_FIELDS.len()];
     let area = frame.area();
     frame
         .render_widget(Block::default().style(Style::default().bg(BG)), area);
@@ -522,7 +575,7 @@ fn draw_setup(
                 .wrap(Wrap { trim: true }),
             area,
         );
-        return;
+        return field_areas;
     }
     let (height, top, field_height, field_gap) = match area.height {
         20.. => (20, 2, 3, 1),
@@ -591,6 +644,7 @@ fn draw_setup(
             width,
             field_height,
         );
+        field_areas[index] = rect;
         if boxed {
             frame.render_widget(
                 Paragraph::new(input).block(
@@ -625,11 +679,16 @@ fn draw_setup(
         Paragraph::new(keys).style(Style::default().fg(MUTED)),
         Rect::new(x + inset, card.y + height - 2, width - inset, 1),
     );
+    field_areas
 }
 
 impl Drop for TerminalDialog {
     fn drop(&mut self) {
         self.state.secret.clear();
+        if self.mouse_capture {
+            let _ =
+                execute!(self.terminal.backend_mut(), DisableMouseCapture);
+        }
         let _ = execute!(
             self.terminal.backend_mut(),
             DisableBracketedPaste,
@@ -1326,14 +1385,36 @@ mod tests {
     };
 
     #[test]
+    fn mouse_focus_accepts_only_primary_button_presses() {
+        assert_eq!(
+            mouse_click(b"[<0;20;10", b'M'),
+            Some(Position::new(19, 9))
+        );
+        assert_eq!(
+            mouse_click(b"[<16;20;10", b'M'),
+            Some(Position::new(19, 9))
+        );
+        for (packet, terminator) in [
+            (&b"[<0;20;10"[..], b'm'),
+            (&b"[<1;20;10"[..], b'M'),
+            (&b"[<32;20;10"[..], b'M'),
+            (&b"[<0;0;10"[..], b'M'),
+            (&b"[<0;20;10;11"[..], b'M'),
+        ] {
+            assert!(mouse_click(packet, terminator).is_none());
+        }
+    }
+
+    #[test]
     fn setup_keeps_all_fields_and_shortcuts_visible() {
         let fields = std::array::from_fn(|_| InputState::new().unwrap());
         for (width, height) in [(86, 28), (66, 17), (40, 10)] {
             let mut terminal =
                 Terminal::new(TestBackend::new(width, height)).unwrap();
+            let mut field_areas = [Rect::default(); SETUP_FIELDS.len()];
             terminal
                 .draw(|frame| {
-                    draw_setup(
+                    field_areas = draw_setup(
                         frame,
                         &fields,
                         0,
@@ -1359,6 +1440,10 @@ mod tests {
             let positions = SETUP_FIELDS.map(row);
             assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
             assert!(positions[3] < row("Esc"));
+            for (area, label_row) in field_areas.iter().zip(positions) {
+                assert_eq!(usize::from(area.y), label_row);
+                assert!(area.contains(Position::new(area.x, area.y)));
+            }
             if height >= 20 {
                 assert_eq!(positions[0], row("Sign in to Bitwarden") + 2);
                 assert!(positions

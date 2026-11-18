@@ -26,7 +26,8 @@ by default when run from a terminal. Use `--ui gtk` for the compact GTK
 dialog on builds with `gtk-ui`, `--tui` to select the terminal explicitly,
 or `--pinentry` for the existing pinentry flow. For a new account, the
 setup dialog shows the server URL, email address, master password, and an
-optional authenticator code together.
+optional authenticator code together. In the terminal, click a field or use
+Tab and Shift+Tab to move between fields.
 Use `https://bitwarden.com` for the US cloud, `https://bitwarden.eu` for the
 EU cloud, or the base URL of your self-hosted server. Leave the authenticator
 code blank if you use another two-factor method or want to enter the code
