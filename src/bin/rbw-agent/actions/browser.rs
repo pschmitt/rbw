@@ -415,6 +415,10 @@ pub async fn assert_passkey(
     client: &ClientPolicy,
     request: &PasskeyAssertionRequest,
 ) -> Result<serde_json::Value, ApiError> {
+    // Match the secret agent's per-value limits. The router also caps the
+    // total request, including JSON overhead and URL fields.
+    const MAX_WEBAUTHN_VALUE: usize = 16 * 1024;
+    const MAX_CREDENTIALS: usize = 64;
     if !can_use_passkeys(client)
         || request
             .item_id
@@ -426,6 +430,13 @@ pub async fn assert_passkey(
     if request.rp_id.is_empty()
         || request.rp_id.len() > 253
         || request.challenge.is_empty()
+        || request.challenge.len() > MAX_WEBAUTHN_VALUE
+        || request.origin.len() > MAX_WEBAUTHN_VALUE
+        || request.allow_credentials.len() > MAX_CREDENTIALS
+        || request
+            .allow_credentials
+            .iter()
+            .any(|id| id.len() > MAX_WEBAUTHN_VALUE)
         || base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(request.challenge.trim_end_matches('='))
             .is_err()

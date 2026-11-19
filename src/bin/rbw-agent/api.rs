@@ -571,7 +571,7 @@ fn router(state: ApiState) -> Router {
         .route(
             "/v1/passkeys/assert",
             axum::routing::post(browser::assert_passkey)
-                .layer(axum::extract::DefaultBodyLimit::max(16 * 1024)),
+                .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024)),
         )
         .route("/v1/status", get(read_status))
         .route("/v1/unlock", axum::routing::post(unlock_account))

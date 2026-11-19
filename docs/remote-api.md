@@ -51,6 +51,8 @@ machine. Do not expose the listener to an untrusted network.
   passkey for its relying party, and the private key stays in rbw. Set
   `userVerified` only after the client has verified the user. Tracked
   counters are reserved in the vault before rbw returns a signature.
+  Assertions accept up to 64 credential IDs, with up to 16 KiB per
+  base64url challenge or credential ID.
 * A `custom_all` field read returns the usual field response, with `value`
   containing a JSON array of text and linked custom fields. Linked fields
   identify their target with `linkedId`. Read the target through its own
