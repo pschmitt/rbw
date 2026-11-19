@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* `rbw security unlock enroll --termux` asks for the master password in the
+  same terminal unlock screen as the keyring enrollment (pinentry only where
+  no terminal UI is available), instead of always using pinentry.
+* Termux enrollment no longer hangs silently when the device never shows
+  its fingerprint prompt: rbw says what to confirm, waits up to 60 seconds
+  for `termux-fingerprint` and 30 seconds for the key signature, then fails
+  with a hint (Termux:API installed, screen on, Termux in the foreground).
+
 ## [2.47.1] - 2026-11-19
 
 ### Fixed

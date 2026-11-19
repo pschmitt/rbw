@@ -106,10 +106,34 @@ struct UserAuthentication {
     validity_duration_seconds: u64,
 }
 
+fn drain<R: std::io::Read + Send + 'static>(
+    pipe: Option<R>,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut data = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut data);
+        }
+        data
+    })
+}
+
 fn command_output(
     program: &str,
     args: &[&str],
     stdin: Option<&[u8]>,
+) -> anyhow::Result<std::process::Output> {
+    command_output_within(program, args, stdin, None)
+}
+
+/// Like `command_output`, but kills the command and fails once `timeout`
+/// has passed. The Termux:API helpers wait for a dialog the user may never
+/// see, so an unbounded wait would hang rbw without any message.
+fn command_output_within(
+    program: &str,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    timeout: Option<std::time::Duration>,
 ) -> anyhow::Result<std::process::Output> {
     let mut command = std::process::Command::new(program);
     command.args(args);
@@ -132,9 +156,39 @@ fn command_output(
             .write_all(stdin_data)
             .with_context(|| format!("failed to write to {program}"))?;
     }
-    child
-        .wait_with_output()
-        .with_context(|| format!("failed to wait for {program}"))
+    let Some(timeout) = timeout else {
+        return child
+            .wait_with_output()
+            .with_context(|| format!("failed to wait for {program}"));
+    };
+
+    // Drain the pipes on threads so a chatty child cannot block on a full
+    // pipe while we poll for its exit.
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("failed to wait for {program}"))?
+        {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!(
+                "{program} did not finish within {} seconds",
+                timeout.as_secs()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
 }
 
 fn run_keystore(
@@ -156,8 +210,26 @@ fn run_keystore(
     }
 }
 
+/// How long to wait for the user to confirm on the device.
+const AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 fn fingerprint() -> anyhow::Result<()> {
-    let output = command_output("termux-fingerprint", &[], None)?;
+    eprintln!(
+        "Confirm with your fingerprint (or device credential) on the \
+         device; waiting up to {} seconds...",
+        AUTH_TIMEOUT.as_secs()
+    );
+    let output = command_output_within(
+        "termux-fingerprint",
+        &[],
+        None,
+        Some(AUTH_TIMEOUT),
+    )
+    .context(
+        "no confirmation from the device: is the Termux:API app installed \
+         and allowed to show its prompt (keep the screen on and Termux in \
+         the foreground)?",
+    )?;
     if !output.status.success() {
         anyhow::bail!(
             "termux-fingerprint failed: {}",
@@ -187,8 +259,23 @@ fn sign(
     // within the key's validity window. termux-fingerprint is what
     // actually satisfies that check.
     fingerprint()?;
-    let signature =
-        run_keystore(&["sign", key_alias, algorithm], Some(challenge))?;
+    let output = command_output_within(
+        "termux-keystore",
+        &["sign", key_alias, algorithm],
+        Some(challenge),
+        Some(std::time::Duration::from_secs(30)),
+    )?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "termux-keystore sign {key_alias} {algorithm} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let signature = if output.stdout.is_empty() {
+        output.stderr
+    } else {
+        output.stdout
+    };
     if signature.is_empty() {
         anyhow::bail!(
             "Termux Keystore returned no signature for {key_alias:?}; \

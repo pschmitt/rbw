@@ -290,6 +290,7 @@ pub(super) fn enroll_password(
     config: &rbw::config::Config,
     account: &rbw::config::Account,
     name: &str,
+    what: &str,
 ) -> anyhow::Result<String> {
     #[cfg(target_os = "linux")]
     if let Ok(db) = load_db() {
@@ -309,7 +310,7 @@ pub(super) fn enroll_password(
                     hide_fingerprint_notice: config
                         .unlock_hide_fingerprint_notice,
                 },
-                &format!("Enroll desktop unlock for account {name}"),
+                &format!("Enroll {what} for account {name}"),
                 config.pinentry.timeout,
                 std::sync::Arc::new(move |password| {
                     verify_cached_password(&account, &db, password)
@@ -323,7 +324,7 @@ pub(super) fn enroll_password(
     let response = runtime.block_on(rbw::pinentry::getpin(
         &config.pinentry.command,
         "Master password",
-        &format!("Enroll rbw desktop keyring unlock for account {name}"),
+        &format!("Enroll rbw {what} for account {name}"),
         None,
         &environment,
         false,
@@ -383,7 +384,12 @@ pub fn secret_service_enroll(
         eprintln!("{} {warning}", style::warning("warning:", c));
     }
     crate::actions::set_active_account(Some(name.clone()))?;
-    let password = Zeroizing::new(enroll_password(&config, &account, &name)?);
+    let password = Zeroizing::new(enroll_password(
+        &config,
+        &account,
+        &name,
+        "desktop unlock",
+    )?);
     unlock_impl(Some(password.to_string()), None, &mut Vec::new()).context(
         "password did not unlock the account; enrollment cancelled",
     )?;
@@ -494,25 +500,15 @@ pub fn termux_enroll(validity: u32) -> anyhow::Result<()> {
         );
     }
 
-    let environment = crate::actions::get_environment();
-    let description = format!(
-        "Enroll native Android unlock for rbw account {account_name:?}"
-    );
-    let runtime = tokio::runtime::Runtime::new()
-        .context("failed to initialize the password prompt")?;
-    let mut password = runtime
-        .block_on(rbw::pinentry::getpin(
-            &config.pinentry.command,
-            "Master password",
-            &description,
-            None,
-            &environment,
-            false,
-            None,
-            config.pinentry.timeout,
-        ))?
-        .password()
-        .to_vec();
+    // The same dialog `rbw unlock` uses; pinentry only when no terminal UI
+    // is available.
+    let mut password = enroll_password(
+        &config,
+        &account,
+        &account_name,
+        "native Android unlock",
+    )?
+    .into_bytes();
 
     // Verify the password actually unlocks the account before enrolling a
     // Termux key against it -- otherwise a mistyped password would get
