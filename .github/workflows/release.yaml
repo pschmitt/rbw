@@ -224,6 +224,7 @@ jobs:
   build-macos:
     name: build (aarch64-apple-darwin)
     needs: [release]
+    if: always() && needs.release.result == 'success'
     runs-on: macos-latest
     continue-on-error: true
     permissions:
@@ -271,7 +272,7 @@ jobs:
   # The Nix package fetches the signed packages from the release by hash.
   packages:
     needs: [release]
-    if: github.event_name == 'push' || inputs.pin
+    if: always() && needs.release.result == 'success' && (github.event_name == 'push' || inputs.pin)
     permissions:
       contents: write
     uses: pschmitt/ci-workflows/.github/workflows/pin-release.yaml@main
