@@ -347,6 +347,21 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
         .unwrap_or_else(|_| rbw::config::Config::new());
     let primary = config.primary_account_name();
     let pid = agent_pid_if_running();
+    let api = rbw::remote_api::load_listener_status()
+        .ok()
+        .flatten()
+        .filter(|status| Some(status.pid) == pid);
+    let api_listening = api.as_ref().is_some_and(|status| status.listening);
+    let api_error = api.as_ref().and_then(|status| status.error.as_deref());
+    let mut api_addresses = Vec::new();
+    if let Some(status) = api.as_ref().filter(|status| status.listening) {
+        api_addresses.extend_from_slice(&status.addresses);
+        // The agent omits the redundant address for one literal bind.
+        if api_addresses.is_empty() {
+            api_addresses
+                .extend(status.listen.parse::<std::net::SocketAddr>());
+        }
+    }
     let others = other_agent_pids(pid);
     // An agent from an older minor or another major (one that outlived an
     // upgrade) can't serve this rbw: shown in red so it's clear why commands
@@ -415,6 +430,12 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
                 "other_pids": others,
                 "lock_timeout": config.agent.lock_timeout,
                 "sync_interval": config.agent.sync_interval,
+                "api": {
+                    "enabled": config.api.enabled,
+                    "listening": api_listening,
+                    "addresses": api_addresses,
+                    "error": api_error,
+                },
             },
             "primary_account": primary,
             "accounts": accounts,
@@ -431,6 +452,24 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
     }
 
     let c = stdout_supports_color();
+    let api_summary = if api_listening {
+        if api_addresses.is_empty() {
+            style::success("listening", c)
+        } else {
+            let addresses = api_addresses
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{} {addresses}", style::success("listening on", c))
+        }
+    } else if let Some(error) = api_error {
+        style::warning(&format!("failed: {error}"), c)
+    } else if config.api.enabled {
+        style::warning("not listening", c)
+    } else {
+        style::empty("disabled", c)
+    };
     if !full {
         print_short(
             &accounts,
@@ -441,6 +480,7 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
             last_lock.as_ref(),
             c,
         );
+        println!("{} {api_summary}", style::label("API:", c));
         return Ok(());
     }
     // Labels are padded before they are painted so the escape codes don't
@@ -525,6 +565,7 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
         "socket:",
         style::uri(&rbw::dirs::socket_file().display().to_string(), c),
     );
+    row("", "API:", api_summary);
     row("", "lock timeout:", duration(config.agent.lock_timeout));
     if let Some(lock) = &last_lock {
         row("", "last lock:", style::dim(&lock_summary(lock), c));
