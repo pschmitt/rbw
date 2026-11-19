@@ -11,6 +11,14 @@ on:
         description: Only check that the tag's signed packages match its source
         type: boolean
         default: false
+      signed-run-id:
+        description: Reuse the browser packages from this tag's earlier signing run
+        type: string
+        default: ''
+      pin:
+        description: Update the main branch pin after publishing an already-signed release
+        type: boolean
+        default: false
 env:
   TAG: ${{ inputs.tag || github.ref_name }}
   RUST_BACKTRACE: 1
@@ -70,13 +78,9 @@ jobs:
         id: setup-ndk
         with:
           ndk-version: r27c
-      - uses: cargo-bins/cargo-binstall@main
-        if: matrix.target == 'aarch64-linux-android'
-      # --force: rust-cache restores binstall's install manifest but not the
-      # binary itself, so without it binstall skips the (missing) install
       - name: Install cargo-ndk
         if: matrix.target == 'aarch64-linux-android'
-        run: cargo binstall --no-confirm --force cargo-ndk
+        run: cargo install --locked --force --version 4.1.2 cargo-ndk
       - name: Build (musl)
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: TARGET_CC=clang-18 TARGET_AR=llvm-ar-18 cargo build --locked --release --target x86_64-unknown-linux-musl
@@ -129,6 +133,7 @@ jobs:
           if-no-files-found: error
   # AMO signs a version only once: a rerun reuses the tag's release assets.
   browser-extensions:
+    if: ${{ !inputs.signed-run-id }}
     uses: pschmitt/ci-workflows/.github/workflows/sign-extension.yaml@main
     with:
       tag: ${{ inputs.tag || github.ref_name }}
@@ -141,9 +146,13 @@ jobs:
       chromium_signing_key: ${{ secrets.RBW_CHROMIUM_SIGNING_KEY }}
   release:
     needs: [build, browser-extensions]
-    if: ${{ !inputs.dry-run }}
+    if: >-
+      ${{ !cancelled() && !inputs.dry-run && needs.build.result == 'success' &&
+          (needs.browser-extensions.result == 'success' ||
+           (inputs.signed-run-id && needs.browser-extensions.result == 'skipped')) }}
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: write
       id-token: write
       attestations: write
@@ -157,7 +166,28 @@ jobs:
           merge-multiple: true
           path: dist
       - uses: actions/download-artifact@v8
+        if: ${{ !inputs.signed-run-id }}
         with:
+          name: browser-extensions
+          path: dist
+      - name: Verify the original signing run
+        if: inputs.signed-run-id
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNED_RUN: ${{ inputs.signed-run-id }}
+        run: |
+          set -euo pipefail
+          [[ "$SIGNED_RUN" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SIGNED_RUN" |
+            jq -e --arg sha "$(git rev-parse HEAD)" --arg tag "$TAG" '
+              .head_sha == $sha and .head_branch == $tag and .event == "push"
+              and .path == ".github/workflows/release.yaml"
+            '
+      - uses: actions/download-artifact@v8
+        if: inputs.signed-run-id
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.signed-run-id }}
           name: browser-extensions
           path: dist
       - name: Generate checksums
@@ -241,11 +271,11 @@ jobs:
   # The Nix package fetches the signed packages from the release by hash.
   packages:
     needs: [release]
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || inputs.pin
     permissions:
       contents: write
     uses: pschmitt/ci-workflows/.github/workflows/pin-release.yaml@main
     with:
-      tag: ${{ github.ref_name }}
+      tag: ${{ inputs.tag || github.ref_name }}
       firefox-asset: rbw-browser-{version}-firefox.xpi
       chromium-asset: rbw-browser-{version}-chromium.crx
