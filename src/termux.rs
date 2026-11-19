@@ -258,7 +258,10 @@ fn fingerprint_failure(response: &serde_json::Value) -> String {
         .get("errors")
         .and_then(serde_json::Value::as_array)
         .map(|errors| {
-            errors.iter().filter_map(serde_json::Value::as_str).collect()
+            errors
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect()
         })
         .unwrap_or_default();
     if errors.is_empty() {
