@@ -34,12 +34,78 @@ pub enum NativeUnlock {
     Termux,
 }
 
-// Termux exports TERMUX_VERSION to every shell it starts; its PREFIX lives
-// in the app's data directory, as a fallback for stripped environments.
+// Termux exports TERMUX_VERSION to every shell it starts; forks (TermuxPP,
+// Android ID `dev.pschmitt.termux`) keep the variable but move the app's
+// data directory, so the `PREFIX` fallback for stripped environments (nix
+// profiles, ssh sessions, Termux:Boot) accepts any app's
+// `/data/data/<app>/files/usr`, and the fork's own TERMUX__PREFIX and
+// TERMUX_APP__DATA_DIR count too.
 pub(super) fn running_on_termux() -> bool {
-    std::env::var_os("TERMUX_VERSION").is_some()
-        || std::env::var("PREFIX")
-            .is_ok_and(|prefix| prefix.contains("/com.termux/"))
+    let var = |name: &str| std::env::var(name).ok();
+    termux_environment(
+        std::env::var_os("TERMUX_VERSION").is_some(),
+        var("PREFIX").as_deref(),
+        var("TERMUX__PREFIX").as_deref(),
+        std::env::var_os("TERMUX_APP__DATA_DIR").is_some(),
+    )
+}
+
+fn termux_environment(
+    has_version: bool,
+    prefix: Option<&str>,
+    termux_prefix: Option<&str>,
+    has_app_data_dir: bool,
+) -> bool {
+    has_version
+        || has_app_data_dir
+        || termux_prefix.is_some_and(|p| !p.is_empty())
+        || prefix.is_some_and(is_android_app_prefix)
+}
+
+// `/data/data/<app>/files/usr` or `/data/user/<n>/<app>/files/usr`.
+fn is_android_app_prefix(prefix: &str) -> bool {
+    let Some(rest) = prefix
+        .strip_prefix("/data/data/")
+        .or_else(|| prefix.strip_prefix("/data/user/"))
+    else {
+        return false;
+    };
+    rest.trim_end_matches('/').ends_with("/files/usr")
+}
+
+#[cfg(test)]
+mod termux_detection_tests {
+    use super::{is_android_app_prefix, termux_environment};
+
+    #[test]
+    fn stock_and_fork_prefixes_are_termux() {
+        for prefix in [
+            "/data/data/com.termux/files/usr",
+            "/data/data/dev.pschmitt.termux/files/usr",
+            "/data/user/10/dev.pschmitt.termux/files/usr/",
+        ] {
+            assert!(is_android_app_prefix(prefix), "{prefix}");
+        }
+    }
+
+    #[test]
+    fn other_prefixes_are_not_termux() {
+        for prefix in ["/usr", "/nix/store/x", "/data/data/app/files"] {
+            assert!(!is_android_app_prefix(prefix), "{prefix}");
+        }
+    }
+
+    #[test]
+    fn fork_variables_count_without_termux_version() {
+        assert!(termux_environment(false, None, None, true));
+        assert!(termux_environment(
+            false,
+            None,
+            Some("/data/data/dev.pschmitt.termux/files/usr"),
+            false
+        ));
+        assert!(!termux_environment(false, Some("/usr"), Some(""), false));
+    }
 }
 
 // How a desktop (non-Termux) enrollment stores its credential: see

@@ -164,10 +164,13 @@ fn session_runtime_dir() -> Option<std::path::PathBuf> {
 fn termux_runtime_dir(
     prefix: Option<std::ffi::OsString>,
 ) -> Option<std::path::PathBuf> {
-    let prefix = prefix.map_or_else(
-        || std::path::PathBuf::from("/data/data/com.termux/files/usr"),
-        std::path::PathBuf::from,
-    );
+    // Forks (TermuxPP) live under another app ID: TERMUX__PREFIX names it.
+    let prefix = prefix
+        .or_else(|| std::env::var_os("TERMUX__PREFIX"))
+        .map_or_else(
+            || std::path::PathBuf::from("/data/data/com.termux/files/usr"),
+            std::path::PathBuf::from,
+        );
     let tmp = prefix.join("tmp");
     tmp.is_dir().then(|| {
         tmp.join(format!(

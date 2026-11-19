@@ -16,7 +16,8 @@ rbw security unlock enroll
 # rbw security unlock enroll --validity 600
 ```
 
-Inside Termux (detected via `TERMUX_VERSION` or a Termux `PREFIX`),
+Inside Termux (detected via `TERMUX_VERSION`, or a `PREFIX` of the form
+`/data/data/<app>/files/usr`, so forks such as TermuxPP count too),
 `rbw security unlock enroll` picks the Android Keystore automatically;
 `--termux` forces it elsewhere. The older `rbw termux enroll|status|remove`
 spelling still works, and `rbw termux generate` creates a key by hand.
