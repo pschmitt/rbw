@@ -118,6 +118,7 @@ fn drain<R: std::io::Read + Send + 'static>(
     })
 }
 
+#[cfg(test)]
 fn command_output(
     program: &str,
     args: &[&str],
@@ -191,11 +192,17 @@ fn command_output_within(
     })
 }
 
+/// How long a Keystore operation (list, generate, delete, sign) may take.
+/// None of them waits for the user, so a longer wait means the Termux:API
+/// app did not answer.
+const KEYSTORE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(20);
+
 fn run_keystore(
     args: &[&str],
     stdin: Option<&[u8]>,
 ) -> anyhow::Result<Vec<u8>> {
-    let output = command_output("termux-keystore", args, stdin)?;
+    let output = keystore_output(args, stdin)?;
     if !output.status.success() {
         anyhow::bail!(
             "termux-keystore {} failed: {}",
@@ -286,12 +293,8 @@ fn sign(
     // within the key's validity window. termux-fingerprint is what
     // actually satisfies that check.
     fingerprint()?;
-    let output = command_output_within(
-        "termux-keystore",
-        &["sign", key_alias, algorithm],
-        Some(challenge),
-        Some(std::time::Duration::from_secs(30)),
-    )?;
+    let output =
+        keystore_output(&["sign", key_alias, algorithm], Some(challenge))?;
     if !output.status.success() {
         anyhow::bail!(
             "termux-keystore sign {key_alias} {algorithm} failed: {}",
@@ -310,6 +313,31 @@ fn sign(
         );
     }
     Ok(signature)
+}
+
+/// Runs termux-keystore with `KEYSTORE_TIMEOUT`, naming the operation
+/// and the likely cause when the app does not answer.
+fn keystore_output(
+    args: &[&str],
+    stdin: Option<&[u8]>,
+) -> anyhow::Result<std::process::Output> {
+    command_output_within(
+        "termux-keystore",
+        args,
+        stdin,
+        Some(KEYSTORE_TIMEOUT),
+    )
+    .map_err(|e| {
+        if keystore_missing(&e) {
+            return e;
+        }
+        let operation = args.first().copied().unwrap_or_default();
+        e.context(format!(
+            "termux-keystore {operation} got no answer from the \
+                 Termux:API app (is it running and allowed to work in the \
+                 background?)"
+        ))
+    })
 }
 
 fn key_infos() -> anyhow::Result<Vec<KeyInfo>> {
