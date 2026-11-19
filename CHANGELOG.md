@@ -11,6 +11,8 @@
   its fingerprint prompt: rbw says what to confirm, waits up to 60 seconds
   for `termux-fingerprint` and 30 seconds for the key signature, then fails
   with a hint (Termux:API installed, screen on, Termux in the foreground).
+* A failed Termux fingerprint authentication says why: rbw shows the
+  Android error name and message that `termux-fingerprint` reports.
 
 ## [2.47.1] - 2026-11-19
 
