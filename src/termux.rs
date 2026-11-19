@@ -243,9 +243,33 @@ fn fingerprint() -> anyhow::Result<()> {
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
     if !result.to_ascii_lowercase().contains("success") {
-        anyhow::bail!("fingerprint authentication was not successful");
+        anyhow::bail!(
+            "fingerprint authentication was not successful: {}",
+            fingerprint_failure(&response)
+        );
     }
     Ok(())
+}
+
+/// Describes a failed termux-fingerprint response: its errors (the Android
+/// error name and message with a current Termux:API), else the raw result.
+fn fingerprint_failure(response: &serde_json::Value) -> String {
+    let errors: Vec<&str> = response
+        .get("errors")
+        .and_then(serde_json::Value::as_array)
+        .map(|errors| {
+            errors.iter().filter_map(serde_json::Value::as_str).collect()
+        })
+        .unwrap_or_default();
+    if errors.is_empty() {
+        let result = response
+            .get("auth_result")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("no auth_result");
+        format!("{result} (Termux:API reported no error)")
+    } else {
+        errors.join("; ")
+    }
 }
 
 fn sign(
@@ -624,6 +648,26 @@ mod tests {
         assert_eq!(
             decrypt_bundle(&bundle, &signature).unwrap(),
             "master password"
+        );
+    }
+
+    #[test]
+    fn fingerprint_failure_names_the_android_error() {
+        let response = serde_json::json!({
+            "errors": ["ERROR_CANCELED: Fingerprint operation cancelled"],
+            "auth_result": "AUTH_RESULT_FAILURE",
+        });
+        assert_eq!(
+            super::fingerprint_failure(&response),
+            "ERROR_CANCELED: Fingerprint operation cancelled"
+        );
+        let response = serde_json::json!({
+            "errors": [],
+            "auth_result": "AUTH_RESULT_FAILURE",
+        });
+        assert_eq!(
+            super::fingerprint_failure(&response),
+            "AUTH_RESULT_FAILURE (Termux:API reported no error)"
         );
     }
 }
