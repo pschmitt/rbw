@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.47.2] - 2026-11-19
+
 ### Fixed
 
 * `rbw security unlock enroll --termux` asks for the master password in the
