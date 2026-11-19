@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Native Termux unlock is detected in Termux forks such as TermuxPP, which
+  live under another Android app ID: any `/data/data/<app>/files/usr`
+  `PREFIX`, `TERMUX__PREFIX`, `TERMUX_APP__DATA_DIR` and nixpp's
+  `NIXPP_RUNTIME` count, so `rbw security unlock enroll` picks the Android
+  Keystore even where `TERMUX_VERSION` is missing.
+
 ## [2.47.0] - 2026-11-19
 
 ### Added
