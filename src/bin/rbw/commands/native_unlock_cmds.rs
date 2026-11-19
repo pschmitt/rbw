@@ -39,14 +39,15 @@ pub enum NativeUnlock {
 // data directory, so the `PREFIX` fallback for stripped environments (nix
 // profiles, ssh sessions, Termux:Boot) accepts any app's
 // `/data/data/<app>/files/usr`, and the fork's own TERMUX__PREFIX and
-// TERMUX_APP__DATA_DIR count too.
+// TERMUX_APP__DATA_DIR count too, as does nixpp's NIXPP_RUNTIME.
 pub(super) fn running_on_termux() -> bool {
     let var = |name: &str| std::env::var(name).ok();
     termux_environment(
         std::env::var_os("TERMUX_VERSION").is_some(),
         var("PREFIX").as_deref(),
         var("TERMUX__PREFIX").as_deref(),
-        std::env::var_os("TERMUX_APP__DATA_DIR").is_some(),
+        std::env::var_os("TERMUX_APP__DATA_DIR").is_some()
+            || std::env::var_os("NIXPP_RUNTIME").is_some(),
     )
 }
 
@@ -54,10 +55,10 @@ fn termux_environment(
     has_version: bool,
     prefix: Option<&str>,
     termux_prefix: Option<&str>,
-    has_app_data_dir: bool,
+    has_android_marker: bool,
 ) -> bool {
     has_version
-        || has_app_data_dir
+        || has_android_marker
         || termux_prefix.is_some_and(|p| !p.is_empty())
         || prefix.is_some_and(is_android_app_prefix)
 }

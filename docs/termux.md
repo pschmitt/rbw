@@ -17,7 +17,8 @@ rbw security unlock enroll
 ```
 
 Inside Termux (detected via `TERMUX_VERSION`, or a `PREFIX` of the form
-`/data/data/<app>/files/usr`, so forks such as TermuxPP count too),
+`/data/data/<app>/files/usr`, or `NIXPP_RUNTIME`, so forks such as TermuxPP
+count too),
 `rbw security unlock enroll` picks the Android Keystore automatically;
 `--termux` forces it elsewhere. The older `rbw termux enroll|status|remove`
 spelling still works, and `rbw termux generate` creates a key by hand.
