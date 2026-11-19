@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.47.1] - 2026-11-19
+
 ### Fixed
 
 * Native Termux unlock is detected in Termux forks such as TermuxPP, which
