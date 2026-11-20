@@ -138,50 +138,17 @@ jobs:
   # niks3, so its next rbw bump substitutes it.
   nix-aarch64-nixos-config:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-26.04-arm
-    timeout-minutes: 120
     permissions:
       contents: read
       id-token: write
-    env:
-      NIKS3_SERVER_URL: ${{ vars.NIKS3_SERVER_URL }}
-      NIKS3_CLI: github:Mic92/niks3/a79dc58832332ebd953974e71160ab69e2371d62#niks3
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        with:
-          repository: pschmitt/ci-workflows
-          path: .ci-workflows
-      - uses: pschmitt/ci-workflows/.github/actions/nix-niks3@main
-        with:
-          s3-store: ${{ secrets.NIKS3_S3_STORE }}
-          s3-access-key: ${{ secrets.NIKS3_S3_ACCESS_KEY }}
-          s3-secret-key: ${{ secrets.NIKS3_S3_SECRET_KEY }}
-          extra-conf: |
-            fallback = true
-      - name: Build with nixos-config's nixpkgs
-        run: |
-          set -o pipefail
-          nixpkgs="$(curl -fsSL https://raw.githubusercontent.com/pschmitt/nixos-config/main/flake.lock \
-            | jq -er '.nodes[.nodes.root.inputs.nixpkgs].locked
-              | select(.type == "github") | "github:\(.owner)/\(.repo)/\(.rev)"')"
-          echo "nixos-config nixpkgs: $nixpkgs"
-          nix build --no-link --print-build-logs --print-out-paths \
-            --override-input nixpkgs "$nixpkgs" .#packages.aarch64-linux.default \
-            > "$RUNNER_TEMP/out"
-          cat "$RUNNER_TEMP/out"
-      - name: Push to niks3
-        if: ${{ env.NIKS3_SERVER_URL != '' }}
-        run: |
-          cli="$(nix build --no-link --print-out-paths "$NIKS3_CLI")"
-          index=0
-          while read -r path
-          do
-            "$cli/bin/niks3" push --server-url "$NIKS3_SERVER_URL" \
-              --auth-token-script "python3 $GITHUB_WORKSPACE/.ci-workflows/scripts/niks3-oidc-token.py" \
-              --pin "gh-rbw-main-nixos-config-$index" "$path"
-            index=$((index + 1))
-          done < "$RUNNER_TEMP/out"
+    uses: pschmitt/ci-workflows/.github/workflows/nix-consumer-build.yaml@main
+    with:
+      packages: packages.aarch64-linux.default
+      pin-prefix: gh-rbw-main-nixos-config
+    secrets:
+      s3_store: ${{ secrets.NIKS3_S3_STORE }}
+      s3_access_key: ${{ secrets.NIKS3_S3_ACCESS_KEY }}
+      s3_secret_key: ${{ secrets.NIKS3_S3_SECRET_KEY }}
 
   # Images are published on pushes and manual runs, never on pull requests.
   docker:
