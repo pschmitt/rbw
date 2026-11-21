@@ -557,13 +557,27 @@ function closeTabInlineSessions(tabId) { for (const [token, session] of inlineSe
 // hit-testable (a user-origin !important rule beats any page style, including
 // pointer-events:none decoys), then let the content script check that the
 // frame is unclipped, untransformed, opaque and topmost at the click point.
+const inlineVerificationErrors = {
+  closed: "The rbw prompt closed. Open it again.",
+  settling: "The rbw prompt is still opening. Click again in a moment.",
+  unfocused: "This page is not in the foreground. Focus it and click again.",
+  hidden: "The rbw prompt is hidden. Reload the page and try again.",
+  altered: "The page changed the appearance or size of the rbw prompt. Reload the page and try again.",
+  translucent: "The rbw prompt is transparent. Reload the page and try again.",
+  clipped: "Part of the rbw prompt is outside the window. Enlarge the window and try again.",
+  coordinates: "The click was outside the rbw prompt. Click the button again.",
+  covered: "Something is covering the rbw prompt. Close any overlays and try again.",
+  unavailable: "rbw could not check the prompt on this page. Reload the page and try again.",
+};
 async function verifyInlineClick(session, x, y) {
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return inlineVerificationErrors.coordinates;
   const target = { tabId: session.tabId, frameIds: [session.frameId] };
   const css = "*,*::before,*::after{pointer-events:auto!important}";
-  try { await api.scripting.insertCSS({ target, css, origin: "USER" }); } catch (_) { return false; }
-  try { return (await api.tabs.sendMessage(session.tabId, { action: "rbw_inline_verify", token: session.token, x, y }, { frameId: session.frameId }))?.ok === true; }
-  catch (_) { return false; }
+  try { await api.scripting.insertCSS({ target, css, origin: "USER" }); } catch (_) { return inlineVerificationErrors.unavailable; }
+  try {
+    const result = await api.tabs.sendMessage(session.tabId, { action: "rbw_inline_verify", token: session.token, x, y }, { frameId: session.frameId });
+    return result && result.reason === null ? null : inlineVerificationErrors[result?.reason] || inlineVerificationErrors.unavailable;
+  } catch (_) { return inlineVerificationErrors.unavailable; }
   finally { await api.scripting.removeCSS({ target, css, origin: "USER" }).catch(() => {}); }
 }
 async function inlineMessage(port, message, state) {
@@ -580,7 +594,8 @@ async function inlineMessage(port, message, state) {
   if (message.type === "size") { if (Number.isFinite(message.height)) relay("rbw_inline_size"); return; }
   if (message.type === "close") { closeInlineSession(session.token, true); return; }
   if (message.type === "edit_saved" && session.mode === "save" && session.savedItem) {
-    if (!await verifyInlineClick(session, message.x, message.y)) { port.postMessage({ type: "rejected", error: "rbw could not confirm that its window is fully visible. Click again." }); return; }
+    const verificationError = await verifyInlineClick(session, message.x, message.y);
+    if (verificationError) { port.postMessage({ type: "rejected", error: verificationError }); return; }
     const query = new URLSearchParams({ surface: "window", edit: session.savedItem });
     if (session.savedAccount) query.set("account", session.savedAccount);
     await api.windows.create({ url: api.runtime.getURL(`popup.html?${query}`), type: "popup", width: 460, height: 680 });
@@ -618,7 +633,8 @@ async function inlineMessage(port, message, state) {
       }));
       port.postMessage({ type: "availability", items });
     } else if (message.type === "copy" && session.kind === "login" && session.allowed.has(message.item) && ["username", "password", "totp"].includes(message.field)) {
-      if (!await verifyInlineClick(session, message.x, message.y)) { port.postMessage({ type: "rejected", error: "rbw could not confirm that its window is fully visible. Click again." }); return; }
+      const verificationError = await verifyInlineClick(session, message.x, message.y);
+      if (verificationError) { port.postMessage({ type: "rejected", error: verificationError }); return; }
       try {
         const tab = await activeTab();
         if (tab.id !== session.tabId || new URL(tab.url).origin !== new URL(session.url).origin) throw new Error("Page changed.");
@@ -632,7 +648,8 @@ async function inlineMessage(port, message, state) {
       const item = session.items.get(message.item) || {};
       const generate = message.type === "generate_fill";
       if (generate && !session.setPassword) return;
-      if (!await verifyInlineClick(session, message.x, message.y)) { port.postMessage({ type: "rejected", error: "rbw could not confirm that its window is fully visible. Click again." }); return; }
+      const verificationError = await verifyInlineClick(session, message.x, message.y);
+      if (verificationError) { port.postMessage({ type: "rejected", error: verificationError }); return; }
       const tab = await activeTab();
       if (tab.id !== session.tabId || new URL(tab.url).origin !== new URL(session.url).origin) throw new Error("Page changed.");
       await api.tabs.sendMessage(session.tabId, { action: "rbw_inline_refocus", token: session.token }, { frameId: session.frameId }).catch(() => {});
@@ -658,7 +675,8 @@ async function inlineMessage(port, message, state) {
       port.postMessage({ type: "save_choices", items: items.slice(0, 30).map(item => ({ id: item.id, name: item.name, username: item.username })) });
     } catch (_) { port.postMessage({ type: "save_choices", items: [] }); }
   } else if (message.type === "save") {
-    if (!await verifyInlineClick(session, message.x, message.y)) { port.postMessage({ type: "save_result", error: "rbw could not confirm that its window is fully visible. Click again." }); return; }
+    const verificationError = await verifyInlineClick(session, message.x, message.y);
+    if (verificationError) { port.postMessage({ type: "save_result", error: verificationError }); return; }
     try { await applySaveOffer(session.tabId, typeof message.item === "string" ? message.item : null, account); }
     catch (error) { port.postMessage({ type: "save_result", error: error.message || "Could not save login." }); return; }
     session.savedItem = offer.addUri?.id || message.item || (await classifySaveOffer(account, offer.url, offer.username, offer.password)).item || null;

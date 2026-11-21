@@ -24,7 +24,7 @@ const send = message => { try { port?.postMessage(message); } catch (_) { /* The
 // its centre, like a click there.
 function act(event, message, target = event.currentTarget) {
   if (!event.isTrusted || performance.now() - shownAt < 500 || !visible || document.visibilityState !== "visible" || !document.hasFocus()) {
-    if (notice) notice.textContent = "rbw is checking that this window is visible. Click again.";
+    if (notice) notice.textContent = document.visibilityState !== "visible" || !document.hasFocus() ? "This page is not in the foreground. Focus it and click again." : !visible ? "The rbw prompt may be covered. Close any overlays and try again." : "The rbw prompt is still opening. Click again in a moment.";
     return false;
   }
   let x = event.clientX, y = event.clientY;

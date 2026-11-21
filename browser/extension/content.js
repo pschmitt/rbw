@@ -10,21 +10,27 @@ const rbwExtensionOrigin = (globalThis.browser || chrome).runtime.getURL("").rep
 function rbwVerifyFrame(state, x, y) {
   try {
     const { host, frame, shownAt } = state;
-    if (!host?.isConnected || shownAt == null || performance.now() - shownAt < 500 || document.visibilityState !== "visible" || !document.hasFocus()) return false;
-    if (host.checkVisibility && !host.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true })) return false;
+    if (!host?.isConnected) return "closed";
+    if (shownAt == null || performance.now() - shownAt < 500) return "settling";
+    if (document.visibilityState !== "visible" || !document.hasFocus()) return "unfocused";
+    if (host.checkVisibility && !host.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true })) return "hidden";
     let opacity = 1;
     for (let node = host; node; node = node.parentElement) {
       const style = getComputedStyle(node);
       opacity *= Number(style.opacity);
-      if (style.display === "none" || style.visibility !== "visible" || style.filter !== "none" || style.transform !== "none" || (style.clipPath || "none") !== "none" || (style.maskImage || style.webkitMaskImage || "none") !== "none" || style.mixBlendMode !== "normal") return false;
+      if (style.display === "none" || style.visibility !== "visible") return "hidden";
+      if (style.filter !== "none" || (style.clipPath || "none") !== "none" || (style.maskImage || style.webkitMaskImage || "none") !== "none" || style.mixBlendMode !== "normal") return "altered";
+      // A computed identity matrix (e.g. translate(0)) changes no pixels.
+      if (style.transform !== "none" && !new DOMMatrixReadOnly(style.transform).isIdentity) return "altered";
     }
-    if (!(opacity >= 0.95)) return false;
+    if (!(opacity >= 0.95)) return "translucent";
     // Layout size equals rendered size unless something scales or zooms the frame.
     const rect = frame.getBoundingClientRect();
-    if (Math.abs(rect.width - frame.offsetWidth) > 1 || Math.abs(rect.height - frame.offsetHeight) > 1 || rect.height < 16 || rect.left < -1 || rect.top < -1 || rect.right > innerWidth + 1 || rect.bottom > innerHeight + 1) return false;
-    if (!(x >= 0 && y >= 0 && x <= rect.width && y <= rect.height)) return false;
-    return document.elementsFromPoint(rect.left + x, rect.top + y)[0] === host;
-  } catch (_) { return false; }
+    if (Math.abs(rect.width - frame.offsetWidth) > 1 || Math.abs(rect.height - frame.offsetHeight) > 1) return "altered";
+    if (rect.height < 16 || rect.left < -1 || rect.top < -1 || rect.right > innerWidth + 1 || rect.bottom > innerHeight + 1) return "clipped";
+    if (!(x >= 0 && y >= 0 && x <= rect.width && y <= rect.height)) return "coordinates";
+    return document.elementsFromPoint(rect.left + x, rect.top + y)[0] === host ? null : "covered";
+  } catch (_) { return "unavailable"; }
 }
 // The token reaches only this frame; the page cannot read messages addressed
 // to the extension origin. Retry until shown in case a page posted a forged one first.
@@ -59,7 +65,7 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
     if (state.shownAt == null) { clearInterval(state.retry); clearTimeout(state.readyTimer); state.host.style.setProperty("visibility", "visible", "important"); state.shownAt = performance.now(); if (rbwMotion()) rbwAnimate(state, [{ opacity: 0, transform: "translateY(-8px) scale(.98)" }, { opacity: 1, transform: "none" }], { duration: 190, easing: "cubic-bezier(.2,.8,.2,1)" }); }
     onSize?.();
   } else if (message.action === "rbw_inline_close") onClose();
-  else if (message.action === "rbw_inline_verify") respond({ ok: rbwVerifyFrame(state, message.x, message.y) });
+  else if (message.action === "rbw_inline_verify") respond({ reason: rbwVerifyFrame(state, message.x, message.y) });
   else if (message.action === "rbw_inline_refocus") { onRefocus?.(); respond({ result: true }); }
   else return false;
   return true;

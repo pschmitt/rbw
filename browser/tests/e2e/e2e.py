@@ -270,6 +270,11 @@ def main():
             if host(): click_in("login"); check(f"{name}: clickjack rejected", values()["pass"] == "")
             else: check(f"{name}: chooser not shown", True)
 
+        fresh("html{transform:translate(0,0)}"); page.click("#pass")
+        if host():
+            click_in("login"); check("identity transform permits filling", values()["pass"] == "pw-from-rbw")
+        else: check("identity transform permits filling", False, "chooser not shown")
+
         for name, decoy in [("pointer-events:none decoy", "() => { document.documentElement.append(decoy); decoy.style.display = 'block'; }"), ("closed-shadow pointer-events:none decoy", SHADOW_DECOY)]:
             fresh(); page.click("#pass")
             if host():

@@ -26,8 +26,8 @@ jobs:
           do
             node --check "$script"
           done
-      - name: Check clipboard safety and WebAuthn provider cooperation
-        run: node --test browser/tests/clipboard.mjs browser/tests/webauthn.mjs browser/tests/passkey-shim.mjs browser/tests/fill-targets.mjs browser/tests/error-detail.mjs browser/tests/top-layer.mjs
+      - name: Check browser extension behavior
+        run: node --test browser/tests/clipboard.mjs browser/tests/webauthn.mjs browser/tests/passkey-shim.mjs browser/tests/fill-targets.mjs browser/tests/error-detail.mjs browser/tests/top-layer.mjs browser/tests/inline-verification.mjs
       - name: Build unsigned browser packages
         run: python3 browser/build.py
       - uses: actions/upload-artifact@v7
