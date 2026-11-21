@@ -33,7 +33,8 @@ function act(event, message, target = event.currentTarget) {
   send({ ...message, x, y });
   return true;
 }
-new ResizeObserver(() => { if (!root.hidden) send({ type: "size", height: Math.ceil(root.getBoundingClientRect().height) }); }).observe(root);
+const sendSize = () => { if (!root.hidden) send({ type: "size", height: Math.ceil(root.getBoundingClientRect().height) }); };
+new ResizeObserver(sendSize).observe(root);
 if (trackVisibility) {
   new IntersectionObserver(entries => { visible = entries[entries.length - 1].isVisible === true; }, { trackVisibility: true, delay: 100 }).observe(root);
 }
@@ -186,7 +187,17 @@ function renderSave(data) {
   const status = element("p", "", "status");
   notice = status;
   const buttons = [primary, secondary, apply];
-  const busy = (value, text = "") => { for (const button of buttons) button.disabled = value; if (!value) apply.disabled = !select.value; status.textContent = text; };
+  const busy = (value, text = "") => {
+    for (const button of buttons) button.disabled = value;
+    if (value) {
+      const progress = element("div", null, "save-progress"); progress.setAttribute("role", "status");
+      const mark = element("span", null, "save-progress-icon"); mark.append(icon("refresh"));
+      progress.append(mark, element("strong", "Saving and syncing…")); body.replaceChildren(progress);
+    } else {
+      apply.disabled = !select.value; status.classList.toggle("is-error", !!text); status.textContent = text;
+      body.replaceChildren(head, actions, picker, status);
+    }
+  };
   const engaged = () => top.stop();
   primary.addEventListener("click", event => { engaged(); if (act(event, { type: "save", item: update ? update.id : null })) busy(true, update ? "Updating and syncing…" : "Saving and syncing…"); });
   if (addUri) secondary.addEventListener("click", event => { if (event.isTrusted) send({ type: "dismiss" }); });
@@ -199,7 +210,22 @@ function renderSave(data) {
     for (const item of items) select.append(new Option(item.username ? `${item.name} · ${item.username}` : item.name, item.id));
     status.textContent = select.options.length > 1 ? "" : "No logins for this site."; secondary.disabled = false;
   };
-  session.saveResult = error => busy(false, error || "");
+  session.saveResult = (error, success, editable) => {
+    if (!success) { busy(false, error || ""); return; }
+    const confirmation = element("div", null, "save-success");
+    confirmation.setAttribute("role", "status");
+    const mark = element("span", null, "save-success-icon"); mark.append(icon("check"));
+    const message = { saved: "Login saved", updated: "Login updated", site: "Site added" }[success] || "Saved";
+    confirmation.append(mark, element("strong", message));
+    if (editable) {
+      const edit = labelled(element("button", null, "save-edit"), "edit", "Edit"); edit.type = "button";
+      edit.addEventListener("click", event => { if (act(event, { type: "edit_saved" })) top.stop(); });
+      confirmation.append(edit);
+    }
+    body.replaceChildren(confirmation);
+    notice = null;
+    top.start(8000, () => send({ type: "close" }));
+  };
   picker.append(select, apply);
   actions.append(primary, secondary);
   body.append(head, actions, picker, status);
@@ -213,7 +239,7 @@ function connect(value) {
     if (message.type === "init") {
       session = {}; root.hidden = false;
       if (message.mode === "save") renderSave(message); else renderChoices(message);
-      settle(); send({ type: "size", height: Math.ceil(root.getBoundingClientRect().height) });
+      settle(); sendSize();
     } else if (message.type === "state") updateState(message);
     else if (message.type === "results") session?.results?.(message);
     else if (message.type === "icons") {
@@ -235,7 +261,7 @@ function connect(value) {
       const motion = session.animations !== "off" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
       stampResult(button, { motion, speed: { slow: 1.6, fast: 0.65 }[session.animationSpeed] || 1 });
     } else if (message.type === "save_choices") session?.saveChoices?.(message.items || []);
-    else if (message.type === "save_result") session?.saveResult?.(message.error);
+    else if (message.type === "save_result") session?.saveResult?.(message.error, message.success, message.editable);
     else if (message.type === "rejected" && notice) notice.textContent = message.error;
   });
   // A rejected (forged) token frees the frame for the content script's real one.

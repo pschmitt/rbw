@@ -579,6 +579,13 @@ async function inlineMessage(port, message, state) {
   const relay = action => api.tabs.sendMessage(session.tabId, { action, token: session.token, height: message.height }, { frameId: session.frameId }).catch(() => {});
   if (message.type === "size") { if (Number.isFinite(message.height)) relay("rbw_inline_size"); return; }
   if (message.type === "close") { closeInlineSession(session.token, true); return; }
+  if (message.type === "edit_saved" && session.mode === "save" && session.savedItem) {
+    if (!await verifyInlineClick(session, message.x, message.y)) { port.postMessage({ type: "rejected", error: "rbw could not confirm that its window is fully visible. Click again." }); return; }
+    const query = new URLSearchParams({ surface: "window", edit: session.savedItem });
+    if (session.savedAccount) query.set("account", session.savedAccount);
+    await api.windows.create({ url: api.runtime.getURL(`popup.html?${query}`), type: "popup", width: 460, height: 680 });
+    closeInlineSession(session.token, true); return;
+  }
   const prefs = await settings(); const account = null;
   if (session.mode === "choices") {
     if (message.type === "icons") {
@@ -654,7 +661,10 @@ async function inlineMessage(port, message, state) {
     if (!await verifyInlineClick(session, message.x, message.y)) { port.postMessage({ type: "save_result", error: "rbw could not confirm that its window is fully visible. Click again." }); return; }
     try { await applySaveOffer(session.tabId, typeof message.item === "string" ? message.item : null, account); }
     catch (error) { port.postMessage({ type: "save_result", error: error.message || "Could not save login." }); return; }
-    closeInlineSession(session.token, true); settings().then(() => refreshActiveBadge()).catch(() => {});
+    session.savedItem = offer.addUri?.id || message.item || (await classifySaveOffer(account, offer.url, offer.username, offer.password)).item || null;
+    session.savedAccount = offer.addUri?.account || account;
+    port.postMessage({ type: "save_result", success: offer.addUri ? "site" : message.item ? "updated" : "saved", editable: !!session.savedItem });
+    settings().then(() => refreshActiveBadge()).catch(() => {});
   } else if (message.type === "dismiss") {
     rememberUnsaved(offer); offers.delete(session.tabId); badge();
     closeInlineSession(session.token, true);
@@ -672,6 +682,8 @@ api.runtime.onConnect.addListener(port => {
   const state = { session: null };
   let chain = Promise.resolve();
   port.onMessage.addListener(message => {
+    // Resizing must not wait for a slow save or sync in the action queue.
+    if (message.type === "size" && state.session) { inlineMessage(port, message, state); return; }
     chain = chain.then(() => inlineMessage(port, message, state)).catch(error => { try { port.postMessage({ type: "rejected", error: error.message || "Request failed." }); } catch (_) { /* Closed. */ } });
   });
 });

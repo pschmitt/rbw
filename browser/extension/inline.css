@@ -59,8 +59,21 @@ main.save{box-sizing:border-box;border:1px solid #555;border-radius:10px;overflo
 .save .picker{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid #494949}
 .save .picker[hidden]{display:none}
 .save .picker select{min-width:0;width:100%}
-.save .status{min-height:0;margin:8px 0 0;color:#f0b4c0;font-size:12px}
+.save .status{min-height:0;margin:8px 0 0;color:#bdbdbd;font-size:12px}
+.save .status.is-error{color:#f0b4c0}
 .save .status:empty{display:none}
+.save-success{display:flex;align-items:center;gap:12px;padding:4px 0;color:#bcebd2}
+.save-success-icon{display:flex;align-items:center;justify-content:center;width:36px;height:36px;flex:none;border-radius:50%;background:#224b38;color:#7de0aa}
+.save-success-icon svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+.save-success strong{font-size:14px;font-weight:600}
+.save-progress{display:flex;align-items:center;gap:12px;padding:4px 0;color:#d0d0d0}
+.save-progress-icon{display:flex;align-items:center;justify-content:center;width:36px;height:36px;flex:none;border-radius:50%;background:#383838}
+.save-progress-icon svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;animation:rbw-spin 1s linear infinite}
+.save-progress strong{font-size:14px;font-weight:600}
+.save-edit{display:inline-flex;align-items:center;gap:6px;margin-left:auto;padding:7px 10px;border:1px solid #555;border-radius:6px;background:#303030;color:#efefef;font:13px system-ui,sans-serif;cursor:pointer}
+.save-edit:hover,.save-edit:focus-visible{background:#383838;border-color:#8a8a8a}
+.save-edit svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2}
+@media (prefers-reduced-motion:reduce){.save-progress-icon svg{animation:none}}
 .notice{padding:6px 12px;color:#f0c674;font-size:11px}
 .notice:empty{display:none}
 .item-row{display:flex;background:#282828}

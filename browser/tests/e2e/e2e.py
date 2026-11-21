@@ -83,6 +83,12 @@ class ChromiumPage:
     def type_text(self, text): self.page.keyboard.type(text, delay=20)
     def screenshot(self, path, rect): self.page.screenshot(path=path, clip={"x": rect["x"] - 8, "y": rect["y"] - 8, "width": rect["w"] + 16, "height": rect["h"] + 16})
     def close(self): self.context.close(); self.playwright.stop()
+    def editor_opened(self):
+        for tab in self.context.pages:
+            if tab != self.page and "edit=login-new" in tab.url:
+                tab.wait_for_selector("#editor:not([hidden])", timeout=5000)
+                tab.close(); return True
+        return None
 
 
 class FirefoxPage:
@@ -113,6 +119,14 @@ class FirefoxPage:
         from selenium.webdriver.common.action_chains import ActionChains
         ActionChains(self.driver).send_keys(text).perform()
     def close(self): self.driver.quit()
+    def editor_opened(self):
+        original = self.driver.current_window_handle
+        for handle in self.driver.window_handles:
+            if handle == original: continue
+            self.driver.switch_to.window(handle)
+            if "edit=login-new" in self.driver.current_url:
+                self.driver.close(); self.driver.switch_to.window(original); return True
+        self.driver.switch_to.window(original); return None
 
 
 def main():
@@ -253,7 +267,25 @@ def main():
         if opened: shoot("save-new", opened)
         check("save prompt opens for a new login", opened is not None)
         if opened:
-            click_in("save"); check("save prompt saves a new login", logged("save:"))
+            page.goto(args.url + "?redirected"); opened = host("save")
+            check("save prompt follows redirect", opened is not None)
+            click_in("save")
+            saving = page.evaluate(HOST_JS, True)
+            check("saving state replaces the form", saving is not None and saving["h"] < opened["h"] - 10, str(saving))
+            time.sleep(2)
+            check("save prompt saves a new login", logged("save:"))
+            saved = page.evaluate(HOST_JS, True)
+            check("save confirmation replaces the form", saved is not None and saved["h"] < opened["h"] - 10, str(saved))
+            if saved:
+                pixel = png_pixel(page.png(), int(saved["x"] + 27), int(saved["y"] + 66))
+                check("save confirmation has a compact green icon", saved["h"] < 140 and pixel[1] > pixel[0] + 15 and pixel[1] > pixel[2] + 5, str(pixel))
+                shoot("save-success", saved)
+                time.sleep(0.8)
+                page.click_point(saved["x"] + saved["w"] - 43, saved["y"] + 68); time.sleep(2)
+                editor_opened = page.editor_opened()
+                check("Edit opens the saved login", editor_opened and logged("detail:login-new"), str(editor_opened))
+            page.evaluate("() => history.back()"); time.sleep(2)
+            check("back navigation does not restore a resolved save prompt", page.evaluate(HOST_JS, True) is None)
 
         submit("alice", "pw-from-rbw")
         check("no save prompt for an already stored login", host("save", timeout=3.0) is None)

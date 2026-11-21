@@ -90,7 +90,7 @@ async function fillPage(expectedUrl, data, fillToken, options = {}) {
     let focused = document.activeElement;
     while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
     const settingPassword = !options.automatic && fields.includes(focused) && focused.type === "password" && focused.autocomplete.split(/\s+/).includes("new-password") && focused.form;
-    const { user, password, newPasswords, otp, scoped: loginScope } = loginTargets(settingPassword ? fields.filter(el => el.form === focused.form) : fields);
+    const { user, password, newPasswords, otp, scoped: loginScope } = loginTargets(settingPassword ? fields.filter(el => el.form === focused.form) : fields, options.automatic ? null : focused);
     scoped = loginScope;
     put(user, data.username); put(password, data.password);
     // Never set a password on page load: only a fill the user asked for.

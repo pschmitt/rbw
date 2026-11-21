@@ -36,6 +36,7 @@ function stopTotp() { clearTimeout(totpTimer); }
 const initialSearch = new URLSearchParams(location.search).get("search");
 const initialSettings = new URLSearchParams(location.search).get("settings") === "1";
 const initialGenerator = new URLSearchParams(location.search).get("page") === "generator";
+const initialEdit = new URLSearchParams(location.search).get("edit");
 let epoch = 0, timer, currentPage = "vault", currentItem = null, currentDetail = null, detailFrom = null, healthScroll = 0, sendCount = 0, healthState = "idle", healthRun = 0, unlocked = false, preference = {}, approvalId = new URLSearchParams(location.search).get("request");
 let accountNames = [], accountStates = [], allAccounts = [], cliAccountColors = {}, primaryAccount = "";
 const colorOf = name => accountColor(name, allAccounts, preference.accountColors, cliAccountColors);
@@ -1848,7 +1849,7 @@ attempt(async () => {
     if (!approvalId) approvalId = await activeApproval();
     const status = initial.status;
     renderAccounts(status.accounts || [], status.primary, preference.popupAccount, status.accountStates || [], status.accountColors);
-    const saved = status.unlocked && !approvalId && !initialSearch ? initial.saved : null;
+    const saved = status.unlocked && !approvalId && !initialSearch && !initialEdit ? initial.saved : null;
     if (initialSearch) {
       $("view").value = "vault";
       $("kind").value = initialSearch === "cards" ? "card" : initialSearch === "logins" ? "login" : "";
@@ -1863,7 +1864,10 @@ attempt(async () => {
       showFilters(saved.expanded); syncChips();
     }
     await refresh(status, !!saved && saved.page !== "vault");
-    if (initialSettings) show("settings"); else if (initialGenerator && unlocked) show("generator");
+    if (initialEdit && unlocked && !approvalId) {
+      if (new URLSearchParams(location.search).get("account") || status.primary) $("account").value = new URLSearchParams(location.search).get("account") || status.primary;
+      await openDetail(initialEdit); editItem();
+    } else if (initialSettings) show("settings"); else if (initialGenerator && unlocked) show("generator");
     else if (saved && unlocked && !approvalId) {
       if (saved.page === "detail" && saved.item) await openDetail(saved.item);
       else if (saved.page === "send" && preference.showSend) await loadSends();
@@ -1874,7 +1878,7 @@ attempt(async () => {
       updateFab();
     }
     ready = true; remember();
-    const draft = unlocked && !approvalId && !initialSearch ? await request("edit_draft") : null;
+    const draft = unlocked && !approvalId && !initialSearch && !initialEdit ? await request("edit_draft") : null;
     if (draft) await resumeEditDraft(draft);
     const notice = await request("popup_notice");
     if (notice && !approvalId && !draft) message(notice.text, notice.error);

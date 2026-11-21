@@ -44,6 +44,15 @@ test("API-key fields are not login passwords", () => {
   assert.equal(loginTargets([key, password]).password, password);
 });
 
+test("an explicitly selected access token receives the password only", () => {
+  const token = input({type: "text", label: "Operator access token"}, form);
+  assert.equal(loginTargets([token]).password, undefined);
+  const found = loginTargets([token], token);
+  assert.equal(found.password, token);
+  assert.equal(found.user, undefined);
+  assert.equal(found.otp, undefined);
+});
+
 test("several passwords leave no choice", () => {
   assert.throws(() => loginTargets([input({type: "password"}, form), input({type: "password"}, form)]), /Several password fields/);
 });

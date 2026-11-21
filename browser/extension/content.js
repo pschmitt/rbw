@@ -279,6 +279,9 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
   const api = globalThis.browser || chrome;
   let prompt = null;
   const close = () => { if (prompt) rbwReleaseFrame(prompt); prompt = null; };
+  // A page restored from the back-forward cache can contain an old, already
+  // resolved prompt. The background will issue a fresh one if an offer remains.
+  window.addEventListener("pageshow", event => { if (event.persisted) close(); });
   function show(token, origin) {
     close();
     if (origin !== location.origin || typeof token !== "string") return;
