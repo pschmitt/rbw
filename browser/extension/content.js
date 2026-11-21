@@ -7,6 +7,34 @@ const rbwHardenCss = "display:block!important;opacity:1!important;filter:none!im
 const rbwMount = host => { if (globalThis.rbwTopLayer) globalThis.rbwTopLayer.mount(host); else document.documentElement.append(host); };
 const rbwTopReset = () => globalThis.rbwTopLayer?.RESET || "";
 const rbwExtensionOrigin = (globalThis.browser || chrome).runtime.getURL("").replace(/\/$/, "");
+// Prefer positions that leave interactive controls visible. The overlap cost
+// is normalized per control so a wide input matters as much as a small button.
+function rbwChooserPosition(anchor, size, viewport, obstacles) {
+  const margin = 8, gap = 8;
+  const maxX = Math.max(margin, viewport.width - size.width - margin);
+  const maxY = Math.max(margin, viewport.height - size.height - margin);
+  const clamp = (value, max) => Math.max(margin, Math.min(value, max));
+  const xs = [anchor.left, anchor.right - size.width, anchor.right + gap, anchor.left - size.width - gap, margin, maxX];
+  const ys = [anchor.bottom + gap, anchor.top - size.height - gap, margin, maxY];
+  for (const rect of obstacles) {
+    xs.push(rect.left - size.width - gap, rect.right + gap);
+    ys.push(rect.top - size.height - gap, rect.bottom + gap);
+  }
+  const unique = (values, max) => [...new Set(values.map(value => Math.round(clamp(value, max))))];
+  let best = null;
+  for (const x of unique(xs, maxX)) for (const y of unique(ys, maxY)) {
+    let overlap = 0;
+    for (const rect of obstacles) {
+      const width = Math.max(0, Math.min(x + size.width, rect.right) - Math.max(x, rect.left));
+      const height = Math.max(0, Math.min(y + size.height, rect.bottom) - Math.max(y, rect.top));
+      if (width && height) overlap += width * height / Math.max(1, (rect.right - rect.left) * (rect.bottom - rect.top)) * (rect.focused ? 8 : 1);
+    }
+    const distance = Math.hypot(x - anchor.left, y - (anchor.bottom + gap));
+    const score = overlap * 100000 + distance;
+    if (!best || score < best.score) best = { x, y, score };
+  }
+  return { x: best.x, y: best.y };
+}
 function rbwVerifyFrame(state, x, y) {
   try {
     const { host, frame, shownAt } = state;
@@ -168,7 +196,19 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
   function place() {
     if (!ui) return null;
     const size = ui.box.getBoundingClientRect(), rect = ui.input.getBoundingClientRect();
-    const anchor = movedPosition || (ui.docked ? { x: innerWidth - size.width - 16, y: innerHeight - size.height - 16 } : { x: rect.left, y: rect.bottom + 4 });
+    let anchor = movedPosition || (ui.docked ? { x: innerWidth - size.width - 16, y: innerHeight - size.height - 16 } : null);
+    if (!anchor) {
+      const selector = 'input:not([type="hidden"]),select,textarea,button,[role="button"],[contenteditable="true"]';
+      const roots = [...new Set([document, ui.input.getRootNode()])];
+      const controls = [...new Set(roots.flatMap(root => [...root.querySelectorAll(selector)]))];
+      if (!controls.includes(ui.input)) controls.push(ui.input);
+      const obstacles = controls.filter(element => element.isConnected && element.getClientRects().length && (typeof element.checkVisibility !== "function" || element.checkVisibility({ visibilityProperty: true, opacityProperty: true })))
+        .map(element => ({ rect: element.getBoundingClientRect(), focused: element === ui.input }))
+        .filter(({ rect: r }) => r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight)
+        .sort((a, b) => (b.focused - a.focused) || Math.abs(a.rect.top - rect.top) - Math.abs(b.rect.top - rect.top))
+        .slice(0, 40).map(({ rect: r, focused }) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom, focused }));
+      anchor = rbwChooserPosition(rect, size, { width: innerWidth, height: innerHeight }, obstacles);
+    }
     const point = { x: Math.max(8, Math.min(anchor.x, innerWidth - size.width - 8)), y: Math.max(8, Math.min(anchor.y, innerHeight - size.height - 8)) };
     ui.host.style.setProperty("left", `${point.x}px`, "important"); ui.host.style.setProperty("top", `${point.y}px`, "important");
     return point;

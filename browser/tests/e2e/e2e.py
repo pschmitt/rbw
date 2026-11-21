@@ -384,6 +384,12 @@ def main():
         fresh(); page.click("#newpw"); opened = host()
         check("set-password chooser opens", opened is not None)
         if opened:
+            time.sleep(0.7); positioned = host()
+            clear = page.evaluate("""(box) => [...document.querySelectorAll('#setpw input, #setpw button')].every(el => {
+              const r = el.getBoundingClientRect();
+              return box.x + box.w <= r.left || box.x >= r.right || box.y + box.h <= r.top || box.y >= r.bottom;
+            })""", positioned)
+            check("chooser leaves registration fields and button visible", clear, str(positioned))
             shoot("set-password", opened)
             click_in("setpw"); v = values()
             check("set-password fill puts the stored password in both fields", v["newpw"] == v["confirmpw"] == "pw-from-rbw" and v["pass"] == "", str(v))
