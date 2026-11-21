@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [2.47.3] - 2026-11-21
+
+### Added
+
+* Browser vault: select multiple entries with Shift-click and move them to
+  Trash together, with progress, partial-failure reporting and Undo.
+* Browser save prompts show saving and success states, with an Edit button
+  to open the saved login.
+
+### Fixed
+
+* The autofill chooser avoids covering visible form fields and buttons when
+  there is room, and explicitly selected access-token fields can receive a
+  login's password.
+* Browser save prompts resize while saving, verify clicks before changing
+  their layout, and do not reappear after returning to a resolved prompt in
+  browser history. Visibility failures now explain what blocked the action.
+* Termux Keystore operations time out with a useful error when Termux:API
+  does not answer, instead of waiting indefinitely.
+
+### Changed
+
+* Update the clap, env_logger, region, url, zbus and zip dependencies.
+* Use the shared consumer-build CI workflow for the NixOS configuration pin.
+
 ## [2.47.2] - 2026-11-19
 
 ### Fixed
