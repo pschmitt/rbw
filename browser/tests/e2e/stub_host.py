@@ -33,8 +33,8 @@ while True:
         items = [item for item in items if query in f"{item['name']} {item['username']}".lower()]
         result = {"items": items, "limit": 200, "total": len(items), "folders": [], "collections": []}
     elif action == "credential": result = {"name": "Test Login", "custom": [], "username": saved_logins[request["item"]]["data"]["username"] if request.get("item") in saved_logins else "alice", "hasTotp": True, "password": saved_logins[request["item"]]["data"]["password"] if request.get("item") in saved_logins else "generated-pw" if request.get("item") in generated else "pw-from-rbw"}
-    elif action == "detail" and request.get("item") in saved_logins: result = {"cipher": saved_logins[request["item"]], "revision": "r1"}
-    elif action == "detail" and str(request.get("item")).startswith("login-"): result = {"cipher": {"name": "Test Login", "data": {"type": "login", "username": "alice", "password": "pw-from-rbw", "uris": []}, "fields": []}, "revision": "r1"}
+    elif action == "detail" and request.get("item") in saved_logins: result = {"cipher": saved_logins[request["item"]], "revision": "r1", "passkeys": [], "history": []}
+    elif action == "detail" and str(request.get("item")).startswith("login-"): result = {"cipher": {"name": "Test Login", "data": {"type": "login", "username": "alice", "password": "pw-from-rbw", "uris": []}, "fields": []}, "revision": "r1", "passkeys": [], "history": []}
     elif action == "detail": result = {"cipher": {"name": "Test Visa", "data": {"type": "card", "cardholder_name": "Alice Test", "number": "4111111111111111", "brand": "Visa", "exp_month": "12", "exp_year": "2030", "code": "123"}, "fields": []}, "revision": "r1"}
     elif action == "totp": result = {"code": "123456"}
     elif action == "generate": result = "generated-pw"

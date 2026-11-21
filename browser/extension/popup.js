@@ -91,7 +91,7 @@ function message(text, error = false, action = null, detail = "") {
   clearTimeout(notificationTimer);
   if (!error && /^(Working|Unlocking|Waiting for rbw|Checking vault locally|Loading Sends|Uploading)/.test(text)) return;
   const kind = error ? "error"
-    : /^(Vault unlocked|Vault synced|Copied\b|Filled \d+ fields|Saved\b|Updated\b|Archived|Unarchived|Added to favorites|Removed from favorites|Moved to trash|Restored|Deleted|Collections updated|Attachment uploaded|Generated password (added|filled)|New password filled|Send link copied|Resumed your unsaved edit|Restarted from the current vault state)/i.test(text) ? "success"
+    : /^(Vault unlocked|Vault synced|Copied\b|Filled \d+ fields|Saved\b|Updated\b|Archived|Unarchived|Added to favorites|Removed from favorites|Moved (?:\d+ items? )?to trash|Restored|Deleted|Collections updated|Attachment uploaded|Generated password (added|filled)|New password filled|Send link copied|Resumed your unsaved edit|Restarted from the current vault state)/i.test(text) ? "success"
       : /^(Vault locked|This item changed|Your unsaved edit|Passkey request expired)/i.test(text) ? "warning" : "info";
   const notification = $("message");
   notification.dataset.kind = kind;
@@ -614,6 +614,7 @@ async function search(retry = false) {
   syncChips();
 }
 function renderSearch(result) {
+  clearItemSelection();
   syncChips();
   $("folder-list").replaceChildren(...result.folders.map(f => new Option(f)));
   const favorites = $("view").value === "favorites" || ($("view").value === "home" && !$("query").value);
@@ -654,6 +655,34 @@ const faviconObserver = new IntersectionObserver(entries => {
     }).catch(() => {});
   }
 }, { root: document.querySelector("main"), rootMargin: "80px" });
+const selectedItems = new Map();
+let selectionAnchor = null;
+const selectionKey = item => JSON.stringify([item.account || $("account").value || "", item.id]);
+function updateItemSelection() {
+  $("selection-bar").hidden = selectedItems.size === 0;
+  $("selection-count").textContent = `${selectedItems.size} selected`;
+  if (!selectedItems.size) $("selection-menu").open = false;
+  for (const row of $("items").querySelectorAll("article[data-selection-key]")) {
+    const selected = selectedItems.has(row.dataset.selectionKey);
+    row.classList.toggle("is-selected", selected);
+    row.querySelector(".item-main")?.setAttribute("aria-pressed", String(selected));
+  }
+}
+function clearItemSelection() { selectedItems.clear(); selectionAnchor = null; updateItemSelection(); }
+$("selection-clear").onclick = clearItemSelection;
+$("selection-trash").onclick = () => attempt(async () => {
+  const items = [...selectedItems.values()]; if (!items.length) return;
+  $("selection-menu").open = false;
+  if (!await confirmDialog({ title: `Move ${items.length} ${items.length === 1 ? "item" : "items"} to trash?`, text: "You can restore them from the Trash view.", confirm: "Move to trash", danger: true })) return;
+  let moved = 0; const failed = [];
+  for (const item of items) {
+    try { await request("mutate", { item: item.id, account: item.account || null, mutation: "delete" }); moved++; }
+    catch (_) { failed.push(item.name); }
+  }
+  await search();
+  if (failed.length) message(`Moved ${moved} of ${items.length} items to trash. Could not move: ${failed.join(", ")}.`, true);
+  else message(`Moved ${moved} ${moved === 1 ? "item" : "items"} to trash.`);
+});
 function itemRow(item, from) {
   const row = element("article"); const image = element("span", null, "item-icon");
   const fallback = item.type === "card"
@@ -673,6 +702,24 @@ function itemRow(item, from) {
   row.append(lead);
   if (preference.favicons && item.iconOrigin) { image.dataset.origin = item.iconOrigin; faviconObserver.observe(image); }
   const main = button("", async () => { if (from === "health") healthScroll = document.querySelector("main").scrollTop; await openDetail(item.id, item.deleted, from); }, "item-main");
+  if (!from && !item.deleted) {
+    main.title = "Shift-click to select multiple items";
+    const key = selectionKey(item); row.dataset.selectionKey = key;
+    const selectionItem = { id: item.id, name: item.name, account: item.account || $("account").value || null };
+    row.addEventListener("click", event => {
+      if (event.target.closest(".item-actions") || !(event.shiftKey || event.ctrlKey || event.metaKey || selectedItems.size)) return;
+      event.preventDefault(); event.stopPropagation();
+      const rows = [...$("items").querySelectorAll("article[data-selection-key]")];
+      if (event.shiftKey && selectionAnchor && rows.some(candidate => candidate.dataset.selectionKey === selectionAnchor)) {
+        const start = rows.findIndex(candidate => candidate.dataset.selectionKey === selectionAnchor), end = rows.indexOf(row);
+        for (const candidate of rows.slice(Math.min(start, end), Math.max(start, end) + 1)) selectedItems.set(candidate.dataset.selectionKey, candidate.rbwSelectionItem);
+      } else if (selectedItems.has(key) && !event.shiftKey) selectedItems.delete(key);
+      else selectedItems.set(key, selectionItem);
+      if (!event.shiftKey || !selectionAnchor) selectionAnchor = key;
+      updateItemSelection();
+    }, true);
+    row.rbwSelectionItem = selectionItem;
+  }
   const title = element("div", null, "item-title");
   if (item.favorite) { const star = icon("star"); star.classList.add("favorite-icon"); title.append(star); }
   title.append(highlighted("strong", item.name, item.nameRanges));
@@ -1671,10 +1718,12 @@ window.addEventListener("keydown", event => {
     event.preventDefault(); $("header-edit").click(); return;
   }
   if (event.key === "Escape") {
+    const hadOpenMenu = !!document.querySelector("details.menu[open]");
     if ($("title-menu").open) $("title-menu").open = false;
     for (const m of document.querySelectorAll("details.menu[open]")) {
       m.open = false;
     }
+    if (!hadOpenMenu && currentPage === "vault" && selectedItems.size) { event.preventDefault(); clearItemSelection(); }
   }
 });
 // Generator: alphabet sizes match rbw's pwgen (src/pwgen.rs); passphrases

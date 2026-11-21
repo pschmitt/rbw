@@ -84,11 +84,50 @@ class ChromiumPage:
     def screenshot(self, path, rect): self.page.screenshot(path=path, clip={"x": rect["x"] - 8, "y": rect["y"] - 8, "width": rect["w"] + 16, "height": rect["h"] + 16})
     def close(self): self.context.close(); self.playwright.stop()
     def editor_opened(self):
-        for tab in self.context.pages:
-            if tab != self.page and "edit=login-new" in tab.url:
-                tab.wait_for_selector("#editor:not([hidden])", timeout=5000)
-                tab.close(); return True
+        end = time.time() + 8
+        while time.time() < end:
+            for tab in self.context.pages:
+                if tab != self.page and "edit=login-new" in tab.url:
+                    tab.wait_for_selector("#editor:not([hidden])", timeout=10000)
+                    tab.close(); return True
+            self.page.wait_for_timeout(200)
         return None
+    def multi_select(self):
+        worker = self.context.service_workers[0] if self.context.service_workers else self.context.wait_for_event("serviceworker")
+        extension_id = worker.url.split("/")[2]
+        popup = self.context.new_page()
+        try:
+            popup.set_viewport_size({"width": 460, "height": 680})
+            popup.goto(f"chrome-extension://{extension_id}/popup.html?surface=window&search=logins")
+            rows = popup.locator("#items article[data-selection-key]")
+            rows.nth(2).wait_for(timeout=15000)
+            rows.nth(0).locator(".item-main").click(modifiers=["Shift"])
+            rows.nth(2).locator(".item-main").click(modifiers=["Shift"])
+            assert popup.locator("#selection-count").inner_text() == "3 selected"
+            assert popup.locator("#items article.is-selected").count() == 3
+            popup.keyboard.press("Escape")
+            assert popup.locator("#selection-bar").is_hidden()
+            rows.nth(0).locator(".item-main").click(modifiers=["Shift"])
+            rows.nth(2).locator(".item-main").click(modifiers=["Shift"])
+            rows.nth(1).locator(".item-main").click()
+            assert popup.locator("#selection-count").inner_text() == "2 selected"
+            popup.locator("#selection-menu summary").click()
+            if os.environ.get("RBW_E2E_SCREENSHOTS"): popup.screenshot(path=os.path.join(os.environ["RBW_E2E_SCREENSHOTS"], "chromium-multi-select.png"))
+            popup.locator("#selection-trash").click()
+            assert "2 items" in popup.locator("#confirm-dialog-title").inner_text()
+            popup.locator(".confirm-dialog button[value=cancel]").click()
+            assert popup.locator("#selection-count").inner_text() == "2 selected"
+            popup.locator("#selection-menu summary").click()
+            popup.locator("#selection-trash").click()
+            popup.locator(".confirm-dialog button[value=ok]").click()
+            popup.locator("#selection-bar").wait_for(state="hidden", timeout=15000)
+            with open(os.environ["RBW_E2E_LOG"]) as log:
+                operations = log.read().split()
+            assert "mutate:login-1" in operations and "mutate:login-3" in operations
+            assert "mutate:login-2" not in operations
+            return True
+        finally:
+            popup.close()
 
 
 class FirefoxPage:
@@ -138,7 +177,7 @@ def main():
     results = []
 
     def check(name, ok, detail=""):
-        results.append(ok); print(f"{'PASS' if ok else 'FAIL'} {name} {detail}", flush=True)
+        results.append(bool(ok)); print(f"{'PASS' if ok else 'FAIL'} {name} {detail}", flush=True)
 
     def host(kind="login", timeout=4.0):
         end = time.time() + timeout
@@ -164,6 +203,10 @@ def main():
         if os.environ.get("RBW_E2E_SCREENSHOTS"): time.sleep(0.6); page.screenshot(os.path.join(os.environ["RBW_E2E_SCREENSHOTS"], f"{args.browser}-{name}.png"), rect)
 
     try:
+        if os.environ.get("RBW_E2E_ONLY_SELECTION") and args.browser == "chromium":
+            try: check("select a range and move selected items to trash", page.multi_select())
+            except Exception as error: check("select a range and move selected items to trash", False, str(error))
+            sys.exit(0 if all(results) else 1)
         fresh(); page.click("#pass"); opened = host()
         if opened is None:
             # The first page load can beat the extension's service worker
@@ -313,6 +356,9 @@ def main():
         if host():
             click_in("setpw-new"); time.sleep(1.0); v = values()
             check("New generates, saves, then fills both fields", v["newpw"] == v["confirmpw"] == "generated-pw" and logged("generate:") and logged("save:login-1"), str(v))
+        if args.browser == "chromium":
+            try: check("select a range and move selected items to trash", page.multi_select() and logged("mutate:login-1") and logged("mutate:login-3"))
+            except Exception as error: check("select a range and move selected items to trash", False, str(error))
     finally:
         page.close()
     print(f"{sum(results)}/{len(results)} passed")

@@ -222,8 +222,10 @@ function renderSave(data) {
       edit.addEventListener("click", event => { if (act(event, { type: "edit_saved" })) top.stop(); });
       confirmation.append(edit);
     }
-    body.replaceChildren(confirmation);
-    notice = null;
+    const errorNotice = element("p", "", "status is-error");
+    errorNotice.setAttribute("role", "alert");
+    body.replaceChildren(confirmation, errorNotice);
+    notice = errorNotice;
     top.start(8000, () => send({ type: "close" }));
   };
   picker.append(select, apply);
