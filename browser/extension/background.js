@@ -677,6 +677,7 @@ async function inlineMessage(port, message, state) {
   } else if (message.type === "save") {
     const verificationError = await verifyInlineClick(session, message.x, message.y);
     if (verificationError) { port.postMessage({ type: "save_result", error: verificationError }); return; }
+    port.postMessage({ type: "save_started" });
     try { await applySaveOffer(session.tabId, typeof message.item === "string" ? message.item : null, account); }
     catch (error) { port.postMessage({ type: "save_result", error: error.message || "Could not save login." }); return; }
     session.savedItem = offer.addUri?.id || message.item || (await classifySaveOffer(account, offer.url, offer.username, offer.password)).item || null;

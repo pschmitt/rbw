@@ -330,13 +330,25 @@ def main():
             with open(os.environ["RBW_E2E_LOG"]) as log: return entry in log.read().split()
 
         submit("bob", "hunter2"); opened = host("save")
+        if opened:
+            page.evaluate(TOP_DECOYS[2][1])
+            click_in("save")
+            check("covered save prompt does not write to the vault", not logged("save:"))
+        else: check("covered save prompt does not write to the vault", False, "prompt not shown")
+
+        submit("bob", "hunter2"); opened = host("save")
         if opened: shoot("save-new", opened)
         check("save prompt opens for a new login", opened is not None)
         if opened:
             page.goto(args.url + "?redirected"); opened = host("save")
             check("save prompt follows redirect", opened is not None)
-            click_in("save")
+            # Click near the bottom of the original button, below the height
+            # of the smaller saving state. Verification must use the layout
+            # the user actually clicked, not the later progress layout.
+            time.sleep(0.8)
+            page.click_point(opened["x"] + 70, opened["y"] + opened["h"] - 20); time.sleep(1.5)
             saving = page.evaluate(HOST_JS, True)
+            check("save click remains valid after the prompt shrinks", saving is not None and opened["h"] - 20 > saving["h"], str(saving))
             check("saving state replaces the form", saving is not None and saving["h"] < opened["h"] - 10, str(saving))
             time.sleep(2)
             check("save prompt saves a new login", logged("save:"))

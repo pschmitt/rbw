@@ -199,12 +199,15 @@ function renderSave(data) {
     }
   };
   const engaged = () => top.stop();
-  primary.addEventListener("click", event => { engaged(); if (act(event, { type: "save", item: update ? update.id : null })) busy(true, update ? "Updating and syncing…" : "Saving and syncing…"); });
+  // Keep the frame geometry stable until the background has verified the click.
+  const save = (event, item) => { engaged(); if (act(event, { type: "save", item })) for (const button of buttons) button.disabled = true; };
+  primary.addEventListener("click", event => save(event, update ? update.id : null));
   if (addUri) secondary.addEventListener("click", event => { if (event.isTrusted) send({ type: "dismiss" }); });
-  else if (update) secondary.addEventListener("click", event => { engaged(); if (act(event, { type: "save", item: null })) busy(true, "Saving and syncing…"); });
+  else if (update) secondary.addEventListener("click", event => save(event, null));
   else secondary.addEventListener("click", event => { if (!event.isTrusted) return; engaged(); picker.hidden = false; secondary.disabled = true; status.textContent = "Loading this site's logins…"; send({ type: "save_choices" }); });
   select.addEventListener("change", () => { engaged(); apply.disabled = !select.value; });
-  apply.addEventListener("click", event => { engaged(); if (select.value && act(event, { type: "save", item: select.value })) busy(true, "Updating and syncing…"); });
+  apply.addEventListener("click", event => { if (select.value) save(event, select.value); });
+  session.saveStarted = () => busy(true);
   session.saveChoices = items => {
     select.replaceChildren(new Option("Choose a login…", ""));
     for (const item of items) select.append(new Option(item.username ? `${item.name} · ${item.username}` : item.name, item.id));
@@ -263,6 +266,7 @@ function connect(value) {
       const motion = session.animations !== "off" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
       stampResult(button, { motion, speed: { slow: 1.6, fast: 0.65 }[session.animationSpeed] || 1 });
     } else if (message.type === "save_choices") session?.saveChoices?.(message.items || []);
+    else if (message.type === "save_started") session?.saveStarted?.();
     else if (message.type === "save_result") session?.saveResult?.(message.error, message.success, message.editable);
     else if (message.type === "rejected" && notice) notice.textContent = message.error;
   });
