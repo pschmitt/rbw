@@ -657,8 +657,12 @@ const faviconObserver = new IntersectionObserver(entries => {
 }, { root: document.querySelector("main"), rootMargin: "80px" });
 const selectedItems = new Map();
 let selectionAnchor = null;
+let selectionWorking = false;
+new ResizeObserver(entries => $("selection-bar").style.setProperty("--selection-top", `${entries[0].target.offsetHeight}px`)).observe(document.querySelector("#vault .search-row"));
 const selectionKey = item => JSON.stringify([item.account || $("account").value || "", item.id]);
 function updateItemSelection() {
+  if (selectionWorking) return;
+  $("selection-bar").style.setProperty("--selection-top", `${document.querySelector("#vault .search-row").offsetHeight}px`);
   $("selection-bar").hidden = selectedItems.size === 0;
   $("selection-count").textContent = `${selectedItems.size} selected`;
   if (!selectedItems.size) $("selection-menu").open = false;
@@ -671,17 +675,42 @@ function updateItemSelection() {
 function clearItemSelection() { selectedItems.clear(); selectionAnchor = null; updateItemSelection(); }
 $("selection-clear").onclick = clearItemSelection;
 $("selection-trash").onclick = () => attempt(async () => {
-  const items = [...selectedItems.values()]; if (!items.length) return;
+  const items = [...selectedItems.values()]; if (!items.length || selectionWorking) return;
   $("selection-menu").open = false;
   if (!await confirmDialog({ title: `Move ${items.length} ${items.length === 1 ? "item" : "items"} to trash?`, text: "You can restore them from the Trash view.", confirm: "Move to trash", danger: true })) return;
-  let moved = 0; const failed = [];
-  for (const item of items) {
-    try { await request("mutate", { item: item.id, account: item.account || null, mutation: "delete" }); moved++; }
-    catch (_) { failed.push(item.name); }
+  const moved = [], failed = [], bar = $("selection-bar");
+  bar.style.setProperty("--selection-top", `${document.querySelector("#vault .search-row").offsetHeight}px`);
+  selectionWorking = true; bar.classList.add("is-working"); bar.setAttribute("aria-busy", "true");
+  $("selection-clear").hidden = true; $("selection-menu").hidden = true; $("selection-progress-icon").hidden = false;
+  const progress = done => { $("selection-count").textContent = `Moving ${done} of ${items.length} to trash…`; bar.style.setProperty("--selection-progress", `${done / items.length * 100}%`); };
+  progress(0);
+  try {
+    for (const item of items) {
+      try {
+        await request("mutate", { item: item.id, account: item.account || null, mutation: "delete" }); moved.push(item);
+        const row = [...$("items").querySelectorAll("article[data-selection-key]")].find(candidate => candidate.dataset.selectionKey === selectionKey(item));
+        if (row && bannerAnimated()) { row.style.height = `${row.offsetHeight}px`; void row.offsetHeight; row.classList.add("is-leaving"); }
+      } catch (_) { failed.push(item.name); }
+      progress(moved.length + failed.length);
+    }
+  } finally {
+    selectionWorking = false; bar.classList.remove("is-working"); bar.removeAttribute("aria-busy"); bar.style.removeProperty("--selection-progress");
+    $("selection-clear").hidden = false; $("selection-menu").hidden = false; $("selection-progress-icon").hidden = true;
   }
   await search();
-  if (failed.length) message(`Moved ${moved} of ${items.length} items to trash. Could not move: ${failed.join(", ")}.`, true);
-  else message(`Moved ${moved} ${moved === 1 ? "item" : "items"} to trash.`);
+  const undo = moved.length ? { label: "Undo", run: async () => {
+    let restored = 0; const restoreFailed = [];
+    for (const item of moved) {
+      message(`Restoring ${restored + restoreFailed.length} of ${moved.length}…`);
+      try { await request("mutate", { item: item.id, account: item.account || null, mutation: "restore" }); restored++; }
+      catch (_) { restoreFailed.push(item.name); }
+    }
+    await search();
+    if (restoreFailed.length) message(`Restored ${restored} of ${moved.length} items. Could not restore: ${restoreFailed.join(", ")}.`, true);
+    else message(`Restored ${restored} ${restored === 1 ? "item" : "items"} from trash.`);
+  } } : null;
+  if (failed.length) message(`Moved ${moved.length} of ${items.length} items to trash. Could not move: ${failed.join(", ")}.`, true, undo);
+  else message(`Moved ${moved.length} ${moved.length === 1 ? "item" : "items"} to trash.`, false, undo);
 });
 function itemRow(item, from) {
   const row = element("article"); const image = element("span", null, "item-icon");
@@ -707,6 +736,7 @@ function itemRow(item, from) {
     const key = selectionKey(item); row.dataset.selectionKey = key;
     const selectionItem = { id: item.id, name: item.name, account: item.account || $("account").value || null };
     row.addEventListener("click", event => {
+      if (selectionWorking) { event.preventDefault(); event.stopPropagation(); return; }
       if (event.target.closest(".item-actions") || !(event.shiftKey || event.ctrlKey || event.metaKey || selectedItems.size)) return;
       event.preventDefault(); event.stopPropagation();
       const rows = [...$("items").querySelectorAll("article[data-selection-key]")];

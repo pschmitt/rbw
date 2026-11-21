@@ -120,11 +120,29 @@ class ChromiumPage:
             popup.locator("#selection-menu summary").click()
             popup.locator("#selection-trash").click()
             popup.locator(".confirm-dialog button[value=ok]").click()
+            popup.locator("#selection-bar.is-working").wait_for(state="visible", timeout=5000)
+            assert "of 2 to trash" in popup.locator("#selection-count").inner_text()
+            assert popup.locator("#selection-progress-icon").is_visible()
+            assert popup.locator("#selection-bar").bounding_box()["y"] >= popup.locator(".search-row").bounding_box()["y"] + popup.locator(".search-row").bounding_box()["height"] - 1
+            if os.environ.get("RBW_E2E_SCREENSHOTS"): popup.screenshot(path=os.path.join(os.environ["RBW_E2E_SCREENSHOTS"], "chromium-trash-progress.png"))
             popup.locator("#selection-bar").wait_for(state="hidden", timeout=15000)
+            popup.locator("#message-action").wait_for(state="visible", timeout=5000)
+            failed = os.environ.get("RBW_E2E_FAIL_ITEM") == "login-3"
+            assert ("Moved 1 of 2 items" if failed else "Moved 2 items to trash") in popup.locator("#message-text").inner_text()
+            if failed: assert "Other Login 3" in popup.locator("#message-text").inner_text()
+            assert popup.locator("#message-action").inner_text() == "Undo"
+            if os.environ.get("RBW_E2E_SCREENSHOTS"): popup.screenshot(path=os.path.join(os.environ["RBW_E2E_SCREENSHOTS"], "chromium-trash-result.png"))
             with open(os.environ["RBW_E2E_LOG"]) as log:
                 operations = log.read().split()
             assert "mutate:login-1" in operations and "mutate:login-3" in operations
             assert "mutate:login-2" not in operations
+            popup.locator("#message-action").click()
+            popup.get_by_text("Restored 1 item from trash." if failed else "Restored 2 items from trash.").wait_for(timeout=15000)
+            with open(os.environ["RBW_E2E_LOG"]) as log:
+                operations = log.read().split()
+            assert "mutation:restore:login-1" in operations
+            assert ("mutation:restore:login-3" in operations) != failed
+            assert "mutation:restore:login-2" not in operations
             return True
         finally:
             popup.close()

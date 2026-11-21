@@ -25,6 +25,11 @@ while True:
     request = json.loads(sys.stdin.buffer.read(struct.unpack("@I", header)[0]))
     action = request.get("action"); log.write(f"{action}:{request.get('item') or ''}\n"); log.flush()
     if action == "copy": log.write(f"copy-field:{request.get('field')}\n"); log.flush()
+    if action == "mutate":
+        log.write(f"mutation:{request.get('mutation')}:{request.get('item')}\n"); log.flush()
+        time.sleep(0.5)
+        if request.get("mutation") == "delete" and request.get("item") == os.environ.get("RBW_E2E_FAIL_ITEM"):
+            reply({"id": request["id"], "error": "Test failure"}); continue
     if action == "status": result = {"unlocked": True, "accounts": ["test"], "primary": "test", "hostVersion": host_version, "staleAgent": None}
     elif action == "search":
         logins = [LOGIN] + [{**LOGIN, "id": f"login-{n}", "name": f"Other Login {n}", "username": f"user{n}"} for n in range(2, 8)] + [{**LOGIN, "id": item, "name": cipher["name"], "username": cipher["data"]["username"]} for item, cipher in saved_logins.items()]

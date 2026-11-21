@@ -99,12 +99,18 @@ article { display:flex; align-items:center; border:1px solid var(--line); backgr
 article:hover, article:focus-within, article.is-active { background:var(--raised); }
 article.is-active { border-color:var(--accent); }
 #items article.is-selected { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 13%, var(--panel)); }
-.selection-bar { position:sticky; top:64px; z-index:9; display:flex; align-items:center; gap:8px; margin:8px 0; padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:var(--raised); box-shadow:0 4px 12px #0003; }
+.selection-bar { position:sticky; top:var(--selection-top, 64px); z-index:9; display:flex; align-items:center; gap:8px; margin:8px 0; padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:var(--raised); box-shadow:0 4px 12px #0003; }
 .selection-bar[hidden] { display:none; }
 .selection-bar #selection-count { flex:1; color:var(--text); font-size:13px; font-weight:600; }
 .selection-bar #selection-clear { border:0; background:transparent; color:var(--muted); font-size:12px; }
 .selection-bar #selection-clear:hover { color:var(--text); }
 .selection-bar summary .svg-icon { width:18px; height:18px; }
+.selection-bar.is-working { overflow:hidden; border-color:color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.selection-bar.is-working::after { content:""; position:absolute; left:0; bottom:0; width:var(--selection-progress, 0%); height:3px; background:var(--accent); transition:width .2s ease; }
+.selection-progress-icon { display:grid; place-items:center; width:22px; height:22px; flex:none; color:var(--accent); }
+.selection-progress-icon[hidden] { display:none; }
+.selection-progress-icon svg { width:18px; height:18px; animation:spin 1s linear infinite; }
+@media (prefers-reduced-motion:reduce) { .selection-progress-icon svg { animation:none; } .selection-bar.is-working::after { transition:none; } }
 article { transition:height .26s ease, opacity .2s ease, transform .26s ease, margin .26s ease, padding .26s ease; }
 article.is-leaving { height:0!important; min-height:0; margin-top:0; margin-bottom:0; padding-top:0; padding-bottom:0; border-width:0; opacity:0; transform:translateX(24px); overflow:hidden; pointer-events:none; }
 article .item-main:hover { background:transparent; }
