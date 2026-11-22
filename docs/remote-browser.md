@@ -58,7 +58,8 @@ domain-separated message. Validate signatures and consume the challenge
 before calling the vault operation. Keep reusable credentials, signatures,
 and request bodies out of logs.
 
-`rbw api policy list` displays named policies and their assigned clients.
+`rbw api policy list` displays named policies and their assigned clients,
+along with each mTLS client’s direct grants.
 Resolve policy assignments on every authorized request so edits and
 revocations apply immediately. Existing certificate clients retain their
 explicit grants. Assigning a named policy requires an explicit account.

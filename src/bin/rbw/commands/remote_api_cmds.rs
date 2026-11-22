@@ -452,7 +452,8 @@ fn wait_for_listener_stopped() -> anyhow::Result<()> {
 }
 
 pub fn api_policy_list() -> anyhow::Result<()> {
-    let browser = rbw::remote_api::load_policy_store()?.browser;
+    let store = rbw::remote_api::load_policy_store()?;
+    let browser = &store.browser;
     let terminal = stdout_is_terminal();
     let columns = [
         TableColumn {
@@ -468,7 +469,7 @@ pub fn api_policy_list() -> anyhow::Result<()> {
             style: TableColumnStyle::Id,
         },
     ];
-    let rows = ["admin", "read-only"]
+    let mut rows = ["admin", "read-only"]
         .into_iter()
         .chain(browser.named.keys().map(String::as_str))
         .map(|name| {
@@ -493,6 +494,58 @@ pub fn api_policy_list() -> anyhow::Result<()> {
             Ok(vec![name.to_owned(), capabilities, clients])
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
+    for client in store.clients.values() {
+        let status = rbw::remote_api::granted_status_accounts(client);
+        let scope = client.account.as_deref().unwrap_or("unscoped");
+        let grants = if terminal {
+            let mut details = vec![format!("account {scope}")];
+            if !client.all_items.is_empty() {
+                let fields = client
+                    .all_items
+                    .iter()
+                    .map(rbw::remote_api::FieldRef::path_token)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                details.push(format!("all items: {fields}"));
+            }
+            for (item, fields) in &client.items {
+                let fields = fields
+                    .iter()
+                    .map(rbw::remote_api::FieldRef::path_token)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                details.push(format!("{item}: {fields}"));
+            }
+            if !status.is_empty() {
+                details.push(format!("status: {}", status.join(", ")));
+            }
+            if !client.unlock_accounts.is_empty() {
+                details.push(format!(
+                    "unlock: {}",
+                    client.unlock_accounts.join(", ")
+                ));
+            }
+            if details.len() == 1 {
+                details.push("no grants".to_owned());
+            }
+            details.join(" · ")
+        } else {
+            serde_json::to_string(&serde_json::json!({
+                "name": client.name,
+                "account": client.account,
+                "allItems": client.all_items,
+                "items": client.items,
+                "statusAccounts": status,
+                "unlockAccounts": client.unlock_accounts,
+            }))?
+        };
+        let name = if terminal {
+            format!("direct ({})", client.name)
+        } else {
+            "direct".to_owned()
+        };
+        rows.push(vec![name, grants, client.id.clone()]);
+    }
     print_table(&columns, &rows, "")
 }
 

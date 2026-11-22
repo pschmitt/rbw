@@ -109,6 +109,19 @@ try {
     api: { listen: `127.0.0.1:${await freePort()}`, browser: { origin, port } },
   }));
   cli("api", "enable");
+  const certificate = cli("api", "client", "create", "browser-daemon")
+    .match(/Created client browser-daemon \(([a-f0-9]+)\)/)[1];
+  cli("api", "grant", certificate, "--account", "test", "--item-id", "@all", "--field", "username");
+  cli("api", "status-grant", certificate, "--account", "test");
+  const directRow = cli("api", "policy", "list").split("\n").find(row => row.startsWith("direct\t"));
+  const [, directGrants, directClient] = directRow.split("\t");
+  assert.equal(directClient, certificate);
+  assert.deepEqual(JSON.parse(directGrants), {
+    name: "browser-daemon", account: "test", allItems: ["username"],
+    items: {}, statusAccounts: ["test"], unlockAccounts: [],
+  });
+  assert.match(terminalCli(["api", "policy", "list"], { color: false }),
+    /direct \(browser-daemon\) +account test · all items: username · status: test/);
   const source = await readFile(new URL("../../extension/remote-agent.js", import.meta.url), "utf8");
   const extension = browser(source, origin, port);
   await assert.rejects(extension.configure("remote", "http://rbw.example.net"));
