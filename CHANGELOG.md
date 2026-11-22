@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Native Android Keystore unlock uses the integrated `tpp` commands on
+  TermuxPP and nixpp and continues to support Termux:API on regular Termux.
+* Home Assistant repair dialogs show the instructions for resolving rbw
+  access issues.
+
+### Changed
+
+* Use the shared Home Assistant CI workflow.
+
 ## [2.47.3] - 2026-11-21
 
 ### Added

@@ -1,12 +1,15 @@
 # Native Termux Android Keystore unlock
 
-On Android, the pschmitt fork can unlock an account natively through
-Termux:API. This uses an authentication-gated Android Keystore signing key;
-the Keystore signing operation itself is the security boundary, and a
-`termux-fingerprint` prompt is what satisfies Android's authentication check
-before each sign (`termux-keystore sign` never prompts on its own — it only
-checks whether you're already authenticated within the key's validity
-window). The encrypted bundle contains no private key or reusable signature.
+On Android, rbw can unlock an account with an authentication-gated Android
+Keystore signing key. Regular Termux requires Termux:API and its
+`termux-fingerprint` and `termux-keystore` commands. TermuxPP, including its
+nixpp guest, uses the integrated `tpp fingerprint` and `tpp keystore` commands.
+The relevant executable must be on rbw's PATH.
+
+The fingerprint prompt satisfies Android's authentication check before each
+signature. The signing operation checks whether you are already authenticated
+within the key's validity window. The encrypted bundle contains no private key
+or reusable signature.
 
 Enroll the active account in one step:
 

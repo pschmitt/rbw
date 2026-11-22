@@ -192,6 +192,43 @@ fn command_output_within(
     })
 }
 
+fn running_on_termuxpp() -> bool {
+    std::env::var_os("NIXPP_RUNTIME").is_some()
+        || ["PREFIX", "TERMUX__PREFIX", "TERMUX_APP__DATA_DIR"]
+            .iter()
+            .filter_map(std::env::var_os)
+            .any(|path| {
+                std::path::Path::new(&path)
+                    .components()
+                    .any(|part| part.as_os_str() == "dev.pschmitt.termux")
+            })
+}
+
+fn api_output(
+    command: &str,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    timeout: std::time::Duration,
+) -> anyhow::Result<std::process::Output> {
+    if !running_on_termuxpp() {
+        return command_output_within(
+            &format!("termux-{command}"),
+            args,
+            stdin,
+            Some(timeout),
+        );
+    }
+
+    let mut tpp_args = Vec::new();
+    // Signing already returns binary data and tpp rejects --json for it.
+    if !(command == "keystore" && args.first() == Some(&"sign")) {
+        tpp_args.push("--json");
+    }
+    tpp_args.push(command);
+    tpp_args.extend_from_slice(args);
+    command_output_within("tpp", &tpp_args, stdin, Some(timeout))
+}
+
 /// How long a Keystore operation (list, generate, delete, sign) may take.
 /// None of them waits for the user, so a longer wait means the Termux:API
 /// app did not answer.
@@ -205,7 +242,7 @@ fn run_keystore(
     let output = keystore_output(args, stdin)?;
     if !output.status.success() {
         anyhow::bail!(
-            "termux-keystore {} failed: {}",
+            "keystore {} failed: {}",
             args.join(" "),
             String::from_utf8_lossy(&output.stderr).trim()
         );
@@ -226,25 +263,18 @@ fn fingerprint() -> anyhow::Result<()> {
          device; waiting up to {} seconds...",
         AUTH_TIMEOUT.as_secs()
     );
-    let output = command_output_within(
-        "termux-fingerprint",
-        &[],
-        None,
-        Some(AUTH_TIMEOUT),
-    )
-    .context(
-        "no confirmation from the device: is the Termux:API app installed \
-         and allowed to show its prompt (keep the screen on and Termux in \
-         the foreground)?",
+    let output = api_output("fingerprint", &[], None, AUTH_TIMEOUT).context(
+        "no confirmation from the Android API: check that the fingerprint \
+         prompt can open (keep the screen on and Termux in the foreground)",
     )?;
     if !output.status.success() {
         anyhow::bail!(
-            "termux-fingerprint failed: {}",
+            "fingerprint command failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
     let response: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .context("termux-fingerprint returned invalid JSON")?;
+        .context("fingerprint command returned invalid JSON")?;
     let result = response
         .get("auth_result")
         .and_then(serde_json::Value::as_str)
@@ -297,11 +327,11 @@ fn sign(
         keystore_output(&["sign", key_alias, algorithm], Some(challenge))?;
     if !output.status.success() {
         anyhow::bail!(
-            "termux-keystore sign {key_alias} {algorithm} failed: {}",
+            "keystore sign {key_alias} {algorithm} failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let signature = if output.stdout.is_empty() {
+    let signature = if output.stdout.is_empty() && !running_on_termuxpp() {
         output.stderr
     } else {
         output.stdout
@@ -315,26 +345,20 @@ fn sign(
     Ok(signature)
 }
 
-/// Runs termux-keystore with `KEYSTORE_TIMEOUT`, naming the operation
+/// Runs the keystore command with `KEYSTORE_TIMEOUT`, naming the operation
 /// and the likely cause when the app does not answer.
 fn keystore_output(
     args: &[&str],
     stdin: Option<&[u8]>,
 ) -> anyhow::Result<std::process::Output> {
-    command_output_within(
-        "termux-keystore",
-        args,
-        stdin,
-        Some(KEYSTORE_TIMEOUT),
-    )
-    .map_err(|e| {
+    api_output("keystore", args, stdin, KEYSTORE_TIMEOUT).map_err(|e| {
         if keystore_missing(&e) {
             return e;
         }
         let operation = args.first().copied().unwrap_or_default();
         e.context(format!(
-            "termux-keystore {operation} got no answer from the \
-                 Termux:API app (is it running and allowed to work in the \
+            "keystore {operation} got no answer from the \
+                 Android API (is it running and allowed to work in the \
                  background?)"
         ))
     })
@@ -343,7 +367,7 @@ fn keystore_output(
 fn key_infos() -> anyhow::Result<Vec<KeyInfo>> {
     let output = run_keystore(&["list", "-d"], None)?;
     serde_json::from_slice(&output)
-        .context("termux-keystore returned invalid key metadata")
+        .context("keystore command returned invalid key metadata")
 }
 
 fn ensure_key_is_authenticated(key_alias: &str) -> anyhow::Result<()> {
@@ -520,7 +544,7 @@ pub fn delete(key_alias: &str) -> anyhow::Result<()> {
 pub fn key_present(key_alias: &str) -> anyhow::Result<bool> {
     match key_infos() {
         Ok(keys) => Ok(keys.iter().any(|key| key.alias == key_alias)),
-        // No termux-keystore (not on Termux, or Termux:API missing): there
+        // If the keystore executable is missing, there
         // can't be a key, which `rbw purge` must not treat as an error.
         Err(e) if keystore_missing(&e) => Ok(false),
         Err(e) => Err(e),
