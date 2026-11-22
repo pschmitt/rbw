@@ -153,12 +153,13 @@ try {
   assert.equal(assignment.policy, "mixed");
   assert.equal(assignment.clientId, certificate);
   const displayPolicy = ["api", "policy", "show", "mixed"];
+  const ansiPrefix = String.fromCharCode(27) + "[";
   assert.match(cli("policy", "show", "mixed"), /work-item/);
   assert.equal(cli(...displayPolicy, "-o", "yaml"), cli(...displayPolicy, "--yaml"));
-  assert.doesNotMatch(cli(...displayPolicy, "--yaml"), /\x1b\[/);
-  assert.doesNotMatch(terminalCli(displayPolicy, { color: false }), /\x1b\[/);
+  assert.ok(!cli(...displayPolicy, "--yaml").includes(ansiPrefix));
+  assert.ok(!terminalCli(displayPolicy, { color: false }).includes(ansiPrefix));
   for (const format of [[], ["-o", "yaml"], ["-o", "json"]]) {
-    assert.match(terminalCli([...displayPolicy, ...format]), /\x1b\[/);
+    assert.ok(terminalCli([...displayPolicy, ...format]).includes(ansiPrefix));
   }
   assert.equal(JSON.parse(cli(...displayPolicy, "--json")).policy, "mixed");
   assert.ok(JSON.parse(cli("api", "-o", "json", "policy", "list")).policies.some(
