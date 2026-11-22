@@ -34,7 +34,7 @@
   "issues": {
     "status_permission_required": {
       "title": "rbw status permission required",
-      "description": "This client can reach the rbw API, but its separate status permission is missing. Run rbw api client list, then grant status access for the existing client and each intended account with rbw api status-grant <client-id> --account <account-name>."
+      "description": "This client can reach the rbw API, but its separate status permission is missing. Run rbw api client list, then grant status access for the existing client and each intended account with rbw api status-grant CLIENT_ID --account ACCOUNT_NAME."
     },
     "status_unavailable": {
       "title": "rbw status API unavailable",
