@@ -78,6 +78,53 @@ trust the CA, and present its client certificate and key for every request. Clie
 identity comes from the verified TLS certificate; a request parameter cannot
 choose or impersonate a client.
 
+## Shared policies and client source restrictions
+
+Reuse one certificate across several accounts by giving it a named policy. The
+policy file maps configured account names to grants. Each account can have
+account-wide field grants, item-specific grants, status access, and permission
+to attempt password-based unlock.
+
+```yaml
+default:
+  allItems: [name, username, password, totp, uri_all, custom_all]
+  status: true
+wiit:
+  items:
+    "<item-uuid>": [username, password]
+  unlock: true
+```
+
+```sh
+rbw api policy import browser-daemon policy.yaml
+rbw api policy assign '<client-id>' browser-daemon
+rbw api policy list
+rbw policy show browser-daemon
+```
+
+Importing changes takes effect on the next request by any assigned client.
+An assigned policy provides the client's effective access. An existing client
+without an assignment continues to use its direct grants.
+`rbw api policy show '<client-id>'` also works for direct grants.
+
+Clients can discover their item scopes with `GET /v1/accounts`. For item
+listing, search, field reads, and passkey operations, send the desired account
+in `X-Rbw-Account`. If exactly one account has item grants, the header may
+be omitted. Requests with several eligible accounts must select one explicitly.
+
+Restrict a certificate client to addresses or CIDRs with repeatable
+`--source` arguments. This replaces the client's allowlist. Match the
+source ranges actually used by the client. For example:
+
+```sh
+rbw api client allow-source '<client-id>' --source 100.64.0.0/10
+rbw api client allow-source '<client-id>' --clear
+```
+
+The server checks the actual TCP peer and ignores forwarded headers. The
+source allowlist is for certificate clients. Restrict network access to the
+signed browser listener at its HTTPS reverse proxy.
+
 ## Grant status without item access
 
 Grant a client non-secret lock status for one or more configured accounts

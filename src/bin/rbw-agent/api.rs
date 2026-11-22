@@ -3,7 +3,7 @@ mod signed_browser;
 
 use anyhow::Context as _;
 use axum::{
-    extract::{Extension, Path, Query, State},
+    extract::{ConnectInfo, Extension, Path, Query, Request, State},
     http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -547,7 +547,7 @@ async fn prepare(
         let certificate_api = futures::future::try_join_all(
             servers.into_iter().map(|(address, server)| {
                 log::info!("rbw remote field API listening on {address}");
-                server.serve(router.clone().into_make_service())
+                server.serve(router.clone().into_make_service_with_connect_info::<std::net::SocketAddr>())
             }),
         );
         if let Some(browser_api) = browser_api {
@@ -608,7 +608,105 @@ fn router(state: ApiState) -> Router {
         )
         .route("/v1/status", get(read_status))
         .route("/v1/unlock", axum::routing::post(unlock_account))
-        .with_state(state)
+        .route("/v1/accounts", get(certificate_accounts))
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            authorize_certificate_request,
+        ))
+}
+
+async fn authorize_certificate_request(
+    State(mut state): State<ApiState>,
+    mut request: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let snapshot = (state.policy)().await;
+    let result = (|| {
+        let cert = request
+            .extensions()
+            .get::<Arc<TlsInfo>>()
+            .and_then(|tls| tls.peer_certificates.first())
+            .ok_or_else(|| ApiError::new(ErrorCode::Unauthorized))?;
+        let fingerprint = rbw::remote_api::certificate_fingerprint(cert);
+        let (enabled, mut store) = snapshot?;
+        if !enabled {
+            return Err(ApiError::new(ErrorCode::Unauthorized));
+        }
+        let client = store
+            .clients
+            .values_mut()
+            .find(|client| client.fingerprint == fingerprint)
+            .ok_or_else(|| ApiError::new(ErrorCode::Unauthorized))?;
+        let peer = request
+            .extensions()
+            .get::<ConnectInfo<std::net::SocketAddr>>()
+            .map(|ConnectInfo(address)| address.ip());
+        if !store.access.permits_source(&client.id, peer) {
+            return Err(ApiError::new(ErrorCode::Forbidden));
+        }
+        let item_operation = !matches!(
+            request.uri().path(),
+            "/v1/status" | "/v1/unlock" | "/v1/accounts"
+        );
+        let mut account_headers =
+            request.headers().get_all("x-rbw-account").iter();
+        let account = account_headers
+            .next()
+            .map(|value| value.to_str())
+            .transpose()
+            .map_err(|_| ApiError::new(ErrorCode::InvalidRequest))?;
+        if account_headers.next().is_some()
+            || account.is_some_and(str::is_empty)
+        {
+            return Err(ApiError::new(ErrorCode::InvalidRequest));
+        }
+        let accounts = store.access.accounts(client)?;
+        store.access.apply(client, account, item_operation)?;
+        Ok((store, accounts))
+    })();
+    let (store, accounts) = match result {
+        Ok(result) => result,
+        Err(error) => {
+            let peer = request.extensions().get::<Arc<TlsInfo>>().cloned();
+            let cert = peer
+                .as_ref()
+                .and_then(|tls| tls.peer_certificates.first())
+                .map(Vec::as_slice);
+            let actor = audit_actor(&state, cert).await;
+            let result = Err::<(), _>(error);
+            let meta = ApiAuditMeta {
+                client: extract_consumer(request.headers()),
+                ..ApiAuditMeta::default()
+            };
+            record_api_event(
+                actor,
+                "api.request_denied",
+                meta,
+                api_audit_outcome(&result),
+            )
+            .await;
+            return api_response(result);
+        }
+    };
+    let store = Arc::new(store);
+    state.policy = Arc::new(move || {
+        let store = Arc::clone(&store);
+        Box::pin(async move { Ok((true, (*store).clone())) })
+    });
+    request.extensions_mut().insert(state);
+    request
+        .extensions_mut()
+        .insert(CertificateAccounts(accounts));
+    next.run(request).await
+}
+
+#[derive(Clone)]
+struct CertificateAccounts(Vec<String>);
+
+async fn certificate_accounts(
+    Extension(accounts): Extension<CertificateAccounts>,
+) -> Response {
+    api_response(Ok(serde_json::json!({ "accounts": accounts.0 })))
 }
 
 #[derive(Default)]
@@ -631,7 +729,7 @@ fn extract_consumer(headers: &axum::http::HeaderMap) -> Option<String> {
 }
 
 async fn read_field(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Extension(tls): Extension<Arc<TlsInfo>>,
     headers: axum::http::HeaderMap,
     Path((item_id, field_token)): Path<(String, String)>,
@@ -650,7 +748,7 @@ async fn read_field(
 }
 
 async fn list_items(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Extension(tls): Extension<Arc<TlsInfo>>,
     headers: axum::http::HeaderMap,
     Query(query): Query<browser::ItemQuery>,
@@ -683,7 +781,7 @@ async fn list_items(
 }
 
 async fn read_status(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Extension(tls): Extension<Arc<TlsInfo>>,
 ) -> Response {
     let cert_der = tls.peer_certificates.first().map(Vec::as_slice);
@@ -701,7 +799,7 @@ async fn read_status(
 }
 
 async fn unlock_account(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Extension(tls): Extension<Arc<TlsInfo>>,
     headers: axum::http::HeaderMap,
     Json(mut request): Json<UnlockRequest>,
@@ -1288,6 +1386,7 @@ mod tests {
         assert_eq!(client.unlock_accounts, Vec::<String>::new());
         let mut store = PolicyStore {
             browser: BrowserPolicies::default(),
+            access: rbw::remote_api::access_policy::AccessPolicies::default(),
             clients: std::collections::BTreeMap::from([(
                 "test".into(),
                 client,
@@ -1390,6 +1489,7 @@ mod tests {
         };
         let store = PolicyStore {
             browser: BrowserPolicies::default(),
+            access: rbw::remote_api::access_policy::AccessPolicies::default(),
             clients: std::collections::BTreeMap::from([(
                 "test".into(),
                 client,
@@ -1449,6 +1549,7 @@ mod tests {
         };
         let mut store = PolicyStore {
             browser: BrowserPolicies::default(),
+            access: rbw::remote_api::access_policy::AccessPolicies::default(),
             clients: std::collections::BTreeMap::new(),
         };
         store.clients.insert("test".into(), client.clone());
@@ -1647,6 +1748,8 @@ mod tests {
             enabled,
             PolicyStore {
                 browser: BrowserPolicies::default(),
+                access:
+                    rbw::remote_api::access_policy::AccessPolicies::default(),
                 clients: std::collections::BTreeMap::from([(
                     client.id.clone(),
                     client,

@@ -338,6 +338,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
             "purge-vault",
             "agent",
             "api",
+            "policy",
             "stop-agent",
             "completions",
             "native-messaging",
@@ -505,6 +506,12 @@ enum Opt {
     Api {
         #[command(subcommand)]
         api: ApiCmd,
+    },
+
+    #[command(about = "Inspect remote API access policies")]
+    Policy {
+        #[command(subcommand)]
+        policy: PolicyInspectCmd,
     },
 
     // Kept for compatibility; `rbw security unlock` is the documented
@@ -2502,6 +2509,7 @@ impl Opt {
                 | Self::Security { .. }
                 | Self::Mirror { .. }
                 | Self::Api { .. }
+                | Self::Policy { .. }
                 | Self::SecretService { .. }
         )
         .then(|| self.subcommand_name())
@@ -2518,6 +2526,7 @@ impl Opt {
                 format!("agent {}", agent.subcommand_name())
             }
             Self::Api { api } => format!("api {}", api.subcommand_name()),
+            Self::Policy { .. } => "policy show".to_owned(),
             Self::SecretService { .. } => "secret-service".to_string(),
             Self::Termux { .. } => "termux".to_string(),
             Self::Register { .. } => "register".to_string(),
@@ -2744,8 +2753,21 @@ enum ApiCmd {
 }
 
 #[derive(Debug, clap::Subcommand)]
+enum PolicyInspectCmd {
+    Show { policy: String },
+}
+
+#[derive(Debug, clap::Subcommand)]
 enum ApiPolicyCmd {
     List,
+    #[command(about = "Create or update an account-scoped policy from YAML")]
+    Import {
+        name: String,
+        file: std::path::PathBuf,
+    },
+    Show {
+        policy: String,
+    },
     Set {
         name: String,
         #[arg(long = "allow", value_enum)]
@@ -2781,6 +2803,16 @@ enum ApiClientCmd {
     },
     #[command(about = "List client identities and grant counts")]
     List,
+    #[command(
+        about = "Restrict a certificate client to source IP addresses or CIDRs"
+    )]
+    AllowSource {
+        id: String,
+        #[arg(long, required_unless_present = "clear")]
+        source: Vec<String>,
+        #[arg(long, conflicts_with = "source")]
+        clear: bool,
+    },
     #[command(about = "Revoke a client and remove its local keypair")]
     Revoke {
         #[arg(help = "Client ID")]
@@ -4650,6 +4682,9 @@ fn main() {
                 if_outdated,
             } => commands::agent_restart(kill, unlock, lock, if_outdated),
         },
+        Opt::Policy {
+            policy: PolicyInspectCmd::Show { policy },
+        } => commands::api_policy_show(&policy),
         Opt::Api { api } => match api {
             ApiCmd::Enable {
                 listen,
@@ -4682,6 +4717,12 @@ fn main() {
             }
             ApiCmd::Policy { policy } => match policy {
                 ApiPolicyCmd::List => commands::api_policy_list(),
+                ApiPolicyCmd::Import { name, file } => {
+                    commands::api_policy_import(&name, &file)
+                }
+                ApiPolicyCmd::Show { policy } => {
+                    commands::api_policy_show(&policy)
+                }
                 ApiPolicyCmd::Set { name, capabilities } => {
                     commands::api_policy_set(&name, capabilities)
                 }
@@ -4707,6 +4748,11 @@ fn main() {
                     commands::api_client_create(&name)
                 }
                 ApiClientCmd::List => commands::api_client_list(),
+                ApiClientCmd::AllowSource {
+                    id,
+                    source,
+                    clear: _,
+                } => commands::api_client_allow_source(&id, &source),
                 ApiClientCmd::Revoke { id } => {
                     commands::api_client_revoke(&id)
                 }

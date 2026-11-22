@@ -200,6 +200,11 @@ pub fn api_client_list() -> anyhow::Result<()> {
             },
         ];
         let mut rows: Vec<_> = store.clients.values().map(|client| {
+            if let Some(policy) = store.access.assignments.get(&client.id) {
+                let accounts = store.access.named.get(policy).into_iter().flat_map(|rules| rules.keys())
+                    .cloned().collect::<Vec<_>>().join(", ");
+                return vec![client.name.clone(), client.id.clone(), "mTLS".to_owned(), accounts, policy.clone(), "—".to_owned()];
+            }
             let fields = client.items.values().map(Vec::len).sum::<usize>();
             let status = rbw::remote_api::granted_status_accounts(client).len();
             vec![
@@ -226,6 +231,22 @@ pub fn api_client_list() -> anyhow::Result<()> {
         return print_table(&columns, &rows, "");
     }
     for client in store.clients.values() {
+        if let Some(policy) = store.access.assignments.get(&client.id) {
+            let accounts = store
+                .access
+                .named
+                .get(policy)
+                .into_iter()
+                .flat_map(|rules| rules.keys())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "{}\t{}\t{accounts}\tpolicy {policy}",
+                client.id, client.name
+            );
+            continue;
+        }
         let fields: usize = client.items.values().map(Vec::len).sum();
         println!(
             "{}\t{}\t{}\t{} item(s), {fields} field grant(s), account-wide fields [{}], status [{}], unlock [{}]",
@@ -465,7 +486,7 @@ pub fn api_policy_list() -> anyhow::Result<()> {
             style: TableColumnStyle::Id,
         },
         TableColumn {
-            header: "capabilities",
+            header: "scope",
             style: TableColumnStyle::Default,
         },
     ];
@@ -483,52 +504,44 @@ pub fn api_policy_list() -> anyhow::Result<()> {
                 .collect::<Vec<_>>()
                 .join(", ");
             let capabilities = if terminal {
-                capabilities
-                    .iter()
-                    .map(|capability| capability.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                "named policy".to_owned()
             } else {
                 serde_json::to_string(capabilities)?
             };
             Ok(vec![name.to_owned(), capabilities, clients])
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    for client in store.clients.values() {
+    for (name, accounts) in &store.access.named {
+        let clients = store
+            .access
+            .assignments
+            .iter()
+            .filter(|(_, policy)| *policy == name)
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let scope = if terminal {
+            accounts.keys().cloned().collect::<Vec<_>>().join(", ")
+        } else {
+            serde_json::to_string(accounts)?
+        };
+        rows.push(vec![name.clone(), scope, clients]);
+    }
+    for client in store
+        .clients
+        .values()
+        .filter(|client| !store.access.assignments.contains_key(&client.id))
+    {
         let status = rbw::remote_api::granted_status_accounts(client);
         let scope = client.account.as_deref().unwrap_or("unscoped");
         let grants = if terminal {
-            let mut details = vec![format!("account {scope}")];
-            if !client.all_items.is_empty() {
-                let fields = client
-                    .all_items
-                    .iter()
-                    .map(rbw::remote_api::FieldRef::path_token)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                details.push(format!("all items: {fields}"));
-            }
-            for (item, fields) in &client.items {
-                let fields = fields
-                    .iter()
-                    .map(rbw::remote_api::FieldRef::path_token)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                details.push(format!("{item}: {fields}"));
-            }
-            if !status.is_empty() {
-                details.push(format!("status: {}", status.join(", ")));
-            }
-            if !client.unlock_accounts.is_empty() {
-                details.push(format!(
-                    "unlock: {}",
-                    client.unlock_accounts.join(", ")
-                ));
-            }
-            if details.len() == 1 {
-                details.push("no grants".to_owned());
-            }
-            details.join(" · ")
+            format!(
+                "{scope} · {} item grants · {} global fields · {} status · {} unlock",
+                client.items.len(),
+                client.all_items.len(),
+                status.len(),
+                client.unlock_accounts.len()
+            )
         } else {
             serde_json::to_string(&serde_json::json!({
                 "name": client.name,
@@ -553,6 +566,92 @@ pub fn api_policy_list() -> anyhow::Result<()> {
         }
     }
     print_table(&columns, &rows, "")
+}
+
+fn show_account_policy(
+    store: &rbw::remote_api::PolicyStore,
+    policy: &str,
+    accounts: &rbw::remote_api::access_policy::AccountPolicy,
+) -> anyhow::Result<()> {
+    let clients = store.access.assignments.iter()
+            .filter(|(_, assigned)| *assigned == policy)
+            .filter_map(|(id, _)| store.clients.get(id))
+            .map(|client| serde_json::json!({
+                "id": client.id, "name": client.name,
+                "sourceAllowlist": store.access.source_allowlists.get(&client.id),
+            }))
+            .collect::<Vec<_>>();
+    write_yaml_pretty(
+        &serde_json::json!({
+            "policy": policy, "accounts": accounts, "clients": clients,
+        }),
+        "failed to display API policy",
+    )
+}
+
+pub fn api_policy_show(policy: &str) -> anyhow::Result<()> {
+    let store = rbw::remote_api::load_policy_store()?;
+    if let Some(accounts) = store.access.named.get(policy) {
+        return show_account_policy(&store, policy, accounts);
+    }
+    if let Some(capabilities) = store.browser.capabilities(policy) {
+        let clients = store
+            .browser
+            .clients
+            .iter()
+            .filter(|(_, client)| client.policy == policy)
+            .map(|(id, client)| {
+                serde_json::json!({
+                    "id": id, "name": client.name, "account": client.account,
+                })
+            })
+            .collect::<Vec<_>>();
+        return write_yaml_pretty(
+            &serde_json::json!({
+                "policy": policy, "capabilities": capabilities, "clients": clients,
+            }),
+            "failed to display API policy",
+        );
+    }
+
+    let client = if let Some(client) = store.clients.get(policy) {
+        client
+    } else {
+        let mut matches = store
+            .clients
+            .values()
+            .filter(|client| client.name == policy);
+        let client = matches
+            .next()
+            .context("API policy or client was not found")?;
+        anyhow::ensure!(
+            matches.next().is_none(),
+            "ambiguous client name; use its client ID"
+        );
+        client
+    };
+    if let Some(assigned) = store.access.assignments.get(&client.id) {
+        let accounts = store
+            .access
+            .named
+            .get(assigned)
+            .context("assigned policy was not found")?;
+        return show_account_policy(&store, assigned, accounts);
+    }
+    write_yaml_pretty(
+        &serde_json::json!({
+            "sourceAllowlist": store.access.source_allowlists.get(&client.id),
+            "policy": "direct",
+            "clientId": client.id,
+            "name": client.name,
+            "account": client.account,
+            "allItems": client.all_items,
+            "items": client.items,
+            "statusAccounts": rbw::remote_api::granted_status_accounts(client),
+            "unlockAccounts": client.unlock_accounts,
+        }),
+        "failed to display API policy",
+    )
 }
 
 pub fn api_pairing_list() -> anyhow::Result<()> {
@@ -602,6 +701,37 @@ pub fn api_pairing_list() -> anyhow::Result<()> {
     print_table(&columns, &rows, "")
 }
 
+pub fn api_policy_import(
+    name: &str,
+    file: &std::path::Path,
+) -> anyhow::Result<()> {
+    let reader = std::fs::File::open(file)
+        .context("failed to open API policy file")?;
+    let rules = serde_yaml::from_reader(reader)
+        .context("invalid account-scoped API policy")?;
+    rbw::remote_api::access_policy::set_policy(name, rules)?;
+    if stdout_is_terminal() {
+        print_access_result("updated", name, "account-scoped API policy")?;
+    }
+    Ok(())
+}
+
+pub fn api_client_allow_source(
+    client_id: &str,
+    sources: &[String],
+) -> anyhow::Result<()> {
+    rbw::remote_api::access_policy::set_sources(client_id, sources)?;
+    if stdout_is_terminal() {
+        let scope = if sources.is_empty() {
+            "any source".to_owned()
+        } else {
+            sources.join(", ")
+        };
+        print_access_result("updated", client_id, &scope)?;
+    }
+    Ok(())
+}
+
 pub fn api_policy_set(
     name: &str,
     capabilities: Vec<rbw::remote_api::browser_policy::Capability>,
@@ -617,7 +747,7 @@ pub fn api_policy_assign(
     client_id: &str,
     policy: &str,
 ) -> anyhow::Result<()> {
-    rbw::remote_api::browser_policy::assign_policy(client_id, policy)?;
+    rbw::remote_api::access_policy::assign(client_id, policy)?;
     if stdout_is_terminal() {
         print_access_result("assigned", client_id, policy)?;
     }

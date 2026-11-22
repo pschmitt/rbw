@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { request as httpsRequest } from "node:https";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -103,10 +104,11 @@ try {
   await mkdir(configDir, { recursive: true });
   await mkdir(env.XDG_RUNTIME_DIR, { recursive: true, mode: 0o700 });
   const port = await freePort();
+  const certificatePort = await freePort();
   const origin = "https://rbw.example.net";
   await writeFile(join(configDir, "config.yaml"), JSON.stringify({
-    accounts: [{ name: "test", email: "browser@example.net" }],
-    api: { listen: `127.0.0.1:${await freePort()}`, browser: { origin, port } },
+    accounts: [{ name: "test", email: "browser@example.net" }, { name: "work", email: "work@example.net" }],
+    api: { listen: `127.0.0.1:${certificatePort}`, browser: { origin, port } },
   }));
   cli("api", "enable");
   const certificate = cli("api", "client", "create", "browser-daemon")
@@ -121,7 +123,44 @@ try {
     items: {}, statusAccounts: ["test"], unlockAccounts: [],
   });
   assert.match(terminalCli(["api", "policy", "list"], { color: false }),
-    /direct \(browser-daemon\) +[a-f0-9]+ +account test · all items: username · status: test/);
+    /direct \(browser-daemon\) +[a-f0-9]+ +test · 0 item grants · 1 global fields · 1 status · 0 unlock/);
+  const pki = join(env.XDG_DATA_HOME, "rbw-signed-browser-test", "remote-api", "pki");
+  const [ca, cert, key] = await Promise.all(["ca.pem", `client-${certificate}.pem`, `client-${certificate}-key.pem`]
+    .map(name => readFile(join(pki, name))));
+  const certificateRequest = (path, headers = {}) => new Promise((resolve, reject) => {
+    const req = httpsRequest({
+      hostname: "127.0.0.1", servername: "localhost", port: certificatePort,
+      path, headers, ca, cert, key,
+    }, response => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", chunk => { body += chunk; });
+      response.on("end", () => resolve({ status: response.statusCode, body: JSON.parse(body) }));
+      response.on("error", reject);
+    });
+    req.on("error", reject);
+    req.end();
+  });
+  assert.deepEqual((await certificateRequest("/v1/accounts")).body.accounts, ["test"]);
+  const policyFile = join(root, "policy.yaml");
+  await writeFile(policyFile, JSON.stringify({
+    test: { allItems: ["username"], status: true },
+    work: { items: { "work-item": ["totp"] }, unlock: true },
+  }));
+  cli("api", "policy", "import", "mixed", policyFile);
+  cli("api", "policy", "assign", certificate, "mixed");
+  assert.match(cli("policy", "show", "mixed"), /work-item/);
+  assert.deepEqual((await certificateRequest("/v1/accounts")).body.accounts, ["test", "work"]);
+  assert.equal((await certificateRequest("/v1/items")).status, 400);
+  assert.equal((await certificateRequest("/v1/items", { "X-Rbw-Account": "ungranted" })).status, 403);
+  assert.equal((await certificateRequest("/v1/items/work-item/fields/username", { "X-Rbw-Account": "work" })).status, 403);
+  assert.equal((await certificateRequest("/v1/items/work-item/fields/totp", { "X-Rbw-Account": "test" })).status, 403);
+  assert.deepEqual((await certificateRequest("/v1/status")).body.accounts.map(account => account.account), ["test"]);
+  cli("api", "client", "allow-source", certificate, "--source", "100.64.0.0/10");
+  assert.equal((await certificateRequest("/v1/accounts", { "X-Forwarded-For": "100.64.1.1" })).status, 403);
+  cli("api", "client", "allow-source", certificate, "--source", "127.0.0.1");
+  assert.equal((await certificateRequest("/v1/accounts")).status, 200);
+  cli("api", "client", "allow-source", certificate, "--clear");
   const source = await readFile(new URL("../../extension/remote-agent.js", import.meta.url), "utf8");
   const extension = browser(source, origin, port);
   await assert.rejects(extension.configure("remote", "http://rbw.example.net"));
@@ -141,7 +180,7 @@ try {
   assert.match(clientTable, /^NAME +CLIENT ID +AUTH +ACCOUNT +POLICY +GRANTS/m);
   assert.match(clientTable, /Test browser +[A-Za-z0-9_-]+ +browser +test +read-only/);
   assert.ok(!clientTable.includes(escape));
-  assert.match(terminalCli(["api", "policy", "list"], { color: false }), /^POLICY +CLIENT ID +CAPABILITIES/m);
+  assert.match(terminalCli(["api", "policy", "list"], { color: false }), /^POLICY +CLIENT ID +SCOPE/m);
   assert.match(terminalCli(["api", "status"], { color: false }), /^FIELD +VALUE/m);
   assert.equal((await extension.call(origin, { action: "status" })).canUnlock, false);
   cli("api", "policy", "assign", pairing.id, "admin");

@@ -3973,6 +3973,7 @@ dependencies = [
  "hmac 0.13.0",
  "humantime",
  "indicatif",
+ "ipnet",
  "is-terminal",
  "libc",
  "log",

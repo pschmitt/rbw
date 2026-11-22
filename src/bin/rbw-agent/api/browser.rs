@@ -3,7 +3,7 @@ use super::{
     record_api_event, ApiAuditMeta, ApiState,
 };
 use axum::{
-    extract::{Extension, Query, State},
+    extract::{Extension, Query},
     response::Response,
     Json,
 };
@@ -72,7 +72,7 @@ pub(super) async fn search(
 }
 
 pub(super) async fn find_passkeys(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Extension(tls): Extension<Arc<TlsInfo>>,
     headers: axum::http::HeaderMap,
     Query(query): Query<PasskeyQuery>,
@@ -104,7 +104,7 @@ pub(super) async fn find_passkeys(
 }
 
 pub(super) async fn assert_passkey(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Extension(tls): Extension<Arc<TlsInfo>>,
     headers: axum::http::HeaderMap,
     Json(request): Json<PasskeyAssertionRequest>,

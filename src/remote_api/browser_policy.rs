@@ -188,23 +188,12 @@ pub fn set_policy(
         "built-in policies cannot be edited"
     );
     update_policy_store(|store| {
-        store.browser.named.insert(name.to_owned(), capabilities);
-        Ok(())
-    })
-}
-
-pub fn assign_policy(client_id: &str, policy: &str) -> anyhow::Result<()> {
-    update_policy_store(|store| {
-        let browser = &mut store.browser;
         anyhow::ensure!(
-            browser.capabilities(policy).is_some(),
-            "browser policy was not found"
+            !store.access.named.contains_key(name),
+            "name is already used by an account-scoped policy"
         );
-        let client = browser
-            .clients
-            .get_mut(client_id)
-            .context("browser client was not found")?;
-        policy.clone_into(&mut client.policy);
+
+        store.browser.named.insert(name.to_owned(), capabilities);
         Ok(())
     })
 }

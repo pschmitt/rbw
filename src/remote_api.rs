@@ -1,5 +1,6 @@
 //! Types shared by rbw's authenticated remote field API and its clients.
 
+pub mod access_policy;
 pub mod browser_pairing;
 pub mod browser_policy;
 
@@ -314,6 +315,11 @@ pub struct PolicyStore {
         skip_serializing_if = "browser_policy::BrowserPolicies::is_empty"
     )]
     pub browser: browser_policy::BrowserPolicies,
+    #[serde(
+        default,
+        skip_serializing_if = "access_policy::AccessPolicies::is_empty"
+    )]
+    pub access: access_policy::AccessPolicies,
 }
 
 /// One rbw-managed mTLS client and its explicitly granted capabilities.
@@ -1038,6 +1044,21 @@ pub fn create_client(name: &str) -> anyhow::Result<ClientPolicy> {
     Ok(policy)
 }
 
+fn direct_client_mut<'a>(
+    store: &'a mut PolicyStore,
+    client_id: &str,
+) -> anyhow::Result<&'a mut ClientPolicy> {
+    if let Some(policy) = store.access.assignments.get(client_id) {
+        anyhow::bail!(
+            "client uses named policy {policy:?}; edit that policy instead"
+        );
+    }
+    store
+        .clients
+        .get_mut(client_id)
+        .context("remote API client was not found")
+}
+
 /// Grant a client access to specific fields on one item of one account.
 pub fn grant_fields(
     client_id: &str,
@@ -1048,10 +1069,7 @@ pub fn grant_fields(
     anyhow::ensure!(!fields.is_empty(), "at least one field is required");
     crate::config::Config::load()?.account(Some(account))?;
     update_policy_store(|store| {
-        let client = store
-            .clients
-            .get_mut(client_id)
-            .context("remote API client was not found")?;
+        let client = direct_client_mut(store, client_id)?;
         grant_fields_policy(client, account, item_id, fields)
     })
 }
@@ -1066,7 +1084,7 @@ fn grant_fields_policy(
     if let Some(existing) = &client.account {
         anyhow::ensure!(
             existing == account,
-            "a client can be scoped to one account; revoke and recreate it to change accounts"
+            "direct item grants are scoped to one account; assign a named policy for several accounts"
         );
     }
     client.account = Some(account.to_owned());
@@ -1095,10 +1113,7 @@ pub fn grant_status(
         config.account(Some(account))?;
     }
     update_policy_store(|store| {
-        let client = store
-            .clients
-            .get_mut(client_id)
-            .context("remote API client was not found")?;
+        let client = direct_client_mut(store, client_id)?;
         for account in accounts {
             grant_status_policy(client, account);
         }
@@ -1110,10 +1125,7 @@ pub fn grant_status(
 pub fn grant_unlock(client_id: &str, account: &str) -> anyhow::Result<()> {
     crate::config::Config::load()?.account(Some(account))?;
     update_policy_store(|store| {
-        let client = store
-            .clients
-            .get_mut(client_id)
-            .context("remote API client was not found")?;
+        let client = direct_client_mut(store, client_id)?;
         if !client.unlock_accounts.iter().any(|name| name == account) {
             client.unlock_accounts.push(account.to_owned());
             client.unlock_accounts.sort();
@@ -1128,10 +1140,7 @@ pub fn revoke_unlock(
     account: Option<&str>,
 ) -> anyhow::Result<()> {
     update_policy_store(|store| {
-        let client = store
-            .clients
-            .get_mut(client_id)
-            .context("remote API client was not found")?;
+        let client = direct_client_mut(store, client_id)?;
         if let Some(account) = account {
             client.unlock_accounts.retain(|name| name != account);
         } else {
@@ -1180,10 +1189,7 @@ pub fn revoke_status(
     account: Option<&str>,
 ) -> anyhow::Result<()> {
     update_policy_store(|store| {
-        let client = store
-            .clients
-            .get_mut(client_id)
-            .context("remote API client was not found")?;
+        let client = direct_client_mut(store, client_id)?;
         revoke_status_policy(client, account);
         Ok(())
     })
@@ -1213,10 +1219,7 @@ pub fn revoke_fields(
     fields: &[FieldRef],
 ) -> anyhow::Result<()> {
     update_policy_store(|store| {
-        let client = store
-            .clients
-            .get_mut(client_id)
-            .context("remote API client was not found")?;
+        let client = direct_client_mut(store, client_id)?;
         revoke_fields_policy(client, item_id, fields)
     })
 }
@@ -1280,6 +1283,8 @@ pub fn revoke_client(client_id: &str) -> anyhow::Result<()> {
                 || store.browser.clients.remove(client_id).is_some(),
             "remote API client was not found"
         );
+        store.access.assignments.remove(client_id);
+        store.access.source_allowlists.remove(client_id);
         Ok(())
     })?;
     remove_client_certificate(client_id)
