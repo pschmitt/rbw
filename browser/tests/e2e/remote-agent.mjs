@@ -121,7 +121,7 @@ try {
     items: {}, statusAccounts: ["test"], unlockAccounts: [],
   });
   assert.match(terminalCli(["api", "policy", "list"], { color: false }),
-    /direct \(browser-daemon\) +account test · all items: username · status: test/);
+    /direct \(browser-daemon\) +[a-f0-9]+ +account test · all items: username · status: test/);
   const source = await readFile(new URL("../../extension/remote-agent.js", import.meta.url), "utf8");
   const extension = browser(source, origin, port);
   await assert.rejects(extension.configure("remote", "http://rbw.example.net"));
@@ -141,7 +141,7 @@ try {
   assert.match(clientTable, /^NAME +CLIENT ID +AUTH +ACCOUNT +POLICY +GRANTS/m);
   assert.match(clientTable, /Test browser +[A-Za-z0-9_-]+ +browser +test +read-only/);
   assert.ok(!clientTable.includes(escape));
-  assert.match(terminalCli(["api", "policy", "list"], { color: false }), /^POLICY +CAPABILITIES +CLIENT IDS/m);
+  assert.match(terminalCli(["api", "policy", "list"], { color: false }), /^POLICY +CLIENT ID +CAPABILITIES/m);
   assert.match(terminalCli(["api", "status"], { color: false }), /^FIELD +VALUE/m);
   assert.equal((await extension.call(origin, { action: "status" })).canUnlock, false);
   cli("api", "policy", "assign", pairing.id, "admin");

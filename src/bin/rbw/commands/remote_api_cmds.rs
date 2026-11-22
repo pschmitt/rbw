@@ -461,12 +461,12 @@ pub fn api_policy_list() -> anyhow::Result<()> {
             style: TableColumnStyle::Name,
         },
         TableColumn {
-            header: "capabilities",
-            style: TableColumnStyle::Default,
+            header: "client id",
+            style: TableColumnStyle::Id,
         },
         TableColumn {
-            header: "client ids",
-            style: TableColumnStyle::Id,
+            header: "capabilities",
+            style: TableColumnStyle::Default,
         },
     ];
     let mut rows = ["admin", "read-only"]
@@ -545,6 +545,12 @@ pub fn api_policy_list() -> anyhow::Result<()> {
             "direct".to_owned()
         };
         rows.push(vec![name, grants, client.id.clone()]);
+    }
+    if terminal {
+        // Keep the legacy field order when print_table emits TSV.
+        for row in &mut rows {
+            row.swap(1, 2);
+        }
     }
     print_table(&columns, &rows, "")
 }
