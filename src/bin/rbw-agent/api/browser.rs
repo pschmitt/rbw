@@ -64,8 +64,9 @@ pub(super) async fn search(
     crate::actions::browser::search(
         agent,
         &client,
-        &url,
+        Some(&url),
         query.q.as_deref().unwrap_or_default(),
+        query.q.as_deref().unwrap_or_default().trim().is_empty(),
     )
     .await
 }

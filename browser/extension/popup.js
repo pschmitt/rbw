@@ -238,8 +238,13 @@ function show(page) {
   document.querySelector("main").scrollTop = 0;
   remember();
 }
+let remoteMode = false;
 function applyTabs() {
-  const visibility = { generator: preference.showGenerator !== false, send: preference.showSend === true, health: preference.showHealth === true };
+  const visibility = {
+    generator: !remoteMode && preference.showGenerator !== false,
+    send: !remoteMode && preference.showSend === true,
+    health: !remoteMode && preference.showHealth === true,
+  };
   for (const el of document.querySelectorAll("#title-dropdown button")) {
     el.hidden = el.dataset.tab !== "vault" && visibility[el.dataset.tab] === false;
   }
@@ -562,6 +567,15 @@ async function refresh(knownStatus = null, skipList = false) {
   const status = knownStatus || await request("status"); unlocked = status.unlocked;
   renderAccounts(status.accounts || [], status.primary, preference.popupAccount, status.accountStates || [], status.accountColors);
   $("state").textContent = unlocked ? (status.merged ? `${status.accountStates.filter(a => a.unlocked).length} of ${status.accountStates.length} accounts unlocked · shared rbw-agent` : "Unlocked · shared rbw-agent") : "Locked";
+  if (remoteMode !== (status.remote === true)) {
+    remoteMode = status.remote === true;
+    if (remoteMode) $("view").value = "vault";
+    applyTabs();
+  }
+  $("sync").hidden = remoteMode;
+  $("header-sync").hidden = remoteMode;
+  $("header-lock").hidden = remoteMode;
+  $("unlock-form").hidden = status.remote === true && !status.canUnlock;
   $("unlock").disabled = unlocked; $("lock").disabled = !unlocked;
   $("header-lock").disabled = !unlocked;
   if (!$("header-sync").classList.contains("is-syncing")) $("header-sync").disabled = !unlocked;
@@ -574,7 +588,7 @@ async function refresh(knownStatus = null, skipList = false) {
   // With several accounts each row has its own unlock, so the page-level one and
   // the (pointless while locked) Lock button go away and the hero shrinks.
   const several = accountStates.length > 1;
-  $("unlock").hidden = several; $("lock").hidden = !unlocked; $("state").hidden = several;
+  $("unlock").hidden = several; $("lock").hidden = !unlocked || status.remote === true; $("state").hidden = several;
   // The host replaces an older agent itself; one it can't use is newer than
   // the host, i.e. the browser still runs the host from before an upgrade.
   const stale = !unlocked && status.staleAgent;
@@ -583,10 +597,11 @@ async function refresh(knownStatus = null, skipList = false) {
   $("locked").querySelector("h2").textContent = stale ? "Browser host out of date" : "Vault locked";
   $("unlock-title").hidden = Boolean(stale);
   const staleNote = $("locked").querySelector("p");
-  staleNote.hidden = !stale;
+  const needsRemoteUnlock = status.remote === true && !status.canUnlock;
+  staleNote.hidden = !stale && !needsRemoteUnlock;
   // rbw already started a fresh host for this browser; it is still the old
   // one, so the native host manifest points to an old rbw-browser.
-  staleNote.textContent = stale ? `rbw-agent is ${status.staleAgent}, but this browser's rbw host is still ${status.hostVersion}: its native messaging manifest points to an older rbw. Update the manifest (or reinstall rbw-browser), then reopen this window.` : "";
+  staleNote.textContent = stale ? `rbw-agent is ${status.staleAgent}, but this browser's rbw host is still ${status.hostVersion}: its native messaging manifest points to an older rbw. Update the manifest (or reinstall rbw-browser), then reopen this window.` : needsRemoteUnlock ? "Unlock this vault on the agent host." : "";
   if (!unlocked) {
     show("locked"); if (several) $("account-menu").hidden = false;
     // The master password is what the popup is for; leave focus alone only if
@@ -731,7 +746,7 @@ function itemRow(item, from) {
   row.append(lead);
   if (preference.favicons && item.iconOrigin) { image.dataset.origin = item.iconOrigin; faviconObserver.observe(image); }
   const main = button("", async () => { if (from === "health") healthScroll = document.querySelector("main").scrollTop; await openDetail(item.id, item.deleted, from); }, "item-main");
-  if (!from && !item.deleted) {
+  if (!from && !item.deleted && !item.remote) {
     main.title = "Shift-click to select multiple items";
     const key = selectionKey(item); row.dataset.selectionKey = key;
     const selectionItem = { id: item.id, name: item.name, account: item.account || $("account").value || null };
@@ -803,10 +818,13 @@ function itemRow(item, from) {
     // Fill the active page from here; "and save" also adds the page's URL to the login.
     if (!autofillExcluded && ["login", "card", "identity"].includes(item.type)) {
       entries.append(actionButton("Autofill", "fill", () => autofillItem(item.id, item.type)));
-      if (item.type === "login") entries.append(actionButton("Autofill and save", "plus", async () => { if (await autofillAndSave(item.id)) await search(); }));
+      if (item.type === "login" && !item.remote) entries.append(actionButton("Autofill and save", "plus", async () => { if (await autofillAndSave(item.id)) await search(); }));
     }
-    entries.append(actionButton("View item", "note", () => openDetail(item.id)), actionButton("Edit", "edit", async () => { await openDetail(item.id); editItem(); }));
-    entries.append(actionButton("Duplicate", "copy", () => duplicateItem(item.id)));
+    entries.append(actionButton("View item", "note", () => openDetail(item.id)));
+    if (!item.remote) {
+      entries.append(actionButton("Edit", "edit", async () => { await openDetail(item.id); editItem(); }));
+      entries.append(actionButton("Duplicate", "copy", () => duplicateItem(item.id)));
+    }
     if (item.type === "login") {
       entries.append(
         actionButton("Copy username", "identity", () => copyField(item.id, "username")),
@@ -814,7 +832,7 @@ function itemRow(item, from) {
         actionButton("Copy TOTP", "generator", () => copyField(item.id, "totp"))
       );
     }
-    entries.append(actionButton(item.favorite ? "Remove favorite" : "Favorite", "star", async () => { await mutateItem(item.id, "favorite", item.favorite); await search(); }),
+    if (!item.remote) entries.append(actionButton(item.favorite ? "Remove favorite" : "Favorite", "star", async () => { await mutateItem(item.id, "favorite", item.favorite); await search(); }),
       actionButton(item.archived ? "Unarchive" : "Archive", "archive", async () => { await mutateItem(item.id, "archive", item.archived, row); await search(); }),
       actionButton("Move to trash", "trash", async () => { if (!await confirmDialog({ title: `Move “${item.name}” to trash?`, text: "You can restore it from the Trash view.", confirm: "Move to trash", danger: true })) return; await mutateItem(item.id, "delete", false, row); await search(); }, "danger"));
     menu.append(entries); actions.append(menu);
@@ -829,22 +847,26 @@ function flashCopied(trigger, text, kind = "ok") {
   const speed = { slow: 1.6, fast: 0.65 }[preference.animationSpeed] || 1;
   if (!stampResult(trigger, { kind, motion: bannerAnimated(), speed })) message(text);
 }
+async function copyValue(item, field) {
+  const result = await request("copy", { item, field });
+  if (typeof result?.clipboardText === "string") await navigator.clipboard.writeText(result.clipboardText);
+}
 async function copyField(item, field, allowFallback = false, trigger = null) {
   try {
-    await request("copy", { item, field });
+    await copyValue(item, field);
     flashCopied(trigger, `Copied ${copyNames[field] || "field"}`);
   } catch (err) {
     if (!allowFallback) throw err;
     if (field === "notes") {
       try {
-        await request("copy", { item, field: "custom/0" });
+        await copyValue(item, "custom/0");
         flashCopied(trigger, "Copied field");
         return;
       } catch (_) {}
     } else if (field === "password") {
       for (const alt of ["totp", "username", "custom/0"]) {
         try {
-          await request("copy", { item, field: alt });
+          await copyValue(item, alt);
           flashCopied(trigger, `Copied ${copyNames[alt] || "field"}`);
           return;
         } catch (_) {}
@@ -1011,8 +1033,8 @@ async function openDetail(item, trashed = false, from) {
   const detail = await request("detail", { item, trashed }); if (current !== epoch) return;
   if (from !== undefined) detailFrom = from;
   currentItem = item; currentDetail = detail; show("detail");
-  $("detail-header-actions").hidden = trashed;
-  const copyable = field => trashed ? null : field;
+  $("detail-header-actions").hidden = trashed || detail.remote === true;
+  const copyable = field => trashed || detail.remote === true ? null : field;
   $("header-move").hidden = accountNames.length < 2;
   // Filling the page applies to logins (and cards/identities) outside the trash.
   const itemType = detail.cipher.data.type;

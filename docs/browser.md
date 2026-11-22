@@ -1,5 +1,8 @@
 # Browser extension: reference
 
+For a direct HTTPS connection, see [Remote browser mode](remote-browser.md).
+
+
 Detailed reference for the extension; see [browser/README.md](../browser/README.md) for the overview.
 
 Firefox and Chromium share an extension and a native `rbw-browser` launcher.

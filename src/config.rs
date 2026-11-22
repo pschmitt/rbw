@@ -294,6 +294,17 @@ pub struct ApiConfig {
     pub hostname: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hostname_aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<BrowserApiConfig>,
+}
+
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq,
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrowserApiConfig {
+    pub port: u16,
+    pub origin: String,
 }
 
 #[derive(
@@ -392,6 +403,7 @@ impl Default for ApiConfig {
             listen: default_api_listen(),
             hostname: default_api_hostname(),
             hostname_aliases: Vec::new(),
+            browser: None,
         }
     }
 }

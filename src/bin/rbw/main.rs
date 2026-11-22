@@ -2699,7 +2699,17 @@ enum ApiCmd {
         )]
         account: Option<String>,
     },
-    #[command(about = "Manage mTLS client credentials")]
+    #[command(about = "Manage shared browser API policies")]
+    Policy {
+        #[command(subcommand)]
+        policy: ApiPolicyCmd,
+    },
+    #[command(about = "Review remote browser pairing requests")]
+    Pairing {
+        #[command(subcommand)]
+        pairing: ApiPairingCmd,
+    },
+    #[command(about = "Manage remote API client credentials")]
     Client {
         #[command(subcommand)]
         client: ApiClientCmd,
@@ -2734,6 +2744,35 @@ enum ApiCmd {
 }
 
 #[derive(Debug, clap::Subcommand)]
+enum ApiPolicyCmd {
+    List,
+    Set {
+        name: String,
+        #[arg(long = "allow", value_enum)]
+        capabilities: Vec<rbw::remote_api::browser_policy::Capability>,
+    },
+    Assign {
+        client_id: String,
+        policy: String,
+    },
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ApiPairingCmd {
+    List,
+    Approve {
+        request: String,
+        #[arg(long)]
+        account: String,
+        #[arg(long)]
+        policy: String,
+    },
+    Deny {
+        request: String,
+    },
+}
+
+#[derive(Debug, clap::Subcommand)]
 enum ApiClientCmd {
     #[command(about = "Create a client certificate with no access grants")]
     Create {
@@ -2760,6 +2799,8 @@ impl ApiCmd {
             Self::UnlockGrant { .. } => "unlock-grant".to_owned(),
             Self::UnlockRevoke { .. } => "unlock-revoke".to_owned(),
             Self::Client { .. } => "client".to_owned(),
+            Self::Policy { .. } => "policy".to_owned(),
+            Self::Pairing { .. } => "pairing".to_owned(),
             Self::Grant { .. } => "grant".to_owned(),
             Self::Revoke { .. } => "revoke".to_owned(),
         }
@@ -4639,6 +4680,28 @@ fn main() {
             ApiCmd::UnlockRevoke { client_id, account } => {
                 commands::api_unlock_revoke(&client_id, account.as_deref())
             }
+            ApiCmd::Policy { policy } => match policy {
+                ApiPolicyCmd::List => commands::api_policy_list(),
+                ApiPolicyCmd::Set { name, capabilities } => {
+                    commands::api_policy_set(&name, capabilities)
+                }
+                ApiPolicyCmd::Assign { client_id, policy } => {
+                    commands::api_policy_assign(&client_id, &policy)
+                }
+            },
+            ApiCmd::Pairing { pairing } => match pairing {
+                ApiPairingCmd::List => commands::api_pairing_list(),
+                ApiPairingCmd::Approve {
+                    request,
+                    account,
+                    policy,
+                } => {
+                    commands::api_pairing_approve(&request, &account, &policy)
+                }
+                ApiPairingCmd::Deny { request } => {
+                    commands::api_pairing_deny(&request)
+                }
+            },
             ApiCmd::Client { client } => match client {
                 ApiClientCmd::Create { name } => {
                     commands::api_client_create(&name)

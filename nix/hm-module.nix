@@ -447,6 +447,24 @@ let
               default = "localhost";
               description = "Primary DNS name or IP for the server certificate and advertised URL.";
             };
+            browser = mkOption {
+              type = types.nullOr (
+                types.submodule {
+                  options = {
+                    port = mkOption {
+                      type = types.port;
+                      description = "Loopback port for the browser API behind an HTTPS reverse proxy.";
+                    };
+                    origin = mkOption {
+                      type = types.str;
+                      description = "Exact HTTPS origin served by the reverse proxy.";
+                    };
+                  };
+                }
+              );
+              default = null;
+              description = "Signed browser request listener.";
+            };
             hostnameAliases = mkOption {
               type = types.listOf types.str;
               default = [ ];

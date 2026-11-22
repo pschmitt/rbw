@@ -1,4 +1,5 @@
 mod browser;
+mod signed_browser;
 
 use anyhow::Context as _;
 use axum::{
@@ -10,6 +11,7 @@ use axum::{
 };
 use axum_server::tls::TlsInfo;
 use futures::future::BoxFuture;
+use std::future::IntoFuture as _;
 use std::sync::Arc;
 
 use rbw::remote_api::{
@@ -233,8 +235,10 @@ pub async fn supervise(
             continue;
         }
         let listen_key = format!("{desired_listen} {addresses:?}");
-        let hostname_key =
-            format!("{desired_hostname} {:?}", config.api.hostname_aliases);
+        let hostname_key = format!(
+            "{desired_hostname} {:?} {:?}",
+            config.api.hostname_aliases, config.api.browser
+        );
         if !backoff.ready(&listen_key, &hostname_key) {
             continue;
         }
@@ -499,7 +503,30 @@ async fn prepare(
         "no configured API interface has an address"
     );
     let tls = rbw::remote_api::with_tls_material(config, tls_config_at)?;
-    let router = router(ApiState::production(agent));
+    let state = ApiState::production(agent);
+    let browser_api = if let Some(browser) = &config.browser {
+        let origin = url::Url::parse(&browser.origin)
+            .context("invalid browser API origin")?;
+        anyhow::ensure!(
+            origin.scheme() == "https"
+                && origin.origin().ascii_serialization() == browser.origin
+                && browser.port != 0,
+            "browser API requires a canonical HTTPS origin and a nonzero port"
+        );
+        let listener = tokio::net::TcpListener::bind((
+            std::net::Ipv4Addr::LOCALHOST,
+            browser.port,
+        ))
+        .await
+        .context("failed to bind remote browser API listener")?;
+        Some(axum::serve(
+            listener,
+            signed_browser::router(state.clone(), browser.origin.clone()),
+        ))
+    } else {
+        None
+    };
+    let router = router(state);
     let acceptor = axum_server::tls_rustls::RustlsAcceptor::new(tls);
 
     let mut servers = Vec::with_capacity(addresses.len());
@@ -517,14 +544,20 @@ async fn prepare(
         ));
     }
     Ok(async move {
-        futures::future::try_join_all(servers.into_iter().map(
-            |(address, server)| {
+        let certificate_api = futures::future::try_join_all(
+            servers.into_iter().map(|(address, server)| {
                 log::info!("rbw remote field API listening on {address}");
                 server.serve(router.clone().into_make_service())
-            },
-        ))
-        .await
-        .context("remote API listener failed")?;
+            }),
+        );
+        if let Some(browser_api) = browser_api {
+            tokio::try_join!(certificate_api, browser_api.into_future())
+                .context("remote API listener failed")?;
+        } else {
+            certificate_api
+                .await
+                .context("remote API listener failed")?;
+        }
         Ok(())
     })
 }
@@ -1083,11 +1116,110 @@ fn authorized_status_accounts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rbw::remote_api::{ClientPolicy, FieldRef, PolicyStore};
+    use rbw::remote_api::{
+        browser_policy::BrowserPolicies, ClientPolicy, FieldRef, PolicyStore,
+    };
     use rcgen::{
         CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
     };
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn signed_browser_requests_use_live_policy_and_reject_replays() {
+        use p256::ecdsa::signature::Signer as _;
+        use rbw::remote_api::{
+            browser_pairing::DOMAIN, browser_policy::BrowserClient,
+        };
+
+        let (state, policy, _) = test_state(b"unused", true, Arc::default());
+        let signing_key =
+            p256::ecdsa::SigningKey::from_slice(&[9_u8; 32]).unwrap();
+        let point = signing_key.verifying_key().to_sec1_point(false);
+        let public_key =
+            rbw::base64::encode_url_safe_no_pad(point.as_bytes());
+        let key =
+            rbw::remote_api::browser_pairing::BrowserKey::parse(&public_key)
+                .unwrap();
+        let origin = "https://rbw.example";
+        let listener =
+            tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url =
+            format!("http://{}/v1/browser", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                signed_browser::router(state, origin.to_owned()),
+            )
+            .await
+            .unwrap();
+        });
+        let http = reqwest::Client::new();
+        let signed = |operation, payload| {
+            let http = &http;
+            let url = &url;
+            let public_key = &public_key;
+            let signing_key = &signing_key;
+            async move {
+                let challenge: serde_json::Value = http
+                    .post(format!("{url}/challenge"))
+                    .json(&serde_json::json!({"publicKey": public_key}))
+                    .send()
+                    .await
+                    .unwrap()
+                    .json()
+                    .await
+                    .unwrap();
+                let request = serde_json::json!({
+                    "origin": origin, "challenge": challenge["challenge"],
+                    "operation": operation, "payload": payload,
+                })
+                .to_string();
+                let mut message = DOMAIN.to_vec();
+                message.extend_from_slice(request.as_bytes());
+                let sig: p256::ecdsa::Signature = signing_key.sign(&message);
+                serde_json::json!({
+                    "publicKey": public_key, "request": request,
+                    "signature": rbw::base64::encode_url_safe_no_pad(sig.to_bytes()),
+                })
+            }
+        };
+        let send = |signed: serde_json::Value| {
+            http.post(format!("{url}/request")).json(&signed).send()
+        };
+        let status = || signed("status", serde_json::Value::Null);
+        assert_eq!(send(status().await).await.unwrap().status(), 403);
+        policy.write().await.1.browser.clients.insert(
+            key.id().to_owned(),
+            BrowserClient {
+                name: "test browser".into(),
+                account: "personal".into(),
+                policy: "read-only".into(),
+            },
+        );
+        let request = status().await;
+        assert_eq!(send(request.clone()).await.unwrap().status(), 200);
+        assert_eq!(send(request).await.unwrap().status(), 401);
+        let unlock = || {
+            signed(
+                "unlock",
+                serde_json::json!({"password": "correct-password"}),
+            )
+        };
+        assert_eq!(send(unlock().await).await.unwrap().status(), 403);
+        policy
+            .write()
+            .await
+            .1
+            .browser
+            .clients
+            .get_mut(key.id())
+            .unwrap()
+            .policy = "admin".into();
+        assert_eq!(send(unlock().await).await.unwrap().status(), 200);
+        policy.write().await.1.browser.clients.remove(key.id());
+        assert_eq!(send(status().await).await.unwrap().status(), 403);
+        server.abort();
+    }
 
     #[tokio::test]
     async fn revoked_unlock_is_denied_before_unlocker_runs() {
@@ -1155,6 +1287,7 @@ mod tests {
             .unwrap();
         assert_eq!(client.unlock_accounts, Vec::<String>::new());
         let mut store = PolicyStore {
+            browser: BrowserPolicies::default(),
             clients: std::collections::BTreeMap::from([(
                 "test".into(),
                 client,
@@ -1256,6 +1389,7 @@ mod tests {
             all_items: Vec::new(),
         };
         let store = PolicyStore {
+            browser: BrowserPolicies::default(),
             clients: std::collections::BTreeMap::from([(
                 "test".into(),
                 client,
@@ -1314,6 +1448,7 @@ mod tests {
             ],
         };
         let mut store = PolicyStore {
+            browser: BrowserPolicies::default(),
             clients: std::collections::BTreeMap::new(),
         };
         store.clients.insert("test".into(), client.clone());
@@ -1511,6 +1646,7 @@ mod tests {
         let state_value = Arc::new(tokio::sync::RwLock::new((
             enabled,
             PolicyStore {
+                browser: BrowserPolicies::default(),
                 clients: std::collections::BTreeMap::from([(
                     client.id.clone(),
                     client,

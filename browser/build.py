@@ -84,7 +84,7 @@ for target in ("firefox", "chromium"):
         "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'"},
     }
     if target == "firefox":
-        manifest["background"] = {"scripts": ["fill-targets.js", "fill.js", "toolbar-icon.js", "background.js"]}
+        manifest["background"] = {"scripts": ["fill-targets.js", "fill.js", "toolbar-icon.js", "remote-agent.js", "background.js"]}
         manifest["sidebar_action"] = {"default_panel": "popup.html?surface=window", "default_title": "rbw", "default_icon": toolbar_icons}
         manifest["browser_specific_settings"] = {"gecko": {
             "id": "rbw-browser@pschmitt.dev",

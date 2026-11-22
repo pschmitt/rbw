@@ -83,7 +83,8 @@ $("accounts-cli").onchange = () => attempt(async () => {
 });
 $("accounts-list").onchange = () => attempt(saveAccountChoice);
 async function status() {
-  const state = await request("status_all"); $("connection").textContent = "Connected to rbw native messaging";
+  const state = await request("status_all");
+  $("connection").textContent = state.remote ? "Connected to remote rbw agent" : "Connected to rbw native messaging";
   const states = state.accountStates || [], open = states.filter(s => s.unlocked).length;
   $("lock-state").textContent = states.length > 1 ? `${open} of ${states.length} accounts unlocked` : state.unlocked ? "Unlocked" : "Locked";
   return state;
@@ -91,7 +92,7 @@ async function status() {
 for (const id of ["passkeys", "inline", "autofill", "allow-http-fill", "autofill-blocklist", "animations", "animation-speed", "card-security-code", "copy-totp", "autofill-totp", "save-prompts", "theme", "show-generator", "show-send", "show-health", "favicons", "uri-match"]) $(id).onchange = () => attempt(async () => {
   const preferences = { passkeys: $("passkeys").checked, savePrompts: $("save-prompts").checked, inlineSuggestions: $("inline").checked, autoFill: $("autofill").checked, allowHttpFill: $("allow-http-fill").checked, autofillBlocklist: $("autofill-blocklist").value, animations: $("animations").value, animationSpeed: $("animation-speed").value, cardSecurityCode: $("card-security-code").value, copyTotp: $("copy-totp").checked, autofillTotp: $("autofill-totp").checked, theme: $("theme").value, showGenerator: $("show-generator").checked, showSend: $("show-send").checked, showHealth: $("show-health").checked, favicons: $("favicons").checked, uriMatchDefault: $("uri-match").value };
   await request("set_preferences", { preferences }); $("animation-speed").disabled = preferences.animations === "off"; $("animation-speed").closest(".switch-row").hidden = preferences.animations === "off"; theme(preferences.theme); $("message").textContent = "Settings saved."; await status();
-  showPolicy(await request("agent_settings"));
+  await refreshPolicy();
 });
 // Browser-account sync of the preferences (not the vault); see background.js.
 function showSyncState(state) {
@@ -99,6 +100,44 @@ function showSyncState(state) {
   box.checked = state.enabled; box.disabled = !state.available; note.hidden = state.available && !state.skipped.length;
   note.textContent = !state.available ? "Not available in this browser." : state.skipped.length ? `Too large to sync: ${state.skipped.join(", ")}.` : "";
 }
+async function refreshPolicy() {
+  const connection = await request("agent_connection");
+  if (connection.mode === "remote") {
+    $("agent-policy").textContent = "Review remote permissions with rbw api policy list on the agent host.";
+  } else {
+    showPolicy(await request("agent_settings"));
+  }
+}
+function renderConnection(connection) {
+  $("agent-mode").value = connection.mode;
+  $("remote-agent-url").value = connection.origin;
+  $("remote-agent-url-row").hidden = connection.mode !== "remote";
+  $("remote-agent-pairing").hidden = connection.mode !== "remote";
+  $("connection").textContent = connection.mode === "remote" ? "Remote agent" : "Native bridge";
+  $("lock").hidden = connection.mode === "remote";
+  $("sync").hidden = connection.mode === "remote";
+}
+$("agent-mode").onchange = () => {
+  $("remote-agent-url-row").hidden = $("agent-mode").value !== "remote";
+};
+$("agent-connection-form").onsubmit = event => {
+  event.preventDefault();
+  attempt(async () => {
+    const connection = await request("set_agent_connection", { mode: $("agent-mode").value, origin: $("remote-agent-url").value });
+    renderConnection(connection);
+    location.reload();
+  });
+};
+$("pair-remote-agent").onclick = () => attempt(async () => {
+  const result = await request("pair_remote_agent", { name: $("remote-agent-name").value });
+  $("remote-pairing-result").textContent = `Compare code ${result.code} with rbw api pairing list, then approve request ${result.id}.`;
+});
+$("check-remote-pairing").onclick = () => attempt(async () => {
+  const result = await request("remote_pairing_status");
+  $("remote-pairing-result").textContent = result.state === "approved" ? `Approved with the ${result.policy} policy.` : `Pairing request is ${result.state}.`;
+  if (result.state === "approved") await status();
+});
+attempt(async () => renderConnection(await request("agent_connection")));
 $("sync-settings").onchange = () => attempt(async () => {
   showSyncState(await request("set_sync_settings", { enabled: $("sync-settings").checked }));
   if ($("sync-settings").checked) location.reload(); // Pick up whatever the sync area brought in.
@@ -129,7 +168,7 @@ attempt(async () => {
   renderAccountChoices(state, prefs);
   $("autofill").checked = prefs.autoFill; $("copy-totp").checked = prefs.copyTotp === true; $("autofill-totp").checked = prefs.autofillTotp === true; $("allow-http-fill").checked = prefs.allowHttpFill === true; $("allow-http-fill").disabled = Object.hasOwn(managedPreferences, "allowHttpFill"); $("allow-http-fill-managed").hidden = !Object.hasOwn(managedPreferences, "allowHttpFill"); $("autofill-blocklist").value = prefs.autofillBlocklist || ""; $("animations").value = prefs.animations; $("animation-speed").value = prefs.animationSpeed; $("animation-speed").disabled = prefs.animations === "off"; $("animation-speed").closest(".switch-row").hidden = prefs.animations === "off"; $("card-security-code").value = ["fill", "clipboard"].includes(prefs.cardSecurityCode) ? prefs.cardSecurityCode : "off"; $("inline").checked = prefs.inlineSuggestions; $("passkeys").checked = prefs.passkeys; $("save-prompts").checked = prefs.savePrompts; $("theme").value = prefs.theme; $("uri-match").value = prefs.uriMatchDefault || ""; await status();
   lockManagedControls(managedPreferences, { copyTotp: "copy-totp", autofillTotp: "autofill-totp", cardSecurityCode: "card-security-code" });
-  showPolicy(await request("agent_settings"));
+  await refreshPolicy();
 });
 // Independent of the panels above, so their failures don't leave it loading.
 folders().catch(() => { $("folders").replaceChildren(Object.assign(document.createElement("p"), { className: "hint", textContent: "Unlock the vault to manage folders." })); });

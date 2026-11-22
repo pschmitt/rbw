@@ -405,10 +405,21 @@ pub(super) fn colorize_table_cell(
     }
 
     if col_style == TableColumnStyle::Status {
-        return if text == "unlocked" {
-            style::success(text, color)
-        } else {
-            style::danger(text, color)
+        return match text {
+            "unlocked" | "listening" | "enabled" | "approved" | "granted"
+            | "created" | "assigned" | "updated" | "Active" | "set" => {
+                style::success(text, color)
+            }
+            "pending" | "locked" | "downgrade" | "would set"
+            | "would downgrade" => style::warning(text, color),
+            "denied" | "revoked" | "failed" | "expired" | "Expired" => {
+                style::danger(text, color)
+            }
+            "disabled" | "Disabled" | "stopped" | "not running" => {
+                style::empty(text, color)
+            }
+            _ if text.starts_with("failed:") => style::danger(text, color),
+            _ => text.to_owned(),
         };
     }
 
@@ -496,7 +507,24 @@ pub(super) fn print_table(
     term: &str,
 ) -> anyhow::Result<()> {
     if stdout_is_terminal() {
-        let widths = compute_table_widths(columns, rows);
+        let safe_rows = rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| {
+                        cell.chars().fold(String::new(), |mut safe, ch| {
+                            if ch.is_control() {
+                                safe.extend(ch.escape_default());
+                            } else {
+                                safe.push(ch);
+                            }
+                            safe
+                        })
+                    })
+                    .collect()
+            })
+            .collect::<Vec<Vec<String>>>();
+        let widths = compute_table_widths(columns, &safe_rows);
         let header_cells = columns
             .iter()
             .map(|column| column.header.to_uppercase())
@@ -505,7 +533,7 @@ pub(super) fn print_table(
             style::header(cell, stdout_supports_color())
         });
         println!("{header}");
-        for row in rows {
+        for row in &safe_rows {
             let rendered = render_table_row(row, &widths, |index, cell| {
                 columns.get(index).map_or_else(String::new, |column| {
                     let ranges = search_field_for_column(column.style)
@@ -533,6 +561,56 @@ pub(super) fn print_table(
     }
 
     Ok(())
+}
+
+pub(super) fn print_fields(fields: &[(&str, String)]) -> anyhow::Result<()> {
+    let columns = [
+        TableColumn {
+            header: "field",
+            style: TableColumnStyle::Name,
+        },
+        TableColumn {
+            header: "value",
+            style: TableColumnStyle::Status,
+        },
+    ];
+    let rows = fields
+        .iter()
+        .map(|(name, value)| vec![(*name).to_owned(), value.clone()])
+        .collect::<Vec<_>>();
+    print_table(&columns, &rows, "")
+}
+
+pub(super) fn print_access_result(
+    action: &str,
+    subject: &str,
+    scope: &str,
+) -> anyhow::Result<()> {
+    print_access_results(&[vec![
+        action.to_owned(),
+        subject.to_owned(),
+        scope.to_owned(),
+    ]])
+}
+
+pub(super) fn print_access_results(
+    rows: &[Vec<String>],
+) -> anyhow::Result<()> {
+    let columns = [
+        TableColumn {
+            header: "action",
+            style: TableColumnStyle::Status,
+        },
+        TableColumn {
+            header: "subject",
+            style: TableColumnStyle::Id,
+        },
+        TableColumn {
+            header: "scope",
+            style: TableColumnStyle::Account,
+        },
+    ];
+    print_table(&columns, rows, "")
 }
 
 pub(super) fn available_attachments_error(

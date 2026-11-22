@@ -41,6 +41,9 @@ pub fn api_enable(
         }
         return Err(error);
     }
+    if stdout_is_terminal() {
+        return api_status();
+    }
     println!("Remote API enabled at {}", api_server_url(&config)?);
     println!(
         "Server CA certificate: {}",
@@ -54,6 +57,9 @@ pub fn api_disable() -> anyhow::Result<()> {
     config.api.enabled = false;
     config.save()?;
     wait_for_listener_stopped()?;
+    if stdout_is_terminal() {
+        return api_status();
+    }
     println!("Remote API disabled");
     Ok(())
 }
@@ -76,6 +82,47 @@ pub fn api_status() -> anyhow::Result<()> {
             )
         },
     );
+    if stdout_is_terminal() {
+        let mut fields = vec![
+            (
+                "Configuration",
+                if config.api.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+                .to_owned(),
+            ),
+            ("Listener", listener),
+            ("Bind", config.api.listen.to_string()),
+            ("Server URL", api_server_url(&config)?),
+        ];
+        if let Some(status) = status.filter(|status| status.listening) {
+            fields.extend(
+                status
+                    .addresses
+                    .iter()
+                    .map(|address| ("Listening on", address.to_string())),
+            );
+        }
+        if config.api.enabled {
+            fields.push((
+                "CA certificate",
+                rbw::dirs::remote_api_dir()
+                    .join("pki/ca.pem")
+                    .display()
+                    .to_string(),
+            ));
+        }
+        if let Some(browser) = &config.api.browser {
+            fields.push(("Browser origin", browser.origin.clone()));
+            fields.push((
+                "Browser upstream",
+                format!("127.0.0.1:{}", browser.port),
+            ));
+        }
+        return print_fields(&fields);
+    }
     println!("configured={} listener={listener}", config.api.enabled);
     println!(
         "bind={} server={}",
@@ -93,6 +140,18 @@ pub fn api_status() -> anyhow::Result<()> {
 pub fn api_client_create(name: &str) -> anyhow::Result<()> {
     let client = rbw::remote_api::create_client(name)?;
     let (ca, cert, key) = rbw::remote_api::client_export_paths(&client.id);
+    if stdout_is_terminal() {
+        return print_fields(&[
+            ("Client", client.name),
+            ("Client ID", client.id),
+            ("Authentication", "mTLS".to_owned()),
+            ("Access", "No grants".to_owned()),
+            ("CA certificate", ca.display().to_string()),
+            ("Client certificate", cert.display().to_string()),
+            ("Private key file", key.display().to_string()),
+            ("Server URL", api_server_url(&rbw::config::Config::load()?)?),
+        ]);
+    }
     println!(
         "Created client {} ({}) with no grants",
         client.name, client.id
@@ -109,9 +168,62 @@ pub fn api_client_create(name: &str) -> anyhow::Result<()> {
 
 pub fn api_client_list() -> anyhow::Result<()> {
     let store = rbw::remote_api::load_policy_store()?;
-    if store.clients.is_empty() {
+    if store.clients.is_empty() && store.browser.clients.is_empty() {
         println!("No remote API clients");
         return Ok(());
+    }
+    if stdout_is_terminal() {
+        let columns = [
+            TableColumn {
+                header: "name",
+                style: TableColumnStyle::Name,
+            },
+            TableColumn {
+                header: "client id",
+                style: TableColumnStyle::Id,
+            },
+            TableColumn {
+                header: "auth",
+                style: TableColumnStyle::EntryType,
+            },
+            TableColumn {
+                header: "account",
+                style: TableColumnStyle::Account,
+            },
+            TableColumn {
+                header: "policy",
+                style: TableColumnStyle::Default,
+            },
+            TableColumn {
+                header: "grants",
+                style: TableColumnStyle::Default,
+            },
+        ];
+        let mut rows: Vec<_> = store.clients.values().map(|client| {
+            let fields = client.items.values().map(Vec::len).sum::<usize>();
+            let status = rbw::remote_api::granted_status_accounts(client).len();
+            vec![
+                client.name.clone(),
+                client.id.clone(),
+                "mTLS".to_owned(),
+                client.account.clone().unwrap_or_else(|| "—".to_owned()),
+                "direct".to_owned(),
+                format!("{} items / {fields} fields / {} global / {status} status / {} unlock",
+                    client.items.len(), client.all_items.len(), client.unlock_accounts.len()),
+            ]
+        }).collect();
+        rows.extend(store.browser.clients.iter().map(|(id, client)| {
+            vec![
+                client.name.clone(),
+                id.clone(),
+                "browser".to_owned(),
+                client.account.clone(),
+                client.policy.clone(),
+                "—".to_owned(),
+            ]
+        }));
+        rows.sort_by(|a, b| a[0].cmp(&b[0]).then_with(|| a[1].cmp(&b[1])));
+        return print_table(&columns, &rows, "");
     }
     for client in store.clients.values() {
         let fields: usize = client.items.values().map(Vec::len).sum();
@@ -124,6 +236,12 @@ pub fn api_client_list() -> anyhow::Result<()> {
             client.all_items.iter().map(rbw::remote_api::FieldRef::path_token).collect::<Vec<_>>().join(", "),
             rbw::remote_api::granted_status_accounts(client).join(", "),
             client.unlock_accounts.join(", "),
+        );
+    }
+    for (id, client) in &store.browser.clients {
+        println!(
+            "{id}\t{:?}\t{:?}\tpolicy {}",
+            client.name, client.account, client.policy
         );
     }
     Ok(())
@@ -145,6 +263,13 @@ pub fn api_status_grant(
     };
     anyhow::ensure!(!accounts.is_empty(), "at least one account is required");
     rbw::remote_api::grant_status(client_id, &accounts)?;
+    if stdout_is_terminal() {
+        return print_access_result(
+            "granted",
+            client_id,
+            &format!("status · {}", accounts.join(", ")),
+        );
+    }
     println!(
         "Granted non-secret status for {} account(s) to client {client_id}; no item fields were granted",
         accounts.len()
@@ -160,6 +285,13 @@ pub fn api_status_revoke(
     account: Option<&str>,
 ) -> anyhow::Result<()> {
     rbw::remote_api::revoke_status(client_id, account)?;
+    if stdout_is_terminal() {
+        return print_access_result(
+            "revoked",
+            client_id,
+            &format!("status · {}", account.unwrap_or("all accounts")),
+        );
+    }
     if let Some(account) = account {
         println!(
             "Revoked status for account {account} from client {client_id}"
@@ -175,6 +307,13 @@ pub fn api_unlock_grant(
     account: &str,
 ) -> anyhow::Result<()> {
     rbw::remote_api::grant_unlock(client_id, account)?;
+    if stdout_is_terminal() {
+        return print_access_result(
+            "granted",
+            client_id,
+            &format!("unlock · {account}"),
+        );
+    }
     println!("Granted unlock for account {account} to client {client_id}; no status or item fields were granted");
     Ok(())
 }
@@ -184,12 +323,22 @@ pub fn api_unlock_revoke(
     account: Option<&str>,
 ) -> anyhow::Result<()> {
     rbw::remote_api::revoke_unlock(client_id, account)?;
+    if stdout_is_terminal() {
+        return print_access_result(
+            "revoked",
+            client_id,
+            &format!("unlock · {}", account.unwrap_or("all accounts")),
+        );
+    }
     println!("Revoked unlock grants for client {client_id}");
     Ok(())
 }
 
 pub fn api_client_revoke(id: &str) -> anyhow::Result<()> {
     rbw::remote_api::revoke_client(id)?;
+    if stdout_is_terminal() {
+        return print_access_result("revoked", id, "all API access");
+    }
     println!("Revoked remote API client {id}");
     Ok(())
 }
@@ -209,6 +358,13 @@ pub fn api_grant(
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     rbw::remote_api::grant_fields(client_id, account, item_id, &fields)?;
+    if stdout_is_terminal() {
+        return print_access_result(
+            "granted",
+            client_id,
+            &format!("{account} / {item_id} · {}", field_tokens.join(", ")),
+        );
+    }
     println!(
         "Granted {} field(s) on item {item_id} to client {client_id}",
         fields.len()
@@ -230,6 +386,18 @@ pub fn api_revoke(
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     rbw::remote_api::revoke_fields(client_id, item_id, &fields)?;
+    if stdout_is_terminal() {
+        let fields = if field_tokens.is_empty() {
+            "all fields".to_owned()
+        } else {
+            field_tokens.join(", ")
+        };
+        return print_access_result(
+            "revoked",
+            client_id,
+            &format!("{item_id} · {fields}"),
+        );
+    }
     println!("Revoked item field grants for client {client_id}");
     Ok(())
 }
@@ -281,4 +449,142 @@ fn wait_for_listener_stopped() -> anyhow::Result<()> {
     anyhow::bail!(
         "API access is disabled, but the listener did not stop; run `rbw api status`"
     )
+}
+
+pub fn api_policy_list() -> anyhow::Result<()> {
+    let browser = rbw::remote_api::load_policy_store()?.browser;
+    let terminal = stdout_is_terminal();
+    let columns = [
+        TableColumn {
+            header: "policy",
+            style: TableColumnStyle::Name,
+        },
+        TableColumn {
+            header: "capabilities",
+            style: TableColumnStyle::Default,
+        },
+        TableColumn {
+            header: "client ids",
+            style: TableColumnStyle::Id,
+        },
+    ];
+    let rows = ["admin", "read-only"]
+        .into_iter()
+        .chain(browser.named.keys().map(String::as_str))
+        .map(|name| {
+            let capabilities =
+                browser.capabilities(name).expect("listed policy exists");
+            let clients = browser
+                .clients
+                .iter()
+                .filter(|(_, client)| client.policy == name)
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let capabilities = if terminal {
+                capabilities
+                    .iter()
+                    .map(|capability| capability.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            } else {
+                serde_json::to_string(capabilities)?
+            };
+            Ok(vec![name.to_owned(), capabilities, clients])
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    print_table(&columns, &rows, "")
+}
+
+pub fn api_pairing_list() -> anyhow::Result<()> {
+    let browser = rbw::remote_api::load_policy_store()?.browser;
+    let now = rbw::remote_api::browser_policy::pairing_time();
+    let terminal = stdout_is_terminal();
+    let columns = [
+        TableColumn {
+            header: "request id",
+            style: TableColumnStyle::Id,
+        },
+        TableColumn {
+            header: "code",
+            style: TableColumnStyle::Name,
+        },
+        TableColumn {
+            header: "status",
+            style: TableColumnStyle::Status,
+        },
+        TableColumn {
+            header: "name",
+            style: TableColumnStyle::Name,
+        },
+    ];
+    let rows = browser
+        .pending
+        .iter()
+        .filter(|(_, request)| request.expires > now)
+        .map(|(id, request)| {
+            let state = if request.denied { "denied" } else { "pending" };
+            vec![
+                id.clone(),
+                request.code.clone(),
+                state.to_owned(),
+                if terminal {
+                    request.name.clone()
+                } else {
+                    format!("{:?}", request.name)
+                },
+            ]
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() && terminal {
+        println!("No browser pairing requests");
+        return Ok(());
+    }
+    print_table(&columns, &rows, "")
+}
+
+pub fn api_policy_set(
+    name: &str,
+    capabilities: Vec<rbw::remote_api::browser_policy::Capability>,
+) -> anyhow::Result<()> {
+    rbw::remote_api::browser_policy::set_policy(name, capabilities)?;
+    if stdout_is_terminal() {
+        print_access_result("updated", name, "browser policy")?;
+    }
+    Ok(())
+}
+
+pub fn api_policy_assign(
+    client_id: &str,
+    policy: &str,
+) -> anyhow::Result<()> {
+    rbw::remote_api::browser_policy::assign_policy(client_id, policy)?;
+    if stdout_is_terminal() {
+        print_access_result("assigned", client_id, policy)?;
+    }
+    Ok(())
+}
+
+pub fn api_pairing_approve(
+    request: &str,
+    account: &str,
+    policy: &str,
+) -> anyhow::Result<()> {
+    rbw::remote_api::browser_policy::approve(request, account, policy)?;
+    if stdout_is_terminal() {
+        print_access_result(
+            "approved",
+            request,
+            &format!("{account} · {policy}"),
+        )?;
+    }
+    Ok(())
+}
+
+pub fn api_pairing_deny(request: &str) -> anyhow::Result<()> {
+    rbw::remote_api::browser_policy::deny(request)?;
+    if stdout_is_terminal() {
+        print_access_result("denied", request, "browser pairing")?;
+    }
+    Ok(())
 }

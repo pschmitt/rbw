@@ -65,8 +65,9 @@ fn text(keys: &rbw::locked::Keys, value: Option<&str>) -> Option<String> {
 pub async fn search(
     agent: &Agent,
     client: &ClientPolicy,
-    url: &url::Url,
+    url: Option<&url::Url>,
     query: &str,
+    site_only: bool,
 ) -> Result<SearchResponse, ApiError> {
     let (account, db) = vault(agent, client).await?;
     let default = Config::load_async()
@@ -121,20 +122,27 @@ pub async fn search(
                     Some((text(keys, Some(&uri.uri))?, uri.match_type))
                 })
                 .collect();
-            let site = uris.iter().any(|(uri, match_type)| {
-                !rbw::uri_match::skip_insecure_uri(url, uri)
-                    && rbw::uri_match::matches_url(
-                        uri,
-                        *match_type,
-                        url,
-                        default,
-                    )
+            let site = url.is_some_and(|url| {
+                uris.iter().any(|(uri, match_type)| {
+                    !rbw::uri_match::skip_insecure_uri(url, uri)
+                        && rbw::uri_match::matches_url(
+                            uri,
+                            *match_type,
+                            url,
+                            default,
+                        )
+                })
             });
-            if !site && rbw::uri_match::skip_insecure_uri(url, "") {
+            if !site
+                && (site_only
+                    || url.is_some_and(|url| {
+                        rbw::uri_match::skip_insecure_uri(url, "")
+                    }))
+            {
                 return None;
             }
             let wanted = if words.is_empty() {
-                site
+                true
             } else {
                 let haystack = std::iter::once(name.as_str())
                     .chain(username.as_deref())

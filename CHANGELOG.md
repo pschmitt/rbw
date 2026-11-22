@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+* The browser extension can connect directly to rbw-agent over HTTPS using a
+  browser-generated key. Approve or deny pairing from the CLI and assign a
+  shared, account-scoped API policy.
+
+### Changed
+
+* API and collection access commands use aligned terminal tables with headers
+  and semantic status colors. Piped command output keeps its existing format.
+
 ## [2.47.4] - 2026-11-22
 
 ### Fixed

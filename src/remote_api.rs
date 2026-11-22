@@ -1,5 +1,8 @@
 //! Types shared by rbw's authenticated remote field API and its clients.
 
+pub mod browser_pairing;
+pub mod browser_policy;
+
 use anyhow::Context as _;
 use std::io::Write as _;
 use std::str::FromStr;
@@ -306,6 +309,11 @@ pub enum ErrorCode {
 pub struct PolicyStore {
     #[serde(default)]
     pub clients: std::collections::BTreeMap<String, ClientPolicy>,
+    #[serde(
+        default,
+        skip_serializing_if = "browser_policy::BrowserPolicies::is_empty"
+    )]
+    pub browser: browser_policy::BrowserPolicies,
 }
 
 /// One rbw-managed mTLS client and its explicitly granted capabilities.
@@ -1268,7 +1276,8 @@ fn revoke_fields_policy(
 pub fn revoke_client(client_id: &str) -> anyhow::Result<()> {
     update_policy_store(|store| {
         anyhow::ensure!(
-            store.clients.remove(client_id).is_some(),
+            store.clients.remove(client_id).is_some()
+                || store.browser.clients.remove(client_id).is_some(),
             "remote API client was not found"
         );
         Ok(())

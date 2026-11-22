@@ -2506,6 +2506,14 @@ pub fn grant_collection_access(
         save_db(&db)?;
     }
 
+    if stdout_is_terminal() {
+        return print_access_result(
+            "granted",
+            &target.email,
+            &format!("collection · {collection_name}"),
+        );
+    }
+
     eprintln!(
         "{} permissions for '{}' on collection '{collection_name}'",
         style::success("Set", stdout_supports_color()),
@@ -2675,6 +2683,8 @@ pub fn propagate_collection_permissions(
     let mut changed_members: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
     let mut grants = 0usize;
+    let terminal = stdout_is_terminal();
+    let mut access_rows = Vec::new();
     for (coll_id, member_targets) in &changes {
         let name = &id2name[coll_id];
         for (member_id, target) in member_targets {
@@ -2684,7 +2694,29 @@ pub fn propagate_collection_permissions(
             let downgrade =
                 current.is_some_and(|c| perm_rank(target) < perm_rank(c));
             let prefix = if apply { "" } else { "WOULD " };
-            if downgrade {
+            if terminal {
+                let action = match (apply, downgrade) {
+                    (true, true) => "downgrade",
+                    (true, false) => "set",
+                    (false, true) => "would downgrade",
+                    (false, false) => "would set",
+                };
+                let scope = current.filter(|_| downgrade).map_or_else(
+                    || format!("{name} · {level}"),
+                    |current| {
+                        format!(
+                            "{name} · {} → {}",
+                            perm_level_name(current),
+                            perm_level_name(target)
+                        )
+                    },
+                );
+                access_rows.push(vec![
+                    action.to_owned(),
+                    email.clone(),
+                    scope,
+                ]);
+            } else if downgrade {
                 let cur_level = perm_level_name(current.unwrap());
                 let tgt_level = perm_level_name(target);
                 println!(
@@ -2696,6 +2728,10 @@ pub fn propagate_collection_permissions(
             changed_members.insert(member_id.clone());
             grants += 1;
         }
+    }
+
+    if !access_rows.is_empty() {
+        print_access_results(&access_rows)?;
     }
 
     if verbose {

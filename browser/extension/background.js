@@ -1,5 +1,5 @@
 /* Native operations are only exposed to our own UI, never directly to pages. */
-if (typeof importScripts === "function") importScripts("fill.js", "toolbar-icon.js");
+if (typeof importScripts === "function") importScripts("fill.js", "toolbar-icon.js", "remote-agent.js");
 const api = globalThis.browser || chrome;
 let serial = 0;
 let queue = Promise.resolve();
@@ -320,7 +320,9 @@ async function hopIcon(prefs) {
 }
 let nativePort;
 const nativeRequests = new Map();
-function native(request) {
+async function native(request) {
+  const { mode, origin } = await remoteAgent.connection();
+  if (mode === "remote") return remoteAgent.call(origin, request);
   if (!request.account && !request.accounts) request = { ...request, ...accountScope };
   if (!SYNCING_ACTIONS.includes(request.action) && !(request.action === "folders" && request.method !== "list")) return nativeCall(request);
   syncStarted();
@@ -890,6 +892,7 @@ async function pageMessage(message, sender, respond) {
     return respond({ result: await operation });
   }
   if (message.action === "save_offer") {
+    if ((await remoteAgent.connection()).mode === "remote") return respond({ result: false });
     if (!(prefs.savePrompts || prefs.autoFill) || typeof message.username !== "string" || typeof message.password !== "string" || message.password.length > 4096 || message.username.length > 1024) return respond({ result: false });
     if (!isSecureFillUrl(sender.url, prefs.allowHttpFill)) return respond({ result: false });
     const tabId = sender.tab.id;
@@ -919,6 +922,7 @@ async function pageMessage(message, sender, respond) {
     badge(); return respond({ result: true });
   }
   if (!prefs.passkeys) return respond({ fallback: true });
+  if (message.method === "create" && (await remoteAgent.connection()).mode === "remote") return respond({ fallback: true });
   if (!["get", "create"].includes(message.method) || typeof message.request !== "string" || JSON.stringify(message.options || {}).length > 65536) return respond({ error: "Invalid passkey request." });
   if ([...pending.values()].some(p => p.tabId === sender.tab.id) || pending.size >= 8) return respond({ error: "Another request is already pending." });
   const id = crypto.randomUUID();
@@ -1056,6 +1060,26 @@ async function handle(message) {
   const account = message.account || null;
   if (["lock", "sync", "save", "mutate", "set_collections", "folders", "import", "save_offer_apply", "unsaved_login_apply", "passkey_approve", "move"].includes(message.action)) clearMetadata();
   switch (message.action) {
+    case "agent_connection": return remoteAgent.connection();
+    case "set_agent_connection": {
+      const connection = await remoteAgent.configure(message.mode, message.origin);
+      cancelNative("Agent connection changed.");
+      clearMetadata();
+      popupStates.clear();
+      editDraft = null;
+      unsavedLogins = [];
+      return connection;
+    }
+    case "pair_remote_agent": {
+      const connection = await remoteAgent.connection();
+      if (connection.mode !== "remote") throw new Error("Enable remote agent mode first.");
+      return remoteAgent.pair(connection.origin, message.name);
+    }
+    case "remote_pairing_status": {
+      const connection = await remoteAgent.connection();
+      if (connection.mode !== "remote") throw new Error("Enable remote agent mode first.");
+      return remoteAgent.send(connection.origin, "pairing_status");
+    }
     case "bootstrap": {
       const preferences = await settings();
       const account = null;
@@ -1193,7 +1217,13 @@ async function handle(message) {
     case "move": return native({ action: "move", account, item: message.item, to: message.to });
     case "save": return native({ action: "save", account, item: message.item || null, revision: message.revision || null, cipher: message.cipher });
     case "mutate": return native({ action: "mutate", account, item: message.item, mutation: message.mutation });
-    case "copy": return native({ action: "copy", account, item: message.item, field: message.field });
+    case "copy": {
+      const { mode, origin } = await remoteAgent.connection();
+      if (mode === "remote") return {
+        clipboardText: await remoteAgent.call(origin, { action: "copy_value", item: message.item, field: message.field }),
+      };
+      return native({ action: "copy", account, item: message.item, field: message.field });
+    }
     case "generate": return native({ action: "generate", account, length: message.length || null, passphrase: !!message.passphrase, mode: message.mode || null });
     case "fill": return fill({ ...message, manual: true }, account);
     case "pending": return [...pending.values()].map(p => ({ id: p.id, tabId: p.tabId, method: p.method, origin: p.origin, user: p.options.user?.name, rp: p.options.rp?.id || p.options.rpId || new URL(p.origin).hostname, verification: (p.method === "create" ? p.options.authenticatorSelection?.userVerification : p.options.userVerification) || "preferred" }));
