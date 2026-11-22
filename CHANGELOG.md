@@ -2,16 +2,26 @@
 
 ## [Unreleased]
 
+## [2.48.0] - 2026-11-22
+
 ### Added
 
 * The browser extension can connect directly to rbw-agent over HTTPS using a
   browser-generated key. Approve or deny pairing from the CLI and assign a
-  shared, account-scoped API policy.
+  shared API policy.
+* A single mTLS client can use a server-managed policy with distinct item,
+  field, status, and unlock grants for each account. Policy updates take effect
+  on the next request using the existing certificate.
+* Restrict individual mTLS clients to allowed source IP addresses or networks.
+* Inspect effective grants with `rbw policy show`. API commands support
+  `-o yaml` and `-o json` for structured output.
 
 ### Changed
 
 * API and collection access commands use aligned terminal tables with headers
-  and semantic status colors. Piped command output keeps its existing format.
+  and semantic status colors. JSON and YAML are highlighted on a terminal,
+  and piped command output remains uncolored.
+* Build ARM Nix packages through Circus and use the shared Nix setup in CI.
 
 ## [2.47.4] - 2026-11-22
 

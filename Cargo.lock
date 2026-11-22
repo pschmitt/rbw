@@ -3938,7 +3938,7 @@ dependencies = [
 
 [[package]]
 name = "rbw"
-version = "2.47.4"
+version = "2.48.0"
 dependencies = [
  "aes 0.9.4",
  "aes-gcm",
