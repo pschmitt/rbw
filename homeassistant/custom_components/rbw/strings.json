@@ -42,7 +42,6 @@
     },
     "api_unavailable": {
       "title": "rbw API request failed",
-      "description": "A requested field could not be fetched. Retry the same request after the API or vault is available.",
       "fix_flow": {
         "step": {
           "init": {
@@ -50,7 +49,8 @@
             "menu_options": {
               "retry": "Retry request",
               "reconfigure": "Update connection"
-            }
+            },
+            "description": "A requested field could not be fetched. Retry the same request after the API or vault is available."
           },
           "retry": {
             "title": "Retry rbw request",
@@ -71,14 +71,14 @@
     },
     "client_certificate": {
       "title": "rbw client certificate needs attention",
-      "description": "Home Assistant could not authenticate with the rbw API. Update the client certificate or CA file paths.",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Update rbw connection",
             "menu_options": {
               "reconfigure": "Update connection"
-            }
+            },
+            "description": "Home Assistant could not authenticate with the rbw API. Update the client certificate or CA file paths."
           }
         },
         "abort": {
@@ -89,12 +89,11 @@
     },
     "reauthentication_required": {
       "title": "rbw item requires interactive unlock",
-      "description": "This item requires the Bitwarden master password again. Remove its reprompt setting, or read it with the local interactive rbw client.",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Handle item reprompt",
-            "description": "Home Assistant cannot provide the master password prompt. Remove the item reprompt setting in Bitwarden, or use the local interactive rbw client, then retry to verify access.",
+            "description": "This item requires the Bitwarden master password again. Remove its reprompt setting, or read it with the local interactive rbw client. Home Assistant cannot provide the master password prompt. Remove the item reprompt setting in Bitwarden, or use the local interactive rbw client, then retry to verify access.",
             "menu_options": {
               "manual_action": "Retry after handling reprompt"
             }
@@ -114,12 +113,11 @@
     },
     "default_account_locked": {
       "title": "rbw default vault is locked",
-      "description": "The default rbw account is locked. Enter the master password to unlock it and any follower accounts.",
       "fix_flow": {
         "step": {
           "unlock": {
             "title": "Unlock default rbw vault",
-            "description": "Enter the master password for the default rbw account. The password is sent over mTLS to rbw-agent and is never stored by Home Assistant.",
+            "description": "The default rbw account is locked. Enter the master password to unlock it and any follower accounts. Enter the master password for the default rbw account. The password is sent over mTLS to rbw-agent and is never stored by Home Assistant.",
             "data": {
               "password": "Master password"
             },
