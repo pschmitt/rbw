@@ -142,12 +142,11 @@
     },
     "access_request": {
       "title": "{integration} asks to read an rbw item",
-      "description": "The {integration} integration tried to read vault item {item} and was denied. Integrations can only read what you allow. Open this to allow it, or ignore it to keep denying it. Change this later in the rbw integration's options.",
       "fix_flow": {
         "step": {
           "allow": {
             "title": "Allow {integration}?",
-            "description": "Allow the {integration} integration to read vault item {item}? The rbw API's own field grants still apply."
+            "description": "The {integration} integration tried to read vault item {item} and was denied. Integrations can only read what you allow. Open this to allow it, or ignore it to keep denying it. Change this later in the rbw integration's options. Allow the {integration} integration to read vault item {item}? The rbw API's own field grants still apply."
           }
         },
         "abort": {
