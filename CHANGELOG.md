@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.47.4] - 2026-11-22
+
 ### Fixed
 
 * Native Android Keystore unlock uses the integrated `tpp` commands on
