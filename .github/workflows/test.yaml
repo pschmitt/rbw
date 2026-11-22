@@ -68,7 +68,7 @@ jobs:
         page: [page.html, csp.html]
     steps:
       - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v23
+      - uses: pschmitt/ci-workflows/.github/actions/nix-setup@main
       # run.sh takes its Python environment and browsers from the nixpkgs in
       # the flake registry, which would otherwise be whatever is newest on the
       # day; pin it to the flake's own revision so runs match and the cache
