@@ -96,25 +96,6 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
-  # The phones of pschmitt/nixos-config take rbw from its overlay with that
-  # repository's nixpkgs, so builds using rbw's own lock never match
-  # theirs and a bump there compiled rbw under emulation. Build the same
-  # package with nixos-config's current nixpkgs pin on main and pin it in
-  # niks3, so its next rbw bump substitutes it.
-  nix-aarch64-nixos-config:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    permissions:
-      contents: read
-      id-token: write
-    uses: pschmitt/ci-workflows/.github/workflows/nix-consumer-build.yaml@main
-    with:
-      packages: packages.aarch64-linux.default
-      pin-prefix: gh-rbw-main-nixos-config
-    secrets:
-      s3_store: ${{ secrets.NIKS3_S3_STORE }}
-      s3_access_key: ${{ secrets.NIKS3_S3_ACCESS_KEY }}
-      s3_secret_key: ${{ secrets.NIKS3_S3_SECRET_KEY }}
-
   # Images are published on pushes and manual runs, never on pull requests.
   docker:
     if: github.event_name != 'pull_request'
