@@ -46,10 +46,8 @@
       };
     in
     {
-      # Linux package builds and checks run on the self-hosted nixbot. aarch64-linux
-      # builds natively on GitHub's arm runners (the aarch64 job of .github/workflows/build.yaml);
-      # the build nodes could only emulate it.
-      hydraJobs = nixpkgs.lib.genAttrs [ "x86_64-linux" ] (system: {
+      # Expose both Linux architectures to Circus.
+      hydraJobs = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
         # The Android NDK used by rbw-termux only runs on x86_64 Linux.
         packages = builtins.removeAttrs self.packages.${system} (
           nixpkgs.lib.optional (system != "x86_64-linux") "rbw-termux"
