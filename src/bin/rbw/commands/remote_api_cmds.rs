@@ -1,9 +1,29 @@
 use super::*;
 
+fn write_api_output(
+    value: &serde_json::Value,
+    output: OutputMode,
+) -> anyhow::Result<()> {
+    write_serialized_pretty(value, output, "failed to write API output")
+}
+
+fn write_api_policy(
+    value: &serde_json::Value,
+    output: OutputMode,
+) -> anyhow::Result<()> {
+    let output = if output == OutputMode::Default {
+        OutputMode::Yaml
+    } else {
+        output
+    };
+    write_api_output(value, output)
+}
+
 pub fn api_enable(
     listen: Vec<String>,
     hostname: Option<&str>,
     hostname_aliases: Vec<String>,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     let mut config = rbw::config::Config::load()?;
     let previous = config.api.clone();
@@ -41,8 +61,8 @@ pub fn api_enable(
         }
         return Err(error);
     }
-    if stdout_is_terminal() {
-        return api_status();
+    if output_is_structured(output) || stdout_is_terminal() {
+        return api_status(output);
     }
     println!("Remote API enabled at {}", api_server_url(&config)?);
     println!(
@@ -52,21 +72,32 @@ pub fn api_enable(
     Ok(())
 }
 
-pub fn api_disable() -> anyhow::Result<()> {
+pub fn api_disable(output: OutputMode) -> anyhow::Result<()> {
     let mut config = rbw::config::Config::load()?;
     config.api.enabled = false;
     config.save()?;
     wait_for_listener_stopped()?;
-    if stdout_is_terminal() {
-        return api_status();
+    if output_is_structured(output) || stdout_is_terminal() {
+        return api_status(output);
     }
     println!("Remote API disabled");
     Ok(())
 }
 
-pub fn api_status() -> anyhow::Result<()> {
+pub fn api_status(output: OutputMode) -> anyhow::Result<()> {
     let config = rbw::config::Config::load()?;
     let status = rbw::remote_api::load_listener_status()?;
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({
+                "enabled": config.api.enabled,
+                "bind": config.api.listen,
+                "serverUrl": api_server_url(&config)?,
+                "listener": status,
+            }),
+            output,
+        );
+    }
     let listener = status.as_ref().map_or_else(
         || "not running".to_owned(),
         |status| {
@@ -137,9 +168,22 @@ pub fn api_status() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn api_client_create(name: &str) -> anyhow::Result<()> {
+pub fn api_client_create(
+    name: &str,
+    output: OutputMode,
+) -> anyhow::Result<()> {
     let client = rbw::remote_api::create_client(name)?;
     let (ca, cert, key) = rbw::remote_api::client_export_paths(&client.id);
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({
+                "name": client.name, "id": client.id, "auth": "mTLS",
+                "caCertificate": ca, "clientCertificate": cert, "privateKeyFile": key,
+                "serverUrl": api_server_url(&rbw::config::Config::load()?)?,
+            }),
+            output,
+        );
+    }
     if stdout_is_terminal() {
         return print_fields(&[
             ("Client", client.name),
@@ -166,8 +210,30 @@ pub fn api_client_create(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn api_client_list() -> anyhow::Result<()> {
+pub fn api_client_list(output: OutputMode) -> anyhow::Result<()> {
     let store = rbw::remote_api::load_policy_store()?;
+    if output_is_structured(output) {
+        let clients = store.clients.values().map(|client| {
+            let policy = store.access.assignments.get(&client.id);
+            let accounts = policy.and_then(|name| store.access.named.get(name))
+                .map_or_else(|| client.account.iter().collect::<Vec<_>>(),
+                    |grants| grants.keys().collect());
+            serde_json::json!({
+                "id": client.id, "name": client.name, "auth": "mTLS",
+                "policy": policy, "accounts": accounts,
+                "sourceAllowlist": store.access.source_allowlists.get(&client.id),
+            })
+        }).chain(store.browser.clients.iter().map(|(id, client)| {
+            serde_json::json!({
+                "id": id, "name": client.name, "auth": "browser",
+                "policy": client.policy, "accounts": [client.account],
+            })
+        })).collect::<Vec<_>>();
+        return write_api_output(
+            &serde_json::json!({"clients": clients}),
+            output,
+        );
+    }
     if store.clients.is_empty() && store.browser.clients.is_empty() {
         println!("No remote API clients");
         return Ok(());
@@ -272,6 +338,7 @@ pub fn api_status_grant(
     client_id: &str,
     accounts: &[String],
     all_configured: bool,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     let accounts = if all_configured {
         rbw::config::Config::load()?
@@ -284,6 +351,12 @@ pub fn api_status_grant(
     };
     anyhow::ensure!(!accounts.is_empty(), "at least one account is required");
     rbw::remote_api::grant_status(client_id, &accounts)?;
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({"action": "granted", "clientId": client_id, "permission": "status", "accounts": accounts}),
+            output,
+        );
+    }
     if stdout_is_terminal() {
         return print_access_result(
             "granted",
@@ -304,8 +377,15 @@ pub fn api_status_grant(
 pub fn api_status_revoke(
     client_id: &str,
     account: Option<&str>,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     rbw::remote_api::revoke_status(client_id, account)?;
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({"action": "revoked", "clientId": client_id, "permission": "status", "account": account}),
+            output,
+        );
+    }
     if stdout_is_terminal() {
         return print_access_result(
             "revoked",
@@ -326,8 +406,15 @@ pub fn api_status_revoke(
 pub fn api_unlock_grant(
     client_id: &str,
     account: &str,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     rbw::remote_api::grant_unlock(client_id, account)?;
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({"action": "granted", "clientId": client_id, "permission": "unlock", "account": account}),
+            output,
+        );
+    }
     if stdout_is_terminal() {
         return print_access_result(
             "granted",
@@ -342,8 +429,15 @@ pub fn api_unlock_grant(
 pub fn api_unlock_revoke(
     client_id: &str,
     account: Option<&str>,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     rbw::remote_api::revoke_unlock(client_id, account)?;
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({"action": "revoked", "clientId": client_id, "permission": "unlock", "account": account}),
+            output,
+        );
+    }
     if stdout_is_terminal() {
         return print_access_result(
             "revoked",
@@ -355,8 +449,14 @@ pub fn api_unlock_revoke(
     Ok(())
 }
 
-pub fn api_client_revoke(id: &str) -> anyhow::Result<()> {
+pub fn api_client_revoke(id: &str, output: OutputMode) -> anyhow::Result<()> {
     rbw::remote_api::revoke_client(id)?;
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({"action": "revoked", "clientId": id}),
+            output,
+        );
+    }
     if stdout_is_terminal() {
         return print_access_result("revoked", id, "all API access");
     }
@@ -369,6 +469,7 @@ pub fn api_grant(
     account: &str,
     item_id: &str,
     field_tokens: &[String],
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     let fields = field_tokens
         .iter()
@@ -379,6 +480,12 @@ pub fn api_grant(
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     rbw::remote_api::grant_fields(client_id, account, item_id, &fields)?;
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({"action": "granted", "clientId": client_id, "account": account, "itemId": item_id, "fields": fields}),
+            output,
+        );
+    }
     if stdout_is_terminal() {
         return print_access_result(
             "granted",
@@ -397,6 +504,7 @@ pub fn api_revoke(
     client_id: &str,
     item_id: &str,
     field_tokens: &[String],
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     let fields = field_tokens
         .iter()
@@ -407,6 +515,12 @@ pub fn api_revoke(
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     rbw::remote_api::revoke_fields(client_id, item_id, &fields)?;
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({"action": "revoked", "clientId": client_id, "itemId": item_id, "fields": fields}),
+            output,
+        );
+    }
     if stdout_is_terminal() {
         let fields = if field_tokens.is_empty() {
             "all fields".to_owned()
@@ -472,9 +586,46 @@ fn wait_for_listener_stopped() -> anyhow::Result<()> {
     )
 }
 
-pub fn api_policy_list() -> anyhow::Result<()> {
+pub fn api_policy_list(output: OutputMode) -> anyhow::Result<()> {
     let store = rbw::remote_api::load_policy_store()?;
     let browser = &store.browser;
+    if output_is_structured(output) {
+        let policies = ["admin", "read-only"]
+            .into_iter()
+            .chain(browser.named.keys().map(String::as_str))
+            .map(|name| {
+                serde_json::json!({
+                    "policy": name,
+                    "capabilities": browser.capabilities(name),
+                    "clientIds": browser.clients.iter()
+                        .filter(|(_, client)| client.policy == name)
+                        .map(|(id, _)| id).collect::<Vec<_>>(),
+                })
+            })
+            .chain(store.access.named.iter().map(|(name, accounts)| {
+                serde_json::json!({
+                    "policy": name,
+                    "accounts": accounts,
+                    "clientIds": store.access.assignments.iter()
+                        .filter(|(_, policy)| *policy == name)
+                        .map(|(id, _)| id).collect::<Vec<_>>(),
+                })
+            }))
+            .chain(
+                store
+                    .clients
+                    .values()
+                    .filter(|client| {
+                        !store.access.assignments.contains_key(&client.id)
+                    })
+                    .map(|client| direct_policy(&store, client)),
+            )
+            .collect::<Vec<_>>();
+        return write_api_output(
+            &serde_json::json!({"policies": policies}),
+            output,
+        );
+    }
     let terminal = stdout_is_terminal();
     let columns = [
         TableColumn {
@@ -572,6 +723,7 @@ fn show_account_policy(
     store: &rbw::remote_api::PolicyStore,
     policy: &str,
     accounts: &rbw::remote_api::access_policy::AccountPolicy,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     let clients = store.access.assignments.iter()
             .filter(|(_, assigned)| *assigned == policy)
@@ -581,18 +733,21 @@ fn show_account_policy(
                 "sourceAllowlist": store.access.source_allowlists.get(&client.id),
             }))
             .collect::<Vec<_>>();
-    write_yaml_pretty(
+    write_api_policy(
         &serde_json::json!({
             "policy": policy, "accounts": accounts, "clients": clients,
         }),
-        "failed to display API policy",
+        output,
     )
 }
 
-pub fn api_policy_show(policy: &str) -> anyhow::Result<()> {
+pub fn api_policy_show(
+    policy: &str,
+    output: OutputMode,
+) -> anyhow::Result<()> {
     let store = rbw::remote_api::load_policy_store()?;
     if let Some(accounts) = store.access.named.get(policy) {
-        return show_account_policy(&store, policy, accounts);
+        return show_account_policy(&store, policy, accounts, output);
     }
     if let Some(capabilities) = store.browser.capabilities(policy) {
         let clients = store
@@ -606,11 +761,11 @@ pub fn api_policy_show(policy: &str) -> anyhow::Result<()> {
                 })
             })
             .collect::<Vec<_>>();
-        return write_yaml_pretty(
+        return write_api_policy(
             &serde_json::json!({
                 "policy": policy, "capabilities": capabilities, "clients": clients,
             }),
-            "failed to display API policy",
+            output,
         );
     }
 
@@ -636,27 +791,48 @@ pub fn api_policy_show(policy: &str) -> anyhow::Result<()> {
             .named
             .get(assigned)
             .context("assigned policy was not found")?;
-        return show_account_policy(&store, assigned, accounts);
+        return show_account_policy(&store, assigned, accounts, output);
     }
-    write_yaml_pretty(
-        &serde_json::json!({
-            "sourceAllowlist": store.access.source_allowlists.get(&client.id),
-            "policy": "direct",
-            "clientId": client.id,
-            "name": client.name,
-            "account": client.account,
-            "allItems": client.all_items,
-            "items": client.items,
-            "statusAccounts": rbw::remote_api::granted_status_accounts(client),
-            "unlockAccounts": client.unlock_accounts,
-        }),
-        "failed to display API policy",
-    )
+    write_api_policy(&direct_policy(&store, client), output)
 }
 
-pub fn api_pairing_list() -> anyhow::Result<()> {
+fn direct_policy(
+    store: &rbw::remote_api::PolicyStore,
+    client: &rbw::remote_api::ClientPolicy,
+) -> serde_json::Value {
+    serde_json::json!({
+        "sourceAllowlist": store.access.source_allowlists.get(&client.id),
+        "policy": "direct",
+        "clientId": client.id,
+        "name": client.name,
+        "account": client.account,
+        "allItems": client.all_items,
+        "items": client.items,
+        "statusAccounts": rbw::remote_api::granted_status_accounts(client),
+        "unlockAccounts": client.unlock_accounts,
+    })
+}
+
+pub fn api_pairing_list(output: OutputMode) -> anyhow::Result<()> {
     let browser = rbw::remote_api::load_policy_store()?.browser;
     let now = rbw::remote_api::browser_policy::pairing_time();
+    if output_is_structured(output) {
+        let requests = browser
+            .pending
+            .iter()
+            .filter(|(_, request)| request.expires > now)
+            .map(|(id, request)| {
+                serde_json::json!({
+                    "id": id, "code": request.code, "name": request.name,
+                    "expires": request.expires, "denied": request.denied,
+                })
+            })
+            .collect::<Vec<_>>();
+        return write_api_output(
+            &serde_json::json!({"requests": requests}),
+            output,
+        );
+    }
     let terminal = stdout_is_terminal();
     let columns = [
         TableColumn {
@@ -704,12 +880,19 @@ pub fn api_pairing_list() -> anyhow::Result<()> {
 pub fn api_policy_import(
     name: &str,
     file: &std::path::Path,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     let reader = std::fs::File::open(file)
         .context("failed to open API policy file")?;
     let rules = serde_yaml::from_reader(reader)
         .context("invalid account-scoped API policy")?;
     rbw::remote_api::access_policy::set_policy(name, rules)?;
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({"action": "updated", "policy": name}),
+            output,
+        );
+    }
     if stdout_is_terminal() {
         print_access_result("updated", name, "account-scoped API policy")?;
     }
@@ -719,8 +902,15 @@ pub fn api_policy_import(
 pub fn api_client_allow_source(
     client_id: &str,
     sources: &[String],
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     rbw::remote_api::access_policy::set_sources(client_id, sources)?;
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({"action": "updated", "clientId": client_id, "sources": sources}),
+            output,
+        );
+    }
     if stdout_is_terminal() {
         let scope = if sources.is_empty() {
             "any source".to_owned()
@@ -735,8 +925,15 @@ pub fn api_client_allow_source(
 pub fn api_policy_set(
     name: &str,
     capabilities: Vec<rbw::remote_api::browser_policy::Capability>,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     rbw::remote_api::browser_policy::set_policy(name, capabilities)?;
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({"action": "updated", "policy": name}),
+            output,
+        );
+    }
     if stdout_is_terminal() {
         print_access_result("updated", name, "browser policy")?;
     }
@@ -746,8 +943,15 @@ pub fn api_policy_set(
 pub fn api_policy_assign(
     client_id: &str,
     policy: &str,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     rbw::remote_api::access_policy::assign(client_id, policy)?;
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({"action": "assigned", "clientId": client_id, "policy": policy}),
+            output,
+        );
+    }
     if stdout_is_terminal() {
         print_access_result("assigned", client_id, policy)?;
     }
@@ -758,8 +962,15 @@ pub fn api_pairing_approve(
     request: &str,
     account: &str,
     policy: &str,
+    output: OutputMode,
 ) -> anyhow::Result<()> {
     rbw::remote_api::browser_policy::approve(request, account, policy)?;
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({"action": "approved", "requestId": request, "account": account, "policy": policy}),
+            output,
+        );
+    }
     if stdout_is_terminal() {
         print_access_result(
             "approved",
@@ -770,8 +981,17 @@ pub fn api_pairing_approve(
     Ok(())
 }
 
-pub fn api_pairing_deny(request: &str) -> anyhow::Result<()> {
+pub fn api_pairing_deny(
+    request: &str,
+    output: OutputMode,
+) -> anyhow::Result<()> {
     rbw::remote_api::browser_policy::deny(request)?;
+    if output_is_structured(output) {
+        return write_api_output(
+            &serde_json::json!({"action": "denied", "requestId": request}),
+            output,
+        );
+    }
     if stdout_is_terminal() {
         print_access_result("denied", request, "browser pairing")?;
     }

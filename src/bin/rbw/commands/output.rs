@@ -263,7 +263,36 @@ where
     T: serde::Serialize,
 {
     let context = context.into();
-    serde_yaml::to_writer(std::io::stdout(), value).context(context)?;
+    if stdout_supports_color() {
+        let yaml = serde_yaml::to_string(value).context(context)?;
+        let mut rendered = String::with_capacity(yaml.len());
+        for line in yaml.lines() {
+            let text = line.trim_start();
+            rendered.push_str(&line[..line.len() - text.len()]);
+            let (prefix, text) = text
+                .strip_prefix("- ")
+                .map_or(("", text), |item| ("- ", item));
+            rendered
+                .push_str(&line[..line.len() - text.len() - prefix.len()]);
+            rendered.push_str(prefix);
+            if let Some(key) = text.strip_suffix(':') {
+                rendered.push_str(&style::label(key, true));
+                rendered.push(':');
+            } else if let Some((key, value)) = text.split_once(": ") {
+                rendered.push_str(&style::label(key, true));
+                rendered.push_str(": ");
+                rendered.push_str(value);
+            } else if !prefix.is_empty() {
+                rendered.push_str(&style::uri(text, true));
+            } else {
+                rendered.push_str(text);
+            }
+            rendered.push('\n');
+        }
+        print!("{rendered}");
+    } else {
+        serde_yaml::to_writer(std::io::stdout(), value).context(context)?;
+    }
     println!();
 
     Ok(())
@@ -279,9 +308,11 @@ where
     let context = context.into();
     if stdout_supports_color() {
         let value = serde_json::to_value(value).context(context.clone())?;
-        let rendered = colored_json::to_colored_json_auto(&value)
-            .map_err(|err| anyhow::anyhow!(err.to_string()))
-            .context(context)?;
+        let rendered = colored_json::to_colored_json(
+            &value,
+            colored_json::ColorMode::On,
+        )
+        .context(context)?;
         println!("{rendered}");
     } else {
         serde_json::to_writer_pretty(std::io::stdout(), value)

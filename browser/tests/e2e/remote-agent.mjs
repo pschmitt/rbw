@@ -12,6 +12,7 @@ const root = await mkdtemp(join(homedir(), "rbw-browser-test-"));
 const bin = resolve("target/debug");
 const env = {
   ...process.env,
+  CLICOLOR_FORCE: "0",
   PATH: `${bin}:${process.env.PATH}`,
   RBW_PROFILE: "signed-browser-test",
   XDG_CONFIG_HOME: join(root, "config"),
@@ -148,8 +149,24 @@ try {
     work: { items: { "work-item": ["totp"] }, unlock: true },
   }));
   cli("api", "policy", "import", "mixed", policyFile);
-  cli("api", "policy", "assign", certificate, "mixed");
+  const assignment = JSON.parse(cli("api", "policy", "assign", certificate, "mixed", "--json"));
+  assert.equal(assignment.policy, "mixed");
+  assert.equal(assignment.clientId, certificate);
+  const displayPolicy = ["api", "policy", "show", "mixed"];
   assert.match(cli("policy", "show", "mixed"), /work-item/);
+  assert.equal(cli(...displayPolicy, "-o", "yaml"), cli(...displayPolicy, "--yaml"));
+  assert.doesNotMatch(cli(...displayPolicy, "--yaml"), /\x1b\[/);
+  assert.doesNotMatch(terminalCli(displayPolicy, { color: false }), /\x1b\[/);
+  for (const format of [[], ["-o", "yaml"], ["-o", "json"]]) {
+    assert.match(terminalCli([...displayPolicy, ...format]), /\x1b\[/);
+  }
+  assert.equal(JSON.parse(cli(...displayPolicy, "--json")).policy, "mixed");
+  assert.ok(JSON.parse(cli("api", "-o", "json", "policy", "list")).policies.some(
+    policy => policy.policy === "mixed",
+  ));
+  assert.ok(JSON.parse(cli("api", "client", "list", "--json")).clients.some(
+    client => client.id === certificate && client.policy === "mixed",
+  ));
   assert.deepEqual((await certificateRequest("/v1/accounts")).body.accounts, ["test", "work"]);
   assert.equal((await certificateRequest("/v1/items")).status, 400);
   assert.equal((await certificateRequest("/v1/items", { "X-Rbw-Account": "ungranted" })).status, 403);

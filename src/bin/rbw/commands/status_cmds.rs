@@ -342,7 +342,7 @@ fn print_short(
     }
 }
 
-pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
+pub fn status(output: OutputMode, full: bool) -> anyhow::Result<()> {
     let config = rbw::config::Config::load()
         .unwrap_or_else(|_| rbw::config::Config::new());
     let primary = config.primary_account_name();
@@ -390,7 +390,7 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
         .then(rbw::audit::last_lock)
         .flatten();
 
-    if json {
+    if output_is_structured(output) {
         let accounts = accounts
             .iter()
             .map(|a| {
@@ -447,8 +447,11 @@ pub fn status(json: bool, full: bool) -> anyhow::Result<()> {
                 "description": lock.describe(),
             })),
         });
-        println!("{}", serde_json::to_string_pretty(&out)?);
-        return Ok(());
+        return write_serialized_pretty(
+            &out,
+            output,
+            "failed to write status",
+        );
     }
 
     let c = stdout_supports_color();

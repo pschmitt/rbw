@@ -504,12 +504,16 @@ enum Opt {
     },
     #[command(about = "Manage the authenticated remote field API")]
     Api {
+        #[command(flatten)]
+        format: StructuredOutputArgs,
         #[command(subcommand)]
         api: ApiCmd,
     },
 
     #[command(about = "Inspect remote API access policies")]
     Policy {
+        #[command(flatten)]
+        format: StructuredOutputArgs,
         #[command(subcommand)]
         policy: PolicyInspectCmd,
     },
@@ -637,11 +641,11 @@ enum Opt {
         about = "Show information about rbw, its agent and the accounts"
     )]
     Status {
-        #[arg(long, help = "Display output as JSON")]
-        json: bool,
+        #[command(flatten)]
+        format: StructuredOutputArgs,
         #[arg(
             long,
-            help = "Show the full report: agent settings and each account's server, unlock policy and database contents (--json always has them)"
+            help = "Show the full report: agent settings and each account's server, unlock policy and database contents (structured output always has them)"
         )]
         full: bool,
     },
@@ -2525,7 +2529,7 @@ impl Opt {
             Self::Agent { agent } => {
                 format!("agent {}", agent.subcommand_name())
             }
-            Self::Api { api } => format!("api {}", api.subcommand_name()),
+            Self::Api { api, .. } => format!("api {}", api.subcommand_name()),
             Self::Policy { .. } => "policy show".to_owned(),
             Self::SecretService { .. } => "secret-service".to_string(),
             Self::Termux { .. } => "termux".to_string(),
@@ -2630,6 +2634,35 @@ enum AgentCmd {
         )]
         if_outdated: bool,
     },
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum StructuredOutputArg {
+    Json,
+    Yaml,
+}
+
+#[derive(Debug, clap::Args)]
+struct StructuredOutputArgs {
+    #[arg(short = 'o', long = "output", value_enum, global = true,
+        conflicts_with_all = ["yaml", "json"])]
+    output: Option<StructuredOutputArg>,
+    #[arg(long, global = true, conflicts_with = "json")]
+    yaml: bool,
+    #[arg(long, global = true)]
+    json: bool,
+}
+
+impl StructuredOutputArgs {
+    fn mode(&self) -> commands::OutputMode {
+        match self.output {
+            Some(StructuredOutputArg::Json) => commands::OutputMode::Json,
+            Some(StructuredOutputArg::Yaml) => commands::OutputMode::Yaml,
+            None if self.yaml => commands::OutputMode::Yaml,
+            None if self.json => commands::OutputMode::Json,
+            None => commands::OutputMode::Default,
+        }
+    }
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -2863,8 +2896,8 @@ enum CompletionShell {
 enum Config {
     #[command(about = "Show the values of all configuration settings")]
     Show {
-        #[arg(long, help = "Display the configuration as JSON")]
-        json: bool,
+        #[command(flatten)]
+        format: StructuredOutputArgs,
     },
     #[command(about = "Print the value of a single configuration setting")]
     Get {
@@ -4620,7 +4653,7 @@ fn main() {
     let res = match opt {
         Opt::NativeMessaging { arguments } => browser::run(&arguments),
         Opt::Config { config } => match config {
-            Config::Show { json } => commands::config_show(json),
+            Config::Show { format } => commands::config_show(format.mode()),
             Config::Get { key } => commands::config_get(&key),
             Config::Set { key, value } => commands::config_set(&key, &value),
             Config::Unset { key } => commands::config_unset(&key),
@@ -4684,91 +4717,113 @@ fn main() {
         },
         Opt::Policy {
             policy: PolicyInspectCmd::Show { policy },
-        } => commands::api_policy_show(&policy),
-        Opt::Api { api } => match api {
-            ApiCmd::Enable {
-                listen,
-                hostname,
-                hostname_aliases,
-            } => commands::api_enable(
-                listen,
-                hostname.as_deref(),
-                hostname_aliases,
-            ),
-            ApiCmd::Disable => commands::api_disable(),
-            ApiCmd::Status => commands::api_status(),
-            ApiCmd::StatusGrant {
-                client_id,
-                account,
-                all_configured,
-            } => commands::api_status_grant(
-                &client_id,
-                &account,
-                all_configured,
-            ),
-            ApiCmd::StatusRevoke { client_id, account } => {
-                commands::api_status_revoke(&client_id, account.as_deref())
-            }
-            ApiCmd::UnlockGrant { client_id, account } => {
-                commands::api_unlock_grant(&client_id, &account)
-            }
-            ApiCmd::UnlockRevoke { client_id, account } => {
-                commands::api_unlock_revoke(&client_id, account.as_deref())
-            }
-            ApiCmd::Policy { policy } => match policy {
-                ApiPolicyCmd::List => commands::api_policy_list(),
-                ApiPolicyCmd::Import { name, file } => {
-                    commands::api_policy_import(&name, &file)
-                }
-                ApiPolicyCmd::Show { policy } => {
-                    commands::api_policy_show(&policy)
-                }
-                ApiPolicyCmd::Set { name, capabilities } => {
-                    commands::api_policy_set(&name, capabilities)
-                }
-                ApiPolicyCmd::Assign { client_id, policy } => {
-                    commands::api_policy_assign(&client_id, &policy)
-                }
-            },
-            ApiCmd::Pairing { pairing } => match pairing {
-                ApiPairingCmd::List => commands::api_pairing_list(),
-                ApiPairingCmd::Approve {
-                    request,
+            format,
+        } => commands::api_policy_show(&policy, format.mode()),
+        Opt::Api { api, format } => {
+            let output = format.mode();
+            match api {
+                ApiCmd::Enable {
+                    listen,
+                    hostname,
+                    hostname_aliases,
+                } => commands::api_enable(
+                    listen,
+                    hostname.as_deref(),
+                    hostname_aliases,
+                    output,
+                ),
+                ApiCmd::Disable => commands::api_disable(output),
+                ApiCmd::Status => commands::api_status(output),
+                ApiCmd::StatusGrant {
+                    client_id,
                     account,
-                    policy,
+                    all_configured,
+                } => commands::api_status_grant(
+                    &client_id,
+                    &account,
+                    all_configured,
+                    output,
+                ),
+                ApiCmd::StatusRevoke { client_id, account } => {
+                    commands::api_status_revoke(
+                        &client_id,
+                        account.as_deref(),
+                        output,
+                    )
+                }
+                ApiCmd::UnlockGrant { client_id, account } => {
+                    commands::api_unlock_grant(&client_id, &account, output)
+                }
+                ApiCmd::UnlockRevoke { client_id, account } => {
+                    commands::api_unlock_revoke(
+                        &client_id,
+                        account.as_deref(),
+                        output,
+                    )
+                }
+                ApiCmd::Policy { policy } => match policy {
+                    ApiPolicyCmd::List => commands::api_policy_list(output),
+                    ApiPolicyCmd::Import { name, file } => {
+                        commands::api_policy_import(&name, &file, output)
+                    }
+                    ApiPolicyCmd::Show { policy } => {
+                        commands::api_policy_show(&policy, output)
+                    }
+                    ApiPolicyCmd::Set { name, capabilities } => {
+                        commands::api_policy_set(&name, capabilities, output)
+                    }
+                    ApiPolicyCmd::Assign { client_id, policy } => {
+                        commands::api_policy_assign(
+                            &client_id, &policy, output,
+                        )
+                    }
+                },
+                ApiCmd::Pairing { pairing } => match pairing {
+                    ApiPairingCmd::List => commands::api_pairing_list(output),
+                    ApiPairingCmd::Approve {
+                        request,
+                        account,
+                        policy,
+                    } => commands::api_pairing_approve(
+                        &request, &account, &policy, output,
+                    ),
+                    ApiPairingCmd::Deny { request } => {
+                        commands::api_pairing_deny(&request, output)
+                    }
+                },
+                ApiCmd::Client { client } => match client {
+                    ApiClientCmd::Create { name } => {
+                        commands::api_client_create(&name, output)
+                    }
+                    ApiClientCmd::List => commands::api_client_list(output),
+                    ApiClientCmd::AllowSource {
+                        id,
+                        source,
+                        clear: _,
+                    } => commands::api_client_allow_source(
+                        &id, &source, output,
+                    ),
+                    ApiClientCmd::Revoke { id } => {
+                        commands::api_client_revoke(&id, output)
+                    }
+                },
+                ApiCmd::Grant {
+                    client_id,
+                    account,
+                    item_id,
+                    field,
+                } => commands::api_grant(
+                    &client_id, &account, &item_id, &field, output,
+                ),
+                ApiCmd::Revoke {
+                    client_id,
+                    item_id,
+                    field,
                 } => {
-                    commands::api_pairing_approve(&request, &account, &policy)
+                    commands::api_revoke(&client_id, &item_id, &field, output)
                 }
-                ApiPairingCmd::Deny { request } => {
-                    commands::api_pairing_deny(&request)
-                }
-            },
-            ApiCmd::Client { client } => match client {
-                ApiClientCmd::Create { name } => {
-                    commands::api_client_create(&name)
-                }
-                ApiClientCmd::List => commands::api_client_list(),
-                ApiClientCmd::AllowSource {
-                    id,
-                    source,
-                    clear: _,
-                } => commands::api_client_allow_source(&id, &source),
-                ApiClientCmd::Revoke { id } => {
-                    commands::api_client_revoke(&id)
-                }
-            },
-            ApiCmd::Grant {
-                client_id,
-                account,
-                item_id,
-                field,
-            } => commands::api_grant(&client_id, &account, &item_id, &field),
-            ApiCmd::Revoke {
-                client_id,
-                item_id,
-                field,
-            } => commands::api_revoke(&client_id, &item_id, &field),
-        },
+            }
+        }
         Opt::Register { stdin } => {
             let (client_id, client_secret) = if stdin {
                 (Some(read_stdin_password()), Some(read_stdin_password()))
@@ -4834,7 +4889,7 @@ fn main() {
             }
         }
         Opt::Unlocked => commands::unlocked(),
-        Opt::Status { json, full } => commands::status(json, full),
+        Opt::Status { format, full } => commands::status(format.mode(), full),
         Opt::Sync { all } => commands::sync(all),
         Opt::Tui {
             term,
@@ -6383,20 +6438,20 @@ mod test {
     #[test]
     fn test_config_show_and_get_options() {
         let Opt::Config {
-            config: Config::Show { json },
+            config: Config::Show { format },
         } = parse(&["rbw", "config", "show"]).command
         else {
             panic!("expected config show");
         };
-        assert!(!json);
+        assert_eq!(format.mode(), commands::OutputMode::Default);
 
         let Opt::Config {
-            config: Config::Show { json },
+            config: Config::Show { format },
         } = parse(&["rbw", "config", "show", "--json"]).command
         else {
             panic!("expected config show --json");
         };
-        assert!(json);
+        assert_eq!(format.mode(), commands::OutputMode::Json);
 
         for key in commands::CONFIG_KEYS {
             parse(&["rbw", "config", "get", key]);

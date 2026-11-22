@@ -102,6 +102,10 @@ rbw api policy list
 rbw policy show browser-daemon
 ```
 
+Remote API management commands accept `-o yaml` (or `--yaml`) and
+`-o json` (or `--json`). Policy details default to YAML. Both formats use
+color on a terminal, honor `NO_COLOR`, and stay plain when redirected or piped.
+
 Importing changes takes effect on the next request by any assigned client.
 An assigned policy provides the client's effective access. An existing client
 without an assignment continues to use its direct grants.

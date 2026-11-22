@@ -1,12 +1,17 @@
 use super::*;
 
-pub fn config_show(json: bool) -> anyhow::Result<()> {
+pub fn config_show(output: OutputMode) -> anyhow::Result<()> {
     let config = rbw::config::Config::load()?;
-    if json {
-        write_json_pretty(&config, "failed to write config to stdout")
+    let output = if output == OutputMode::Default {
+        OutputMode::Yaml
     } else {
-        write_yaml_pretty(&config, "failed to write config to stdout")
-    }
+        output
+    };
+    write_serialized_pretty(
+        &config,
+        output,
+        "failed to write config to stdout",
+    )
 }
 
 // Print a single setting's effective value: account-scoped keys resolve
