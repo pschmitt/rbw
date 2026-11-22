@@ -31,8 +31,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  # macOS runners are often unavailable for a long time, so the macOS build
-  # doesn't hold up the release: build-macos adds its tarball afterwards.
   build:
     name: build (${{ matrix.target }})
     if: ${{ !inputs.dry-run }}
@@ -221,54 +219,6 @@ jobs:
           body_path: RELEASE_NOTES.md
           generate_release_notes: false
           prerelease: ${{ contains(env.TAG, '-') }}
-  build-macos:
-    name: build (aarch64-apple-darwin)
-    needs: [release]
-    if: always() && needs.release.result == 'success'
-    runs-on: macos-latest
-    continue-on-error: true
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    env:
-      TARGET: aarch64-apple-darwin
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.TAG }}
-      - name: Read the declared Rust toolchain
-        id: rust
-        run: echo "version=$(sed -n 's/^rust-version = \"\(.*\)\"$/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
-      - name: Set reproducible build environment
-        run: |
-          echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
-          echo "RUSTFLAGS=--remap-path-prefix=${GITHUB_WORKSPACE}=." >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.rust.outputs.version }}
-          targets: ${{ env.TARGET }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ env.TARGET }}
-      - name: Build
-        run: cargo build --locked --release --target "$TARGET"
-      - name: Package
-        run: tools/package-release.sh "$TARGET"
-      - uses: actions/attest@v4
-        with:
-          subject-path: ${{ github.workspace }}/rbw-*-aarch64-apple-darwin.tar.gz
-      # Add the tarball and its checksum to the published release.
-      - name: Upload to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tarball="$(ls rbw-*-"$TARGET".tar.gz)"
-          gh release download "$TAG" --pattern SHA256SUMS --clobber
-          grep -v " ${tarball}\$" SHA256SUMS > SHA256SUMS.new || true
-          shasum -a 256 "$tarball" >> SHA256SUMS.new
-          mv SHA256SUMS.new SHA256SUMS
-          gh release upload "$TAG" "$tarball" SHA256SUMS --clobber
   # The Nix package fetches the signed packages from the release by hash.
   packages:
     needs: [release]

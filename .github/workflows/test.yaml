@@ -46,14 +46,6 @@ jobs:
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
       - run: TARGET_CC=clang-18 TARGET_AR=llvm-ar-18 cargo test --no-default-features --features clipboard --target x86_64-unknown-linux-musl
-  test-macos:
-    runs-on: macos-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all-features
   # The browser extension in a real Chromium and Firefox against a stub
   # native host (browser/tests/e2e): the inline autofill UI, its clickjacking
   # defences and the save prompts, with trusted input events. The page.html
