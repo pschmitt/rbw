@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.48.2] - 2026-11-23
+
 ### Added
 
 * Generate a password for the selected password field from the browser context menu.
@@ -11,6 +13,7 @@
 ### Changed
 
 * Run version preparation and tagging through the shared release workflow tooling.
+* Refresh the Nix and browser lint dependency lockfiles.
 
 ## [2.48.1] - 2026-11-23
 

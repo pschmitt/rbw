@@ -7,7 +7,7 @@ id = "RUSTSEC-2026-0542"
 crate = "humantime"
 version = "2.4.0"
 expires = 2026-12-17
-allow = ["rbw 2.48.1"]
+allow = ["rbw 2.48.2"]
 
 [[exceptions]]
 id = "RUSTSEC-2026-0543"
