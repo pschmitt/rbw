@@ -391,4 +391,5 @@ pub const CONFIG_KEYS: &[&str] = &[
     "redact",
     "browser.clients",
     "browser.fingerprintAutoStart",
+    "browser.passkeyAssumeVerified",
 ];

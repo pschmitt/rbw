@@ -968,6 +968,11 @@ pub struct BrowserConfig {
     /// locked account that has fingerprint unlock enrolled.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fingerprint_auto_start: bool,
+    /// Treat an unlocked vault as `WebAuthn` user verification: sites that
+    /// require it no longer ask for the master password, and the extension
+    /// reports the user as verified unless the site discourages it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub passkey_assume_verified: bool,
 }
 
 /// `d548826e-79b4-db40-a3d8-11116f7e8349`, the AAGUID Bitwarden clients use.

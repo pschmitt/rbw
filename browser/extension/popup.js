@@ -560,11 +560,14 @@ async function finishApproval(text) {
 // A popup restored onto another page skips the vault search; leaving that
 // page for the vault must load it then.
 let vaultListed = false;
+// `browser.passkeyAssumeVerified` in rbw's config: an unlocked vault counts as
+// WebAuthn user verification, so required verification asks for nothing.
+let passkeyAssumeVerified = false;
 async function refresh(knownStatus = null, skipList = false) {
   loading(true);
   try {
   clearVault();
-  const status = knownStatus || await request("status"); unlocked = status.unlocked;
+  const status = knownStatus || await request("status"); unlocked = status.unlocked; passkeyAssumeVerified = status.passkeyAssumeVerified === true;
   renderAccounts(status.accounts || [], status.primary, preference.popupAccount, status.accountStates || [], status.accountColors);
   $("state").textContent = unlocked ? (status.merged ? `${status.accountStates.filter(a => a.unlocked).length} of ${status.accountStates.length} accounts unlocked · shared rbw-agent` : "Unlocked · shared rbw-agent") : "Locked";
   if (remoteMode !== (status.remote === true)) {
@@ -1497,9 +1500,10 @@ async function showApproval(id) {
     await finishApproval("Passkey request completed.");
   };
   const approve = async (item, row) => {
-    if (pending.verification !== "required") return complete(row, item);
+    if (pending.verification !== "required" || passkeyAssumeVerified) return complete(row, item);
     // Required WebAuthn verification comes after choosing the account: an
-    // unlocked agent alone must never be reported as user verification.
+    // unlocked agent alone is never reported as user verification unless
+    // the user opted in (`passkeyAssumeVerified`).
     row.classList.add("is-selected");
     $("approval-items").classList.add("is-verifying"); $("approval-verification").hidden = false;
     $("approval-description").textContent = `Verify it is you to use ${row.dataset.name}.`;

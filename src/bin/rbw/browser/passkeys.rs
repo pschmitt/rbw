@@ -319,6 +319,9 @@ pub(super) trait Vault {
         id: &uuid::Uuid,
     ) -> anyhow::Result<bool>;
     fn aaguid(&mut self) -> anyhow::Result<[u8; 16]>;
+    /// Whether an unlocked vault counts as user verification
+    /// (`browser.passkeyAssumeVerified`).
+    fn assume_verified(&mut self) -> anyhow::Result<bool>;
 }
 
 #[derive(Default)]
@@ -403,6 +406,10 @@ impl Vault for LiveVault {
 
     fn aaguid(&mut self) -> anyhow::Result<[u8; 16]> {
         Ok(rbw::config::Config::load()?.browser.passkey_aaguid()?)
+    }
+
+    fn assume_verified(&mut self) -> anyhow::Result<bool> {
+        Ok(rbw::config::Config::load()?.browser.passkey_assume_verified)
     }
 }
 
@@ -584,6 +591,9 @@ fn verification(
         );
         vault.verify_master_password(password)?;
         Ok(true)
+    } else if vault.assume_verified()? {
+        // Opted in: the unlocked vault stands in for the master password.
+        Ok(requirement != "discouraged")
     } else {
         ensure!(requirement != "required", PasskeyError::PasswordRequired);
         Ok(false)
@@ -633,6 +643,7 @@ mod tests {
         existing: Option<anyhow::Result<commands::EditableCipher>>,
         save_error: Option<rbw::error::Error>,
         persisted: bool,
+        assume_verified: bool,
         saved: Vec<(Option<String>, serde_json::Value)>,
     }
 
@@ -683,6 +694,9 @@ mod tests {
         }
         fn aaguid(&mut self) -> anyhow::Result<[u8; 16]> {
             Ok(rbw::config::BITWARDEN_AAGUID)
+        }
+        fn assume_verified(&mut self) -> anyhow::Result<bool> {
+            Ok(self.assume_verified)
         }
     }
 
@@ -774,6 +788,30 @@ mod tests {
             ..Fake::default()
         };
         register_with(&mut vault, None, ORIGIN, &options, None).unwrap();
+    }
+
+    #[test]
+    fn assume_verified_skips_the_master_password() {
+        let mut vault = Fake {
+            assume_verified: true,
+            ..Fake::default()
+        };
+        assert!(verification(&mut vault, &stricknani(), true, None).unwrap());
+        let mut options = stricknani();
+        options["authenticatorSelection"]["userVerification"] =
+            json!("discouraged");
+        assert!(!verification(&mut vault, &options, true, None).unwrap());
+        // The response carries the UV flag (0x04) of a verified user.
+        vault.persisted = true;
+        let response =
+            register_with(&mut vault, None, ORIGIN, &stricknani(), None)
+                .unwrap();
+        let auth = B64
+            .decode(
+                response["response"]["authenticatorData"].as_str().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(auth[32] & 0x04, 0x04);
     }
 
     #[test]

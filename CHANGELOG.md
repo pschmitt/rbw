@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+* `browser.passkeyAssumeVerified` (off by default) lets an unlocked vault
+  count as passkey user verification, so sites that require it no longer ask
+  for the master password in the browser extension.
+
 ## [2.48.0] - 2026-11-22
 
 ### Added

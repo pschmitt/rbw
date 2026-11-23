@@ -87,6 +87,20 @@ conditional account-picker integration and other algorithms are not implemented.
 Conditional requests can be approved through the rbw toolbar popup. Sites that
 require unimplemented capabilities can use the other-authenticator fallback.
 
+A site that requires user verification (`userVerification: "required"`) gets
+it after you pick the account and enter the master password; other sites sign
+in with a click and are told the user is present but not verified. To let an
+unlocked vault count as verification instead (no master password, and the
+verified flag set unless the site discourages it), opt in (off by default):
+
+```shell
+rbw config set browser.passkeyAssumeVerified true
+```
+
+or `programs.rbw.settings.browser.passkeyAssumeVerified = true;` in Home
+Manager. Anyone at your unlocked desktop can then use your passkeys on sites
+that rely on that verification, so keep the lock timeout short.
+
 When a request fails, the native host answers with a specific message and a
 sanitized `detail` (the error chain, with long opaque tokens redacted); the
 extension shows the message in its banner and the detail behind a "Details"

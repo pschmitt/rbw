@@ -394,6 +394,17 @@ let
           '';
         };
 
+        passkeyAssumeVerified = mkOption {
+          type = types.nullOr types.bool;
+          default = null;
+          example = true;
+          description = ''
+            Treat an unlocked vault as WebAuthn user verification: passkey
+            prompts of sites that require verification no longer ask for the
+            master password. `null` keeps rbw's default (off).
+          '';
+        };
+
       };
 
       # ---- grouped global preferences ---------------------------------

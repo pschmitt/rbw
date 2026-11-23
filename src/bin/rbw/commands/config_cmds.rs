@@ -62,6 +62,9 @@ pub fn config_get(key: &str) -> anyhow::Result<()> {
         "browser.fingerprintAutoStart" => {
             Some(config.browser.fingerprint_auto_start.to_string())
         }
+        "browser.passkeyAssumeVerified" => {
+            Some(config.browser.passkey_assume_verified.to_string())
+        }
         "passwordGen.length" => {
             config.password_gen.length.map(|length| length.to_string())
         }
@@ -257,6 +260,11 @@ pub fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
                 "browser.fingerprintAutoStart must be true or false",
             )?;
         }
+        "browser.passkeyAssumeVerified" => {
+            config.browser.passkey_assume_verified = value.parse().context(
+                "browser.passkeyAssumeVerified must be true or false",
+            )?;
+        }
         "passwordGen.length" => {
             config.password_gen.length =
                 Some(value.parse().context(
@@ -344,6 +352,9 @@ pub fn config_unset(key: &str) -> anyhow::Result<()> {
         "fzf.options" => config.fzf.options = None,
         "browser.fingerprintAutoStart" => {
             config.browser.fingerprint_auto_start = false;
+        }
+        "browser.passkeyAssumeVerified" => {
+            config.browser.passkey_assume_verified = false;
         }
         "pinentry.timeout" => {
             config.pinentry.timeout = rbw::config::default_pinentry_timeout();
