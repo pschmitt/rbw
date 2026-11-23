@@ -8,6 +8,11 @@
   count as passkey user verification, so sites that require it no longer ask
   for the master password in the browser extension.
 
+### Changed
+
+* Update the anyhow, nix (0.32), psl, secret-service (6) and zip
+  dependencies, and refresh the lock file.
+
 ## [2.48.0] - 2026-11-22
 
 ### Added
