@@ -167,12 +167,12 @@ check: format-check cargo-check clippy deny test doc nix-check
 
 # Bump rbw and the browser extension to VERSION, date the changelog, commit and push.
 release-prepare version:
-    tools/release.sh prepare '{{ version }}'
+    nix run github:pschmitt/ci-workflows#release -- prepare '{{ version }}'
 
 # Push a GPG-signed vVERSION tag once build, test and docker are green for HEAD;
 # the release workflow signs and publishes the browser extension.
 release-tag:
-    tools/release.sh tag
+    nix run github:pschmitt/ci-workflows#release -- tag
 
 # Remove Cargo's build output.
 clean:

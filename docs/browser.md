@@ -182,8 +182,8 @@ and check that the pinned packages are intact. Signing reads
 GitHub Actions secrets. AMO signs each version once, so every release that
 changes extension sources needs a new rbw version, and a failed release run
 should be retried with "Re-run failed jobs" to reuse the signed files. Release
-with
-`tools/release.sh` (or the `just release-*` recipes):
+with the `just release-*` recipes (they run the shared release script with
+`nix run github:pschmitt/ci-workflows#release`):
 
 1. `prepare X.Y.Z` bumps `Cargo.toml`/`Cargo.lock`, dates the changelog,
    commits and pushes.

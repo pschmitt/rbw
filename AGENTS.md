@@ -88,14 +88,14 @@ resulting `main` before tagging. Leave out PRs with failing checks or major
 bumps that need real work, and say which.
 
 The browser extension shares rbw's version (from `Cargo.toml`). Release with
-`just release-prepare X.Y.Z`, then `just release-tag` (see
-`tools/release.sh`); the tag must be GPG-signed, so unlock GPG first. The
+`just release-prepare X.Y.Z`, then `just release-tag` (they run
+`nix run github:pschmitt/ci-workflows#release`); the tag must be GPG-signed, so unlock GPG first. The
 tag's release workflow signs the extension (AMO, CRX), publishes it,
 and commits the hashes of the signed packages (`browser/packages/metadata.json`;
 the packages themselves are only release assets) to `main`. Signing, pinning
 and the pin check come from the reusable workflows in `pschmitt/ci-workflows`,
-shared with browser-daemon and bruvtab, and `tools/release.sh` is a verbatim
-copy of that repository's script. Any extension source change needs a new
+shared with browser-daemon and bruvtab, and so does the release script, which
+runs from there (never add a copy back). Any extension source change needs a new
 version, because AMO signs each version only once.
 
 This repo is consumed by `nixos-config` (flake input `rbw`, following
