@@ -46,6 +46,17 @@
       };
     in
     {
+      circus.consumerBuilds.nixos-config = {
+        repository = "pschmitt/nixos-config";
+        ref = "main";
+        input = "rbw";
+        follows = [
+          "nixpkgs"
+          "home-manager"
+        ];
+        packages.aarch64-linux = [ "rbw" ];
+      };
+
       # Expose both Linux architectures to Circus.
       hydraJobs = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
         # The Android NDK used by rbw-termux only runs on x86_64 Linux.
