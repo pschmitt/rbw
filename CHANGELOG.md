@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.48.1] - 2026-11-23
+
 ### Added
 
 * `browser.passkeyAssumeVerified` (off by default) lets an unlocked vault
