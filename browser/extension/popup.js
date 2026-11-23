@@ -1236,6 +1236,28 @@ async function labelUriDefaults() {
   $("uri-default").textContent = `Default is ${uriDefaultName}${prefs.uriMatchDefault ? " (this browser's override)" : " (rbw setting)"}.`;
 }
 $("add-uri").onclick = () => addUri().focus();
+$("add-current-uri").onclick = () => attempt(async () => {
+  const item = currentItem;
+  const page = await currentWebsite();
+  if (currentPage !== "editor" || currentItem !== item || editSaving || $("edit-type").value !== "login") return;
+  if (!page) throw new Error("Open an HTTP or HTTPS page first.");
+  const inputs = [...$("edit-uris").querySelectorAll(".uri-input")];
+  const existing = inputs.find(input => input.value.trim() === page.uri);
+  if (existing) {
+    existing.focus();
+    message("This URI is already in the list.");
+    return;
+  }
+  const empty = inputs.find(input => !input.value.trim() && !input.closest(".uri-row").querySelector(".uri-match").value);
+  if (empty) {
+    empty.value = page.uri;
+    empty.dispatchEvent(new Event("input", { bubbles: true }));
+    empty.focus();
+  } else {
+    addUri({ uri: page.uri }).focus();
+    rememberEditDraft();
+  }
+});
 $("uri-apply-all").append(new Option("Default", ""), ...Object.entries(uriMatchNames).map(([key, name]) => new Option(name, key)));
 $("uri-apply-all").onchange = () => {
   if ($("uri-apply-all").value !== "keep") for (const select of document.querySelectorAll(".uri-match")) select.value = $("uri-apply-all").value;
@@ -1328,17 +1350,20 @@ function editedCollections() {
   const inputs = [...$("edit-collections").querySelectorAll("input")];
   return inputs.length ? inputs.filter(input => input.checked).map(input => input.value) : null;
 }
-async function newLoginForPage(password = null) {
-  let tab;
+async function currentWebsite() {
   for (const query of [{ active: true, currentWindow: true }, { active: true, lastFocusedWindow: true }]) {
+    let tab;
     try { [tab] = await api.tabs.query(query); } catch (_) { continue; }
-    if (/^https?:\/\//.test(tab?.url || "")) break;
-    tab = null;
+    if (!/^https?:\/\//.test(tab?.url || "")) continue;
+    const url = new URL(tab.url);
+    // Query strings and fragments can contain sign-in tokens.
+    return { uri: `${url.origin}${url.pathname}`, name: tab.title?.trim() || url.hostname.replace(/^www\./, "") };
   }
-  const url = tab ? new URL(tab.url) : null;
-  // Query strings and fragments can contain sign-in tokens.
-  const uris = url ? [{ uri: `${url.origin}${url.pathname}` }] : [];
-  return { name: url ? tab.title?.trim() || url.hostname.replace(/^www\./, "") : "", data: { type: "login", password, uris } };
+  return null;
+}
+async function newLoginForPage(password = null) {
+  const page = await currentWebsite();
+  return { name: page?.name || "", data: { type: "login", password, uris: page ? [{ uri: page.uri }] : [] } };
 }
 function editItem(fresh = false, draft = null, defaults = null) {
   if (fresh) { currentItem = null; currentDetail = null; }

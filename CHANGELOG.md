@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+* Generate a password for the selected password field from the browser context menu.
+* Use the active page title and URI as defaults for new browser logins.
+* Add the active page URI to a login from the browser item editor.
+
+### Changed
+
+* Run version preparation and tagging through the shared release workflow tooling.
+
 ## [2.48.1] - 2026-11-23
 
 ### Added
