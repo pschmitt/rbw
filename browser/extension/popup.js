@@ -1328,9 +1328,21 @@ function editedCollections() {
   const inputs = [...$("edit-collections").querySelectorAll("input")];
   return inputs.length ? inputs.filter(input => input.checked).map(input => input.value) : null;
 }
-function editItem(fresh = false, draft = null) {
+async function newLoginForPage(password = null) {
+  let tab;
+  for (const query of [{ active: true, currentWindow: true }, { active: true, lastFocusedWindow: true }]) {
+    try { [tab] = await api.tabs.query(query); } catch (_) { continue; }
+    if (/^https?:\/\//.test(tab?.url || "")) break;
+    tab = null;
+  }
+  const url = tab ? new URL(tab.url) : null;
+  // Query strings and fragments can contain sign-in tokens.
+  const uris = url ? [{ uri: `${url.origin}${url.pathname}` }] : [];
+  return { name: url ? tab.title?.trim() || url.hostname.replace(/^www\./, "") : "", data: { type: "login", password, uris } };
+}
+function editItem(fresh = false, draft = null, defaults = null) {
   if (fresh) { currentItem = null; currentDetail = null; }
-  const cipher = draft?.cipher || currentDetail?.cipher || { name: "", data: { type: "login" } };
+  const cipher = draft?.cipher || currentDetail?.cipher || defaults || { name: "", data: { type: "login" } };
   $("edit-name").value = cipher.name; setEditFolder(cipher.folder || ""); $("edit-notes").value = cipher.notes || "";
   // New items choose their account; existing ones stay where they are.
   $("edit-account-row").hidden = !!currentItem || accountNames.length < 2;
@@ -1398,7 +1410,7 @@ async function resumeEditDraft(draft) {
   const changed = !!draft.item && draft.revision !== currentDetail?.revision;
   editItem(!draft.item, draft);
   message(changed ? "Resumed your unsaved edit. The item changed in the vault since; restart to edit the current version." : "Resumed your unsaved edit.", false, {
-    label: "Restart", run: async () => { forgetEditDraft(); if (draft.item) { await openDetail(draft.item); editItem(); } else editItem(true); message("Restarted from the current vault state."); }
+    label: "Restart", run: async () => { forgetEditDraft(); if (draft.item) { await openDetail(draft.item); editItem(); } else editItem(true, null, await newLoginForPage()); message("Restarted from the current vault state."); }
   });
 }
 let editSaving = false;
@@ -1660,7 +1672,11 @@ document.addEventListener("keydown", event => {
     items[(at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
   }
 }, true);
-$("add").onclick = () => { if (currentPage === "send") editSend(); else editItem(true); };
+$("add").onclick = () => attempt(async () => {
+  if (currentPage === "send") { editSend(); return; }
+  const cipher = await newLoginForPage();
+  if (currentPage === "vault") editItem(true, null, cipher);
+});
 $("header-edit").onclick = () => editItem();
 // A duplicate is a new item prefilled from the original; it exists once saved.
 // Attachments and passkeys stay with the original.
@@ -1851,15 +1867,10 @@ $("gen-readable").onchange = () => { generator.readable = $("gen-readable").chec
 $("generate").onclick = () => attempt(generatePassword);
 // Save the generated value: into a new login for the current site, or as the
 // new password of an existing login. Both open the editor for review.
-async function generatorSite() {
-  for (const query of [{ active: true, currentWindow: true }, { active: true, lastFocusedWindow: true }]) {
-    try { const [tab] = await api.tabs.query(query); if (/^https?:\/\//.test(tab?.url || "")) return new URL(tab.url); } catch (_) { /* Try the next window. */ }
-  }
-  return null;
-}
 async function renderGeneratorSite() {
-  const site = await generatorSite();
-  $("gen-save-site").textContent = site ? `Save for ${site.hostname.replace(/^www\./, "")}` : "Save as a new vault item";
+  const { data } = await newLoginForPage();
+  const site = data.uris[0]?.uri;
+  $("gen-save-site").textContent = site ? `Save for ${new URL(site).hostname.replace(/^www\./, "")}` : "Save as a new vault item";
 }
 function requireGenerated() {
   if (!generatedValue) throw new Error("Generate a value first.");
@@ -1868,8 +1879,7 @@ function requireGenerated() {
 }
 function closeGeneratorPicker() { $("gen-picker").hidden = true; $("gen-save-existing").setAttribute("aria-expanded", "false"); }
 $("gen-save-new").onclick = () => attempt(async () => {
-  const password = requireGenerated(); const site = await generatorSite();
-  const cipher = { name: site ? site.hostname.replace(/^www\./, "") : "", folder: null, notes: null, data: { type: "login", username: "", password, uris: site ? [{ uri: site.origin }] : [] }, fields: [] };
+  const cipher = await newLoginForPage(requireGenerated());
   closeGeneratorPicker(); editItem(true, { item: null, revision: null, cipher, noAutofill: false });
   $("field-username")?.focus();
   message("Generated password filled in. Add a username and save.");

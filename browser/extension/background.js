@@ -1332,7 +1332,10 @@ api.windows?.onFocusChanged?.addListener(windowId => {
   if (windowId >= 0) { refreshVaultLockState(); refreshActiveBadge().catch(() => {}); }
 });
 api.runtime.onInstalled.addListener(() => {
-  api.contextMenus.removeAll().then(() => api.contextMenus.create({ id: "rbw-open", title: "Fill with rbw…", contexts: ["editable"] }));
+  api.contextMenus.removeAll().then(() => {
+    api.contextMenus.create({ id: "rbw-open", title: "Fill with rbw…", contexts: ["editable"] });
+    api.contextMenus.create({ id: "rbw-generate", title: "Generate password", contexts: ["editable"], documentUrlPatterns: ["https://*/*", "http://*/*"] });
+  });
   api.alarms.create("rbw-vault-lock-state", { periodInMinutes: 1 });
   refreshVaultLockState();
 });
@@ -1342,9 +1345,33 @@ api.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === "rbw-vault-lock-state") refreshVaultLockState();
 });
 api.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== "rbw-open" || !tab?.id) return;
-  api.tabs.sendMessage(tab.id, { action: "open_inline_suggestions" }, { frameId: info.frameId || 0 }).catch(() => {});
+  if (!tab?.id) return;
+  const target = { frameId: info.frameId || 0 };
+  if (info.menuItemId === "rbw-open") {
+    api.tabs.sendMessage(tab.id, { action: "open_inline_suggestions" }, target).catch(() => {});
+  }
+  if (info.menuItemId === "rbw-generate") {
+    generateIntoField(tab, info.frameUrl || info.pageUrl, target).catch(() => {});
+  }
 });
+async function generateIntoField(tab, url, target) {
+  try {
+    const prefs = await settings();
+    if (!isSecureFillUrl(tab.url, prefs.allowHttpFill) || !isSecureFillUrl(url, prefs.allowHttpFill)) {
+      throw new Error("HTTP is unencrypted. Change this in rbw settings.");
+    }
+    if ([tab.url, url].some(page => isAutofillBlocked(page, prefs.autofillBlocklist))) {
+      throw new Error("Autofill is blocked for this site in rbw settings.");
+    }
+    const password = await generateDefaultPassword();
+    const filled = await api.tabs.sendMessage(tab.id, { action: "rbw_generated_password", url, password }, target);
+    if (!filled) throw new Error("Right-click an editable password field and try again.");
+  } catch (err) {
+    if ((await api.tabs.get(tab.id)).url === tab.url) {
+      await notifyFill(tab, { title: "Password not filled", error: true, message: err.message });
+    }
+  }
+}
 async function fillShortcut(tabId) {
   let tab;
   try {
@@ -1385,13 +1412,16 @@ async function fillShortcut(tabId) {
     }
   }
 }
+function generateDefaultPassword() {
+  return native({ action: "generate", account: null, length: null, passphrase: false, mode: null });
+}
 // Generates a password with rbw's defaults, puts it on the clipboard (the
 // agent's, so its clearing timeout applies) and says so on the page. The
 // password itself never reaches the page or the notice.
 async function generateToClipboard() {
   let notice = { title: "Password copied", message: "A new password is on the clipboard.", clipboard: "Password copied to clipboard", generatorAction: true };
   try {
-    const text = await native({ action: "generate", account: null, length: null, passphrase: false, mode: null });
+    const text = await generateDefaultPassword();
     await native({ action: "copy_text", account: null, text });
   } catch (err) {
     notice = { title: "Could not generate a password", message: err?.message || "rbw did not answer.", error: true };

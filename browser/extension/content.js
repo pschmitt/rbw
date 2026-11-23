@@ -150,6 +150,23 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
       showInlineSuggestions(input, true);
       return;
     }
+    if (message?.action === "rbw_generated_password") {
+      const input = contextMenuTarget;
+      contextMenuTarget = null;
+      const password = message.password;
+      if (location.href !== message.url || !(input instanceof HTMLInputElement) || input.type !== "password" ||
+          !input.isConnected || input.matches(":disabled, [readonly]") || !input.getClientRects().length ||
+          typeof password !== "string" || !password || (input.maxLength >= 0 && password.length > input.maxLength)) {
+        respond(false);
+        return;
+      }
+      close();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, password);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      respond(true);
+      return;
+    }
     if (message?.action === "rbw_fill_state") {
       if (message.active) fills.add(message.token);
       else { fills.delete(message.token); if (message.filled) { filled = true; if (ui) { dockFilled(); startCardCloseCountdown(); } } }
@@ -233,7 +250,7 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
   document.addEventListener("contextmenu", event => {
     if (!event.isTrusted) return;
     const target = event.composedPath()[0];
-    if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable)) contextMenuTarget = target;
+    contextMenuTarget = target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable) ? target : null;
   }, true);
   async function showInlineSuggestions(input, explicit = false) {
     if (refocusing || (ui && (input === ui.host || ui.host.contains(input)))) return;
