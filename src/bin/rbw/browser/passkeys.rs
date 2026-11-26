@@ -40,6 +40,8 @@ pub enum PasskeyError {
     InvalidUserName,
     #[error("This item already contains a passkey for this site. Pick another item or choose \"Create a new login\".")]
     AlreadyHasPasskey,
+    #[error("The passkey changed. Reopen the request and select it again.")]
+    ReplacementUnavailable,
     #[error("Only login items can hold a passkey. Pick a login or create a new one.")]
     NotALogin,
     #[error("That item is not available in the selected vault account. It may have been deleted, belong to another account, or not be synchronized yet. Sync and try again, or pick \"All accounts\".")]
@@ -415,19 +417,28 @@ impl Vault for LiveVault {
 
 pub fn register(
     item: Option<&str>,
+    replace_credential: Option<&str>,
     origin: &str,
     options: &Value,
     password: Option<&str>,
 ) -> anyhow::Result<Value> {
-    register_with(&mut LiveVault::default(), item, origin, options, password)
+    register_with(
+        &mut LiveVault::default(),
+        item,
+        origin,
+        options,
+        password,
+        replace_credential,
+    )
 }
 
-pub(super) fn register_with(
+fn register_with(
     vault: &mut impl Vault,
     item: Option<&str>,
     origin: &str,
     options: &Value,
     password: Option<&str>,
+    replace_credential: Option<&str>,
 ) -> anyhow::Result<Value> {
     use p256::pkcs8::{EncodePrivateKey as _, EncodePublicKey as _};
     rbw::audit::note_origin(origin);
@@ -498,12 +509,28 @@ pub(super) fn register_with(
         return Err(PasskeyError::NotALogin.into());
     };
     rbw::audit::note_item(None, item.unwrap_or(""), Some(&editable.name));
-    ensure!(
-        !fido2_credentials
+    if let Some(expected) = replace_credential {
+        ensure!(item.is_some(), PasskeyError::ReplacementUnavailable);
+        let index = fido2_credentials
             .iter()
-            .any(|c| c.rp_id.as_deref() == Some(&rp)),
-        PasskeyError::AlreadyHasPasskey
-    );
+            .position(|credential| {
+                credential.rp_id.as_deref() == Some(&rp)
+                    && credential
+                        .credential_id
+                        .as_deref()
+                        .and_then(|id| id_bytes(id).ok())
+                        .is_some_and(|id| B64.encode(id) == expected)
+            })
+            .context(PasskeyError::ReplacementUnavailable)?;
+        fido2_credentials.remove(index);
+    } else {
+        ensure!(
+            !fido2_credentials
+                .iter()
+                .any(|c| c.rp_id.as_deref() == Some(&rp)),
+            PasskeyError::AlreadyHasPasskey
+        );
+    }
     let key = p256::ecdsa::SigningKey::generate();
     let id = uuid::Uuid::new_v4();
     let point = key.verifying_key().to_sec1_point(false);
@@ -603,6 +630,16 @@ fn verification(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn register_with(
+        vault: &mut impl Vault,
+        item: Option<&str>,
+        origin: &str,
+        options: &Value,
+        password: Option<&str>,
+    ) -> anyhow::Result<Value> {
+        super::register_with(vault, item, origin, options, password, None)
+    }
     use crate::browser::failure::{describe, Context as FailureContext};
 
     const ORIGIN: &str = "https://wolle.anika.blue";
@@ -847,6 +884,69 @@ mod tests {
         ));
         assert!(message.contains("already contains a passkey"), "{message}");
         assert_eq!(vault.saved.len(), 0);
+    }
+
+    #[test]
+    fn replacement_changes_only_the_selected_passkey() {
+        let old = uuid::Uuid::from_bytes([1; 16]);
+        let mut cipher = login(Some("wolle.anika.blue"));
+        let commands::EditableData::Login {
+            fido2_credentials, ..
+        } = &mut cipher.data
+        else {
+            unreachable!();
+        };
+        fido2_credentials[0].credential_id = Some(old.to_string());
+        fido2_credentials.push(commands::EditableFido2Credential {
+            credential_id: Some(uuid::Uuid::from_bytes([2; 16]).to_string()),
+            rp_id: Some("other.example".into()),
+            ..Default::default()
+        });
+        let other = serde_json::to_value(&fido2_credentials[1]).unwrap();
+
+        let mut vault = Fake {
+            existing: Some(
+                serde_json::from_value(
+                    serde_json::to_value(&cipher).unwrap(),
+                )
+                .map_err(Into::into),
+            ),
+            persisted: true,
+            ..Fake::default()
+        };
+        let stale = B64.encode([3; 16]);
+        let error = super::register_with(
+            &mut vault,
+            Some("item-1"),
+            ORIGIN,
+            &stricknani(),
+            Some("pw"),
+            Some(&stale),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref(),
+            Some(PasskeyError::ReplacementUnavailable)
+        ));
+        assert!(vault.saved.is_empty());
+
+        vault.existing = Some(Ok(cipher));
+        super::register_with(
+            &mut vault,
+            Some("item-1"),
+            ORIGIN,
+            &stricknani(),
+            Some("pw"),
+            Some(&B64.encode(old.as_bytes())),
+        )
+        .unwrap();
+        let credentials = vault.saved[0].1["data"]["fido2_credentials"]
+            .as_array()
+            .unwrap();
+        assert_eq!(credentials.len(), 2);
+        assert_eq!(credentials[0], other);
+        assert_eq!(credentials[1]["rp_id"], "wolle.anika.blue");
+        assert_ne!(credentials[1]["credential_id"], old.to_string());
     }
 
     #[test]

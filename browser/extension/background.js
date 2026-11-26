@@ -275,7 +275,7 @@ async function refreshVaultLockState(preferences = null) {
 // Toolbar feedback while the vault syncs: the crab gets a small badge with
 // rotating sync arrows in the top-right corner, standing in for the match
 // count until the sync ends. Writes sync afterwards, so they count as well.
-const SYNCING_ACTIONS = ["sync", "save", "mutate", "import", "set_collections", "upload_finish", "attachment_delete"];
+const SYNCING_ACTIONS = ["sync", "save", "save_with_passkey_removals", "mutate", "import", "set_collections", "upload_finish", "attachment_delete"];
 const { redEyeFrame, syncFrame, hopFrame, playHop, spinner } = globalThis.rbwToolbarIcon;
 const syncAnimation = { active: 0, timer: null, frame: 0, bitmaps: null };
 // Locked: the crab's eyes turn red (drawn in toolbar-icon.js).
@@ -1138,7 +1138,7 @@ async function handle(message) {
       const value = message.draft;
       if (!value || typeof value.cipher !== "object" || JSON.stringify(value.cipher).length > 1000000) { editDraft = null; return true; }
       editDraft = { account, draft: { item: typeof value.item === "string" ? value.item.slice(0, 128) : null, revision: typeof value.revision === "string" ? value.revision.slice(0, 128) : null,
-        cipher: value.cipher, noAutofill: value.noAutofill === true } };
+        cipher: value.cipher, removePasskeys: Array.isArray(value.removePasskeys) ? value.removePasskeys.filter(Number.isSafeInteger) : [], noAutofill: value.noAutofill === true } };
       return true;
     }
     case "preferences": return settings();
@@ -1215,7 +1215,12 @@ async function handle(message) {
     case "status_all": return native({ action: "status", account: null, accounts: [] });
     case "detail": return native({ action: "detail", account, item: message.item });
     case "move": return native({ action: "move", account, item: message.item, to: message.to });
-    case "save": return native({ action: "save", account, item: message.item || null, revision: message.revision || null, cipher: message.cipher });
+    case "save": {
+      const removals = message.remove_passkeys;
+      // Older hosts must reject a removal request instead of silently preserving the key.
+      return native({ action: removals?.length ? "save_with_passkey_removals" : "save",
+        account, item: message.item || null, revision: message.revision || null, cipher: message.cipher, remove_passkeys: removals });
+    }
     case "mutate": return native({ action: "mutate", account, item: message.item, mutation: message.mutation });
     case "copy": {
       const { mode, origin } = await remoteAgent.connection();
@@ -1231,7 +1236,13 @@ async function handle(message) {
       const p = pending.get(message.request); if (!p) throw new Error("This request has expired.");
       await checkDocument(p);
       if (p.method === "get") return native({ action: "passkey_candidates", account, origin: p.origin, options: p.options });
-      return native({ action: "search", account, query: "", url: p.url, site_only: true, kind: "login" });
+      const logins = await native({ action: "search", account, query: "", url: p.url, site_only: true, kind: "login" });
+      if (!logins.items.some(item => item.passkeys)) return logins;
+      const { items } = await native({
+        action: "passkey_candidates", account, origin: p.origin,
+        options: { challenge: p.options.challenge, rpId: p.options.rp?.id }
+      }).catch(() => ({ items: [] }));
+      return { ...logins, replacementChoices: items };
     }
     case "passkey_approve": {
       const p = pending.get(message.request); if (!p) throw new Error("This request has expired.");
@@ -1244,7 +1255,7 @@ async function handle(message) {
         // confirms the new counter after answering (see `passkeySyncFailure`).
         result = await native({ action: "passkey_get", account, item: message.item || null, password: typeof message.password === "string" ? message.password : null, origin: p.origin, options: p.options });
       } else {
-        result = await native({ action: "passkey_create", account, item: message.item || null, password: typeof message.password === "string" ? message.password : null, origin: p.origin, options: p.options });
+        result = await native({ action: "passkey_create", account, item: message.item || null, replace_credential: message.replaceCredential, password: typeof message.password === "string" ? message.password : null, origin: p.origin, options: p.options });
       }
       await checkDocument(p);
       if (!pending.has(p.id)) throw new Error("The request was cancelled.");

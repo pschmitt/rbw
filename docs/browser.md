@@ -374,7 +374,9 @@ Security hardening following an internal review:
   or use the configured rbw credential source / pinentry; shared lock and sync.
 - Login, card, identity, secure note and SSH key browsing, details, creation,
   editing, password history, custom fields, favorites, archive and restore.
-  Item edits use revision guards and preserve existing passkeys natively.
+  Item edits use revision guards and preserve passkeys unless you mark them
+  for removal. During registration, you can confirm replacing an existing
+  passkey for the same site. The extension displays passkey metadata only.
 - Explicit login/card/identity autofill; username-only flows, same-origin
   frames and open shadow roots; keyboard commands and a context menu.
   The fill shortcut fills the first match and cycles through matches when

@@ -90,6 +90,7 @@ enum Operation {
         counter: u32,
     },
     PasskeyCreate {
+        replace_credential: Option<String>,
         password: Option<String>,
         item: Option<String>,
         origin: String,
@@ -101,10 +102,13 @@ enum Operation {
         #[serde(default)]
         trashed: bool,
     },
+    #[serde(alias = "save_with_passkey_removals")]
     Save {
         item: Option<String>,
         revision: Option<String>,
         cipher: commands::EditableCipher,
+        #[serde(default)]
+        remove_passkeys: Vec<usize>,
     },
     Mutate {
         item: String,
@@ -1526,12 +1530,14 @@ fn dispatch(
                     &item, &origin, &options, counter,
                 ),
                 Operation::PasskeyCreate {
+                    replace_credential,
                     password,
                     item,
                     origin,
                     options,
                 } => passkeys::register(
                     item.as_deref(),
+                    replace_credential.as_deref(),
                     &origin,
                     &options,
                     password.as_deref(),
@@ -1645,9 +1651,19 @@ fn dispatch(
                     item,
                     revision,
                     mut cipher,
+                    remove_passkeys,
                 } => {
                     ensure!(!cipher.name.trim().is_empty(), "name required");
                     let mut db = db;
+                    ensure!(
+                        remove_passkeys.is_empty()
+                            || (item.is_some()
+                                && matches!(
+                                    &cipher.data,
+                                    commands::EditableData::Login { .. }
+                                )),
+                        "passkeys can only be removed from an existing login"
+                    );
                     if let Some(item) = item {
                         let mut entry = entry(&db, &item)?.clone();
                         if cipher.folder.is_none() {
@@ -1676,7 +1692,28 @@ fn dispatch(
                                 ..
                             } = previous.data
                             {
-                                *fido2_credentials = stored;
+                                ensure!(
+                                    remove_passkeys
+                                        .iter()
+                                        .all(|&index| index < stored.len()),
+                                    "passkey changed; reload before saving"
+                                );
+                                if !remove_passkeys.is_empty() {
+                                    rbw::audit::note_field("passkey");
+                                }
+                                *fido2_credentials = stored
+                                    .into_iter()
+                                    .enumerate()
+                                    .filter_map(|(index, credential)| {
+                                        (!remove_passkeys.contains(&index))
+                                            .then_some(credential)
+                                    })
+                                    .collect();
+                            } else {
+                                ensure!(
+                                    remove_passkeys.is_empty(),
+                                    "item is not a login"
+                                );
                             }
                         } else if matches!(previous.data, commands::EditableData::Login { ref fido2_credentials, .. } if !fido2_credentials.is_empty())
                         {
@@ -2209,8 +2246,8 @@ fn detail(entry: &rbw::db::Entry) -> anyhow::Result<Value> {
         fido2_credentials, ..
     } = &mut editable.data
     {
-        for c in fido2_credentials.iter() {
-            passkeys.push(json!({"rp": c.rp_id, "user": c.user_name, "created": c.creation_date}));
+        for (index, c) in fido2_credentials.iter().enumerate() {
+            passkeys.push(json!({"index": index, "credential_id": c.credential_id, "rp": c.rp_id, "user": c.user_name, "created": c.creation_date}));
         }
         fido2_credentials.clear();
     }

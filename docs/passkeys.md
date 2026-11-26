@@ -4,12 +4,15 @@ Passkeys (WebAuthn/FIDO2 credentials) synced onto a login item are fully
 supported: `rbw sync`/decrypt, `rbw show`/the TUI detail pane (a `Passkey`
 row showing the relying party and account, never the raw key material),
 `rbw export`/`rbw import`, and `rbw mirror` all carry them through
-end-to-end, the same way a password or TOTP secret does. `rbw edit`/`rbw
-set` never expose the raw credential fields for editing (there's nothing
-meaningful to hand-edit in opaque key material) but always preserve
-whatever passkeys an entry already has -- important given the destination
-server stores an item's `login` object as one unit, so a request that
-omitted this field entirely would otherwise silently delete the passkey.
+end-to-end, the same way a password or TOTP secret does. Ordinary password
+edits and `rbw set` preserve existing passkeys. To remove an individual
+passkey from the CLI, run `rbw edit --yaml ENTRY` and delete its record from
+`data.fido2_credentials`. The structured editor contains private key material.
+To clear every passkey on the item without opening an editor, run:
+
+```sh
+printf '%s\n' '{"data":{"fido2_credentials":[]}}' | rbw edit --patch ENTRY
+```
 
 `rbw passkey counter ENTRY --rp-id example.com` reads a credential's counter;
 add `--set N` to advance it without exposing or changing key material.

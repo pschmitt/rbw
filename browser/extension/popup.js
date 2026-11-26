@@ -1138,7 +1138,8 @@ async function attachmentOperation(item, operation) {
     if (currentPage !== "editor" || currentItem !== item) return;
     // Accept our attachment-only revision change, but preserve the guard if
     // another client also changed the editable fields while the editor was open.
-    if (JSON.stringify(fresh.cipher) === JSON.stringify(currentDetail.cipher)) {
+    if (JSON.stringify(fresh.cipher) === JSON.stringify(currentDetail.cipher)
+      && JSON.stringify(fresh.passkeys) === JSON.stringify(currentDetail.passkeys)) {
       if (editRevision === currentDetail.revision) editRevision = fresh.revision;
       currentDetail = fresh;
     }
@@ -1381,7 +1382,8 @@ function editItem(fresh = false, draft = null, defaults = null) {
   $("edit-no-autofill").checked = !!currentItem && (draft ? draft.noAutofill : Array.isArray(preference.autofillExcludedItems) && preference.autofillExcludedItems.includes(currentItem));
   $("edit-no-autofill").disabled = !currentItem;
   $("edit-no-autofill-hint").textContent = currentItem ? "Inline suggestions, on-load autofill and the fill shortcut skip this item." : "Save the item first to exclude it from autofill.";
-  $("edit-passkeys").textContent = currentDetail?.passkeys.length ? "Existing passkeys are preserved by rbw. Their private keys never enter this editor." : "";
+  removedPasskeys = new Set(draft?.removePasskeys || []);
+  renderEditPasskeys();
   renderAttachments(currentDetail, currentItem);
   renderEditCollections(currentDetail);
   renderEditFields(cipher.data); show("editor"); $("edit-name").focus();
@@ -1393,6 +1395,33 @@ function editItem(fresh = false, draft = null, defaults = null) {
 // One unsaved edit survives closing the popup. The background page keeps it
 // in memory until it is saved, cancelled or restarted, or the vault locks.
 let editBase = null, editRevision = null, draftTimer;
+let removedPasskeys = new Set();
+function renderEditPasskeys() {
+  const content = $("edit-passkeys");
+  content.replaceChildren();
+  const passkeys = currentDetail?.passkeys || [];
+  if (!passkeys.length) return;
+  content.append(element("h3", "Passkeys"));
+  for (const passkey of passkeys) {
+    const row = element("div", null, "field"), actions = element("div", null, "actions");
+    const removed = removedPasskeys.has(passkey.index);
+    row.append(element("p", [passkey.rp, passkey.user].filter(Boolean).join(" · ")));
+    row.append(element("p", removed ? "Will be removed when you save." : `Created ${passkey.created || "unknown"}`, "hint"));
+    if (Number.isInteger(passkey.index)) {
+      actions.append(actionButton(removed ? "Undo removal" : "Remove passkey", removed ? "close" : "trash", async () => {
+        if (removed) removedPasskeys.delete(passkey.index);
+        else {
+          if (!await confirmDialog({ title: "Remove this passkey?", text: "Saving will remove it from your vault. The website may still list it in your account settings.", confirm: "Mark for removal", danger: true })) return;
+          removedPasskeys.add(passkey.index);
+        }
+        renderEditPasskeys();
+        rememberEditDraft();
+      }, removed ? "" : "danger"));
+    }
+    row.append(actions);
+    content.append(row);
+  }
+}
 function editorCipher() {
   const type = $("edit-type").value; const data = { type };
   for (const name of schema[type]) data[name] = $(`field-${name}`).value || null;
@@ -1404,7 +1433,7 @@ function editorCipher() {
   }));
   return { name: $("edit-name").value, folder: editFolder(), notes: $("edit-notes").value || null, data, fields };
 }
-function editorDraft() { return { account: $("edit-account-row").hidden ? null : $("edit-account").value, item: currentItem, revision: editRevision, cipher: editorCipher(), noAutofill: $("edit-no-autofill").checked }; }
+function editorDraft() { return { account: $("edit-account-row").hidden ? null : $("edit-account").value, item: currentItem, revision: editRevision, cipher: editorCipher(), removePasskeys: [...removedPasskeys], noAutofill: $("edit-no-autofill").checked }; }
 function rememberEditDraft() {
   clearTimeout(draftTimer);
   if (currentPage !== "editor" || editSaving || editBase === null) return;
@@ -1458,7 +1487,7 @@ $("edit-form").onsubmit = event => { event.preventDefault(); if (editSaving) ret
   try {
     const cipher = editorCipher(), type = cipher.data.type;
     const collections = currentItem ? editedCollections() : null, before = currentDetail?.collection_ids || [];
-    await request("save", { item: currentItem, revision: editRevision, cipher, ...(!currentItem && !$("edit-account-row").hidden ? { account: $("edit-account").value } : {}) });
+    await request("save", { item: currentItem, revision: editRevision, cipher, remove_passkeys: [...removedPasskeys], ...(!currentItem && !$("edit-account-row").hidden ? { account: $("edit-account").value } : {}) });
     if (collections && (collections.length !== before.length || collections.some(id => !before.includes(id)))) await request("set_collections", { item: currentItem, collections });
     if (currentItem && ["login", "card", "identity"].includes(type)) {
       const excluded = new Set(Array.isArray(preference.autofillExcludedItems) ? preference.autofillExcludedItems : []);
@@ -1524,11 +1553,11 @@ async function showApproval(id) {
     $("approval-items").classList.remove("is-verifying"); $("approval-verification").hidden = true;
     setApprovalBusy(false, intro);
   };
-  const complete = async (row, item, password = null) => {
+  const complete = async (row, item, replacement, password = null) => {
     $("approval-verification").hidden = true; $("approval-items").classList.remove("is-verifying");
     row.classList.add("is-selected"); state(row, element("span", null, "spinner"));
     setApprovalBusy(true, create ? "Saving the passkey to your vault…" : `Signing in${row.dataset.username ? ` as ${row.dataset.username}` : ""}…`);
-    try { await request("passkey_approve", { request: id, item, password }); }
+    try { await request("passkey_approve", { request: id, item, password, replaceCredential: replacement?.credential_id }); }
     catch (err) { reset(row); throw err; }
     row.classList.add("is-done"); state(row, icon("check"));
     $("approval-description").textContent = create ? "Passkey saved." : "Signed in."; $("approval-description").classList.add("is-done");
@@ -1536,8 +1565,13 @@ async function showApproval(id) {
     await new Promise(resolve => setTimeout(resolve, 600));
     await finishApproval("Passkey request completed.");
   };
-  const approve = async (item, row) => {
-    if (pending.verification !== "required" || passkeyAssumeVerified) return complete(row, item);
+  const approve = async (item, row, replacement) => {
+    if (replacement && !await confirmDialog({
+      title: "Replace this passkey?",
+      text: `Saving a new passkey for ${pending.rp || host} will remove the existing passkey${replacement.username ? ` for ${replacement.username}` : ""} from your vault.`,
+      confirm: "Replace passkey", danger: true
+    })) return;
+    if (pending.verification !== "required" || passkeyAssumeVerified) return complete(row, item, replacement);
     // Required WebAuthn verification comes after choosing the account: an
     // unlocked agent alone is never reported as user verification unless
     // the user opted in (`passkeyAssumeVerified`).
@@ -1548,17 +1582,18 @@ async function showApproval(id) {
     $("approval-verify-back").onclick = () => { $("approval-password").value = ""; reset(row); };
     $("approval-verification").onsubmit = event => {
       event.preventDefault(); const password = $("approval-password").value; $("approval-password").value = "";
-      attempt(() => complete(row, item, password));
+      attempt(() => complete(row, item, replacement, password));
     };
   };
   $("approval-reveal").onclick = () => { const input = $("approval-password"); const reveal = input.type === "password"; input.type = reveal ? "text" : "password"; $("approval-reveal").replaceChildren(icon(reveal ? "eye-off" : "eye")); $("approval-reveal").title = reveal ? "Hide" : "Show"; $("approval-reveal").setAttribute("aria-label", $("approval-reveal").title); };
-  const choice = (name, username, item, isNew = false, iconOrigin = null) => {
+  const choice = (name, username, item, isNew = false, iconOrigin = null, replacement = null) => {
     let row;
-    row = button("", () => approve(item, row), "passkey-choice");
+    row = button("", () => approve(item, row, replacement), "passkey-choice");
     row.dataset.name = name;
     row.dataset.username = username || "";
     const emblem = element("span", null, "passkey-choice-icon"); emblem.append(icon(isNew ? "plus" : "key"));
     const text = element("span", null, "passkey-choice-text"); text.append(element("strong", name)); if (username) text.append(element("small", username));
+    if (replacement) text.append(element("small", "Replace existing passkey"));
     const trailing = element("span", null, "passkey-choice-state"); trailing.append(icon("chevron-left"));
     row.append(emblem, text, trailing);
     if (iconOrigin) request("favicon", { origin: iconOrigin }).then(favicon => {
@@ -1569,7 +1604,14 @@ async function showApproval(id) {
     return row;
   };
   if (create) $("approval-items").append(choice("Create a new login", pending.user || "Save in your vault", null, true, pending.origin));
-  for (const item of result.items) $("approval-items").append(choice(item.name, item.username || (create ? "Add to this login" : ""), item.id, false, item.iconOrigin));
+  for (const item of result.items) {
+    const replacements = result.replacementChoices?.filter(candidate => candidate.id === item.id && candidate.account === item.account) || [];
+    if (replacements.length) {
+      for (const candidate of replacements) {
+        $("approval-items").append(choice(item.name, candidate.username || item.username, item.id, false, item.iconOrigin, candidate));
+      }
+    } else $("approval-items").append(choice(item.name, item.username || (create ? "Add to this login" : ""), item.id, false, item.iconOrigin));
+  }
   if (!create && !result.items.length) {
     $("approval-description").textContent = "";
     const empty = element("div", null, "passkey-empty"); empty.append(icon("key"), element("strong", `No passkey for ${host}`), element("p", "Try another vault account or use a different authenticator.", "hint")); $("approval-items").append(empty);
