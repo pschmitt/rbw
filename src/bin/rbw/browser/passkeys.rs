@@ -928,7 +928,7 @@ mod tests {
             error.downcast_ref(),
             Some(PasskeyError::ReplacementUnavailable)
         ));
-        assert!(vault.saved.is_empty());
+        assert_eq!(vault.saved.len(), 0);
 
         vault.existing = Some(Ok(cipher));
         super::register_with(
