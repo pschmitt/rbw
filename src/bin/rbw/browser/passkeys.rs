@@ -18,8 +18,6 @@ pub enum PasskeyError {
     RpMismatch(String),
     #[error("This site asked for a passkey for a public suffix, which is not a valid relying party.")]
     PublicSuffix,
-    #[error("This site uses the legacy WebAuthn AppID extension, which rbw does not support.")]
-    LegacyAppId,
     #[error("This site enforces a credential protection policy that rbw does not support.")]
     CredentialProtection,
     #[error("Passkeys cannot be saved for an IP address.")]
@@ -84,11 +82,8 @@ pub fn relying_party(
         rp == "localhost" || psl::domain_str(rp).is_some(),
         PasskeyError::PublicSuffix
     );
-    ensure!(
-        options["extensions"].get("appid").is_none()
-            && options["extensions"].get("appidExclude").is_none(),
-        PasskeyError::LegacyAppId
-    );
+    // AppID and AppID exclusion are optional legacy U2F extensions. Our
+    // credentials are scoped to the RP ID, so neither extension applies.
     ensure!(
         options["extensions"]["enforceCredentialProtectionPolicy"] != true,
         PasskeyError::CredentialProtection
@@ -765,6 +760,40 @@ mod tests {
             FailureContext::default(),
         );
         (failure.message, failure.detail)
+    }
+
+    #[test]
+    fn legacy_appid_does_not_override_the_rp_id() {
+        let mut options = json!({
+            "challenge": B64.encode([9u8; 32]),
+            "rpId": "wolle.anika.blue",
+            "extensions": {"appid": "https://legacy.example.com/facets"}
+        });
+        assert_eq!(
+            relying_party(ORIGIN, &options, false).unwrap(),
+            "wolle.anika.blue"
+        );
+
+        options["rpId"] = json!("legacy.example.com");
+        let error = relying_party(ORIGIN, &options, false).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref(),
+            Some(PasskeyError::RpMismatch(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_appid_exclusion_allows_modern_registration() {
+        let mut options = stricknani();
+        options["extensions"]["appidExclude"] =
+            json!("https://legacy.example.com/facets");
+        let mut vault = Fake {
+            persisted: true,
+            ..Fake::default()
+        };
+        register_with(&mut vault, None, ORIGIN, &options, Some("pw"))
+            .unwrap();
+        assert_eq!(vault.saved.len(), 1);
     }
 
     #[test]

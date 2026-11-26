@@ -86,6 +86,8 @@ largeBlob, enterprise attestation, cross-origin frame WebAuthn, browser-native
 conditional account-picker integration and other algorithms are not implemented.
 Conditional requests can be approved through the rbw toolbar popup. Sites that
 require unimplemented capabilities can use the other-authenticator fallback.
+Requests that include the optional legacy AppID extensions can still use
+modern passkeys scoped to the relying party ID.
 
 A site that requires user verification (`userVerification: "required"`) gets
 it after you pick the account and enter the master password; other sites sign
