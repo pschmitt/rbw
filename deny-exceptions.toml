@@ -8,10 +8,3 @@ crate = "humantime"
 version = "2.4.0"
 expires = 2026-12-17
 allow = ["rbw 2.48.3"]
-
-[[exceptions]]
-id = "RUSTSEC-2026-0543"
-crate = "chrono"
-version = "0.4.45"
-expires = 2026-12-17
-allow = ["rmcp 3.11.0", "schemars 1.2.3"]

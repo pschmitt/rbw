@@ -14,9 +14,6 @@ ignore = [
     # and direct-depender scope from deny-exceptions.toml using
     # python3 tools/check_advisory_exceptions.py (cargo-deny cannot do this).
     { id = "RUSTSEC-2026-0542", reason = "humantime is used for duration parsing/formatting and RFC 3339 timestamps; migrating to jiff requires compatibility tests for its different duration grammar. No known vulnerability is reported." },
-    # rmcp unconditionally uses chrono and enables schemars/chrono04.
-    # Remove when https://github.com/modelcontextprotocol/rust-sdk/issues/1469 lands.
-    { id = "RUSTSEC-2026-0543", reason = "rmcp and its schemars chrono04 support require chrono; no released opt-out or patched version exists. Used for MCP timestamps/schema support; this is not a vulnerability advisory." },
     # secret-service 5.2 still requires zbus 5. These standalone crates
     # were merged into zbus 6; the notices report maintenance status, not
     # known vulnerabilities. Remove when secret-service adopts zbus 6.
