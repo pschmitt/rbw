@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [2.48.3] - 2026-11-26
+
+### Added
+
+* Remove individual passkeys when editing a browser login, and confirm
+  replacing an existing passkey during registration.
+
+### Fixed
+
+* Accept modern passkeys on sites that include the optional legacy WebAuthn
+  AppID extensions, including GitLab.
+
+### Changed
+
+* Refresh Rust, Nix, and browser lint dependency lockfiles.
+
 ## [2.48.2] - 2026-11-23
 
 ### Added
