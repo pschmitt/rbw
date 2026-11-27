@@ -7,4 +7,4 @@ id = "RUSTSEC-2026-0542"
 crate = "humantime"
 version = "2.4.0"
 expires = 2026-12-17
-allow = ["rbw 2.48.3"]
+allow = ["rbw 2.48.4"]

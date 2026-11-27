@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [2.48.4] - 2026-11-27
+
+### Changed
+
+* Generating a password from the browser context menu also fills the
+  "repeat password" field that follows it and copies the password to the
+  clipboard.
+* Update the rmcp and psl Rust crates.
+
 ## [2.48.3] - 2026-11-26
 
 ### Added
