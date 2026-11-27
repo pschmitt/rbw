@@ -7,7 +7,40 @@ const source = readFileSync(new URL("../extension/fill-targets.js", import.meta.
 class HTMLInputElement {}
 const context = vm.createContext({document: {getElementById: () => null}, Node: {DOCUMENT_POSITION_FOLLOWING: 4}, HTMLInputElement});
 vm.runInContext(source, context);
-const {isOtpField, loginTargets, confirmationField} = context.rbwFillTargets;
+const {isOtpField, loginTargets, confirmationField, passwordLengthBounds} = context.rbwFillTargets;
+
+function passwordField({minLength = -1, maxLength = -1, rules, hint, nearby} = {}) {
+  const description = textContent => ({textContent, querySelector: () => null});
+  return {
+    minLength, maxLength,
+    getAttribute: name => ({"aria-describedby": hint && "hint", passwordrules: rules})[name],
+    getRootNode: () => ({getElementById: () => description(hint)}),
+    parentElement: nearby && {nextElementSibling: description(nearby)},
+  };
+}
+
+test("length bounds recognize the nearby 8–16 character hint", () => {
+  const {min, max} = passwordLengthBounds(passwordField({nearby: "Contains 8 - 16 characters"}));
+  assert.equal(min, 8);
+  assert.equal(max, 16);
+});
+
+test("length bounds combine field attributes, passwordrules and descriptions across both fields", () => {
+  const {min, max} = passwordLengthBounds(
+    passwordField({minLength: 9, maxLength: 24, rules: "minlength: 10; maxlength: 20; required: upper;"}),
+    passwordField({maxLength: 18, hint: "Maximum 16 characters"}),
+  );
+  assert.equal(min, 10);
+  assert.equal(max, 16);
+});
+
+test("length bounds ignore unrelated text and malformed ranges", () => {
+  const {min, max} = passwordLengthBounds(passwordField({
+    hint: "Use 2 special characters and 3 digits.", nearby: "Contains 16 - 8 characters",
+  }));
+  assert.equal(min, 1);
+  assert.equal(max, null);
+});
 
 // Just enough of an input for the heuristics: attributes, a form, document order.
 let order = 0;

@@ -1374,9 +1374,23 @@ async function generateIntoField(tab, url, target) {
     if ([tab.url, url].some(page => isAutofillBlocked(page, prefs.autofillBlocklist))) {
       throw new Error("Autofill is blocked for this site in rbw settings.");
     }
-    const password = await generateDefaultPassword();
-    const filled = await api.tabs.sendMessage(tab.id, { action: "rbw_generated_password", url, password }, target);
-    if (!filled) throw new Error("Right-click an editable password field and try again.");
+    const request = crypto.randomUUID();
+    const limits = await api.tabs.sendMessage(tab.id, { action: "rbw_password_limits", url, request }, target);
+    if (!limits) throw new Error("Right-click an editable password field and try again.");
+    const { min, max } = limits;
+    if (max !== null && min > max) throw new Error("The password fields have conflicting length limits.");
+    const fits = password => password.length >= min && (max === null || password.length <= max);
+    let password = await generateDefaultPassword();
+    if (!fits(password)) {
+      const length = Math.max(min, Math.min(password.length, max ?? 128, 128));
+      if (length > 128) throw new Error("The site requires a password longer than rbw can generate.");
+      password = await generateDefaultPassword(length);
+      // A configured passphrase length counts words. Use characters if it cannot fit.
+      if (!fits(password)) password = await generateDefaultPassword(length, "all");
+    }
+    if (!fits(password)) throw new Error("Could not generate a password within the site's length limits.");
+    const filled = await api.tabs.sendMessage(tab.id, { action: "rbw_generated_password", url, request, password }, target);
+    if (!filled) throw new Error("The password field changed. Right-click it and try again.");
     // Keep a copy on the clipboard (the agent's, so its clearing timeout
     // applies) for the sites that want it typed again somewhere else.
     await native({ action: "copy_text", account: null, text: password }).catch(() => {});
@@ -1426,8 +1440,8 @@ async function fillShortcut(tabId) {
     }
   }
 }
-function generateDefaultPassword() {
-  return native({ action: "generate", account: null, length: null, passphrase: false, mode: null });
+function generateDefaultPassword(length = null, mode = null) {
+  return native({ action: "generate", account: null, length, passphrase: false, mode });
 }
 // Generates a password with rbw's defaults, puts it on the clipboard (the
 // agent's, so its clearing timeout applies) and says so on the page. The

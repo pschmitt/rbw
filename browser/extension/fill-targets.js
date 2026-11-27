@@ -60,5 +60,33 @@
     const repeats = /confirm|repeat|retype|re[\s_-]*enter|again|verif|wiederhol|bestätig|bestaetig|erneut|confirmar|répéte|ripet|conferm|(pass(word)?|pwd)[\s_-]*2($|[^0-9])/i.test(text);
     return tokens(next).includes("new-password") || repeats || (input.form && passwords.length === 2) ? next : null;
   }
-  Object.defineProperty(globalThis, "rbwFillTargets", { configurable: true, value: { isOtpField, loginTargets, confirmationField } });
+  function passwordLengthBounds(...fields) {
+    let min = 1, max = Infinity;
+    const add = (lower, upper) => {
+      if (Number.isSafeInteger(lower) && lower >= 0) min = Math.max(min, lower);
+      if (Number.isSafeInteger(upper) && upper >= 0) max = Math.min(max, upper);
+    };
+    for (const field of fields) {
+      add(field.minLength, field.maxLength);
+      for (const rule of (field.getAttribute("passwordrules") || "").split(";")) {
+        const match = /^\s*(minlength|maxlength)\s*:\s*(\d+)\s*$/i.exec(rule);
+        if (match?.[1].toLowerCase() === "minlength") add(Number(match[2]));
+        if (match?.[1].toLowerCase() === "maxlength") add(undefined, Number(match[2]));
+      }
+      const root = field.getRootNode();
+      const descriptions = (field.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean)
+        .map(id => root.getElementById?.(id));
+      descriptions.push(field.nextElementSibling, field.parentElement?.nextElementSibling);
+      for (const description of descriptions) {
+        if (!description || description.querySelector("input, select, textarea")) continue;
+        const text = description.textContent.trim();
+        const range = /^(?:password\s+)?(?:(?:must\s+)?(?:contain|contains|be)\s+)?(?:between\s+)?(\d+)\s*(?:[-–—]|to|and)\s*(\d+)\s+characters?\s*(?:long)?\.?$/i.exec(text);
+        const limit = /^(?:password\s+)?(?:max(?:imum)?(?:\s+length)?\s*:?\s*|(?:must\s+)?(?:contain|be)\s+(?:at\s+most|up\s+to)\s+)(\d+)\s+characters?\.?$/i.exec(text);
+        if (range && Number(range[1]) <= Number(range[2])) add(Number(range[1]), Number(range[2]));
+        if (limit) add(undefined, Number(limit[1]));
+      }
+    }
+    return { min, max: Number.isFinite(max) ? max : null };
+  }
+  Object.defineProperty(globalThis, "rbwFillTargets", { configurable: true, value: { isOtpField, loginTargets, confirmationField, passwordLengthBounds } });
 })();

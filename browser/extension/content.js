@@ -141,6 +141,10 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
   const autofillGate = globalThis.__rbwAutofillGate || (globalThis.__rbwAutofillGate = { waiting: document.readyState === "loading", pending: false, completed: false });
   let ui = null, generation = 0, filled = false, dismissed = false, refocusing = false, movedPosition = null, contextMenuTarget = null, lastInteraction = { el: null, at: -Infinity };
   const fills = new Set();
+  let passwordRequest = null;
+  const usablePasswordField = input => input instanceof HTMLInputElement && input.type === "password" &&
+    input.isConnected && !input.matches(":disabled, [readonly]") && input.getClientRects().length;
+  const passwordFields = input => [input, globalThis.rbwFillTargets.confirmationField(input)].filter(Boolean);
   api.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== api.runtime.id) return;
     if (message?.action === "open_inline_suggestions") {
@@ -150,20 +154,28 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
       showInlineSuggestions(input, true);
       return;
     }
-    if (message?.action === "rbw_generated_password") {
+    if (message?.action === "rbw_password_limits") {
       const input = contextMenuTarget;
       contextMenuTarget = null;
+      passwordRequest = null;
+      if (location.href !== message.url || !usablePasswordField(input)) { respond(null); return; }
+      passwordRequest = { input, id: message.request };
+      respond(globalThis.rbwFillTargets.passwordLengthBounds(...passwordFields(input)));
+      return;
+    }
+    if (message?.action === "rbw_generated_password") {
+      if (!passwordRequest || passwordRequest.id !== message.request) { respond(false); return; }
+      const { input } = passwordRequest;
+      passwordRequest = null;
       const password = message.password;
-      if (location.href !== message.url || !(input instanceof HTMLInputElement) || input.type !== "password" ||
-          !input.isConnected || input.matches(":disabled, [readonly]") || !input.getClientRects().length ||
-          typeof password !== "string" || !password || (input.maxLength >= 0 && password.length > input.maxLength)) {
+      if (location.href !== message.url || !usablePasswordField(input) || typeof password !== "string") {
         respond(false);
         return;
       }
+      const targets = passwordFields(input);
+      const { min, max } = globalThis.rbwFillTargets.passwordLengthBounds(...targets);
+      if (password.length < min || (max !== null && password.length > max)) { respond(false); return; }
       close();
-      // Also fill the "repeat password" field that follows, if there is one.
-      const repeat = globalThis.rbwFillTargets?.confirmationField(input);
-      const targets = repeat && !(repeat.maxLength >= 0 && password.length > repeat.maxLength) ? [input, repeat] : [input];
       for (const el of targets) {
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, password);
         el.dispatchEvent(new Event("input", { bubbles: true }));
@@ -254,6 +266,7 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
   const moveTo = (x, y) => { movedPosition = { x, y }; movedPosition = place(); };
   document.addEventListener("contextmenu", event => {
     if (!event.isTrusted) return;
+    passwordRequest = null;
     const target = event.composedPath()[0];
     contextMenuTarget = target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable) ? target : null;
   }, true);
