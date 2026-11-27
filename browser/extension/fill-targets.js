@@ -49,7 +49,7 @@
      the form holds just these two password fields. Null when there is none. */
   function confirmationField(input) {
     const usable = el => el instanceof HTMLInputElement && el.type === "password" && el.isConnected && !el.matches(":disabled, [readonly]") && el.getClientRects().length;
-    const scope = input.form ? Array.from(input.form.elements) : Array.from(document.querySelectorAll("input"));
+    const scope = input.form ? Array.from(input.form.elements) : Array.from(input.getRootNode().querySelectorAll("input"));
     const passwords = scope.filter(usable);
     const index = passwords.indexOf(input);
     const next = index < 0 ? null : passwords[index + 1];
@@ -82,8 +82,10 @@
         const text = description.textContent.trim();
         const range = /^(?:password\s+)?(?:(?:must\s+)?(?:contain|contains|be)\s+)?(?:between\s+)?(\d+)\s*(?:[-–—]|to|and)\s*(\d+)\s+characters?\s*(?:long)?\.?$/i.exec(text);
         const limit = /^(?:password\s+)?(?:max(?:imum)?(?:\s+length)?\s*:?\s*|(?:must\s+)?(?:contain|be)\s+(?:at\s+most|up\s+to)\s+)(\d+)\s+characters?\.?$/i.exec(text);
+        const minimum = /^(?:password\s+)?(?:(?:must\s+)?(?:contain|be)\s+)?(?:at\s+least|min(?:imum)?(?:\s+length)?\s*:?)\s*(\d+)\s+characters?\.?$/i.exec(text);
         if (range && Number(range[1]) <= Number(range[2])) add(Number(range[1]), Number(range[2]));
         if (limit) add(undefined, Number(limit[1]));
+        if (minimum) add(Number(minimum[1]));
       }
     }
     return { min, max: Number.isFinite(max) ? max : null };

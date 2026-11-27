@@ -42,6 +42,12 @@ test("length bounds ignore unrelated text and malformed ranges", () => {
   assert.equal(max, null);
 });
 
+test("length bounds recognize a minimum from the field's linked hint", () => {
+  const {min, max} = passwordLengthBounds(passwordField({hint: "At least 10 characters."}));
+  assert.equal(min, 10);
+  assert.equal(max, null);
+});
+
 // Just enough of an input for the heuristics: attributes, a form, document order.
 let order = 0;
 function input(attrs = {}, form = null) {
@@ -129,6 +135,13 @@ function formOf(...build) {
 test("a generated password also goes into the repeat field after it", () => {
   const f = formOf(form => passwordInput({name: "password"}, form), form => passwordInput({placeholder: "Passwort bestätigen"}, form));
   assert.equal(confirmationField(f.elements[0]), f.elements[1]);
+});
+
+test("paired new-password fields work without a form element", () => {
+  const first = passwordInput({autocomplete: "new-password"});
+  const repeat = passwordInput({autocomplete: "new-password"});
+  first.getRootNode = () => ({querySelectorAll: () => [first, repeat]});
+  assert.equal(confirmationField(first), repeat);
 });
 
 test("a form of just two password fields pairs them without hints", () => {

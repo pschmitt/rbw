@@ -176,10 +176,19 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
       const { min, max } = globalThis.rbwFillTargets.passwordLengthBounds(...targets);
       if (password.length < min || (max !== null && password.length > max)) { respond(false); return; }
       close();
-      for (const el of targets) {
+      const fillPassword = el => {
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, password);
         el.dispatchEvent(new Event("input", { bubbles: true }));
         el.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      fillPassword(input);
+      if (targets.length > 1 && usablePasswordField(input)) {
+        // The first input event can replace the confirmation field in a controlled form.
+        const repeat = globalThis.rbwFillTargets.confirmationField(input);
+        if (repeat) {
+          const { min, max } = globalThis.rbwFillTargets.passwordLengthBounds(repeat);
+          if (password.length >= min && (max === null || password.length <= max)) fillPassword(repeat);
+        }
       }
       respond(true);
       return;
