@@ -4,9 +4,10 @@ import {test} from "node:test";
 import vm from "node:vm";
 
 const source = readFileSync(new URL("../extension/fill-targets.js", import.meta.url), "utf8");
-const context = vm.createContext({document: {getElementById: () => null}, Node: {DOCUMENT_POSITION_FOLLOWING: 4}});
+class HTMLInputElement {}
+const context = vm.createContext({document: {getElementById: () => null}, Node: {DOCUMENT_POSITION_FOLLOWING: 4}, HTMLInputElement});
 vm.runInContext(source, context);
-const {isOtpField, loginTargets} = context.rbwFillTargets;
+const {isOtpField, loginTargets, confirmationField} = context.rbwFillTargets;
 
 // Just enough of an input for the heuristics: attributes, a form, document order.
 let order = 0;
@@ -79,4 +80,36 @@ test("a change-password form fills only the current password", () => {
   const found = loginTargets([current, input({type: "password", autocomplete: "new-password"}, form), input({type: "password", autocomplete: "new-password"}, form)]);
   assert.equal(found.password, current);
   assert.equal(found.newPasswords.length, 0);
+});
+
+// A visible, editable password input as confirmationField sees it.
+function passwordInput(attrs = {}, form = null) {
+  return Object.assign(Object.create(HTMLInputElement.prototype), input({type: "password", ...attrs}, form),
+    {value: attrs.value ?? "", isConnected: true, matches: () => false, getClientRects: () => [{}]});
+}
+function formOf(...build) {
+  const f = {elements: []};
+  f.elements = build.map(make => make(f));
+  return f;
+}
+
+test("a generated password also goes into the repeat field after it", () => {
+  const f = formOf(form => passwordInput({name: "password"}, form), form => passwordInput({placeholder: "Passwort bestätigen"}, form));
+  assert.equal(confirmationField(f.elements[0]), f.elements[1]);
+});
+
+test("a form of just two password fields pairs them without hints", () => {
+  const f = formOf(form => passwordInput({name: "a"}, form), form => passwordInput({name: "b"}, form));
+  assert.equal(confirmationField(f.elements[0]), f.elements[1]);
+});
+
+test("a filled, a current or an unrelated next password field is left alone", () => {
+  const filled = formOf(form => passwordInput({}, form), form => passwordInput({name: "confirm", value: "x"}, form));
+  assert.equal(confirmationField(filled.elements[0]), null);
+  const current = formOf(form => passwordInput({autocomplete: "current-password"}, form), form => passwordInput({name: "confirm"}, form));
+  assert.equal(confirmationField(current.elements[0]), null);
+  const three = formOf(form => passwordInput({}, form), form => passwordInput({name: "pin"}, form), form => passwordInput({}, form));
+  assert.equal(confirmationField(three.elements[0]), null);
+  const last = formOf(form => passwordInput({}, form), form => passwordInput({name: "confirm"}, form));
+  assert.equal(confirmationField(last.elements[1]), null);
 });

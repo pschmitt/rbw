@@ -161,9 +161,14 @@ function rbwFrameMessage(state, message, respond, { onSize, onClose, onRefocus }
         return;
       }
       close();
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, password);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new Event("change", { bubbles: true }));
+      // Also fill the "repeat password" field that follows, if there is one.
+      const repeat = globalThis.rbwFillTargets?.confirmationField(input);
+      const targets = repeat && !(repeat.maxLength >= 0 && password.length > repeat.maxLength) ? [input, repeat] : [input];
+      for (const el of targets) {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, password);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
       respond(true);
       return;
     }

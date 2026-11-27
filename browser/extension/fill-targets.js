@@ -42,5 +42,23 @@
     const scoped = scopeForm ? fields.filter(el => el.form === scopeForm) : fields;
     return { user, password, newPasswords: setPasswords, otp: fields.find(isOtpField), scoped };
   }
-  Object.defineProperty(globalThis, "rbwFillTargets", { configurable: true, value: { isOtpField, loginTargets } });
+  /* The field that repeats a new password: the next usable password field
+     after `input` (in its form, or the page without one), when it is empty
+     and says it is a confirmation (autocomplete=new-password, or a name,
+     label or placeholder like "repeat", "confirm", "bestätigen"), or when
+     the form holds just these two password fields. Null when there is none. */
+  function confirmationField(input) {
+    const usable = el => el instanceof HTMLInputElement && el.type === "password" && el.isConnected && !el.matches(":disabled, [readonly]") && el.getClientRects().length;
+    const scope = input.form ? Array.from(input.form.elements) : Array.from(document.querySelectorAll("input"));
+    const passwords = scope.filter(usable);
+    const index = passwords.indexOf(input);
+    const next = index < 0 ? null : passwords[index + 1];
+    const tokens = el => el.autocomplete.split(/\s+/);
+    if (!next || next.value || tokens(input).includes("current-password") || tokens(next).includes("current-password")) return null;
+    const text = [next.id, next.name, next.placeholder, next.getAttribute("aria-label"),
+      ...Array.from(next.labels || [], label => label.textContent)].filter(Boolean).join(" ").replace(/([a-z])([A-Z])/g, "$1 $2");
+    const repeats = /confirm|repeat|retype|re[\s_-]*enter|again|verif|wiederhol|bestätig|bestaetig|erneut|confirmar|répéte|ripet|conferm|(pass(word)?|pwd)[\s_-]*2($|[^0-9])/i.test(text);
+    return tokens(next).includes("new-password") || repeats || (input.form && passwords.length === 2) ? next : null;
+  }
+  Object.defineProperty(globalThis, "rbwFillTargets", { configurable: true, value: { isOtpField, loginTargets, confirmationField } });
 })();

@@ -1377,6 +1377,9 @@ async function generateIntoField(tab, url, target) {
     const password = await generateDefaultPassword();
     const filled = await api.tabs.sendMessage(tab.id, { action: "rbw_generated_password", url, password }, target);
     if (!filled) throw new Error("Right-click an editable password field and try again.");
+    // Keep a copy on the clipboard (the agent's, so its clearing timeout
+    // applies) for the sites that want it typed again somewhere else.
+    await native({ action: "copy_text", account: null, text: password }).catch(() => {});
   } catch (err) {
     if ((await api.tabs.get(tab.id)).url === tab.url) {
       await notifyFill(tab, { title: "Password not filled", error: true, message: err.message });
