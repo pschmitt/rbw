@@ -32,7 +32,8 @@ export default [
     files: ["extension/popup-audit.js"],
     languageOptions: { globals: { itemRow: "readonly", element: "readonly", AUDIT_PAGE: "readonly", $: "readonly", healthState: "writable", healthRun: "readonly", request: "readonly" } },
   },
-  { files: ["extension/popup.js"], languageOptions: { globals: { runAudit: "readonly" } } },
+  { files: ["extension/popup.js"], languageOptions: { globals: { runAudit: "readonly", scanPageQr: "readonly" } } },
+  { files: ["extension/qr-scan.js"], languageOptions: { globals: { jsQR: "readonly" } } },
   { files: ["extension/background.js"], languageOptions: { globals: { remoteAgent: "readonly" } } },
   {
     // browser-daemon's live-view extension: classic scripts too; bridge.js

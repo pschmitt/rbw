@@ -90,6 +90,8 @@ function icon(name) {
     star: ['m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z'],
     trash: ['M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7'],
     copy: ['rect:8,8,13,13,2', 'M16 8V3H3v13h5'],
+    // QR code: three finder squares and a few modules.
+    qr: ['rect:3,3,7,7,1', 'rect:14,3,7,7,1', 'rect:3,14,7,7,1', 'M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3'],
     // A filled-in form field with a text cursor.
     fill: ['rect:2,7,20,10,2', 'M6.5 12h.01M10 12h.01M13.5 12h.01', 'M17.5 9.5v5'],
     more: ['circle:12,5,1.5', 'circle:12,12,1.5', 'circle:12,19,1.5'],

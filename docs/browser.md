@@ -31,6 +31,11 @@ after filling" puts the code on the clipboard, written by the extension;
 unlike rbw's own clipboard it isn't cleared by rbw-agent afterwards. Both
 settings can be set by browser policy (`autofillTotp`, `copyTotp`).
 
+To set up 2FA on a site, open the login in the item editor while the site
+shows its QR code and press the QR button in the TOTP field. The extension
+captures the visible part of the tab, decodes the code locally (bundled
+jsQR) and puts its `otpauth://totp/` URI into the field; save to keep it.
+
 ## Multiple accounts
 
 With more than one rbw account configured the account picker has an "All

@@ -1191,6 +1191,14 @@ function renderEditFields(data = {}) {
         }, "icon");
         generate.classList.add("generate-password"); row.append(generate);
       }
+      if (name === "totp") {
+        const scan = actionButton("Scan QR code on this page", "qr", async () => {
+          input.value = await scanPageQr(api);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          message("TOTP key read from the page's QR code. Save to keep it.");
+        }, "icon");
+        scan.classList.add("scan-qr"); row.append(scan);
+      }
       row.append(revealButton(input)); label.append(row);
     } else label.append(input);
     $("edit-fields").append(label);

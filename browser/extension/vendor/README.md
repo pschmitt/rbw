@@ -1,4 +1,4 @@
-# Bundled Markdown libraries
+# Bundled libraries
 
 These upstream distributions are bundled locally; the extension downloads no
 JavaScript at runtime. Licenses are included alongside the distributions.
@@ -9,6 +9,10 @@ JavaScript at runtime. Licenses are included alongside the distributions.
 - DOMPurify 3.4.17: https://github.com/cure53/DOMPurify/tree/3.4.17
   `dist/purify.js` from the npm `dompurify-3.4.17.tgz` archive.
   Archive SHA-256: `056cbdae276897208b88c21d1d779adfa09ad7be488a2f510a28e900d3bbffe7`.
+- jsQR 1.4.0: https://github.com/cozmo/jsQR/tree/1.4.0
+  `dist/jsQR.js` from the npm `jsqr-1.4.0.tgz` archive (Apache-2.0, `jsQR-LICENSE`).
+  Archive SHA-256: `b5299b37917a1fe7a8cab9dd5cc6b8accf82663add80abe5bf7761a921cc6602`.
+  It decodes 2FA QR codes from a capture of the visible tab (`qr-scan.js`).
 
 Parsed Markdown is sanitized before insertion. Note images and media are disabled
 so opening a note cannot automatically contact tracking URLs. Only HTTP(S) and
